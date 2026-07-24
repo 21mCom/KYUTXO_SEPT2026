@@ -12,17 +12,8 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
-  Shield,
-  ShieldCheck,
-  ShieldAlert,
-  Copy,
-  ClipboardCheck,
   QrCode as QrCodeIcon,
   Globe,
-  Upload,
-  Trash2,
-  Image as ImageIcon,
-  Paperclip,
 } from "lucide-react";
 import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
@@ -33,11 +24,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -52,7 +41,7 @@ import {
 } from "@/lib/blockchain-api";
 import { validateAddress, formatBTC, truncateAddress } from "@/lib/bitcoin";
 import { sanitizePdfText } from "@/lib/pdfText";
-import { mergeEvidencePdfs, countPdfPages, type PdfExhibit } from "@/lib/pdfMerge";
+import { mergeEvidencePdfs, type PdfExhibit } from "@/lib/pdfMerge";
 import { buildAttestationLines } from "@/lib/attestationLines";
 import {
   AML_APPENDIX_STRINGS,
@@ -71,10 +60,7 @@ import { getAttachmentsByRecordId } from "@/lib/data/attachments-crud";
 import { ACQUISITION_METHOD_OPTIONS, COUNTERPARTY_TYPE_OPTIONS } from "@/lib/db-types";
 import { useToast } from "@/hooks/use-toast";
 import {
-  buildChallengeMessage,
-  verifyBitcoinSignature,
   generateDeclarationNonce,
-  signatureFormatLabel,
   type SignatureFormat,
   type FreshnessAnchor,
 } from "@/lib/signatureVerify";
@@ -97,19 +83,7 @@ import {
   formatUnix,
   todayString,
 } from "./proof-of-funds/address-helpers";
-import {
-  type EvidenceKind,
-  type EvidenceItem,
-  EVIDENCE_MAX_ITEMS,
-  EVIDENCE_MAX_FILE_BYTES,
-  EVIDENCE_MAX_TOTAL_BYTES,
-  EVIDENCE_ACCEPT,
-  EVIDENCE_IMAGE_MIMES,
-  nextEvidenceId,
-  hashBytesHex,
-  imageBytesToDataUrl,
-  formatEvidenceSize,
-} from "./proof-of-funds/evidence-helpers";
+import { type EvidenceItem } from "./proof-of-funds/evidence-helpers";
 import {
   type ExplorerId,
   type ExplorerDef,
@@ -122,12 +96,14 @@ import {
   DEFAULT_DECLARATION_PREFS,
   loadDeclarationPrefs,
   saveDeclarationPrefs,
-  DECLARATION_INTRO_PARAGRAPHS,
 } from "./proof-of-funds/declaration-prefs";
 import { usePofPdfBuilder } from "./proof-of-funds/use-pof-pdf-builder";
 import { QrCodesCard } from "./proof-of-funds/qr-codes-card";
 import { AmlRiskCard } from "./proof-of-funds/aml-risk-card";
 import { ProvenanceCard } from "./proof-of-funds/provenance-card";
+import { ProofOfControlCard } from "./proof-of-funds/proof-of-control-card";
+import { EvidenceCard } from "./proof-of-funds/evidence-card";
+import { AttestationCard, GlossaryCard, IntroCard } from "./proof-of-funds/declaration-toggle-cards";
 
 export default function ProofOfFundsDeclaration() {
   const { nodeSettings } = useNodeSettings();
@@ -174,18 +150,13 @@ export default function ProofOfFundsDeclaration() {
   // Proof of control
   // Map of address -> per-address control verification state
   const [controlStates, setControlStates] = useState<Record<string, ControlState>>({});
-  // Track which addresses' challenge messages have been copied
-  const [copiedAddresses, setCopiedAddresses] = useState<Set<string>>(new Set());
 
-  // Optional add-ons for Step 5 (both off by default)
-  const [proofAddonsOpen, setProofAddonsOpen] = useState(false);
+  // Optional add-ons for Step 5 (both off by default) — UI lives in ProofOfControlCard,
+  // but the values live here because the PDF builder and the signature-invalidation
+  // effect below depend on them.
   const [verifierReference, setVerifierReference] = useState("");
   const [freshnessAnchorEnabled, setFreshnessAnchorEnabled] = useState(false);
   const [freshnessAnchor, setFreshnessAnchor] = useState<FreshnessAnchor | null>(null);
-  const [freshnessAnchorFetching, setFreshnessAnchorFetching] = useState(false);
-  const [freshnessAnchorError, setFreshnessAnchorError] = useState<string | null>(null);
-  const [freshnessManualHeight, setFreshnessManualHeight] = useState("");
-  const [freshnessManualHash, setFreshnessManualHash] = useState("");
 
   // When declarant identity fields OR proof-of-control add-ons change, any
   // previously-verified signatures are no longer valid (the challenge message
@@ -291,126 +262,6 @@ export default function ProofOfFundsDeclaration() {
 
   // Supporting Evidence (optional) — session-only; binary is never persisted.
   const [evidenceItems, setEvidenceItems] = useState<EvidenceItem[]>([]);
-  const [isAddingEvidence, setIsAddingEvidence] = useState(false);
-  const evidenceInputRef = useRef<HTMLInputElement>(null);
-
-  const handleEvidenceFiles = useCallback(
-    async (files: FileList | null) => {
-      if (!files || files.length === 0) return;
-      const incoming = Array.from(files);
-      setIsAddingEvidence(true);
-      try {
-        const room = EVIDENCE_MAX_ITEMS - evidenceItems.length;
-        if (room <= 0) {
-          toast({
-            title: "Evidence limit reached",
-            description: `You can attach up to ${EVIDENCE_MAX_ITEMS} files.`,
-            variant: "destructive",
-          });
-          return;
-        }
-        const toProcess = incoming.slice(0, room);
-        const skippedForLimit = incoming.length - toProcess.length;
-        const added: EvidenceItem[] = [];
-        const errors: string[] = [];
-        let runningTotal = evidenceItems.reduce((sum, it) => sum + it.size, 0);
-        for (const file of toProcess) {
-          const mime = file.type;
-          const isImage = EVIDENCE_IMAGE_MIMES.includes(mime);
-          const isPdf = mime === "application/pdf";
-          if (!isImage && !isPdf) {
-            errors.push(`${file.name}: unsupported file type`);
-            continue;
-          }
-          if (file.size > EVIDENCE_MAX_FILE_BYTES) {
-            errors.push(
-              `${file.name}: larger than ${EVIDENCE_MAX_FILE_BYTES / (1024 * 1024)} MB`,
-            );
-            continue;
-          }
-          if (runningTotal + file.size > EVIDENCE_MAX_TOTAL_BYTES) {
-            errors.push(
-              `${file.name}: skipped — would exceed the ${EVIDENCE_MAX_TOTAL_BYTES / (1024 * 1024)} MB combined limit`,
-            );
-            continue;
-          }
-          const bytes = new Uint8Array(await file.arrayBuffer());
-          const sha256 = await hashBytesHex(bytes);
-          // Reserve this file's bytes against the combined cap so later files in
-          // the same batch see an accurate running total.
-          runningTotal += file.size;
-          if (isPdf) {
-            let pageCount: number;
-            try {
-              pageCount = await countPdfPages(bytes);
-            } catch {
-              // Not actually added — release its reserved bytes.
-              runningTotal -= file.size;
-              errors.push(
-                `${file.name}: could not be read as a PDF (it may be corrupted or password-protected)`,
-              );
-              continue;
-            }
-            added.push({
-              id: nextEvidenceId(),
-              name: file.name,
-              kind: "pdf",
-              mime,
-              bytes,
-              caption: "",
-              sha256,
-              size: file.size,
-              pageCount,
-            });
-          } else {
-            added.push({
-              id: nextEvidenceId(),
-              name: file.name,
-              kind: "image",
-              mime,
-              bytes,
-              dataUrl: imageBytesToDataUrl(bytes, mime),
-              caption: "",
-              sha256,
-              size: file.size,
-            });
-          }
-        }
-        if (added.length) setEvidenceItems((prev) => [...prev, ...added]);
-        if (errors.length || skippedForLimit) {
-          const parts = [...errors];
-          if (skippedForLimit) {
-            parts.push(
-              `${skippedForLimit} file(s) skipped (limit of ${EVIDENCE_MAX_ITEMS})`,
-            );
-          }
-          toast({
-            title: added.length
-              ? "Some files were not added"
-              : "No files were added",
-            description: parts.join("; "),
-            variant: "destructive",
-          });
-        }
-      } finally {
-        setIsAddingEvidence(false);
-        if (evidenceInputRef.current) evidenceInputRef.current.value = "";
-      }
-    },
-    [evidenceItems.length, toast],
-  );
-
-  const removeEvidenceItem = useCallback((id: string) => {
-    setEvidenceItems((prev) => prev.filter((it) => it.id !== id));
-  }, []);
-
-  const clearEvidence = useCallback(() => setEvidenceItems([]), []);
-
-  const updateEvidenceCaption = useCallback((id: string, caption: string) => {
-    setEvidenceItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, caption } : it)),
-    );
-  }, []);
 
   const evidenceImageCount = useMemo(
     () => evidenceItems.filter((it) => it.kind === "image").length,
@@ -872,157 +723,8 @@ export default function ProofOfFundsDeclaration() {
     setProviderError(null);
     setPastedText("");
     setControlStates({});
-    setCopiedAddresses(new Set());
   };
 
-  // Fetch current block height + hash for the freshness anchor
-  const fetchFreshnessAnchor = useCallback(async () => {
-    setFreshnessAnchorFetching(true);
-    setFreshnessAnchorError(null);
-    setFreshnessAnchor(null);
-    try {
-      const provider = createProviderFromSettings(nodeSettings);
-      const height = await provider.getBlockHeight();
-      let hash: string;
-      if (provider.getTipBlockHash) {
-        hash = (await provider.getTipBlockHash()).trim();
-      } else {
-        throw new Error("Connected provider does not support block-hash lookup. Use the manual entry below.");
-      }
-      const fetchedAt = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
-      setFreshnessAnchor({ height, hash, fetchedAt });
-      setFreshnessManualHeight(String(height));
-      setFreshnessManualHash(hash);
-    } catch (err) {
-      setFreshnessAnchorError(err instanceof Error ? err.message : "Failed to fetch block data.");
-    } finally {
-      setFreshnessAnchorFetching(false);
-    }
-  }, [nodeSettings]);
-
-  // Validate the manually-entered freshness anchor inputs
-  const freshnessManualHeightError = useMemo(() => {
-    const raw = freshnessManualHeight.trim();
-    if (!raw) return null;
-    if (!/^\d+$/.test(raw)) return "Height must be a whole number.";
-    if (parseInt(raw, 10) <= 0) return "Height must be greater than zero.";
-    return null;
-  }, [freshnessManualHeight]);
-
-  const freshnessManualHashError = useMemo(() => {
-    const raw = freshnessManualHash.trim();
-    if (!raw) return null;
-    if (!/^[0-9a-f]{64}$/.test(raw)) {
-      return "Block hash must be exactly 64 lowercase hex characters.";
-    }
-    return null;
-  }, [freshnessManualHash]);
-
-  const canApplyManualFreshnessAnchor =
-    /^\d+$/.test(freshnessManualHeight.trim()) &&
-    parseInt(freshnessManualHeight.trim(), 10) > 0 &&
-    /^[0-9a-f]{64}$/.test(freshnessManualHash.trim());
-
-  // Apply manually-entered height + hash as the freshness anchor
-  const applyManualFreshnessAnchor = useCallback(() => {
-    const raw = freshnessManualHeight.trim();
-    const hash = freshnessManualHash.trim();
-    if (!/^\d+$/.test(raw)) return;
-    const h = parseInt(raw, 10);
-    if (h <= 0) return;
-    if (!/^[0-9a-f]{64}$/.test(hash)) return;
-    const fetchedAt = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
-    setFreshnessAnchor({ height: h, hash, fetchedAt });
-    setFreshnessAnchorError(null);
-  }, [freshnessManualHeight, freshnessManualHash]);
-
-  const handleCopyChallenge = useCallback(
-    (address: string) => {
-      const msg = buildChallengeMessage({
-        address,
-        declarantName,
-        declarationDate,
-        purpose,
-        nonce: declarationNonce,
-        verifierReference: verifierReference || undefined,
-        freshnessAnchor: freshnessAnchor ?? undefined,
-      });
-      navigator.clipboard.writeText(msg).then(() => {
-        setCopiedAddresses((prev) => new Set(prev).add(address));
-        setTimeout(() => {
-          setCopiedAddresses((prev) => {
-            const next = new Set(prev);
-            next.delete(address);
-            return next;
-          });
-        }, 2000);
-      });
-    },
-    [declarantName, declarationDate, purpose, declarationNonce, verifierReference, freshnessAnchor]
-  );
-
-  // Per-address: update pasted signature text
-  const handleSignaturePaste = useCallback((address: string, value: string) => {
-    setControlStates((prev) => ({
-      ...prev,
-      [address]: { ...prev[address], paste: value, status: "idle", error: undefined, verifiedSig: undefined },
-    }));
-  }, []);
-
-  // Per-address: verify pasted signature
-  const handleVerify = useCallback(
-    async (address: string) => {
-      const cs = controlStates[address];
-      const paste = cs?.paste?.trim() ?? "";
-      if (!paste) {
-        setControlStates((prev) => ({
-          ...prev,
-          [address]: { ...prev[address], status: "failed", error: "Paste a signature first." },
-        }));
-        return;
-      }
-
-      setControlStates((prev) => ({
-        ...prev,
-        [address]: { ...prev[address], status: "verifying", error: undefined },
-      }));
-
-      const message = buildChallengeMessage({
-        address,
-        declarantName,
-        declarationDate,
-        purpose,
-        nonce: declarationNonce,
-        verifierReference: verifierReference || undefined,
-        freshnessAnchor: freshnessAnchor ?? undefined,
-      });
-
-      try {
-        const result = await verifyBitcoinSignature(address, message, paste);
-        if (result.verified) {
-          setControlStates((prev) => ({
-            ...prev,
-            [address]: { paste, status: "verified", verifiedSig: paste, verifiedFormat: result.format },
-          }));
-        } else {
-          setControlStates((prev) => ({
-            ...prev,
-            [address]: { paste, status: "failed", error: result.error },
-          }));
-        }
-      } catch (err) {
-        setControlStates((prev) => ({
-          ...prev,
-          [address]: {
-            paste,
-            status: "failed",
-            error: err instanceof Error ? err.message : "Verification failed unexpectedly.",
-          },
-        }));
-      }
-    },
-    [controlStates, declarantName, declarationDate, purpose, declarationNonce, verifierReference, freshnessAnchor]
-  );
 
   // ── PDF generation ──────────────────────────────────────────────────────────
   // Extracted to a dedicated hook; all PDF state lives there.
@@ -1642,462 +1344,23 @@ export default function ProofOfFundsDeclaration() {
         </Card>
 
         {/* Step 5: Proof of Control */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Shield className="h-5 w-5" />
-              Step 5 — Proof of Control
-              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
-            </CardTitle>
-            <CardDescription>
-              Strengthen the declaration by proving cryptographic control of each address.
-              Sign the challenge message below in your own wallet, then paste the resulting
-              signature here. No private keys are shared with KYUTXO — only the address,
-              message, and signature are used for verification.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!declarantInfoComplete && (
-              <Alert>
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  Complete Step 3 (declarant name, date, and purpose) first so the challenge message
-                  can be generated. Any signatures you collect must match that exact message.
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {doneRows.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                Check balances for at least one valid address (Step 2) to unlock this step.
-              </p>
-            )}
-
-            {doneRows.length > 0 && declarantInfoComplete && (
-              <>
-                <Alert>
-                  <Shield className="h-4 w-4" />
-                  <AlertDescription className="space-y-1">
-                    <p className="font-medium">Supported formats</p>
-                    <p className="text-xs">
-                      Bitcoin Signed Message (legacy format) — supported by Bitcoin Core, Electrum,
-                      BlueWallet, Sparrow, Trezor, Ledger, and most hardware/software wallets.
-                      Works for P2PKH (1…), P2SH-P2WPKH (3…), and native SegWit P2WPKH (bc1q…) addresses.
-                    </p>
-                    <p className="text-xs">
-                      BIP-322 — for native SegWit (bc1q…), Taproot (bc1p…), and P2SH-wrapped
-                      (3…) addresses, including multisig vaults (P2WSH, P2SH-P2WSH, and Taproot
-                      script-path). Paste the base64 signature produced by a BIP-322 capable
-                      wallet such as Bitcoin Core 24+ or Sparrow.
-                    </p>
-                  </AlertDescription>
-                </Alert>
-
-                {verifiedCount > 0 && (
-                  <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400 font-medium">
-                    <ShieldCheck className="h-4 w-4" />
-                    {verifiedCount} of {doneRows.length} address{doneRows.length !== 1 ? "es" : ""} control-verified
-                  </div>
-                )}
-
-                {/* Optional add-ons: verifier reference + block-hash freshness anchor */}
-                <div className="rounded-md border">
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium hover-elevate rounded-md"
-                    onClick={() => setProofAddonsOpen((v) => !v)}
-                    data-testid="button-proof-addons-toggle"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Shield className="h-4 w-4 text-muted-foreground" />
-                      Optional add-ons
-                      <Badge variant="secondary" className="text-xs font-normal">both off by default</Badge>
-                    </span>
-                    {proofAddonsOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                  </button>
-
-                  {proofAddonsOpen && (
-                    <div className="border-t px-4 py-4 space-y-5">
-                      {/* Verifier reference */}
-                      <div className="space-y-2">
-                        <Label htmlFor="verifier-reference" className="text-sm font-medium">
-                          Verifier reference{" "}
-                          <span className="text-muted-foreground font-normal">(optional)</span>
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          Free text the requesting party (e.g. a bank) wants embedded in the signed
-                          message — such as a case number or request ID. Leave blank to omit.
-                        </p>
-                        <Input
-                          id="verifier-reference"
-                          placeholder="e.g. ACME Bank request #2026-001"
-                          value={verifierReference}
-                          onChange={(e) => setVerifierReference(e.target.value)}
-                          data-testid="input-verifier-reference"
-                          maxLength={200}
-                        />
-                        {verifierReference.trim() && (
-                          <p className="text-xs text-muted-foreground font-mono">
-                            Will appear in message as: <span className="text-foreground">Verifier ref: {verifierReference.trim()}</span>
-                          </p>
-                        )}
-                      </div>
-
-                      <Separator />
-
-                      {/* Block-hash freshness anchor */}
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between gap-4 flex-wrap">
-                          <div className="space-y-0.5">
-                            <Label htmlFor="freshness-anchor-toggle" className="text-sm font-medium">
-                              Add freshness anchor (block hash){" "}
-                              <span className="text-muted-foreground font-normal">(optional)</span>
-                            </Label>
-                            <p className="text-xs text-muted-foreground">
-                              Embeds the current block height + hash in the signed message, proving the
-                              signature was made at or after that block. No third party involved.
-                            </p>
-                          </div>
-                          <Switch
-                            id="freshness-anchor-toggle"
-                            checked={freshnessAnchorEnabled}
-                            onCheckedChange={(v) => {
-                              setFreshnessAnchorEnabled(v);
-                              if (v) {
-                                fetchFreshnessAnchor();
-                              } else {
-                                setFreshnessAnchor(null);
-                                setFreshnessAnchorError(null);
-                              }
-                            }}
-                            data-testid="switch-freshness-anchor"
-                          />
-                        </div>
-
-                        {freshnessAnchorEnabled && (
-                          <div className="space-y-3 pl-1">
-                            {freshnessAnchor ? (
-                              <Alert className="py-2 border-green-500/50 [&>svg]:text-green-600 dark:[&>svg]:text-green-400">
-                                <ShieldCheck className="h-3.5 w-3.5" />
-                                <AlertDescription className="text-xs space-y-1">
-                                  <p className="font-medium text-green-700 dark:text-green-300">Block anchor set</p>
-                                  <p className="font-mono break-all">Height: {freshnessAnchor.height}</p>
-                                  <p className="font-mono break-all">Hash: {freshnessAnchor.hash}</p>
-                                  <p className="text-muted-foreground">Fetched: {freshnessAnchor.fetchedAt}</p>
-                                  <p className="text-muted-foreground">
-                                    This proves signatures were created at or after block {freshnessAnchor.height}.
-                                  </p>
-                                </AlertDescription>
-                              </Alert>
-                            ) : null}
-
-                            <div className="flex gap-2 flex-wrap">
-                              <Button
-                                size="sm"
-                                variant={freshnessAnchor ? "outline" : "default"}
-                                onClick={fetchFreshnessAnchor}
-                                disabled={freshnessAnchorFetching}
-                                data-testid="button-fetch-freshness-anchor"
-                              >
-                                {freshnessAnchorFetching ? (
-                                  <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Fetching…</>
-                                ) : freshnessAnchor ? (
-                                  <><RefreshCw className="h-3.5 w-3.5 mr-1.5" />Refresh anchor</>
-                                ) : (
-                                  <><Download className="h-3.5 w-3.5 mr-1.5" />Fetch current block</>
-                                )}
-                              </Button>
-                              {freshnessAnchor && (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => { setFreshnessAnchor(null); setFreshnessAnchorError(null); }}
-                                  data-testid="button-clear-freshness-anchor"
-                                >
-                                  <X className="h-3.5 w-3.5 mr-1.5" />Clear
-                                </Button>
-                              )}
-                            </div>
-
-                            {freshnessAnchorError && (
-                              <div className="space-y-2">
-                                <Alert variant="destructive" className="py-2">
-                                  <AlertCircle className="h-3.5 w-3.5" />
-                                  <AlertDescription className="text-xs">
-                                    {freshnessAnchorError}
-                                  </AlertDescription>
-                                </Alert>
-                                <p className="text-xs text-muted-foreground">
-                                  Paste the block height and hash manually — you can look them up on any
-                                  Bitcoin block explorer.
-                                </p>
-                                <div className="flex gap-2 flex-wrap items-start">
-                                  <div className="space-y-1">
-                                    <Label className="text-xs">Block height</Label>
-                                    <Input
-                                      placeholder="e.g. 900000"
-                                      value={freshnessManualHeight}
-                                      onChange={(e) => setFreshnessManualHeight(e.target.value)}
-                                      className="w-32 text-xs font-mono"
-                                      aria-invalid={!!freshnessManualHeightError}
-                                      data-testid="input-freshness-manual-height"
-                                    />
-                                    {freshnessManualHeightError && (
-                                      <p
-                                        className="text-xs text-destructive"
-                                        data-testid="error-freshness-manual-height"
-                                      >
-                                        {freshnessManualHeightError}
-                                      </p>
-                                    )}
-                                  </div>
-                                  <div className="space-y-1 flex-1">
-                                    <Label className="text-xs">Block hash</Label>
-                                    <Input
-                                      placeholder="64-character hex hash"
-                                      value={freshnessManualHash}
-                                      onChange={(e) => setFreshnessManualHash(e.target.value)}
-                                      className="text-xs font-mono"
-                                      aria-invalid={!!freshnessManualHashError}
-                                      data-testid="input-freshness-manual-hash"
-                                    />
-                                    {freshnessManualHashError && (
-                                      <p
-                                        className="text-xs text-destructive"
-                                        data-testid="error-freshness-manual-hash"
-                                      >
-                                        {freshnessManualHashError}
-                                      </p>
-                                    )}
-                                  </div>
-                                  <div className="space-y-1">
-                                    <Label className="text-xs invisible">Apply</Label>
-                                    <Button
-                                      size="sm"
-                                      onClick={applyManualFreshnessAnchor}
-                                      disabled={!canApplyManualFreshnessAnchor}
-                                      data-testid="button-apply-manual-freshness"
-                                    >
-                                      Apply
-                                    </Button>
-                                  </div>
-                                </div>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="text-xs"
-                                  onClick={() => { setFreshnessAnchorEnabled(false); setFreshnessAnchor(null); setFreshnessAnchorError(null); }}
-                                  data-testid="button-proceed-without-anchor"
-                                >
-                                  Proceed without freshness anchor
-                                </Button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-6">
-                  {doneRows.map((row, idx) => {
-                    const cs = controlStates[row.raw] ?? { paste: "", status: "idle" as ControlStatus };
-                    const isTaproot = row.raw.startsWith("bc1p") || row.raw.startsWith("tb1p");
-                    const challengeMsg = buildChallengeMessage({
-                      address: row.raw,
-                      declarantName,
-                      declarationDate,
-                      purpose,
-                      nonce: declarationNonce,
-                      verifierReference: verifierReference || undefined,
-                      freshnessAnchor: freshnessAnchor ?? undefined,
-                    });
-                    const copied = copiedAddresses.has(row.raw);
-
-                    return (
-                      <div key={idx} className="space-y-3 rounded-md border p-4">
-                        <div className="flex items-start justify-between gap-2 flex-wrap">
-                          <div className="font-mono text-xs break-all text-muted-foreground">
-                            {row.raw}
-                          </div>
-                          {cs.status === "verified" && (
-                            <Badge className="gap-1 bg-green-600 dark:bg-green-700 text-white shrink-0">
-                              <ShieldCheck className="h-3 w-3" />
-                              Control Verified
-                            </Badge>
-                          )}
-                          {cs.status === "failed" && (
-                            <Badge variant="destructive" className="gap-1 shrink-0">
-                              <AlertCircle className="h-3 w-3" />
-                              Verification Failed
-                            </Badge>
-                          )}
-                          {cs.status === "idle" && cs.staleAfterVerify && (
-                            <Badge
-                              variant="outline"
-                              className="gap-1 shrink-0 border-amber-500 text-amber-600 dark:text-amber-400"
-                              data-testid={`badge-stale-${idx}`}
-                            >
-                              <AlertCircle className="h-3 w-3" />
-                              Re-verification Needed
-                            </Badge>
-                          )}
-                          {cs.status === "idle" && !cs.staleAfterVerify && (
-                            <Badge variant="secondary" className="gap-1 shrink-0">
-                              <Shield className="h-3 w-3" />
-                              Self-Declared (Unverified)
-                            </Badge>
-                          )}
-                        </div>
-
-                        {cs.status === "idle" && cs.staleAfterVerify && (
-                          <Alert
-                            className="py-2 border-amber-500/60 text-amber-700 dark:text-amber-300 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400"
-                            data-testid={`alert-stale-${idx}`}
-                          >
-                            <AlertCircle className="h-3.5 w-3.5" />
-                            <AlertDescription className="text-xs">
-                              Challenge message changed — re-verify your signature. The declarant
-                              details, verifier reference, or block anchor were updated, so the
-                              previous signature no longer matches.
-                            </AlertDescription>
-                          </Alert>
-                        )}
-
-                        {(
-                          <>
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-xs font-medium">Challenge Message</Label>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => handleCopyChallenge(row.raw)}
-                                      data-testid={`button-copy-challenge-${idx}`}
-                                      className="h-7 text-xs gap-1.5"
-                                    >
-                                      {copied ? (
-                                        <>
-                                          <ClipboardCheck className="h-3.5 w-3.5 text-green-600" />
-                                          Copied
-                                        </>
-                                      ) : (
-                                        <>
-                                          <Copy className="h-3.5 w-3.5" />
-                                          Copy
-                                        </>
-                                      )}
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Copy message to clipboard</TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <pre
-                                className="rounded-md bg-muted/60 px-3 py-2 text-xs font-mono whitespace-pre-wrap break-all leading-relaxed"
-                                data-testid={`text-challenge-${idx}`}
-                              >
-                                {challengeMsg}
-                              </pre>
-                              <p className="text-xs text-muted-foreground">
-                                {isTaproot
-                                  ? 'In a BIP-322 capable wallet (Bitcoin Core 24+, Sparrow), use "Sign Message" and paste the text above exactly as shown.'
-                                  : 'In your wallet, use "Sign Message" (or equivalent) and paste the text above exactly as shown.'}
-                              </p>
-                            </div>
-
-                            <div className="space-y-2">
-                              <Label className="text-xs font-medium" htmlFor={`sig-input-${idx}`}>
-                                {isTaproot
-                                  ? "Paste BIP-322 Signature (base64)"
-                                  : "Paste Wallet Signature (base64)"}
-                              </Label>
-                              <Textarea
-                                id={`sig-input-${idx}`}
-                                placeholder="Paste the base64 signature from your wallet here…"
-                                className="min-h-[80px] font-mono text-xs resize-none"
-                                value={cs.paste}
-                                onChange={(e) => handleSignaturePaste(row.raw, e.target.value)}
-                                data-testid={`textarea-signature-${idx}`}
-                                disabled={cs.status === "verifying"}
-                              />
-
-                              {cs.status === "failed" && cs.error && (
-                                <Alert variant="destructive" className="py-2">
-                                  <AlertCircle className="h-3.5 w-3.5" />
-                                  <AlertDescription className="text-xs">
-                                    {cs.error}
-                                  </AlertDescription>
-                                </Alert>
-                              )}
-
-                              {cs.status === "verified" && (
-                                <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400 font-medium">
-                                  <ShieldCheck className="h-3.5 w-3.5" />
-                                  Signature verified
-                                  {cs.verifiedFormat
-                                    ? ` (${signatureFormatLabel(cs.verifiedFormat)})`
-                                    : ""}
-                                  {" "}— control of this address is cryptographically proven.
-                                </div>
-                              )}
-
-                              <div className="flex gap-2">
-                                <Button
-                                  size="sm"
-                                  variant={cs.status === "verified" ? "outline" : "default"}
-                                  onClick={() => handleVerify(row.raw)}
-                                  disabled={cs.status === "verifying" || !cs.paste.trim()}
-                                  data-testid={`button-verify-${idx}`}
-                                >
-                                  {cs.status === "verifying" ? (
-                                    <>
-                                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                                      Verifying…
-                                    </>
-                                  ) : cs.status === "verified" ? (
-                                    <>
-                                      <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />
-                                      Re-verify
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Shield className="h-3.5 w-3.5 mr-1.5" />
-                                      Verify Signature
-                                    </>
-                                  )}
-                                </Button>
-
-                                {(cs.paste || cs.status !== "idle") && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() =>
-                                      setControlStates((prev) => ({
-                                        ...prev,
-                                        [row.raw]: { paste: "", status: "idle" },
-                                      }))
-                                    }
-                                    data-testid={`button-clear-sig-${idx}`}
-                                  >
-                                    <X className="h-3.5 w-3.5 mr-1.5" />
-                                    Clear
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
+        <ProofOfControlCard
+          doneRows={doneRows}
+          declarantInfoComplete={declarantInfoComplete}
+          declarantName={declarantName}
+          declarationDate={declarationDate}
+          purpose={purpose}
+          declarationNonce={declarationNonce}
+          verifiedCount={verifiedCount}
+          controlStates={controlStates}
+          setControlStates={setControlStates}
+          verifierReference={verifierReference}
+          setVerifierReference={setVerifierReference}
+          freshnessAnchorEnabled={freshnessAnchorEnabled}
+          setFreshnessAnchorEnabled={setFreshnessAnchorEnabled}
+          freshnessAnchor={freshnessAnchor}
+          setFreshnessAnchor={setFreshnessAnchor}
+        />
 
 
         {/* Step 6: Balance-Verification QR Codes */}
@@ -2145,359 +1408,28 @@ export default function ProofOfFundsDeclaration() {
         />
 
         {/* Step 9: Formal Attestation */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ClipboardCheck className="h-5 w-5" />
-              Step 9 — Formal Attestation
-              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
-            </CardTitle>
-            <CardDescription>
-              Add a formal attestation block with a solemn declaration statement, a signature line,
-              place of signing, and an optional witness or notary line. Off by default — the always-on
-              document integrity section (reference ID, content fingerprint, page numbers, blockchain
-              time-anchor) is included in every PDF regardless of this toggle.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div className="space-y-0.5">
-                <Label htmlFor="include-attestation" className="text-sm font-medium">
-                  Include formal attestation block in the PDF
-                </Label>
-                <p className="text-sm text-muted-foreground">
-                  Off by default. When on, adds a solemn declaration statement with a signature line,
-                  date, place of signing, and an optional witness/notary block.
-                </p>
-              </div>
-              <Switch
-                id="include-attestation"
-                checked={includeAttestation}
-                onCheckedChange={setIncludeAttestation}
-                data-testid="switch-include-attestation"
-              />
-            </div>
-
-            {includeAttestation && (
-              <>
-                <Separator />
-                <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-1 text-sm">
-                  <div className="font-medium text-sm">Attestation statement (printed verbatim)</div>
-                  <p className="text-xs text-muted-foreground italic">
-                    "I, [your name], hereby solemnly declare and attest that the foregoing information —
-                    including all Bitcoin addresses, reported balances, and supporting details — is true,
-                    accurate, and complete to the best of my knowledge and belief. I am the lawful owner
-                    or authorised signatory of the declared addresses and the funds associated with them.
-                    I understand that knowingly making a false declaration may result in civil and/or
-                    criminal liability under applicable law."
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <Label htmlFor="attestation-place" className="text-sm">
-                      Place of signing <span className="text-muted-foreground text-xs">(optional)</span>
-                    </Label>
-                    <Input
-                      id="attestation-place"
-                      placeholder="e.g. London, United Kingdom"
-                      value={attestationPlaceOfSigning}
-                      onChange={(e) => setAttestationPlaceOfSigning(e.target.value)}
-                      data-testid="input-attestation-place"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      If blank, a blank signature line is printed instead.
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="attestation-witness" className="text-sm">
-                      Witness / Notary line <span className="text-muted-foreground text-xs">(optional)</span>
-                    </Label>
-                    <Input
-                      id="attestation-witness"
-                      placeholder="e.g. John Smith, Solicitor, Law Society No. 12345"
-                      value={attestationWitnessLine}
-                      onChange={(e) => setAttestationWitnessLine(e.target.value)}
-                      data-testid="input-attestation-witness"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      If blank, blank witness/notary signature lines are printed.
-                    </p>
-                  </div>
-                </div>
-                <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-1 text-xs text-muted-foreground">
-                  <p className="font-medium text-foreground text-sm">Always included in every PDF (no toggle needed)</p>
-                  <ul className="list-disc list-inside space-y-0.5">
-                    <li>Page X of Y footer with declaration reference ID on every page</li>
-                    <li>Generation metadata: tool name, generation date/time</li>
-                    <li>Content fingerprint: SHA-256 of key declaration fields</li>
-                    <li>Blockchain time-anchor: block height and timestamp from your balance data</li>
-                  </ul>
-                </div>
-              </>
-            )}
-
-            {!includeAttestation && (
-              <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-1 text-xs text-muted-foreground">
-                <p className="font-medium text-foreground text-sm">Always included in every PDF</p>
-                <ul className="list-disc list-inside space-y-0.5">
-                  <li>Page X of Y footer with declaration reference ID on every page</li>
-                  <li>Generation metadata: tool name, generation date/time</li>
-                  <li>Content fingerprint: SHA-256 of key declaration fields</li>
-                  <li>Blockchain time-anchor: block height and timestamp from your balance data</li>
-                </ul>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <AttestationCard
+          includeAttestation={includeAttestation}
+          setIncludeAttestation={setIncludeAttestation}
+          attestationPlaceOfSigning={attestationPlaceOfSigning}
+          setAttestationPlaceOfSigning={setAttestationPlaceOfSigning}
+          attestationWitnessLine={attestationWitnessLine}
+          setAttestationWitnessLine={setAttestationWitnessLine}
+        />
 
         {/* Step 10: Glossary */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Step 10 — Glossary
-              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
-            </CardTitle>
-            <CardDescription>
-              Append a plain-language glossary of Bitcoin and compliance terms for non-technical reviewers.
-              Covers Bitcoin addresses, UTXO, xpub, confirmations, hops, SHA-256, PEP, AML, and more.
-              Off by default — when off, the PDF is unchanged.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div className="space-y-0.5">
-                <Label htmlFor="include-glossary" className="text-sm font-medium">
-                  Include glossary appendix in the PDF
-                </Label>
-                <p className="text-sm text-muted-foreground">
-                  Off by default. When on, adds a final appendix defining Bitcoin, Address, UTXO, xpub,
-                  Confirmation, Hop, SHA-256, PEP, AML, KYC, and other terms used in this document.
-                </p>
-              </div>
-              <Switch
-                id="include-glossary"
-                checked={includeGlossary}
-                onCheckedChange={setIncludeGlossary}
-                data-testid="switch-include-glossary"
-              />
-            </div>
-
-            {includeGlossary && (
-              <>
-                <Separator />
-                <div className="rounded-md border bg-muted/30 px-4 py-3 text-xs text-muted-foreground space-y-1">
-                  <p className="font-medium text-foreground text-sm">Terms covered</p>
-                  <p>Bitcoin, Bitcoin Address, Balance, BTC, Satoshi, Blockchain, Block, Confirmation,
-                  UTXO, xpub, Proof of Control, Bitcoin Signed Message, BIP-322, Hop, SHA-256,
-                  Declaration Reference (Nonce), PEP, AML, KYC</p>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
+        <GlossaryCard includeGlossary={includeGlossary} setIncludeGlossary={setIncludeGlossary} />
 
         {/* Step 11: Introduction / Preface */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Step 11 — Introduction / Preface
-              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
-            </CardTitle>
-            <CardDescription>
-              Add a short plain-language preface to the very top of the PDF: that Bitcoin is a digital
-              bearer asset, that the blockchain is a publicly verifiable ledger, and that ownership is
-              established through control of the private keys.
-              Off by default — when off, the PDF is unchanged.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div className="space-y-0.5">
-                <Label htmlFor="include-intro" className="text-sm font-medium">
-                  Include introduction / preface in the PDF
-                </Label>
-                <p className="text-sm text-muted-foreground">
-                  Off by default. When on, adds an Introduction section at the top of the declaration,
-                  before the declarant details.
-                </p>
-              </div>
-              <Switch
-                id="include-intro"
-                checked={includeIntro}
-                onCheckedChange={setIncludeIntro}
-                data-testid="switch-include-intro"
-              />
-            </div>
-
-            {includeIntro && (
-              <>
-                <Separator />
-                <div
-                  className="rounded-md border bg-muted/30 px-4 py-3 text-xs text-muted-foreground space-y-2"
-                  data-testid="text-intro-preview"
-                >
-                  <p className="font-medium text-foreground text-sm">Preview</p>
-                  {DECLARATION_INTRO_PARAGRAPHS.map((paragraph, i) => (
-                    <p key={i}>{paragraph}</p>
-                  ))}
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
+        <IntroCard includeIntro={includeIntro} setIncludeIntro={setIncludeIntro} />
 
         {/* Step 12: Supporting Evidence (optional) */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Step 12 — Supporting Evidence (optional)</CardTitle>
-            <CardDescription>
-              Attach images (screenshots or photos) and PDF documents to support your
-              declaration. Images are embedded into the dossier, and PDFs are merged on
-              as extra pages at the end. Files stay on your device and are only kept for
-              this session — they are never uploaded or saved.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <input
-              ref={evidenceInputRef}
-              type="file"
-              accept={EVIDENCE_ACCEPT}
-              multiple
-              className="hidden"
-              data-testid="input-evidence-file"
-              onChange={(e) => handleEvidenceFiles(e.target.files)}
-            />
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="default"
-                onClick={() => evidenceInputRef.current?.click()}
-                disabled={
-                  isAddingEvidence || evidenceItems.length >= EVIDENCE_MAX_ITEMS
-                }
-                data-testid="button-add-evidence"
-              >
-                {isAddingEvidence ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Adding…
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    Add files
-                  </>
-                )}
-              </Button>
-              {evidenceItems.length > 0 && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="default"
-                  onClick={clearEvidence}
-                  data-testid="button-clear-evidence"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Clear all
-                </Button>
-              )}
-              <span
-                className="text-xs text-muted-foreground"
-                data-testid="text-evidence-count"
-              >
-                {evidenceItems.length === 0
-                  ? "No files attached"
-                  : `${evidenceItems.length} of ${EVIDENCE_MAX_ITEMS} file${
-                      evidenceItems.length !== 1 ? "s" : ""
-                    } — ${evidenceImageCount} image${
-                      evidenceImageCount !== 1 ? "s" : ""
-                    }, ${evidencePdfItems.length} PDF${
-                      evidencePdfItems.length !== 1 ? "s" : ""
-                    }`}
-              </span>
-            </div>
-
-            <p className="text-xs text-muted-foreground">
-              Accepted: PNG, JPEG, WebP images and PDF documents. Up to{" "}
-              {EVIDENCE_MAX_ITEMS} files, {EVIDENCE_MAX_FILE_BYTES / (1024 * 1024)} MB
-              each, {EVIDENCE_MAX_TOTAL_BYTES / (1024 * 1024)} MB combined.
-            </p>
-
-            {evidenceItems.length > 0 && (
-              <div className="space-y-2">
-                {evidenceItems.map((it) => (
-                  <div
-                    key={it.id}
-                    data-testid={`row-evidence-${it.id}`}
-                    className="flex items-start gap-3 rounded-md border p-3"
-                  >
-                    <div className="shrink-0">
-                      {it.kind === "image" && it.dataUrl ? (
-                        <img
-                          src={it.dataUrl}
-                          alt={it.name}
-                          className="h-16 w-16 rounded-md object-cover border"
-                          data-testid={`img-evidence-${it.id}`}
-                        />
-                      ) : (
-                        <div className="h-16 w-16 rounded-md border flex items-center justify-center bg-muted/40">
-                          <FileText className="h-7 w-7 text-muted-foreground" />
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0 space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {it.kind === "image" ? (
-                          <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
-                        ) : (
-                          <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
-                        )}
-                        <span
-                          className="text-sm font-medium truncate"
-                          data-testid={`text-evidence-name-${it.id}`}
-                        >
-                          {it.name}
-                        </span>
-                        <Badge variant="secondary">
-                          {it.kind === "pdf"
-                            ? `PDF · ${it.pageCount ?? "?"} page${
-                                it.pageCount === 1 ? "" : "s"
-                              }`
-                            : "Image"}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {formatEvidenceSize(it.size)}
-                        </span>
-                      </div>
-                      <Input
-                        value={it.caption}
-                        onChange={(e) =>
-                          updateEvidenceCaption(it.id, e.target.value)
-                        }
-                        placeholder="Add a caption (optional)"
-                        data-testid={`input-evidence-caption-${it.id}`}
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeEvidenceItem(it.id)}
-                      aria-label={`Remove ${it.name}`}
-                      data-testid={`button-remove-evidence-${it.id}`}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <EvidenceCard
+          evidenceItems={evidenceItems}
+          setEvidenceItems={setEvidenceItems}
+          evidenceImageCount={evidenceImageCount}
+          evidencePdfCount={evidencePdfItems.length}
+        />
 
         {/* Step 13: Generate PDF */}
         <Card>

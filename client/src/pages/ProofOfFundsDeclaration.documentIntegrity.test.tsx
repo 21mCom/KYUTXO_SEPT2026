@@ -25,6 +25,8 @@ import { fireEvent, cleanup, waitFor } from "@testing-library/react";
 
 import { createRecord, clearAllRecords } from "@/lib/data/record-crud";
 import {
+  addTransaction,
+  addParticipant,
   clearTransactions,
   clearParticipants,
 } from "@/lib/data/transaction-crud";
@@ -99,6 +101,31 @@ beforeEach(async () => {
   await createRecord(
     { type: "address", inputString: ADDRESS, label: "Owned", tags: [], categories: [] },
     { skipNotification: true, skipVocabularySync: true },
+  );
+
+  // Seed one synced confirmed transaction paying the address so the OFFLINE
+  // balance source resolves a non-zero balance — the empty-exclusion rule
+  // drops zero-balance rows, which would leave nothing to declare.
+  await addTransaction(
+    {
+      txid: "a".repeat(64),
+      blockHeight: 820000,
+      blockTime: 1_700_000_000,
+      fee: 1000,
+      feeRate: 10,
+      syncedAt: Date.now(),
+    },
+    { skipNotification: true },
+  );
+  await addParticipant(
+    {
+      txid: "a".repeat(64),
+      role: "output",
+      address: ADDRESS,
+      amount: LIVE_BALANCE_SATS,
+      vout: 0,
+    },
+    { skipNotification: true },
   );
 });
 
