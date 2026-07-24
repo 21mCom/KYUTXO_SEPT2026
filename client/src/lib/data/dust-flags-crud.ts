@@ -150,3 +150,38 @@ export async function getDustFlaggedOutpointSet(): Promise<Set<string>> {
   const rows = await db.dustFlags.toArray();
   return new Set(rows.map((r) => r.outpoint));
 }
+
+/** Per-address totals of dust flags that are still unspent. */
+export interface UnspentDustByAddress {
+  /** address -> summed sats + flag count of its still-unspent dust outputs. */
+  byAddress: Map<string, { sats: number; count: number }>;
+}
+
+/**
+ * Sum the still-unspent dust-flagged outputs per address, so balance surfaces
+ * can subtract them from cached per-address totals when "Hide dust" is on.
+ *
+ * A flag is treated as spent when ANY input participant references its
+ * outpoint via the `[prevTxid+prevVout]` index (the same exact-mode rule the
+ * UTXO computation uses); spent flags are excluded so a stale flag on an
+ * already-spent output can never deflate a balance. Rows without a recorded
+ * address are skipped — they can't be attributed to any per-address cached
+ * balance. Pure local read.
+ */
+export async function getUnspentDustByAddress(): Promise<UnspentDustByAddress> {
+  const rows = await db.dustFlags.toArray();
+  const byAddress = new Map<string, { sats: number; count: number }>();
+  for (const row of rows) {
+    if (!row.address) continue;
+    const spent = await db.transactionParticipants
+      .where('[prevTxid+prevVout]')
+      .equals([row.txid, row.vout])
+      .count();
+    if (spent > 0) continue;
+    const agg = byAddress.get(row.address) ?? { sats: 0, count: 0 };
+    agg.sats += row.amountSats;
+    agg.count += 1;
+    byAddress.set(row.address, agg);
+  }
+  return { byAddress };
+}

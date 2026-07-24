@@ -9,7 +9,9 @@ import {
   getRecordsPageByTypeIdReverseKeyset,
   getAddressBalanceRowsForGroup,
   getRecordsByIds,
+  findRecordByInputString,
 } from "@/lib/data/record-crud";
+import { getUnspentDustByAddress } from "@/lib/data/dust-flags-crud";
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { recomputeAddressStats, countHeuristicMatchedAddresses, getHeuristicMatchedAddresses } from "@/lib/data/address-stats";
@@ -25,6 +27,8 @@ import {
   type AddressBalanceRow,
   getGroupKeys,
 } from "@/lib/balance-grouping";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { Card, CardContent } from "@/components/ui/card";
@@ -428,6 +432,9 @@ export default function BalanceOverview() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const dbSignal = useDbChangeSignal(["records", "blockchainTransactions", "transactionParticipants"]);
+  // Separate signal so flag/unflag actions on the Dusted/UTXOs pages refresh
+  // the dust adjustments without re-running the full balance aggregation.
+  const dustFlagsSignal = useDbChangeSignal(["dustFlags"]);
   const computationId = useRef(0);
   const [engineReadySignal, setEngineReadySignal] = useState(0);
 
@@ -511,6 +518,19 @@ export default function BalanceOverview() {
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
   useEffect(() => subscribeEngineReadiness(() => setEngineReadySignal((s) => s + 1)), []);
+
+  // Hide user-flagged dust UTXOs from all balance totals when enabled
+  // (mirrors the UTXOs page toggle; off = identical to before).
+  const [hideDust, setHideDust] = useState(false);
+  // Precomputed dust adjustments while "Hide dust" is on: per-address and
+  // per-group sats/count to subtract, plus deduped grand totals. Only dust on
+  // addresses actually counted in the totals (cachedUtxoCount > 0) is included.
+  const [dustAdj, setDustAdj] = useState<{
+    byAddress: Map<string, { sats: number; count: number }>;
+    byGroup: Map<string, { sats: number; count: number }>;
+    totalSats: number;
+    totalCount: number;
+  } | null>(null);
 
   const [phase, setPhase] = useState<"loading" | "backfilling" | "ready">("loading");
   const [groupSummaries, setGroupSummaries] = useState<Map<string, GroupSummary>>(new Map());
@@ -669,6 +689,47 @@ export default function BalanceOverview() {
       abort.abort();
     };
   }, [groupBy, dbSignal, engineReadySignal]);
+
+  // Dust adjustments: while "Hide dust" is on, compute how many sats/UTXOs to
+  // subtract per address and per group. A dust flag only counts when it is
+  // still unspent AND its address is actually included in the cached totals
+  // (record exists with cachedUtxoCount > 0). Recomputed on db changes and
+  // when the grouping dimension changes (group keys depend on it).
+  useEffect(() => {
+    if (!hideDust) {
+      setDustAdj(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const dust = await getUnspentDustByAddress();
+      const byAddress = new Map<string, { sats: number; count: number }>();
+      const byGroup = new Map<string, { sats: number; count: number }>();
+      let totalSats = 0;
+      let totalCount = 0;
+      for (const [address, adj] of Array.from(dust.byAddress.entries())) {
+        if (cancelled) return;
+        const rec = await findRecordByInputString(address);
+        if (!rec || (rec.cachedUtxoCount ?? 0) <= 0) continue;
+        byAddress.set(address, adj);
+        totalSats += adj.sats;
+        totalCount += adj.count;
+        for (const key of getGroupKeys(rec, groupBy)) {
+          const g = byGroup.get(key) ?? { sats: 0, count: 0 };
+          g.sats += adj.sats;
+          g.count += adj.count;
+          byGroup.set(key, g);
+        }
+      }
+      if (!cancelled) setDustAdj({ byAddress, byGroup, totalSats, totalCount });
+    })().catch((err) => {
+      console.warn("[BalanceOverview] Failed to compute dust adjustments:", err);
+      if (!cancelled) setDustAdj(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hideDust, groupBy, dbSignal, dustFlagsSignal]);
 
   // Spend health: check for unresolved prevout inputs whenever db changes.
   useEffect(() => {
@@ -1405,8 +1466,28 @@ export default function BalanceOverview() {
     return { date: sorted[0].date, price: sorted[0].close };
   }, [priceData]);
 
+  // Apply dust adjustments to the per-group summaries when "Hide dust" is on.
+  const effectiveSummaries = useMemo(() => {
+    if (!hideDust || !dustAdj || dustAdj.byGroup.size === 0) return groupSummaries;
+    const next = new Map<string, GroupSummary>();
+    groupSummaries.forEach((g, key) => {
+      const adj = dustAdj.byGroup.get(key);
+      next.set(
+        key,
+        adj
+          ? {
+              ...g,
+              totalSats: Math.max(0, g.totalSats - adj.sats),
+              utxoCount: Math.max(0, g.utxoCount - adj.count),
+            }
+          : g,
+      );
+    });
+    return next;
+  }, [groupSummaries, hideDust, dustAdj]);
+
   const groups = useMemo(() => {
-    const result = Array.from(groupSummaries.values());
+    const result = Array.from(effectiveSummaries.values());
     switch (sortBy) {
       case "balance-desc":
         result.sort((a, b) => b.totalSats - a.totalSats);
@@ -1425,7 +1506,7 @@ export default function BalanceOverview() {
         break;
     }
     return result;
-  }, [groupSummaries, sortBy]);
+  }, [effectiveSummaries, sortBy]);
 
   const toggleGroup = useCallback(
     (name: string) => {
@@ -1528,7 +1609,9 @@ export default function BalanceOverview() {
     [missingDetails, toast],
   );
 
-  const totalBalance = totals.sats;
+  const hiddenDustSats = hideDust && dustAdj ? dustAdj.totalSats : 0;
+  const hiddenDustCount = hideDust && dustAdj ? dustAdj.totalCount : 0;
+  const totalBalance = Math.max(0, totals.sats - hiddenDustSats);
   const totalAddresses = totals.addresses;
   const isBusy = phase !== "ready";
 
@@ -1599,8 +1682,42 @@ export default function BalanceOverview() {
             >
               {displayUnit === "btc" ? "BTC" : "sats"}
             </Button>
+
+            <div className="flex items-center gap-2 min-h-9">
+              <Switch
+                id="switch-balance-hide-dust"
+                checked={hideDust}
+                onCheckedChange={setHideDust}
+                data-testid="switch-hide-dust"
+              />
+              <Label htmlFor="switch-balance-hide-dust" className="text-sm cursor-pointer whitespace-nowrap">
+                Hide dust
+              </Label>
+            </div>
           </div>
         </div>
+
+        {hideDust && (
+          <div className="flex items-center gap-2 flex-wrap mt-2">
+            <Badge variant="secondary" className="gap-1" data-testid="badge-dust-hidden">
+              Excluding dust-flagged UTXOs from balances
+              {hiddenDustCount > 0 && (
+                <span>
+                  ({hiddenDustCount.toLocaleString()} excluded, {formatBtc(hiddenDustSats, displayUnit)})
+                </span>
+              )}
+            </Badge>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setHideDust(false)}
+              className="h-6 text-xs"
+              data-testid="button-show-dust"
+            >
+              Include dust
+            </Button>
+          </div>
+        )}
       </div>
 
       {showSpendWarning && (
@@ -2003,7 +2120,22 @@ export default function BalanceOverview() {
               const isExpanded = expandedGroups.has(group.name);
               const percentage = totalBalance > 0 ? (group.totalSats / totalBalance) * 100 : 0;
               const usdValue = latestPrice ? (group.totalSats / 100_000_000) * latestPrice.price : null;
-              const rows = groupRows.get(group.name);
+              const rawRows = groupRows.get(group.name);
+              // Apply per-address dust adjustments to the expanded rows so
+              // they stay consistent with the adjusted group totals.
+              const rows =
+                rawRows && hideDust && dustAdj && dustAdj.byAddress.size > 0
+                  ? rawRows.map((r) => {
+                      const adj = dustAdj.byAddress.get(r.address);
+                      return adj
+                        ? {
+                            ...r,
+                            sats: Math.max(0, r.sats - adj.sats),
+                            utxoCount: Math.max(0, r.utxoCount - adj.count),
+                          }
+                        : r;
+                    })
+                  : rawRows;
               const rowsLoading = loadingGroups.has(group.name);
               const unresolvedCount = unresolvedByGroup.get(group.name) ?? 0;
 

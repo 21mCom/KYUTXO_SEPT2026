@@ -7,7 +7,9 @@ import {
   unmarkDustOutpoints,
   getAllDustFlags,
   getDustFlaggedOutpointSet,
+  getUnspentDustByAddress,
 } from './dust-flags-crud';
+import { bulkAddParticipants, clearParticipants } from './transaction-crud';
 import { detectDustUTXOs, type AuditContext } from '../privacy-audit';
 import type { TransactionParticipant } from '../database';
 
@@ -17,6 +19,7 @@ const ADDR = 'bc1qexampledustaddr000000000000000000000000';
 
 beforeEach(async () => {
   await db.dustFlags.clear();
+  await clearParticipants();
 });
 
 describe('dust-flags-crud', () => {
@@ -56,6 +59,40 @@ describe('dust-flags-crud', () => {
     const set = await getDustFlaggedOutpointSet();
     expect(set.size).toBe(1);
     expect(set.has(toOutpoint(TXID_A, 1))).toBe(true);
+  });
+
+  it('sums unspent dust per address and excludes spent + address-less flags', async () => {
+    const ADDR_2 = 'bc1qseconddustaddr0000000000000000000000000';
+    await markOutpointsAsDust([
+      { txid: TXID_A, vout: 0, address: ADDR, amountSats: 546 },
+      { txid: TXID_A, vout: 1, address: ADDR, amountSats: 800 },
+      { txid: TXID_B, vout: 0, address: ADDR_2, amountSats: 700 },
+      // Spent flag: an input references this outpoint below.
+      { txid: TXID_B, vout: 1, address: ADDR, amountSats: 900 },
+      // No address: cannot be attributed to any per-address balance.
+      { txid: TXID_B, vout: 2, address: '', amountSats: 1000 },
+    ]);
+    await bulkAddParticipants([
+      {
+        txid: 'c'.repeat(64),
+        role: 'input',
+        address: ADDR,
+        amount: 900,
+        prevTxid: TXID_B,
+        prevVout: 1,
+      } as unknown as TransactionParticipant,
+    ]);
+
+    const { byAddress } = await getUnspentDustByAddress();
+    expect(byAddress.get(ADDR)).toEqual({ sats: 546 + 800, count: 2 });
+    expect(byAddress.get(ADDR_2)).toEqual({ sats: 700, count: 1 });
+    expect(byAddress.has('')).toBe(false);
+    expect(byAddress.size).toBe(2);
+  });
+
+  it('returns an empty map when there are no dust flags', async () => {
+    const { byAddress } = await getUnspentDustByAddress();
+    expect(byAddress.size).toBe(0);
   });
 });
 
