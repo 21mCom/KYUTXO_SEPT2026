@@ -105,6 +105,10 @@ args = "adversary-view-browser-check"
 task = "workflow.run"
 args = "dust-badge-audit-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "privacy-audit-flows-browser-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -308,6 +312,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-dust-badge-audit-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "privacy-audit-flows-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-privacy-audit-flows-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
