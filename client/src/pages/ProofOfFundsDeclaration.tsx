@@ -1,103 +1,47 @@
-import { useState, useRef, useCallback, useMemo, useEffect } from "react";
-import {
-  FileText,
-  Loader2,
-  AlertCircle,
-  CheckCircle,
-  Clock,
-  X,
-  RefreshCw,
-  Wifi,
-  Database,
-  ChevronDown,
-  ChevronUp,
-  Download,
-  QrCode as QrCodeIcon,
-  Globe,
-} from "lucide-react";
+import { useState, useRef, useMemo, useEffect } from "react";
+import { FileText, Loader2, Clock, Download } from "lucide-react";
 import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Link } from "wouter";
-import {
-  createProviderFromSettings,
-  isNodeUnreachableError,
-  NODE_PROBE_TIMEOUT_MS,
-  NODE_UNREACHABLE_CONSECUTIVE_LIMIT,
-} from "@/lib/blockchain-api";
-import { validateAddress, formatBTC, truncateAddress } from "@/lib/bitcoin";
-import { sanitizePdfText } from "@/lib/pdfText";
-import { mergeEvidencePdfs, type PdfExhibit } from "@/lib/pdfMerge";
+import { formatBTC } from "@/lib/bitcoin";
 import { buildAttestationLines } from "@/lib/attestationLines";
-import {
-  AML_APPENDIX_STRINGS,
-  AML_PREVIEW_STRINGS,
-  buildScreeningDateLine,
-  buildAddressesScreenedLine,
-  buildDirectMatchResultLine,
-  buildPreviewDirectMatchLine,
-  buildEntityListDescription,
-  buildNearestEntityLine,
-} from "@/lib/amlAppendixStrings";
-import { computeStatsForAddresses } from "@/lib/data/address-stats";
 import { getRecordsByType } from "@/lib/data/record-crud";
-import { getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
-import { getAttachmentsByRecordId } from "@/lib/data/attachments-crud";
-import { ACQUISITION_METHOD_OPTIONS, COUNTERPARTY_TYPE_OPTIONS } from "@/lib/db-types";
-import { useToast } from "@/hooks/use-toast";
 import {
   generateDeclarationNonce,
-  type SignatureFormat,
   type FreshnessAnchor,
 } from "@/lib/signatureVerify";
-import {
-  lookupEntities,
-  getActiveEntityCount,
-  getActiveEntitySource,
-  ENTITY_CATEGORY_LABELS,
-} from "@/lib/privacy-entity-list";
-import { runAmlScreening, type AmlDirectMatch, type AmlScreeningResult } from "./proof-of-funds/aml-screening";
+import { runAmlScreening, type AmlScreeningResult } from "./proof-of-funds/aml-screening";
 export { runAmlScreening } from "./proof-of-funds/aml-screening";
 import {
-  type BalanceSource,
-  type RowStatus,
-  type ControlStatus,
-  type AddressRow,
   type ControlState,
-  type BalanceSummary,
-  parseAddressInput,
-  formatUnix,
   todayString,
 } from "./proof-of-funds/address-helpers";
 import { type EvidenceItem } from "./proof-of-funds/evidence-helpers";
 import {
   type ExplorerId,
-  type ExplorerDef,
-  QR_EXPLORERS,
   getExplorer,
 } from "./proof-of-funds/explorer-helpers";
 import {
-  KYUTXO_APP_VERSION,
-  type DeclarationPrefs,
-  DEFAULT_DECLARATION_PREFS,
   loadDeclarationPrefs,
   saveDeclarationPrefs,
 } from "./proof-of-funds/declaration-prefs";
+import { useBalanceCheck } from "./proof-of-funds/use-balance-check";
 import { usePofPdfBuilder } from "./proof-of-funds/use-pof-pdf-builder";
+import {
+  AddressInputCard,
+  BalanceSourceCard,
+  BalanceResultsCard,
+} from "./proof-of-funds/address-balance-cards";
+import {
+  DeclarantDetailsCard,
+  FiatEquivalentCard,
+} from "./proof-of-funds/declarant-fiat-cards";
 import { QrCodesCard } from "./proof-of-funds/qr-codes-card";
 import { AmlRiskCard } from "./proof-of-funds/aml-risk-card";
 import { ProvenanceCard } from "./proof-of-funds/provenance-card";
@@ -109,7 +53,6 @@ export default function ProofOfFundsDeclaration() {
   const { nodeSettings } = useNodeSettings();
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
-  const { toast } = useToast();
   const { openRecordEdit } = useRecordPreview();
 
   // Address records, kept live so the provenance summary in Step 7 updates
@@ -117,20 +60,36 @@ export default function ProofOfFundsDeclaration() {
   // quick-action.
   const addressRecords = useLiveQuery(() => getRecordsByType("address"), []);
 
-  // Address input
-  const [addressTab, setAddressTab] = useState<"paste" | "vault">("paste");
-  const [pastedText, setPastedText] = useState("");
-  const [filterOwner, setFilterOwner] = useState<string>("all");
-  const [filterWallet, setFilterWallet] = useState<string>("all");
+  // Proof of control
+  // Map of address -> per-address control verification state
+  const [controlStates, setControlStates] = useState<Record<string, ControlState>>({});
 
-  // Balance resolution
-  const [balanceSource, setBalanceSource] = useState<BalanceSource>("offline");
-  const [rows, setRows] = useState<AddressRow[]>([]);
-  const [dupes, setDupes] = useState(0);
-  const [isChecking, setIsChecking] = useState(false);
-  const [summary, setSummary] = useState<BalanceSummary | null>(null);
-  const [providerError, setProviderError] = useState<string | null>(null);
-  const cancelledRef = useRef(false);
+  // Address input + balance resolution (Steps 1-2 and the results table).
+  // All resolution state and logic lives in the hook; the reset callback also
+  // clears the per-address proof-of-control states.
+  const {
+    addressTab,
+    setAddressTab,
+    pastedText,
+    setPastedText,
+    filterOwner,
+    setFilterOwner,
+    filterWallet,
+    setFilterWallet,
+    balanceSource,
+    setBalanceSource,
+    rows,
+    dupes,
+    isChecking,
+    summary,
+    providerError,
+    runCheck,
+    handleCancel,
+    handleReset,
+  } = useBalanceCheck({
+    nodeSettings,
+    onReset: () => setControlStates({}),
+  });
 
   // Declarant form
   const [declarantName, setDeclarantName] = useState("");
@@ -146,10 +105,6 @@ export default function ProofOfFundsDeclaration() {
 
   // Declaration nonce — generated once per page session
   const [declarationNonce] = useState<string>(() => generateDeclarationNonce());
-
-  // Proof of control
-  // Map of address -> per-address control verification state
-  const [controlStates, setControlStates] = useState<Record<string, ControlState>>({});
 
   // Optional add-ons for Step 5 (both off by default) — UI lives in ProofOfControlCard,
   // but the values live here because the PDF builder and the signature-invalidation
@@ -271,9 +226,6 @@ export default function ProofOfFundsDeclaration() {
     () => evidenceItems.filter((it) => it.kind === "pdf"),
     [evidenceItems],
   );
-
-  // Expanded invalid section
-  const [showInvalid, setShowInvalid] = useState(false);
 
   const validRows = useMemo(() => rows.filter((r) => !r.isInvalid), [rows]);
   const invalidRows = useMemo(() => rows.filter((r) => r.isInvalid), [rows]);
@@ -459,273 +411,6 @@ export default function ProofOfFundsDeclaration() {
     purpose.trim() !== "" &&
     !isChecking;
 
-  const resolveAddresses = useCallback(async (): Promise<string[]> => {
-    if (addressTab === "paste") {
-      return pastedText
-        .split(/[\n,;]+/)
-        .map((a) => a.trim())
-        .filter((a) => a.length > 0);
-    }
-    const allRecords = await getRecordsByType("address");
-    let filtered = allRecords;
-    if (filterOwner !== "all") filtered = filtered.filter((r) => r.owner === filterOwner);
-    if (filterWallet !== "all") filtered = filtered.filter((r) => r.walletName === filterWallet);
-    return filtered.map((r) => r.inputString).filter((s) => s.length > 0);
-  }, [addressTab, pastedText, filterOwner, filterWallet]);
-
-  const runCheck = useCallback(async () => {
-    setProviderError(null);
-    setSummary(null);
-
-    const rawAddresses = await resolveAddresses();
-    if (rawAddresses.length === 0) {
-      toast({ title: "No Addresses", description: "Please enter or select at least one address." });
-      return;
-    }
-
-    const { rows: parsed, dupes: d } = parseAddressInput(rawAddresses.join("\n"));
-    setRows(parsed);
-    setDupes(d);
-    setIsChecking(true);
-    cancelledRef.current = false;
-
-    const validIndices = parsed
-      .map((r, i) => ({ r, i }))
-      .filter(({ r }) => !r.isInvalid);
-
-    if (balanceSource === "live") {
-      let provider: ReturnType<typeof createProviderFromSettings>;
-      try {
-        provider = createProviderFromSettings(nodeSettings);
-      } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : "Failed to create provider.";
-        setProviderError(msg);
-        setIsChecking(false);
-        return;
-      }
-
-      let blockHeight: number | undefined;
-      try {
-        blockHeight = await provider.getBlockHeight();
-      } catch {
-        // Non-fatal — still proceed without block height
-      }
-
-      const nowTs = Math.floor(Date.now() / 1000);
-
-      const fetchBalanceSats = async (
-        address: string,
-        signal?: AbortSignal,
-      ): Promise<number> => {
-        if (provider.getAddressCoreStats) {
-          const info = await provider.getAddressCoreStats(address, signal);
-          return info.balanceSats ?? 0;
-        } else if (provider.getAddressInfo) {
-          const info = await provider.getAddressInfo(address);
-          return info.balanceSats ?? 0;
-        } else {
-          const { computeHistoryFromTxs } = await import("@/lib/providers/address-history");
-          const txs = await provider.getAddressTransactions(address);
-          const history = computeHistoryFromTxs(address, txs);
-          return (history.receivedSats ?? 0) - (history.sentSats ?? 0);
-        }
-      };
-
-      let isFirstAttempt = true;
-      let hadSuccess = false;
-      let consecutiveNodeFailures = 0;
-      for (const { i } of validIndices) {
-        if (cancelledRef.current) break;
-        setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, status: "loading" } : r)));
-        const address = parsed[i].raw;
-        const attemptIsFirst = isFirstAttempt;
-        try {
-          let balanceSats: number;
-          if (attemptIsFirst) {
-            // Cap the very first attempt so an unreachable node fails fast instead
-            // of hanging for the full per-request timeout on every address. Abort
-            // the in-flight request and reject the race once the cap is hit.
-            const controller = new AbortController();
-            let probeTimer: ReturnType<typeof setTimeout> | undefined;
-            try {
-              balanceSats = await Promise.race([
-                fetchBalanceSats(address, controller.signal),
-                new Promise<number>((_, reject) => {
-                  probeTimer = setTimeout(() => {
-                    controller.abort(
-                      new DOMException("Node probe timed out", "TimeoutError"),
-                    );
-                    reject(
-                      new Error(
-                        `Node unreachable — no response within ${NODE_PROBE_TIMEOUT_MS / 1000}s.`,
-                      ),
-                    );
-                  }, NODE_PROBE_TIMEOUT_MS);
-                }),
-              ]);
-            } finally {
-              if (probeTimer) clearTimeout(probeTimer);
-            }
-          } else {
-            balanceSats = await fetchBalanceSats(address);
-          }
-          isFirstAttempt = false;
-          hadSuccess = true;
-          consecutiveNodeFailures = 0;
-          setRows((prev) =>
-            prev.map((r, idx) =>
-              idx === i
-                ? { ...r, status: balanceSats === 0 ? "empty" : "done", balanceSats }
-                : r
-            )
-          );
-        } catch (err) {
-          if (cancelledRef.current) break;
-          const nodeUnreachable = isNodeUnreachableError(err);
-          // On the first attempt, a node-level connectivity failure means the
-          // node is unreachable: fail the whole check immediately rather than
-          // grinding through every address. Transient/per-address errors still
-          // surface per-row (here and on later addresses).
-          if (attemptIsFirst && nodeUnreachable) {
-            setProviderError(
-              "Node unreachable — the on-chain balance check could not reach your node.",
-            );
-            setRows((prev) =>
-              prev.map((r) => (r.status === "loading" ? { ...r, status: "pending" } : r))
-            );
-            setIsChecking(false);
-            return;
-          }
-          isFirstAttempt = false;
-          // After a successful start, the node going down partway through shows up
-          // as a run of consecutive node-unreachable failures. Short-circuit the
-          // whole check rather than grinding through the rest one timeout at a
-          // time. A single transient failure (or any non-node error) stays below
-          // the threshold and resets the run, so isolated 429/500/404s continue.
-          if (nodeUnreachable) {
-            consecutiveNodeFailures += 1;
-          } else {
-            consecutiveNodeFailures = 0;
-          }
-          if (
-            hadSuccess &&
-            nodeUnreachable &&
-            consecutiveNodeFailures >= NODE_UNREACHABLE_CONSECUTIVE_LIMIT
-          ) {
-            setProviderError(
-              "Node unreachable — the on-chain balance check could not reach your node.",
-            );
-            setRows((prev) =>
-              prev.map((r) =>
-                r.status === "loading" ? { ...r, status: "pending" } : r,
-              ),
-            );
-            setIsChecking(false);
-            return;
-          }
-          setRows((prev) =>
-            prev.map((r, idx) =>
-              idx === i
-                ? { ...r, status: "error", error: err instanceof Error ? err.message : "Lookup failed" }
-                : r
-            )
-          );
-        }
-      }
-
-      if (!cancelledRef.current) {
-        const asOfLabel = blockHeight
-          ? `Live on-chain check — block ${blockHeight.toLocaleString()} (${formatUnix(nowTs)})`
-          : `Live on-chain check — ${formatUnix(nowTs)}`;
-        setSummary({
-          totalSats: 0,
-          source: "live",
-          asOfLabel,
-          blockHeight,
-          timestamp: nowTs,
-        });
-      }
-    } else {
-      const validAddresses = validIndices.map(({ r }) => r.raw);
-      setRows((prev) =>
-        prev.map((r) => (!r.isInvalid ? { ...r, status: "loading" } : r))
-      );
-
-      try {
-        const statsMap = await computeStatsForAddresses(validAddresses);
-
-        let lastSyncTime: number | undefined;
-        try {
-          const allRecords = await getRecordsByType("address");
-          const relevantRecords = allRecords.filter((rec) =>
-            validAddresses.includes(rec.inputString)
-          );
-          const syncTimes = relevantRecords
-            .map((r) => r.statsComputedAt)
-            .filter((t): t is number => t !== undefined && t > 0);
-          if (syncTimes.length > 0) {
-            lastSyncTime = Math.max(...syncTimes);
-          }
-        } catch {
-          // Non-fatal
-        }
-
-        setRows((prev) =>
-          prev.map((r) => {
-            if (r.isInvalid) return r;
-            const stats = statsMap.get(r.raw);
-            const balanceSats = stats ? stats.balanceSats : 0;
-            return { ...r, status: balanceSats === 0 ? "empty" : "done", balanceSats };
-          })
-        );
-
-        const asOfLabel = lastSyncTime
-          ? `Offline vault data — last synced ${formatUnix(lastSyncTime)}`
-          : "Offline vault data (sync time unavailable)";
-
-        setSummary({
-          totalSats: 0,
-          source: "offline",
-          asOfLabel,
-          timestamp: lastSyncTime,
-        });
-      } catch (err) {
-        toast({
-          variant: "destructive",
-          title: "Offline Balance Failed",
-          description: err instanceof Error ? err.message : "Failed to compute balances from vault.",
-        });
-        setRows((prev) =>
-          prev.map((r) =>
-            !r.isInvalid
-              ? { ...r, status: "error", error: "Failed to compute offline balance" }
-              : r
-          )
-        );
-      }
-    }
-
-    setIsChecking(false);
-  }, [resolveAddresses, balanceSource, nodeSettings, toast]);
-
-  const handleCancel = () => {
-    cancelledRef.current = true;
-    setIsChecking(false);
-  };
-
-  const handleReset = () => {
-    cancelledRef.current = true;
-    setIsChecking(false);
-    setRows([]);
-    setDupes(0);
-    setSummary(null);
-    setProviderError(null);
-    setPastedText("");
-    setControlStates({});
-  };
-
-
   // ── PDF generation ──────────────────────────────────────────────────────────
   // Extracted to a dedicated hook; all PDF state lives there.
   const { generatePdf, generateSamplePdf, isGeneratingPdf, isGeneratingSamplePdf } = usePofPdfBuilder({
@@ -794,554 +479,91 @@ export default function ProofOfFundsDeclaration() {
         </div>
 
         {/* Step 1: Address Input */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Step 1 — Bitcoin Addresses</CardTitle>
-            <CardDescription>
-              Enter addresses by pasting a list, or select from your vault by owner or wallet.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Tabs value={addressTab} onValueChange={(v) => setAddressTab(v as "paste" | "vault")}>
-              <TabsList>
-                <TabsTrigger value="paste" data-testid="tab-paste-addresses">Paste List</TabsTrigger>
-                <TabsTrigger value="vault" data-testid="tab-vault-addresses">From Vault</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="paste" className="space-y-2 mt-3">
-                <Textarea
-                  placeholder={`bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh\nbc1q...\n1A1zP1...`}
-                  className="min-h-[120px] font-mono text-sm"
-                  value={pastedText}
-                  onChange={(e) => setPastedText(e.target.value)}
-                  disabled={isChecking}
-                  data-testid="textarea-address-input"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Separate addresses with newlines, commas, or semicolons. Duplicates are removed automatically.
-                </p>
-              </TabsContent>
-
-              <TabsContent value="vault" className="space-y-3 mt-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <Label>Filter by Owner</Label>
-                    <Select value={filterOwner} onValueChange={setFilterOwner} disabled={isChecking}>
-                      <SelectTrigger data-testid="select-filter-owner">
-                        <SelectValue placeholder="All owners" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All owners</SelectItem>
-                        {owners.map((o) => (
-                          <SelectItem key={o.name} value={o.name}>{o.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Filter by Wallet</Label>
-                    <Select value={filterWallet} onValueChange={setFilterWallet} disabled={isChecking}>
-                      <SelectTrigger data-testid="select-filter-wallet">
-                        <SelectValue placeholder="All wallets" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All wallets</SelectItem>
-                        {walletNames.map((w) => (
-                          <SelectItem key={w.name} value={w.name}>{w.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  All address records matching the selected filters will be included.
-                </p>
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
+        <AddressInputCard
+          addressTab={addressTab}
+          setAddressTab={setAddressTab}
+          pastedText={pastedText}
+          setPastedText={setPastedText}
+          filterOwner={filterOwner}
+          setFilterOwner={setFilterOwner}
+          filterWallet={filterWallet}
+          setFilterWallet={setFilterWallet}
+          isChecking={isChecking}
+          owners={owners}
+          walletNames={walletNames}
+        />
 
         {/* Step 2: Balance Source */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Step 2 — Balance Source</CardTitle>
-            <CardDescription>
-              Choose how balances are resolved for each address.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setBalanceSource("offline")}
-                disabled={isChecking}
-                data-testid="button-source-offline"
-                className={`flex items-start gap-3 rounded-md border p-4 text-left transition-colors ${
-                  balanceSource === "offline"
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover-elevate"
-                }`}
-              >
-                <Database className={`h-5 w-5 mt-0.5 shrink-0 ${balanceSource === "offline" ? "text-primary" : "text-muted-foreground"}`} />
-                <div>
-                  <div className="font-medium text-sm">Offline Vault Data</div>
-                  <div className="text-xs text-muted-foreground mt-0.5">
-                    Use already-synced data from your vault. No network required. Shows last-sync timestamp.
-                  </div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setBalanceSource("live")}
-                disabled={isChecking}
-                data-testid="button-source-live"
-                className={`flex items-start gap-3 rounded-md border p-4 text-left transition-colors ${
-                  balanceSource === "live"
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover-elevate"
-                }`}
-              >
-                <Wifi className={`h-5 w-5 mt-0.5 shrink-0 ${balanceSource === "live" ? "text-primary" : "text-muted-foreground"}`} />
-                <div>
-                  <div className="font-medium text-sm">Live On-Chain Check</div>
-                  <div className="text-xs text-muted-foreground mt-0.5">
-                    Query your configured node for real-time balances. Shows block height and timestamp.
-                  </div>
-                </div>
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button
-                onClick={runCheck}
-                disabled={isChecking || (addressTab === "paste" && !pastedText.trim())}
-                data-testid="button-check-balances"
-              >
-                {isChecking ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Checking…
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    Check Balances
-                  </>
-                )}
-              </Button>
-
-              {isChecking && (
-                <Button variant="outline" onClick={handleCancel} data-testid="button-cancel-check">
-                  <X className="h-4 w-4 mr-2" />
-                  Cancel
-                </Button>
-              )}
-
-              {hasResults && !isChecking && (
-                <Button variant="outline" onClick={handleReset} data-testid="button-reset">
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  Reset
-                </Button>
-              )}
-
-              {isChecking && validCount > 0 && balanceSource === "live" && (
-                <span className="text-sm text-muted-foreground" data-testid="text-check-progress">
-                  {doneCount} / {validCount} done
-                </span>
-              )}
-            </div>
-
-            {providerError && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  {providerError}{" "}
-                  <Link
-                    href="/node-settings"
-                    className="font-medium underline underline-offset-2"
-                    data-testid="link-node-settings"
-                  >
-                    Check Node Connection settings
-                  </Link>
-                </AlertDescription>
-              </Alert>
-            )}
-          </CardContent>
-        </Card>
+        <BalanceSourceCard
+          balanceSource={balanceSource}
+          setBalanceSource={setBalanceSource}
+          isChecking={isChecking}
+          addressTab={addressTab}
+          pastedText={pastedText}
+          hasResults={hasResults}
+          validCount={validCount}
+          doneCount={doneCount}
+          providerError={providerError}
+          runCheck={runCheck}
+          handleCancel={handleCancel}
+          handleReset={handleReset}
+        />
 
         {/* Results */}
         {hasResults && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Balance Results</CardTitle>
-              {summary && (
-                <CardDescription data-testid="text-data-source-note">
-                  {summary.asOfLabel}
-                </CardDescription>
-              )}
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {dupes > 0 && (
-                <Alert>
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>
-                    {dupes} duplicate address{dupes !== 1 ? "es were" : " was"} removed.
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {validRows.filter((r) => r.status !== "empty").length > 0 && (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Address</TableHead>
-                      <TableHead className="text-right">Balance (BTC)</TableHead>
-                      <TableHead className="w-28">Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {validRows.filter((r) => r.status !== "empty").map((row, idx) => (
-                      <TableRow key={idx} data-testid={`row-address-${idx}`}>
-                        <TableCell className="font-mono text-xs break-all">
-                          {row.raw}
-                        </TableCell>
-                        <TableCell className="text-right font-mono tabular-nums">
-                          {row.status === "done"
-                            ? formatBTC(row.balanceSats ?? 0)
-                            : <span className="text-muted-foreground">—</span>
-                          }
-                        </TableCell>
-                        <TableCell>
-                          {row.status === "pending" && (
-                            <Badge variant="secondary" className="gap-1">
-                              <Clock className="h-3 w-3" />
-                              Pending
-                            </Badge>
-                          )}
-                          {row.status === "loading" && (
-                            <Badge variant="secondary" className="gap-1">
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              Checking
-                            </Badge>
-                          )}
-                          {row.status === "done" && (
-                            <Badge variant="secondary" className="gap-1 text-green-600 dark:text-green-400">
-                              <CheckCircle className="h-3 w-3" />
-                              Done
-                            </Badge>
-                          )}
-                          {row.status === "error" && (
-                            <Badge variant="destructive" className="gap-1" title={row.error}>
-                              <AlertCircle className="h-3 w-3" />
-                              Error
-                            </Badge>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-
-              {doneRows.length === 0 && emptyRows.length > 0 && !isChecking && (
-                <Alert data-testid="alert-all-empty">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>
-                    All {emptyRows.length} address{emptyRows.length !== 1 ? "es" : ""} resolved to a zero balance and were excluded. There is nothing to declare.
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {doneRows.length > 0 && (
-                <div className="flex items-center justify-between rounded-md border bg-muted/30 px-4 py-3">
-                  <span className="font-semibold text-sm">Total Balance</span>
-                  <div className="text-right">
-                    <div className="font-bold font-mono tabular-nums" data-testid="text-total-balance">
-                      {formatBTC(totalSats)} BTC
-                    </div>
-                    {fiatValid && fiatTotal !== null && (
-                      <div className="text-sm text-muted-foreground font-mono tabular-nums" data-testid="text-fiat-total">
-                        ≈ {fiatTotal.toLocaleString("en-US", {
-                          style: "currency",
-                          currency: fiatCurrency,
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })} {fiatCurrency}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {emptyRows.length > 0 && doneRows.length > 0 && (
-                <Alert data-testid="alert-empty-excluded">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>
-                    {emptyRows.length} empty address{emptyRows.length !== 1 ? "es" : ""} excluded — {emptyRows.length !== 1 ? "these addresses have" : "this address has"} a zero balance and will not appear in the declaration.
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {invalidRows.length > 0 && (
-                <div className="rounded-md border border-destructive/30">
-                  <button
-                    type="button"
-                    onClick={() => setShowInvalid((v) => !v)}
-                    className="flex w-full items-center justify-between px-4 py-2 text-sm font-medium text-destructive hover-elevate rounded-md"
-                    data-testid="button-toggle-invalid"
-                  >
-                    <span className="flex items-center gap-2">
-                      <AlertCircle className="h-4 w-4" />
-                      {invalidRows.length} invalid address{invalidRows.length !== 1 ? "es" : ""} (excluded from declaration)
-                    </span>
-                    {showInvalid ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  </button>
-                  {showInvalid && (
-                    <div className="border-t px-4 pb-3 pt-2 space-y-1">
-                      {invalidRows.map((r, idx) => (
-                        <div key={idx} className="flex items-start gap-2 text-xs">
-                          <AlertCircle className="h-3 w-3 text-destructive mt-0.5 shrink-0" />
-                          <span className="font-mono text-destructive break-all">{r.raw}</span>
-                          <span className="text-muted-foreground shrink-0">— {r.invalidReason}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {errorRows.length > 0 && (
-                <Alert variant="destructive">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>
-                    {errorRows.length} address{errorRows.length !== 1 ? "es" : ""} failed to load
-                    {balanceSource === "live" ? " — check your Node Connection settings." : "."}
-                  </AlertDescription>
-                </Alert>
-              )}
-            </CardContent>
-          </Card>
+          <BalanceResultsCard
+            summary={summary}
+            dupes={dupes}
+            validRows={validRows}
+            invalidRows={invalidRows}
+            doneRows={doneRows}
+            emptyRows={emptyRows}
+            errorRows={errorRows}
+            isChecking={isChecking}
+            balanceSource={balanceSource}
+            totalSats={totalSats}
+            fiatValid={fiatValid}
+            fiatTotal={fiatTotal}
+            fiatCurrency={fiatCurrency}
+          />
         )}
 
         {/* Step 3: Declarant Details */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Step 3 — Declarant Details</CardTitle>
-            <CardDescription>
-              These details appear in the declaration header and signature block.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <Label htmlFor="declarant-name">Full Name <span className="text-destructive">*</span></Label>
-                <Input
-                  id="declarant-name"
-                  placeholder="Your full legal name"
-                  value={declarantName}
-                  onChange={(e) => setDeclarantName(e.target.value)}
-                  data-testid="input-declarant-name"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="declaration-date">Declaration Date <span className="text-destructive">*</span></Label>
-                <Input
-                  id="declaration-date"
-                  type="date"
-                  value={declarationDate}
-                  onChange={(e) => setDeclarationDate(e.target.value)}
-                  data-testid="input-declaration-date"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <Label htmlFor="declarant-contact">Contact / Address <span className="text-muted-foreground text-xs">(optional)</span></Label>
-              <Input
-                id="declarant-contact"
-                placeholder="Email, postal address, or other contact information"
-                value={declarantContact}
-                onChange={(e) => setDeclarantContact(e.target.value)}
-                data-testid="input-declarant-contact"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <Label htmlFor="declarant-residential-address">Residential / Street Address <span className="text-muted-foreground text-xs">(optional)</span></Label>
-              <Input
-                id="declarant-residential-address"
-                placeholder="Street address, city, state / country"
-                value={declarantResidentialAddress}
-                onChange={(e) => setDeclarantResidentialAddress(e.target.value)}
-                data-testid="input-declarant-residential-address"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <Label htmlFor="declarant-dob">Date of Birth <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                <Input
-                  id="declarant-dob"
-                  type="date"
-                  value={declarantDob}
-                  onChange={(e) => setDeclarantDob(e.target.value)}
-                  data-testid="input-declarant-dob"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="declarant-nationality">Nationality <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                <Input
-                  id="declarant-nationality"
-                  placeholder="e.g. United States"
-                  value={declarantNationality}
-                  onChange={(e) => setDeclarantNationality(e.target.value)}
-                  data-testid="input-declarant-nationality"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <Label htmlFor="declarant-tax-id">Tax ID Number <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                <Input
-                  id="declarant-tax-id"
-                  placeholder="e.g. SSN, EIN, TIN"
-                  value={declarantTaxId}
-                  onChange={(e) => setDeclarantTaxId(e.target.value)}
-                  data-testid="input-declarant-tax-id"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="declarant-id-number">Identification Number <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                <Input
-                  id="declarant-id-number"
-                  placeholder="e.g. Passport or national ID number"
-                  value={declarantIdNumber}
-                  onChange={(e) => setDeclarantIdNumber(e.target.value)}
-                  data-testid="input-declarant-id-number"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <Label htmlFor="purpose">Purpose <span className="text-destructive">*</span></Label>
-              <Input
-                id="purpose"
-                placeholder="e.g. Proof of funds for a residential property purchase"
-                value={purpose}
-                onChange={(e) => setPurpose(e.target.value)}
-                data-testid="input-purpose"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <Label htmlFor="statement">Declaration Statement <span className="text-muted-foreground text-xs">(optional)</span></Label>
-              <Textarea
-                id="statement"
-                placeholder="I, the undersigned, hereby declare that I am the sole owner of the Bitcoin addresses listed in this document and that the balances shown represent funds under my direct control..."
-                className="min-h-[100px]"
-                value={statement}
-                onChange={(e) => setStatement(e.target.value)}
-                data-testid="textarea-statement"
-              />
-            </div>
-
-            {/* Live preview of the declarant details that will appear in the PDF.
-                Optional identity fields only show when filled (mirrors the PDF). */}
-            {declarantPreviewRows.length > 0 && (
-              <div
-                className="rounded-md border bg-muted/30 p-4 space-y-2"
-                data-testid="declarant-preview"
-              >
-                <h4 className="text-sm font-semibold">Declaration Preview</h4>
-                <p className="text-xs text-muted-foreground">
-                  This is how the declarant details will appear in the PDF. Blank optional fields are omitted.
-                </p>
-                <dl className="space-y-1 text-sm">
-                  {declarantPreviewRows.map((row) => (
-                    <div
-                      key={row.key}
-                      className="flex flex-wrap gap-x-2"
-                      data-testid={`preview-row-${row.key}`}
-                    >
-                      <dt className="text-muted-foreground">{row.label}</dt>
-                      <dd className="font-medium break-all" data-testid={row.testid}>
-                        {row.value}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <DeclarantDetailsCard
+          declarantName={declarantName}
+          setDeclarantName={setDeclarantName}
+          declarantContact={declarantContact}
+          setDeclarantContact={setDeclarantContact}
+          declarantResidentialAddress={declarantResidentialAddress}
+          setDeclarantResidentialAddress={setDeclarantResidentialAddress}
+          declarantDob={declarantDob}
+          setDeclarantDob={setDeclarantDob}
+          declarantTaxId={declarantTaxId}
+          setDeclarantTaxId={setDeclarantTaxId}
+          declarantIdNumber={declarantIdNumber}
+          setDeclarantIdNumber={setDeclarantIdNumber}
+          declarantNationality={declarantNationality}
+          setDeclarantNationality={setDeclarantNationality}
+          declarationDate={declarationDate}
+          setDeclarationDate={setDeclarationDate}
+          purpose={purpose}
+          setPurpose={setPurpose}
+          statement={statement}
+          setStatement={setStatement}
+          declarantPreviewRows={declarantPreviewRows}
+        />
 
         {/* Step 4: Optional Fiat */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Step 4 — Fiat Equivalent <span className="text-muted-foreground font-normal text-base">(Optional)</span></CardTitle>
-            <CardDescription>
-              Enter an exchange rate and currency to include a fiat equivalent in the PDF.
-              The rate is supplied by you — it is not fetched from any market feed.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <Label htmlFor="fiat-currency">Currency</Label>
-                <Select value={fiatCurrency} onValueChange={setFiatCurrency}>
-                  <SelectTrigger id="fiat-currency" data-testid="select-fiat-currency">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="USD">USD — US Dollar</SelectItem>
-                    <SelectItem value="EUR">EUR — Euro</SelectItem>
-                    <SelectItem value="GBP">GBP — British Pound</SelectItem>
-                    <SelectItem value="CAD">CAD — Canadian Dollar</SelectItem>
-                    <SelectItem value="AUD">AUD — Australian Dollar</SelectItem>
-                    <SelectItem value="CHF">CHF — Swiss Franc</SelectItem>
-                    <SelectItem value="JPY">JPY — Japanese Yen</SelectItem>
-                    <SelectItem value="SGD">SGD — Singapore Dollar</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="fiat-rate">Exchange Rate (BTC per 1 {fiatCurrency})</Label>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground whitespace-nowrap">1 BTC =</span>
-                  <Input
-                    id="fiat-rate"
-                    type="number"
-                    min="0"
-                    step="any"
-                    placeholder="e.g. 65000"
-                    value={fiatRate}
-                    onChange={(e) => setFiatRate(e.target.value)}
-                    data-testid="input-fiat-rate"
-                  />
-                  <span className="text-sm text-muted-foreground">{fiatCurrency}</span>
-                </div>
-              </div>
-            </div>
-
-            {fiatValid && summary && doneRows.length > 0 && fiatTotal !== null && (
-              <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm space-y-1">
-                <div className="font-medium">
-                  Fiat Equivalent: {fiatTotal.toLocaleString("en-US", {
-                    style: "currency",
-                    currency: fiatCurrency,
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })} {fiatCurrency}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  Rate supplied by declarant — not a market quote or financial advice.
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <FiatEquivalentCard
+          fiatCurrency={fiatCurrency}
+          setFiatCurrency={setFiatCurrency}
+          fiatRate={fiatRate}
+          setFiatRate={setFiatRate}
+          fiatValid={fiatValid}
+          fiatTotal={fiatTotal}
+          summary={summary}
+          doneRows={doneRows}
+        />
 
         {/* Step 5: Proof of Control */}
         <ProofOfControlCard
