@@ -57,7 +57,7 @@ interface DustScanOutcome {
   scannedAddresses: Set<string>;
 }
 
-async function computeDustings(
+export async function computeDustings(
   scopeType: ScopeType,
   scopeValue: string,
   threshold: number,
