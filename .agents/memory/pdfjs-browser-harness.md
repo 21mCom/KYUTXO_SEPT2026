@@ -27,9 +27,16 @@ check's `loadPdfjs()` feature-detects at runtime:
 - In the browser pdf.js needs an explicit `GlobalWorkerOptions.workerSrc`
   (Node has a built-in fake worker; the browser does not).
 - The Nix channel (stable-24_05) pins Chromium 125; replit.nix can't be edited
-  directly and the package tool installs from the same channel, so the harness
-  browser can't be bumped from inside a task — the feature detection makes the
-  full-fidelity path activate automatically once it is.
+  directly and the package tool installs from the same channel. But a one-off
+  modern Chromium IS obtainable: `nix build github:NixOS/nixpkgs/nixos-25.05#chromium`
+  (retry the ~2min-capped bash call; nix resumes from the store) then point the
+  guard at it via `CHROMIUM_BIN`. Playwright's Chrome-for-Testing download does
+  NOT work here — it crashes with a floating point exception at startup even
+  with a full LD_LIBRARY_PATH built from the nix chromium's RUNPATH.
+- CONFIRMED (Chromium 143): the default-build path works end to end — native
+  `Promise.try` detected, default `pdfjs-dist` + real `pdf.worker.min.mjs`
+  loaded (no legacy chunk requested), all glyph steps PASS. The v125 legacy
+  fallback also still passes.
 
 **Why legacy fallback is acceptable:** pdf.js is only a verification *oracle*
 (KYUTXO writes PDFs with jsPDF, never reads them). Both builds parse the byte
