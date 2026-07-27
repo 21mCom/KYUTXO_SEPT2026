@@ -367,12 +367,17 @@ export function UtxoTableRow({
   );
 }
 
-// Scrollable, virtualized UTXO list. Extracted as a pure-props component (like
+// Virtualized UTXO list. Extracted as a pure-props component (like
 // VirtualizedTransactionList) so the virtual-scroll note-icon preload wiring can
 // be regression-tested in isolation, without rendering the whole engine-backed,
 // Dexie-driven page. As the visible window moves it preloads hover metadata for
 // the newly-visible rows (group addresses + utxo txids from the flattened row
 // model) via batchPreloadIdentifiers, so note icons appear without a hover.
+//
+// The list does NOT own a scroll container: the entire page scrolls as one
+// (scrollRef points at the page-level scroll element). The virtualizer is fed
+// scrollMargin = the list's offset from the top of that scroll element so the
+// visible-row window stays correct below the header/summary/filter sections.
 export function VirtualizedUtxoList({
   flattenedRows,
   expandedAddresses,
@@ -392,12 +397,42 @@ export function VirtualizedUtxoList({
   header: React.ReactNode;
   dustFlaggedOutpoints?: Set<string>;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  const measureScrollMargin = useCallback(() => {
+    const scrollEl = scrollRef.current;
+    const listEl = listRef.current;
+    if (!scrollEl || !listEl) return;
+    const margin =
+      listEl.getBoundingClientRect().top -
+      scrollEl.getBoundingClientRect().top +
+      scrollEl.scrollTop;
+    // 1px guard prevents update loops from sub-pixel layout jitter.
+    setScrollMargin(prev => (Math.abs(prev - margin) > 1 ? margin : prev));
+  }, [scrollRef]);
+
+  // Content above the list (status cards, filter badges) mounts/unmounts with
+  // renders of this page, so re-measure after every commit...
+  useEffect(measureScrollMargin);
+
+  // ...and on container resizes (window/sidebar changes), which don't
+  // necessarily re-render this component.
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measureScrollMargin);
+    ro.observe(scrollEl);
+    return () => ro.disconnect();
+  }, [scrollRef, measureScrollMargin]);
+
   const utxoVirtualizer = useVirtualizer({
     count: flattenedRows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => flattenedRows[index]?.kind === 'utxo' ? 44 : 72,
     overscan: 20,
     measureElement: (el) => el.getBoundingClientRect().height,
+    scrollMargin,
   });
 
   const utxoVirtualItems = utxoVirtualizer.getVirtualItems();
@@ -421,15 +456,15 @@ export function VirtualizedUtxoList({
   }, [utxoVisibleRangeKey, flattenedRows]);
 
   return (
-    <div ref={scrollRef} className="h-full overflow-auto">
+    <div ref={listRef}>
       <Table>
         <TableHeader className="sticky top-0 bg-card z-10">
           {header}
         </TableHeader>
         <TableBody>
-          {utxoVirtualizer.getVirtualItems().length > 0 && utxoVirtualizer.getVirtualItems()[0].start > 0 && (
+          {utxoVirtualizer.getVirtualItems().length > 0 && utxoVirtualizer.getVirtualItems()[0].start > scrollMargin && (
             <TableRow>
-              <TableCell colSpan={7} className="p-0 border-0" style={{ height: utxoVirtualizer.getVirtualItems()[0].start }} />
+              <TableCell colSpan={7} className="p-0 border-0" style={{ height: utxoVirtualizer.getVirtualItems()[0].start - scrollMargin }} />
             </TableRow>
           )}
           {utxoVirtualizer.getVirtualItems().map(virtualRow => {
@@ -453,7 +488,8 @@ export function VirtualizedUtxoList({
           })}
           {utxoVirtualizer.getVirtualItems().length > 0 && (() => {
             const lastItem = utxoVirtualizer.getVirtualItems().at(-1)!;
-            const remaining = utxoVirtualizer.getTotalSize() - lastItem.end;
+            // Virtual item offsets include scrollMargin; getTotalSize() does not.
+            const remaining = utxoVirtualizer.getTotalSize() - (lastItem.end - scrollMargin);
             return remaining > 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="p-0 border-0" style={{ height: remaining }} />
@@ -1430,7 +1466,7 @@ export default function UTXOs() {
   );
 
   return (
-    <div className="flex flex-col h-full overflow-hidden p-4 gap-4">
+    <div ref={utxoScrollRef} className="flex flex-col h-full overflow-y-auto overflow-x-hidden p-4 gap-4">
       <div className="flex-none flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-page-title">
@@ -1821,16 +1857,16 @@ export default function UTXOs() {
         </CardContent>
       </Card>
 
-      <div className={`flex-1 min-h-0 ${searchPendingClass(isSearchPending, 'UTXOs')}`}>
-        <Card className="h-full flex flex-col">
-          <CardHeader className="pb-2 flex-none">
+      <div className={searchPendingClass(isSearchPending, 'UTXOs')}>
+        <Card>
+          <CardHeader className="pb-2">
             <CardTitle className="text-base">
               {filteredGroups.length === addressGroups.length 
                 ? `${totalAddressCount} addresses (${totalUtxoCount} UTXOs)` 
                 : `${filteredGroups.length} of ${addressGroups.length} addresses`}
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex-1 min-h-0 p-0">
+          <CardContent className="p-0">
             {isLoading || isComputing ? (
               <div className="flex flex-col items-center justify-center h-32 gap-2" data-testid="status-loading">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
