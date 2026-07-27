@@ -64,6 +64,12 @@ export const MIRROR_TABLES: MirrorTable[] = [
 // has no app imports).
 export const OWNED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 
+// SQL predicate selecting user-curated address rows (NULL importance = legacy
+// manual entry, treated as curated). Allowlist-based like
+// isUserCuratedImportance in db-types.ts so an unknown/future tier is excluded
+// on BOTH the Dexie and engine paths — keep the tier list in sync.
+export const CURATED_ADDRESS_SQL = `(addressImportance IS NULL OR addressImportance IN (${OWNED_TIERS.map((t) => `'${t}'`).join(', ')}))`;
+
 // SQLite caps bound parameters per statement (default 32766 in modern builds,
 // but historically 999). Stay well under the conservative ceiling for IN() lists.
 const PARAM_BATCH_SIZE = 800;
@@ -1113,7 +1119,11 @@ export function getBalanceGroupSummaries(
 ): BalanceSummariesResult {
   const col = BALANCE_GROUP_COLUMN[opts.groupBy];
   const empty = BALANCE_GROUP_EMPTY[opts.groupBy];
-  const baseFilter = "type = 'address' AND cachedUtxoCount > 0";
+  // Only user-curated addresses count toward balances: blockchain-discovered
+  // counterparty records carry one-sided history (their "balance" is just sats
+  // seen received), so including them would inflate every group. Mirrors the
+  // Dexie aggregation in BalanceOverview.tsx.
+  const baseFilter = `type = 'address' AND cachedUtxoCount > 0 AND ${CURATED_ADDRESS_SQL}`;
 
   let summaries: BalanceGroupSummary[];
   if (opts.groupBy === 'tag' || opts.groupBy === 'category') {
@@ -1176,7 +1186,8 @@ export function getBalanceGroupSummaries(
     db,
     `SELECT COUNT(*) AS n
        FROM records
-      WHERE type = 'address' AND statsComputedAt IS NOT NULL AND cachedUtxoCount IS NULL`,
+      WHERE type = 'address' AND ${CURATED_ADDRESS_SQL}
+        AND statsComputedAt IS NOT NULL AND cachedUtxoCount IS NULL`,
   )[0];
 
   return {

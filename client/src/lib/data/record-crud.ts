@@ -1,5 +1,5 @@
 import Dexie from 'dexie';
-import { db, notifyDbChange, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type DerivationTemplate, type AddressImportance } from '../database';
+import { db, notifyDbChange, isUserCuratedImportance, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type DerivationTemplate, type AddressImportance } from '../database';
 import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from './vocabulary-crud';
 import { getActivityBus } from '../activity-bus';
 import { type GroupBy, GROUP_EMPTY_KEY, addressMatchesGroup, type AddressBalanceRow } from '../balance-grouping';
@@ -992,15 +992,20 @@ export async function getRecordsByTypeAndImportanceTiers(
  * owner / *tags / *categories). The "empty" bucket (e.g. "Unassigned") can't be
  * indexed and must also absorb any record literally named the sentinel, so it
  * scans the address table in id-keyset batches, yielding between batches.
- * Only addresses with a positive cachedUtxoCount are returned.
+ * Only addresses with a positive cachedUtxoCount are returned, and — unless
+ * `includeDiscovered` is set — only user-curated addresses (blockchain-discovered
+ * counterparty records are excluded, matching the page's aggregation pass).
  */
 export async function getAddressBalanceRowsForGroup(
   groupBy: GroupBy,
   groupKey: string,
+  opts?: { includeDiscovered?: boolean },
 ): Promise<AddressBalanceRow[]> {
   const rows: AddressBalanceRow[] = [];
+  const includeDiscovered = opts?.includeDiscovered ?? false;
   const pushIfUtxo = (r: Record): void => {
     if (r.id == null || !r.inputString) return;
+    if (!includeDiscovered && !isUserCuratedImportance(r.addressImportance)) return;
     const utxoCount = r.cachedUtxoCount ?? 0;
     if (utxoCount <= 0) return;
     rows.push({

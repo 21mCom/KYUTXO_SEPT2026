@@ -1034,6 +1034,12 @@ describe("engine-core: balance group summaries", () => {
       rec({ id: 4, walletName: "W1", owner: "O1", cachedBalanceSats: 9999, cachedUtxoCount: 0 }),
       // Excluded: not an address.
       rec({ id: 5, type: "descriptor", walletName: "W1", cachedBalanceSats: 7777, cachedUtxoCount: 5 }),
+      // Excluded: blockchain-discovered counterparty rows (one-sided history —
+      // their "balance" is just sats seen received). They inherit the parent's
+      // wallet/owner/tags during sync, so a missing filter would silently
+      // inflate the SAME groups the user's own addresses live in.
+      rec({ id: 40, walletName: "W1", owner: "O1", tags: '["red"]', addressImportance: "blockchain-discovered", cachedBalanceSats: 123_456, cachedUtxoCount: 4 }),
+      rec({ id: 41, walletName: "W1", owner: "O1", tags: '["red"]', addressImportance: "pending-review", cachedBalanceSats: 77_000, cachedUtxoCount: 2 }),
     ]);
   });
 
@@ -1063,6 +1069,23 @@ describe("engine-core: balance group summaries", () => {
     expect(res.totals).toEqual({ totalSats: 1700, totalAddresses: 3, totalUtxos: 6 });
   });
 
+  it("excludes discovered/pending-review rows while counting NULL importance as curated", () => {
+    insertRecords(db, [
+      // Legacy row with no importance tier at all -> counted (curated).
+      { ...rec({ id: 42, walletName: "W1", cachedBalanceSats: 300, cachedUtxoCount: 1 }), addressImportance: null },
+      // Unknown/future tier -> excluded: the predicate is an allowlist, so a
+      // new tier stays out of balances on both engine and Dexie paths until
+      // it is deliberately added to the curated set.
+      rec({ id: 44, walletName: "W1", addressImportance: "some-future-tier", cachedBalanceSats: 40_000, cachedUtxoCount: 3 }),
+    ]);
+    const res = getBalanceGroupSummaries(db, { groupBy: "wallet" });
+    const byKey = Object.fromEntries(res.summaries.map((s) => [s.groupKey, s]));
+    // W1 = rec1 (1000/2) + rec2 (500/1) + legacy rec42 (300/1); the discovered
+    // rows 40/41 (123456+77000 sats, 6 UTXOs) must not appear anywhere.
+    expect(byKey["W1"]).toEqual({ groupKey: "W1", totalSats: 1800, addressCount: 3, utxoCount: 4 });
+    expect(res.totals).toEqual({ totalSats: 2000, totalAddresses: 4, totalUtxos: 7 });
+  });
+
   it("merges a literal 'Untagged' tag with the empty-array bucket", () => {
     insertRecords(db, [
       rec({ id: 6, tags: '["Untagged"]', cachedBalanceSats: 50, cachedUtxoCount: 1 }),
@@ -1084,6 +1107,9 @@ describe("engine-core: balance group summaries", () => {
       rec({ id: 8, walletName: "W2", statsComputedAt: 5678, cachedUtxoCount: null }),
       // Has both -> not stale.
       rec({ id: 9, walletName: "W1", statsComputedAt: 9999, cachedBalanceSats: 1, cachedUtxoCount: 1 }),
+      // Stale-shaped but blockchain-discovered -> ignored: the balance view
+      // never shows it, so it must not force the page off the engine fast path.
+      rec({ id: 43, walletName: "W1", addressImportance: "blockchain-discovered", statsComputedAt: 4321, cachedUtxoCount: null }),
     ]);
     const res = getBalanceGroupSummaries(db, { groupBy: "wallet" });
     expect(res.staleAddressCount).toBe(2);

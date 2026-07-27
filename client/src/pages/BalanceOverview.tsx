@@ -4,6 +4,7 @@ import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { getBtcUsdPriceData } from "@/lib/data/price-data-crud";
+import { isUserCuratedImportance } from "@/lib/db-types";
 import {
   countRecordsByType,
   getRecordsPageByTypeIdReverseKeyset,
@@ -61,6 +62,7 @@ import {
 import { SiBitcoin } from "react-icons/si";
 
 const HIDE_DUST_STORAGE_KEY = "kyutxo-balance-hide-dust";
+const INCLUDE_DISCOVERED_STORAGE_KEY = "kyutxo-balance-include-discovered";
 
 type SortBy = "balance-desc" | "balance-asc" | "name-asc" | "name-desc" | "addresses-desc";
 type DisplayUnit = "btc" | "sats";
@@ -101,11 +103,18 @@ function formatUsd(amount: number): string {
  * ONLY the cached per-address stats fields (never participants/transactions).
  * Accumulates per-group totals plus a deduped overall total. Returns
  * `needsBackfill` if it finds an address whose stats predate `cachedUtxoCount`.
+ *
+ * Unless `includeDiscovered` is set, only user-curated addresses are counted —
+ * blockchain-discovered records (auto-created for counterparty addresses during
+ * sync, often inheriting the parent's wallet name) carry one-sided local
+ * history, so their "balance" is really just sats seen received and would
+ * inflate every total with funds the user does not control.
  */
 async function aggregateGroups(
   groupBy: GroupBy,
   signal: AbortSignal,
   onProgress: (processed: number) => void,
+  includeDiscovered: boolean,
 ): Promise<AggResult | null> {
   const summaries = new Map<string, GroupSummary>();
   let totalSats = 0;
@@ -124,6 +133,10 @@ async function aggregateGroups(
     if (batch.length === 0) break;
 
     for (const rec of batch) {
+      // Skip non-curated (blockchain-discovered / pending-review) records
+      // before anything else so an excluded row can neither count toward the
+      // totals nor trigger the backfill pass.
+      if (!includeDiscovered && !isUserCuratedImportance(rec.addressImportance)) continue;
       // Stats written before cachedUtxoCount existed → trigger one-time backfill.
       if (rec.statsComputedAt != null && rec.cachedUtxoCount === undefined) {
         return { needsBackfill: true };
@@ -539,6 +552,25 @@ export default function BalanceOverview() {
       // Ignore storage errors (e.g. private mode); toggle still works in-session.
     }
   }, [hideDust]);
+  // Whether blockchain-discovered addresses are counted in the balances.
+  // Default off: their local history is one-sided (only txs that touched the
+  // user's own addresses are stored), so their "balance" is just sats seen
+  // received — not funds the user controls. Mirrors the UTXOs page toggle and
+  // persists the choice like Hide dust.
+  const [includeDiscovered, setIncludeDiscovered] = useState(() => {
+    try {
+      return localStorage.getItem(INCLUDE_DISCOVERED_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(INCLUDE_DISCOVERED_STORAGE_KEY, includeDiscovered ? "true" : "false");
+    } catch {
+      // Ignore storage errors (e.g. private mode); toggle still works in-session.
+    }
+  }, [includeDiscovered]);
   // Precomputed dust adjustments while "Hide dust" is on: per-address and
   // per-group sats/count to subtract, plus deduped grand totals. Only dust on
   // addresses actually counted in the totals (cachedUtxoCount > 0) is included.
@@ -566,6 +598,8 @@ export default function BalanceOverview() {
   groupRowsRef.current = groupRows;
   const loadingGroupsRef = useRef(loadingGroups);
   loadingGroupsRef.current = loadingGroups;
+  const includeDiscoveredRef = useRef(includeDiscovered);
+  includeDiscoveredRef.current = includeDiscovered;
 
   const priceData = useLiveQuery(() => getBtcUsdPriceData(), []);
 
@@ -640,7 +674,9 @@ export default function BalanceOverview() {
       try {
         const decision = await evaluateEngineFreshness("records");
         if (thisId !== computationId.current || signal.aborted) return;
-        if (decision.useEngine) {
+        // The engine query serves only the default (user-curated) view; the
+        // include-discovered view always takes the Dexie path below.
+        if (decision.useEngine && !includeDiscovered) {
           const eng = await engineGetBalanceGroupSummaries(groupBy);
           if (thisId !== computationId.current || signal.aborted) return;
           if (eng.staleAddressCount === 0) {
@@ -670,7 +706,7 @@ export default function BalanceOverview() {
 
       let result = await aggregateGroups(groupBy, signal, (p) => {
         if (thisId === computationId.current) setAggProgress({ processed: p, total });
-      });
+      }, includeDiscovered);
       if (!result || thisId !== computationId.current || signal.aborted) return;
 
       if (result.needsBackfill) {
@@ -692,7 +728,7 @@ export default function BalanceOverview() {
         setAggProgress({ processed: 0, total });
         result = await aggregateGroups(groupBy, signal, (p) => {
           if (thisId === computationId.current) setAggProgress({ processed: p, total });
-        });
+        }, includeDiscovered);
         if (!result || result.needsBackfill || thisId !== computationId.current || signal.aborted) return;
       }
 
@@ -705,7 +741,7 @@ export default function BalanceOverview() {
     return () => {
       abort.abort();
     };
-  }, [groupBy, dbSignal, engineReadySignal]);
+  }, [groupBy, dbSignal, engineReadySignal, includeDiscovered]);
 
   // Dust adjustments: while "Hide dust" is on, compute how many sats/UTXOs to
   // subtract per address and per group. A dust flag only counts when it is
@@ -728,6 +764,9 @@ export default function BalanceOverview() {
         if (cancelled) return;
         const rec = await findRecordByInputString(address);
         if (!rec || (rec.cachedUtxoCount ?? 0) <= 0) continue;
+        // Keep the dust adjustments aligned with the displayed set: dust on an
+        // excluded blockchain-discovered address must not be subtracted.
+        if (!includeDiscovered && !isUserCuratedImportance(rec.addressImportance)) continue;
         byAddress.set(address, adj);
         totalSats += adj.sats;
         totalCount += adj.count;
@@ -746,7 +785,7 @@ export default function BalanceOverview() {
     return () => {
       cancelled = true;
     };
-  }, [hideDust, groupBy, dbSignal, dustFlagsSignal]);
+  }, [hideDust, groupBy, dbSignal, dustFlagsSignal, includeDiscovered]);
 
   // Spend health: check for unresolved prevout inputs whenever db changes.
   useEffect(() => {
@@ -1455,7 +1494,9 @@ export default function BalanceOverview() {
       return next;
     });
     try {
-      const rows = await getAddressBalanceRowsForGroup(groupByRef.current, name);
+      const rows = await getAddressBalanceRowsForGroup(groupByRef.current, name, {
+        includeDiscovered: includeDiscoveredRef.current,
+      });
       rows.sort((a, b) => b.sats - a.sats);
       setGroupRows((prev) => {
         const next = new Map(prev);
@@ -1711,8 +1752,28 @@ export default function BalanceOverview() {
                 Hide dust
               </Label>
             </div>
+
+            <div className="flex items-center gap-2 min-h-9">
+              <Switch
+                id="switch-balance-include-discovered"
+                checked={includeDiscovered}
+                onCheckedChange={setIncludeDiscovered}
+                data-testid="switch-include-discovered"
+              />
+              <Label htmlFor="switch-balance-include-discovered" className="text-sm cursor-pointer whitespace-nowrap">
+                Include discovered
+              </Label>
+            </div>
           </div>
         </div>
+
+        {includeDiscovered && (
+          <div className="flex items-center gap-2 flex-wrap mt-2">
+            <Badge variant="secondary" className="gap-1" data-testid="badge-discovered-included">
+              Including blockchain-discovered addresses — their history is one-sided, so these balances may not be funds you control
+            </Badge>
+          </div>
+        )}
 
         {hideDust && (
           <div className="flex items-center gap-2 flex-wrap mt-2">

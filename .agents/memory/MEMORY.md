@@ -49,3 +49,4 @@
 - [pdf.js browser harness](pdfjs-browser-harness.md) — Nix Chromium v125 can't run pdfjs-dist default build (Promise.try); use legacy build + legacy worker ?url in browser; pdf.js is only an oracle.
 - [Concurrent browser-check contention](browser-check-contention.md) — parallel Chromium validation checks starve each other and time out on input-password; rerun sequentially before suspecting a bug.
 - [PofF shared PDF builder pattern](pof-shared-pdf-builder.md) — `buildPofPdf(isSample)` useCallback with `eff*` vars; sample AML needs explicit placeholder SOW/SOF strings; sample inline amlResult needs full EntityListDescriptionInput fields (entityListSource etc.).
+- [Curated-tier balance surfaces](curated-tier-balance-surfaces.md) — cached-stats aggregations must ALLOWLIST curated tiers; discovered counterparty rows inherit walletName + stamped stats and inflate totals; import helpers from db-types not database.

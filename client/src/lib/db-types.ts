@@ -23,6 +23,18 @@ export const USER_CURATED_TIERS: AddressImportance[] = [
   'xpub-derived',
 ];
 
+/**
+ * True when an address record counts as user-curated ("owned"). Records with no
+ * importance tier (created before tiers existed) count as curated, matching the
+ * UTXOs page's long-standing treatment of legacy rows. Blockchain-discovered and
+ * pending-review records — auto-created during sync for counterparty addresses —
+ * are NOT curated: their local history is one-sided, so any "balance" computed
+ * for them is really just sats seen received, not funds the user controls.
+ */
+export function isUserCuratedImportance(importance: AddressImportance | undefined): boolean {
+  return !importance || USER_CURATED_TIERS.includes(importance);
+}
+
 // The complete set of importance tiers, ordered from highest to lowest priority
 // (matches the hierarchy documented on AddressImportance). Use this single source
 // of truth instead of re-declaring the full six-element array on each
