@@ -44,6 +44,14 @@ import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-soft
 import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, getRecord } from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { validateBitcoinInput } from "@/lib/bitcoin";
+import {
+  type TaggerMode,
+  classifyForMode,
+  isSharedFieldVisible,
+  buildUpdateData,
+  buildCreateFields,
+  type MetadataValues,
+} from "./quick-tagger/quick-tagger-mode";
 import { 
   COUNTERPARTY_TYPE_OPTIONS,
   FLOW_TYPE_OPTIONS,
@@ -73,6 +81,7 @@ type Step = 'paste' | 'review' | 'metadata' | 'complete';
 export default function QuickTagger() {
   const { toast } = useToast();
   const [step, setStep] = useState<Step>('paste');
+  const [mode, setMode] = useState<TaggerMode>('address');
   const [pastedText, setPastedText] = useState("");
   const [entries, setEntries] = useState<ParsedEntry[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -211,7 +220,7 @@ export default function QuickTagger() {
         normalized,
         type: entryType,
         existingRecordId,
-        selected: entryType !== 'invalid',
+        selected: classifyForMode(entryType, mode) === 'match',
       });
     }
 
@@ -228,33 +237,75 @@ export default function QuickTagger() {
     }
   };
 
+  // Switch mode: clear mode-inapplicable field state and re-validate entries so
+  // no stale entries of the other type carry into the apply step.
+  const handleModeChange = (newMode: TaggerMode) => {
+    if (newMode === mode) return;
+    setMode(newMode);
+    setEntries(prev => prev.map(e => ({
+      ...e,
+      selected: classifyForMode(e.type, newMode) === 'match',
+    })));
+    if (newMode === 'transaction') {
+      // Address-only + address-centric shared fields don't apply to transactions
+      setAddressImportance("");
+      setCounterpartyType("");
+      setWalletName("");
+      setSeedName("");
+      setWalletSoftware("");
+      setPrivateKeyStatus("");
+    } else {
+      setFlowType("");
+      setAcquisitionMethod("");
+      setDispositionType("");
+      setCostBasisUsd("");
+    }
+  };
+
   // Computed counts - derived directly each render for immediate reactivity
-  const selected = entries.filter(e => e.selected);
-  const addressCount = selected.filter(e => e.type === 'address').length;
-  const transactionCount = selected.filter(e => e.type === 'transaction').length;
+  const selected = entries.filter(e => e.selected && e.type === mode);
   const invalidCount = entries.filter(e => e.type === 'invalid').length;
+  const mismatchedCount = entries.filter(e => classifyForMode(e.type, mode) === 'mismatch').length;
   const existingCount = selected.filter(e => e.existingRecordId !== undefined).length;
   const newCount = selected.filter(e => e.existingRecordId === undefined).length;
   const totalCount = selected.length;
 
-  // Toggle entry selection
+  // Toggle entry selection (only entries matching the active mode are selectable)
   const toggleEntry = (index: number) => {
     setEntries(prev => prev.map((e, i) => 
-      i === index ? { ...e, selected: !e.selected } : e
+      i === index && e.type === mode ? { ...e, selected: !e.selected } : e
     ));
   };
 
-  // Select/deselect all
+  // Select/deselect all (only entries matching the active mode)
   const selectAll = (selected: boolean) => {
     setEntries(prev => prev.map(e => 
-      e.type !== 'invalid' ? { ...e, selected } : e
+      e.type === mode ? { ...e, selected } : { ...e, selected: false }
     ));
   };
 
   // Apply metadata to all selected entries
   const applyMetadata = async () => {
     setIsProcessing(true);
-    const entriesToProcess = entries.filter(e => e.selected);
+    // Only ever process entries of the active mode's type
+    const entriesToProcess = entries.filter(e => e.selected && e.type === mode);
+    const metadataValues: MetadataValues = {
+      selectedTags,
+      selectedCategories,
+      owner,
+      walletName,
+      seedName,
+      walletSoftware,
+      privateKeyStatus,
+      label,
+      notes,
+      addressImportance,
+      counterpartyType,
+      flowType,
+      acquisitionMethod,
+      dispositionType,
+      costBasisUsd,
+    };
     let created = 0;
     let updated = 0;
     let skipped = 0;
@@ -287,35 +338,35 @@ export default function QuickTagger() {
         await createOwner(owner);
       }
 
-      // Ensure wallet name exists
-      if (walletName && !walletNames.find(w => w.name === walletName)) {
-        await createWalletName(walletName);
-      }
-
-      // Ensure seed name exists
-      if (seedName && !seedNames.find(s => s.name === seedName)) {
-        try {
-          await createSeedName(seedName);
-        } catch {
-          // May already exist
+      // Wallet/seed/software vocab only applies in Addresses mode
+      if (mode === 'address') {
+        // Ensure wallet name exists
+        if (walletName && !walletNames.find(w => w.name === walletName)) {
+          await createWalletName(walletName);
         }
-      }
 
-      // Ensure wallet software exists
-      if (walletSoftware && !walletSoftwareList.find(w => w.name === walletSoftware)) {
-        try {
-          await createWalletSoftware(walletSoftware);
-        } catch {
-          // May already exist
+        // Ensure seed name exists
+        if (seedName && !seedNames.find(s => s.name === seedName)) {
+          try {
+            await createSeedName(seedName);
+          } catch {
+            // May already exist
+          }
+        }
+
+        // Ensure wallet software exists
+        if (walletSoftware && !walletSoftwareList.find(w => w.name === walletSoftware)) {
+          try {
+            await createWalletSoftware(walletSoftware);
+          } catch {
+            // May already exist
+          }
         }
       }
 
       const applyLookup = await lookupRecordsByInputStrings(entriesToProcess.map(e => e.raw));
 
       for (const entry of entriesToProcess) {
-        const isAddress = entry.type === 'address';
-        const isTransaction = entry.type === 'transaction';
-
         let currentRecordId = entry.existingRecordId;
         if (!currentRecordId) {
           const cached = applyLookup.get(entry.raw.trim().toLowerCase());
@@ -324,33 +375,8 @@ export default function QuickTagger() {
           }
         }
 
-        // Build update object
-        const updateData: any = {};
-        
-        // Shared fields - only add if value provided
-        if (selectedTags.length > 0) updateData.tags = selectedTags;
-        if (selectedCategories.length > 0) updateData.categories = selectedCategories;
-        if (owner) updateData.owner = owner;
-        if (walletName) updateData.walletName = walletName;
-        if (seedName) updateData.seedName = seedName;
-        if (walletSoftware) updateData.walletSoftware = walletSoftware;
-        if (privateKeyStatus) updateData.privateKeyStatus = privateKeyStatus;
-        if (label) updateData.label = label;
-        if (notes) updateData.notes = notes;
-
-        // Address-specific fields
-        if (isAddress) {
-          if (addressImportance) updateData.addressImportance = addressImportance;
-          if (counterpartyType) updateData.counterpartyType = counterpartyType;
-        }
-
-        // Transaction-specific fields
-        if (isTransaction) {
-          if (flowType) updateData.flowType = flowType;
-          if (acquisitionMethod) updateData.acquisitionMethod = acquisitionMethod;
-          if (dispositionType) updateData.dispositionType = dispositionType;
-          if (costBasisUsd) updateData.costBasisUsd = parseFloat(costBasisUsd);
-        }
+        // Build update object with only mode-appropriate fields
+        const updateData: any = buildUpdateData(mode, metadataValues);
 
         if (currentRecordId) {
           const existingRecord = await getRecord(currentRecordId);
@@ -367,23 +393,8 @@ export default function QuickTagger() {
           }
         } else if (createNewRecords) {
           const newRecordId = await createRecord({
-            type: entry.type as 'address' | 'transaction',
+            ...(buildCreateFields(mode, metadataValues) as any),
             inputString: entry.raw,
-            label: label || "",
-            notes: notes || "",
-            tags: selectedTags,
-            categories: selectedCategories,
-            owner: owner || undefined,
-            walletName: walletName || undefined,
-            seedName: seedName || undefined,
-            walletSoftware: walletSoftware || undefined,
-            privateKeyStatus: privateKeyStatus || undefined,
-            addressImportance: isAddress ? (addressImportance as AddressImportance || 'manual') : undefined,
-            counterpartyType: isAddress ? (counterpartyType as CounterpartyType || undefined) : undefined,
-            flowType: isTransaction ? (flowType as FlowType || undefined) : undefined,
-            acquisitionMethod: isTransaction ? (acquisitionMethod as AcquisitionMethod || undefined) : undefined,
-            dispositionType: isTransaction ? (dispositionType as DispositionType || undefined) : undefined,
-            costBasisUsd: isTransaction && costBasisUsd ? parseFloat(costBasisUsd) : undefined,
           });
           if (newRecordId) {
             applyLookup.set(entry.raw.trim().toLowerCase(), { id: newRecordId as number, inputString: entry.raw } as any);
@@ -424,6 +435,7 @@ export default function QuickTagger() {
 
   // Reset to start
   const reset = () => {
+    setMode('address');
     setPastedText("");
     setEntries([]);
     setStep('paste');
@@ -473,17 +485,37 @@ export default function QuickTagger() {
         {step === 'paste' && (
           <Card>
             <CardHeader>
-              <CardTitle>Paste Addresses or TXIDs</CardTitle>
+              <CardTitle>{mode === 'address' ? 'Paste Addresses' : 'Paste Transaction IDs'}</CardTitle>
               <CardDescription>
-                Paste one item per line. You can mix addresses and transaction IDs - they'll be automatically detected.
+                Choose what you're tagging, then paste one item per line. Entries of the other type will be flagged and skipped.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label>Mode</Label>
+                <div className="inline-flex rounded-md border p-1 gap-1">
+                  <Button
+                    size="sm"
+                    variant={mode === 'address' ? 'default' : 'ghost'}
+                    onClick={() => handleModeChange('address')}
+                    data-testid="button-mode-address"
+                  >
+                    Addresses
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={mode === 'transaction' ? 'default' : 'ghost'}
+                    onClick={() => handleModeChange('transaction')}
+                    data-testid="button-mode-transaction"
+                  >
+                    Transactions
+                  </Button>
+                </div>
+              </div>
               <Textarea
-                placeholder="bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh
-bc1q...
-a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
-..."
+                placeholder={mode === 'address'
+                  ? "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh\nbc1q...\n..."
+                  : "a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\n..."}
                 className="min-h-[200px] font-mono text-sm"
                 value={pastedText}
                 onChange={(e) => setPastedText(e.target.value)}
@@ -518,12 +550,33 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
             <CardHeader>
               <CardTitle>Review Entries</CardTitle>
               <CardDescription>
-                Found {totalCount} valid items ({addressCount} addresses, {transactionCount} transactions).
+                Found {totalCount} valid {mode === 'address' ? 'addresses' : 'transactions'}.
                 {existingCount > 0 && ` ${existingCount} already exist in your database.`}
                 {newCount > 0 && ` ${newCount} are new.`}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {mismatchedCount > 0 && (
+                <Alert data-testid="alert-mismatched-entries">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription className="flex items-center justify-between gap-2 flex-wrap">
+                    <span>
+                      {mode === 'address'
+                        ? `${mismatchedCount} transaction ID${mismatchedCount === 1 ? '' : 's'} ignored — switch to Transactions mode to tag them.`
+                        : `${mismatchedCount} address${mismatchedCount === 1 ? '' : 'es'} ignored — switch to Addresses mode to tag them.`}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleModeChange(mode === 'address' ? 'transaction' : 'address')}
+                      data-testid="button-switch-mode"
+                    >
+                      Switch to {mode === 'address' ? 'Transactions' : 'Addresses'}
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+
               {invalidCount > 0 && (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />
@@ -579,17 +632,18 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                     {reviewVirtualizer.getVirtualItems().map(virtualRow => {
                       const entry = entries[virtualRow.index];
                       const index = virtualRow.index;
+                      const modeStatus = classifyForMode(entry.type, mode);
                       return (
                         <tr
                           key={virtualRow.key}
                           ref={reviewVirtualizer.measureElement}
                           data-index={virtualRow.index}
-                          className={`border-b ${entry.type === 'invalid' ? 'opacity-50' : ''}`}
+                          className={`border-b ${modeStatus !== 'match' ? 'opacity-50' : ''}`}
                         >
                           <td className="p-2">
                             <Checkbox
-                              checked={entry.selected}
-                              disabled={entry.type === 'invalid'}
+                              checked={entry.selected && modeStatus === 'match'}
+                              disabled={modeStatus !== 'match'}
                               onCheckedChange={() => toggleEntry(index)}
                               data-testid={`checkbox-entry-${index}`}
                             />
@@ -598,12 +652,19 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                             {entry.raw}
                           </td>
                           <td className="p-2">
-                            <Badge variant={entry.type === 'invalid' ? 'destructive' : 'secondary'}>
-                              {entry.type === 'address' ? 'Address' : entry.type === 'transaction' ? 'TXID' : 'Invalid'}
+                            <Badge
+                              variant={entry.type === 'invalid' ? 'destructive' : modeStatus === 'mismatch' ? 'outline' : 'secondary'}
+                              data-testid={`badge-type-${index}`}
+                            >
+                              {entry.type === 'invalid'
+                                ? 'Invalid'
+                                : modeStatus === 'mismatch'
+                                  ? (entry.type === 'address' ? 'Address — wrong mode' : 'TXID — wrong mode')
+                                  : (entry.type === 'address' ? 'Address' : 'TXID')}
                             </Badge>
                           </td>
                           <td className="p-2">
-                            {entry.type !== 'invalid' && (
+                            {modeStatus === 'match' && (
                               <Badge variant={entry.existingRecordId ? 'outline' : 'default'}>
                                 {entry.existingRecordId ? 'Exists' : 'New'}
                               </Badge>
@@ -757,6 +818,7 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                     </Popover>
                   </div>
 
+                  {isSharedFieldVisible('walletName', mode) && (
                   <div className="space-y-2">
                     <Label>Wallet Name</Label>
                     <Popover open={walletNameOpen} onOpenChange={setWalletNameOpen}>
@@ -819,7 +881,9 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                       </PopoverContent>
                     </Popover>
                   </div>
+                  )}
 
+                  {isSharedFieldVisible('seedName', mode) && (
                   <div className="space-y-2">
                     <Label>Seed Name</Label>
                     <Popover open={seedNameOpen} onOpenChange={setSeedNameOpen}>
@@ -882,7 +946,9 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                       </PopoverContent>
                     </Popover>
                   </div>
+                  )}
 
+                  {isSharedFieldVisible('walletSoftware', mode) && (
                   <div className="space-y-2">
                     <Label>Wallet Software</Label>
                     <Popover open={walletSoftwareOpen} onOpenChange={setWalletSoftwareOpen}>
@@ -945,7 +1011,9 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                       </PopoverContent>
                     </Popover>
                   </div>
+                  )}
 
+                  {isSharedFieldVisible('privateKeyStatus', mode) && (
                   <div className="space-y-2">
                     <Label>Private Key Status</Label>
                     <Select value={privateKeyStatus} onValueChange={setPrivateKeyStatus}>
@@ -959,6 +1027,7 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                       </SelectContent>
                     </Select>
                   </div>
+                  )}
 
                   <div className="space-y-2">
                     <Label>Label</Label>
@@ -983,7 +1052,7 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
               </div>
 
               {/* Address-Specific Metadata */}
-              {addressCount > 0 && (
+              {mode === 'address' && (
                 <>
                   <Separator />
                   <div className="space-y-4">
@@ -992,7 +1061,7 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                       <h3 className="font-semibold">
                         Address-Specific
                         <span className="text-muted-foreground font-normal ml-2">
-                          (applies to {addressCount} addresses)
+                          (applies to {totalCount} addresses)
                         </span>
                       </h3>
                     </div>
@@ -1031,7 +1100,7 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
               )}
 
               {/* Transaction-Specific Metadata */}
-              {transactionCount > 0 && (
+              {mode === 'transaction' && (
                 <>
                   <Separator />
                   <div className="space-y-4">
@@ -1040,7 +1109,7 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                       <h3 className="font-semibold">
                         Transaction-Specific
                         <span className="text-muted-foreground font-normal ml-2">
-                          (applies to {transactionCount} transactions)
+                          (applies to {totalCount} transactions)
                         </span>
                       </h3>
                     </div>
