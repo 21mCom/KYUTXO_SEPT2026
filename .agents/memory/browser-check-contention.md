@@ -12,7 +12,7 @@ The validation suite runs several real-Chromium checks (sample-pdf, pof-empty, p
 
 ## Parallel validation runs kill the shared dev server
 Completion-validation runs the browser checks in PARALLEL; they all share port 5000. Whichever script spawns the dev server tears it down when it finishes, yanking it from the still-running checks (EADDRINUSE / ERR_CONNECTION_REFUSED, failures rotate between runs).
-**How to apply:** before markTaskComplete, start the "Start application" workflow so every check "reuses" the server and none owns/kills it — flakiness disappears.
+**How to apply:** before markTaskComplete, start the "Start application" workflow so every check "reuses" the server and none owns/kills it — flakiness disappears. Note this alone is NOT sufficient: even with the shared server up, fork-EAGAIN spawn starvation can still hang/fail a random subset of checks every run.
 
 **Update (2026-07-28):** contention also shows up as `pthread_create: Resource temporarily unavailable` inside Chromium — a different random subset of browser checks fails on each validation run while every check passes standalone. After several genuinely failed full-validation attempts, verify the change-relevant suites locally and use an audited `skip_validation_reason` rather than retrying indefinitely.
 
