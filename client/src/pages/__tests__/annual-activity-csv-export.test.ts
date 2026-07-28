@@ -82,6 +82,32 @@ describe("buildAnnualActivityCsv", () => {
     );
   });
 
+  it("keeps dotted address/label values literal and unquoted in the CSV", () => {
+    // Dots are not CSV-special (only quotes, commas, and newlines trigger
+    // csvEscape quoting), so dotted user text must pass through verbatim —
+    // including trailing dots — without gaining wrapping quotes.
+    const dotted: ReportData = {
+      ...SAMPLE,
+      receivedFrom: [{ address: "wallet.v1.2.sender", txCount: 3 }],
+      sentTo: [{ address: "Alice.", txCount: 2 }],
+    };
+    const csv = buildAnnualActivityCsv(dotted, ["bc1qaddr1"], GENERATED_AT);
+    expect(csv).toContain("wallet.v1.2.sender,3");
+    expect(csv).not.toContain('"wallet.v1.2.sender"');
+    expect(csv).toContain("Alice.,2");
+    expect(csv).not.toContain('"Alice."');
+  });
+
+  it("still quotes a dotted value when it also contains a comma", () => {
+    const dotted: ReportData = {
+      ...SAMPLE,
+      receivedFrom: [{ address: "v1.2, beta", txCount: 1 }],
+    };
+    const csv = buildAnnualActivityCsv(dotted, ["bc1qaddr1"], GENERATED_AT);
+    // The comma forces quoting; the dots inside remain literal.
+    expect(csv).toContain('"v1.2, beta",1');
+  });
+
   it("omits the understated-spent-totals warning when unresolvedInputAmountCount is 0", () => {
     const csv = buildAnnualActivityCsv(SAMPLE, ["bc1qaddr1"], GENERATED_AT);
     expect(csv).not.toContain("Spent totals may be understated");

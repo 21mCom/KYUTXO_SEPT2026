@@ -5,6 +5,27 @@ import { sanitizePdfText } from "@/lib/pdfText";
 import { mergeEvidencePdfs, type PdfExhibit } from "@/lib/pdfMerge";
 import type { PdfLayout, PofPdfData } from "./pof-pdf-context";
 
+/**
+ * Build the download filename for a Proof of Funds PDF. Pure helper extracted
+ * from finalizeAndSavePdf (zero behavior change) so filename generation is
+ * unit-testable: whitespace collapses to "_", every other non [a-zA-Z0-9_-]
+ * character (including dots) is stripped, and an empty result falls back to
+ * "specimen"/"declaration". The ".pdf" extension is appended last so it can
+ * never be mangled by the name sanitizer.
+ */
+export function pofPdfFileName(
+  effName: string,
+  effDate: string,
+  isSample: boolean,
+): string {
+  const safeName = sanitizePdfText(
+    effName.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, ""),
+  );
+  return isSample
+    ? `proof-of-funds-SAMPLE-${safeName || "specimen"}-${effDate}.pdf`
+    : `proof-of-funds-${safeName || "declaration"}-${effDate}.pdf`;
+}
+
 export async function finalizeAndSavePdf(L: PdfLayout, d: PofPdfData) {
   const { doc, margin, pageW } = L;
   const { isSample, effNonce, effName, effDate } = d;
@@ -63,10 +84,7 @@ export async function finalizeAndSavePdf(L: PdfLayout, d: PofPdfData) {
     }
   }
 
-  const safeName = sanitizePdfText(effName.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, ""));
-  const baseFileName = isSample
-    ? `proof-of-funds-SAMPLE-${safeName || "specimen"}-${effDate}.pdf`
-    : `proof-of-funds-${safeName || "declaration"}-${effDate}.pdf`;
+  const baseFileName = pofPdfFileName(effName, effDate, isSample);
 
   // PDF exhibits can only be appended after the jsPDF document is complete:
   // jsPDF cannot import external PDF pages, so we hand the finished dossier

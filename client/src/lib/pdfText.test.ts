@@ -19,6 +19,15 @@ describe("sanitizePdfText", () => {
     expect(sanitizePdfText("bc1qalice 1.5 BTC")).toBe("bc1qalice 1.5 BTC");
   });
 
+  it("keeps dots in user text literally (labels, wallet names, versions)", () => {
+    // Dot is ASCII 0x2E — well inside WinAnsi — so dotted user values
+    // (including leading/trailing/consecutive dots) must survive verbatim in
+    // every PDF export that routes text through this sanitizer.
+    for (const s of ["Ledger v1.2", "cold.storage", "Alice.", ".hidden", "a..b", "..."]) {
+      expect(sanitizePdfText(s)).toBe(s);
+    }
+  });
+
   it("preserves Latin-1 (U+0080–U+00FF) characters such as accents", () => {
     // é = U+00E9, ñ = U+00F1, ÿ = U+00FF — all inside the WinAnsi range and at
     // or below the helper's U+00FF cutoff, so they survive unchanged.

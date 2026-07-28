@@ -506,6 +506,35 @@ describe("fundTrailFilename", () => {
     expect(fundTrailFilename("Alice", "csv", date)).toMatch(/\.csv$/);
     expect(fundTrailFilename("Alice", "pdf", date)).toMatch(/\.pdf$/);
   });
+
+  it("keeps interior dots in the label portion literally", () => {
+    // The sanitizer's character class ([^A-Za-z0-9._-]) intentionally keeps
+    // dots, so a dotted wallet/group label survives into the filename.
+    expect(fundTrailFilename("cold.storage v1.2", "csv", date)).toBe(
+      "fund-trail-cold.storage-v1.2-2026-06-27.csv",
+    );
+  });
+
+  it("keeps a trailing-dot label sane and never mangles the extension", () => {
+    // "Alice." keeps its dot; the date + extension are appended AFTER the
+    // label slot, so the file still ends in exactly one .csv/.pdf suffix.
+    const csv = fundTrailFilename("Alice.", "csv", date);
+    expect(csv).toBe("fund-trail-Alice.-2026-06-27.csv");
+    expect(csv.endsWith(".csv")).toBe(true);
+    expect(csv.match(/\.csv/g)).toHaveLength(1);
+
+    const pdf = fundTrailFilename("Alice.", "pdf", date);
+    expect(pdf).toBe("fund-trail-Alice.-2026-06-27.pdf");
+    expect(pdf.endsWith(".pdf")).toBe(true);
+  });
+
+  it("falls back when the label is dots only mixed with unsafe chars", () => {
+    // Dots-only labels are kept (dots are allowed), but dots+slashes collapse
+    // the slashes to hyphens which then trim — the dot itself survives.
+    expect(fundTrailFilename(".", "csv", date)).toBe(
+      "fund-trail-.-2026-06-27.csv",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
