@@ -40,6 +40,30 @@ export class ElectrumProvider implements BlockchainProvider {
   // cached one — refresh the tip instead of storing an off-by-one height.
   private derivedHeightByBlockHash: Map<string, number> = new Map();
 
+  /**
+   * Server's blockhash at a given height, used to verify a derived height for
+   * a block the memo has never seen. Returns null on any failure — the caller
+   * then keeps its best-effort derivation rather than dropping the height.
+   */
+  private async getServerBlockHashAtHeight(height: number): Promise<string | null> {
+    try {
+      const api = getElectronAPI();
+      const result = await api.electrumGetBlockHash({
+        host: this.host,
+        port: this.port,
+        useSSL: this.useSSL,
+        height,
+        timeout: this.timeout,
+      });
+      if (result.success && typeof result.blockHash === 'string' && result.blockHash.length > 0) {
+        return result.blockHash;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   constructor(host: string, port: number = 50001, useSSL: boolean = false, timeout: number = 30000) {
     if (!host || host.trim() === '') {
       throw new Error('Electrum host is required');
@@ -322,6 +346,21 @@ export class ElectrumProvider implements BlockchainProvider {
             // If the refresh failed (or the server raced yet another block),
             // fall back to the memoized exact height for this block.
             if (derived < known) derived = known;
+          } else if (known === undefined && derived > 0) {
+            // First fetch in a block the memo has NEVER seen: there is no
+            // regression evidence available, so a tip that advanced right
+            // before this fetch could still make `derived` one block too low.
+            // Verify against the server's blockhash at the derived height —
+            // one cheap header lookup per new blockhash, skipped for every
+            // repeat block via the memo. A mismatch means our cached tip is
+            // stale: refresh it and re-derive. If the lookup itself fails,
+            // keep the best-effort derivation (previous behavior).
+            const serverHash = await this.getServerBlockHashAtHeight(derived);
+            if (serverHash !== null && serverHash !== blockHash) {
+              this.cachedTipHeightAt = 0;
+              const freshTip = await this.getTipHeightForDerivation();
+              if (freshTip !== null) derived = freshTip - confirmations + 1;
+            }
           }
           if (derived > 0) {
             this.derivedHeightByBlockHash.set(

@@ -23,6 +23,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const mockApi = vi.hoisted(() => ({
   electrumTest: vi.fn(),
   electrumGetTransaction: vi.fn(),
+  electrumGetBlockHash: vi.fn(),
 }));
 
 vi.mock("@/lib/electron", () => ({
@@ -74,8 +75,24 @@ function makeProvider() {
 beforeEach(() => {
   mockApi.electrumTest.mockReset();
   mockApi.electrumGetTransaction.mockReset();
+  mockApi.electrumGetBlockHash.mockReset();
   mockApi.electrumTest.mockResolvedValue({ success: true, blockHeight: TIP_HEIGHT });
+  // Default: the blockhash-at-height verification lookup is unavailable. The
+  // provider must then keep its best-effort tip-derived height (the behavior
+  // all pre-existing expectations pin). Tests for the unseen-block verification
+  // override this with a per-height map.
+  mockApi.electrumGetBlockHash.mockResolvedValue({ success: false, error: "not mocked" });
 });
+
+/** Serve blockhash-at-height lookups from a height → hash map. */
+function mockBlockHashes(byHeight: Record<number, string>) {
+  mockApi.electrumGetBlockHash.mockImplementation(async ({ height }: { height: number }) => {
+    const blockHash = byHeight[height];
+    return blockHash !== undefined
+      ? { success: true, blockHash }
+      : { success: false, error: `no header at ${height}` };
+  });
+}
 
 // ---- confirmation derivation ------------------------------------------------
 
@@ -275,6 +292,65 @@ describe("mid-batch tip advance", () => {
     // Same block ⇒ same height: the memoized value is exact even without a tip.
     expect(a?.status.block_height).toBe(TIP_HEIGHT - 3 + 1);
     expect(b?.status.block_height).toBe(TIP_HEIGHT - 3 + 1);
+  });
+
+  it("stores the exact height for the FIRST fetch in a never-seen block right after a tip advance", async () => {
+    // The tip advances to 800003 right after we cached 800002, and the very
+    // first fetch afterwards is a tx in the brand-new block: 1 confirmation
+    // against the NEW tip. With the stale cached tip that derives 800002 —
+    // one too low — and the memo has no entry to catch the regression. The
+    // provider must notice the server's blockhash at 800002 is a different
+    // block, refresh the tip, and store the exact height 800003.
+    mockApi.electrumTest
+      .mockResolvedValueOnce({ success: true, blockHeight: TIP_HEIGHT })
+      .mockResolvedValueOnce({ success: true, blockHeight: TIP_HEIGHT + 1 });
+    mockApi.electrumGetTransaction
+      .mockResolvedValueOnce({ success: true, transaction: verboseTx(TXID_A, 3, BLOCK_HASH) })
+      .mockResolvedValueOnce({ success: true, transaction: verboseTx(TXID_B, 1, OTHER_HASH) });
+    mockBlockHashes({
+      [TIP_HEIGHT - 3 + 1]: BLOCK_HASH, // tx A's block, verified against the old tip
+      [TIP_HEIGHT]: "1".repeat(64), // the old tip block — NOT tx B's block
+      [TIP_HEIGHT + 1]: OTHER_HASH, // the brand-new block
+    });
+
+    const provider = makeProvider();
+    const a = await provider.getTransaction(TXID_A);
+    const b = await provider.getTransaction(TXID_B);
+
+    expect(a?.status.block_height).toBe(TIP_HEIGHT - 3 + 1);
+    expect(b?.status.block_height).toBe(TIP_HEIGHT + 1); // exact, not off by one
+    // One tip refresh for the whole advance, not one per transaction.
+    expect(mockApi.electrumTest).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips the verification lookup for blocks the memo has already seen", async () => {
+    mockApi.electrumGetTransaction
+      .mockResolvedValueOnce({ success: true, transaction: verboseTx(TXID_A, 3, BLOCK_HASH) })
+      .mockResolvedValueOnce({ success: true, transaction: verboseTx(TXID_B, 3, BLOCK_HASH) });
+    mockBlockHashes({ [TIP_HEIGHT - 3 + 1]: BLOCK_HASH });
+
+    const provider = makeProvider();
+    await provider.getTransaction(TXID_A);
+    await provider.getTransaction(TXID_B);
+
+    // Only tx A (first sighting of the block) pays the header lookup.
+    expect(mockApi.electrumGetBlockHash).toHaveBeenCalledTimes(1);
+    expect(mockApi.electrumTest).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the best-effort tip-derived height when the verification lookup fails", async () => {
+    // Default electrumGetBlockHash mock fails — the provider must not drop
+    // the height or refresh the tip on a failed verification.
+    mockApi.electrumGetTransaction.mockResolvedValueOnce({
+      success: true,
+      transaction: verboseTx(TXID_A, 3, BLOCK_HASH),
+    });
+
+    const a = await makeProvider().getTransaction(TXID_A);
+
+    expect(a?.status.confirmed).toBe(true);
+    expect(a?.status.block_height).toBe(TIP_HEIGHT - 3 + 1);
+    expect(mockApi.electrumTest).toHaveBeenCalledTimes(1);
   });
 
   it("does not confuse a legitimately older block with a tip advance", async () => {

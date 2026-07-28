@@ -84,6 +84,20 @@ export interface ElectrumTransactionResult {
   error?: string;
 }
 
+export interface ElectrumBlockHashParams {
+  host: string;
+  port: number;
+  useSSL?: boolean;
+  height: number;
+  timeout?: number;
+}
+
+export interface ElectrumBlockHashResult {
+  success: boolean;
+  blockHash?: string;
+  error?: string;
+}
+
 export interface ElectrumBatchHistoryParams {
   host: string;
   port: number;
@@ -220,6 +234,7 @@ interface ElectronAPI {
   electrumGetHistory: (params: ElectrumHistoryParams) => Promise<ElectrumHistoryResult>;
   electrumGetUtxos: (params: ElectrumUtxoParams) => Promise<ElectrumUtxoResult>;
   electrumGetTransaction: (params: ElectrumTransactionParams) => Promise<ElectrumTransactionResult>;
+  electrumGetBlockHash: (params: ElectrumBlockHashParams) => Promise<ElectrumBlockHashResult>;
   electrumBatchGetHistory: (params: ElectrumBatchHistoryParams) => Promise<ElectrumBatchHistoryResult>;
   platform: string;
   isElectron: boolean;

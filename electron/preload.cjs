@@ -76,6 +76,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('electrum-get-utxos', params),
   electrumGetTransaction: (params) =>
     ipcRenderer.invoke('electrum-get-transaction', params),
+  electrumGetBlockHash: (params) =>
+    ipcRenderer.invoke('electrum-get-block-hash', params),
   electrumBatchGetHistory: (params) =>
     ipcRenderer.invoke('electrum-batch-get-history', params),
 

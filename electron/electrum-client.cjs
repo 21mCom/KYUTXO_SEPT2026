@@ -412,6 +412,36 @@ function registerElectrumHandlers(ipcMain) {
     }
   });
 
+  // Get the block hash at a given height via Electrum - uses connection pool.
+  // blockchain.block.header returns the raw 80-byte header hex; the block hash
+  // is the double-SHA256 of that header, byte-reversed. Computed here in Node
+  // so the renderer only compares hex strings.
+  ipcMain.handle('electrum-get-block-hash', async (event, { host, port, useSSL, height, timeout }) => {
+    try {
+      if (!Number.isInteger(height) || height < 0) {
+        return { success: false, error: `Invalid block height: ${height}` };
+      }
+      const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000);
+      await ensureVersionHandshake(key, timeout || 15000);
+
+      const headerHex = await pooledRequest(key, 'blockchain.block.header', [height], timeout || 30000);
+      if (typeof headerHex !== 'string' || headerHex.length < 160) {
+        return { success: false, error: 'Electrum server returned an invalid block header' };
+      }
+      const headerBytes = Buffer.from(headerHex.slice(0, 160), 'hex');
+      const hash1 = crypto.createHash('sha256').update(headerBytes).digest();
+      const hash2 = crypto.createHash('sha256').update(hash1).digest();
+      const blockHash = Buffer.from(hash2).reverse().toString('hex');
+
+      return { success: true, blockHash };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  });
+
   // Batch get history for multiple addresses - uses connection pool with multiplexing
   ipcMain.handle('electrum-batch-get-history', async (event, { host, port, useSSL, addresses, timeout }) => {
     const startTime = Date.now();
