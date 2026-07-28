@@ -17,7 +17,7 @@ Completion-validation runs the browser checks in PARALLEL; they all share port 5
 **Update (2026-07-28):** contention also shows up as `pthread_create: Resource temporarily unavailable` inside Chromium — a different random subset of browser checks fails on each validation run while every check passes standalone. After several genuinely failed full-validation attempts, verify the change-relevant suites locally and use an audited `skip_validation_reason` rather than retrying indefinitely.
 
 ## jsdom vitest suites also flake under validation load
-Heavy page-level vitest suites (e.g. ProofOfFundsDeclaration.*) hit the 5s default testTimeout / 1s waitFor defaults when running alongside the parallel Chromium checks, failing with "Test timed out in 5000ms" while passing standalone.
+Heavy page-level vitest suites (e.g. ProofOfFundsDeclaration.*) hit the 5s default testTimeout / 1s waitFor defaults when running alongside the parallel Chromium checks, failing with "Test timed out in 5000ms" while passing standalone. Another symptom: all tests PASS but the run exits 1 with `[vitest-pool]: Timeout terminating forks worker` — pure load artifact, not a test failure.
 **How to apply:** harden such suites with `describe("...", { timeout: 60_000 }, ...)` and explicit `waitFor(..., { timeout })` on slow async steps (PDF assembly, balance checks) instead of retrying validation forever.
 ## Chromium SIGTRAP crashes + hung check scripts
 Even with the dev server pre-started, concurrent runs can crash individual Chromium instances (`signal=SIGTRAP`, `browser has been closed`) at random — a different check fails each run. Worse, some check scripts print the ERROR but never exit, wedging the run until the poll budget is exhausted (POLL_BUDGET_EXCEEDED).

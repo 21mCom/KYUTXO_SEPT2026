@@ -1,4 +1,5 @@
-import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle, Network, Clock, Copy, Check, Activity, RefreshCw, Loader2 } from "lucide-react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle, Network, Clock, Copy, Check, Activity, RefreshCw, Loader2, CalendarPlus } from "lucide-react";
+import { formatAddedDate } from "@/lib/format-added-date";
 import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY } from "@/lib/behavior-profile";
 import { formatBTC } from "@/lib/bitcoin";
 import DiscoveryTreeDialog from "./DiscoveryTreeDialog";
@@ -75,6 +76,7 @@ interface RecordDetailPanelProps {
     id: string;
     type: "address" | "transaction" | "other";
     inputString: string;
+    createdAt?: number;
     label: string;
     notes?: string;
     tags: string[];
@@ -790,6 +792,22 @@ export function RecordDetailPanel({
                 <Badge variant="outline" data-testid="text-source-detail">
                   {getSourceLabel(record.source)}
                 </Badge>
+              </div>
+            )}
+
+            {!!record.createdAt && (
+              <div>
+                <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <CalendarPlus className="h-4 w-4" />
+                  Added
+                </h4>
+                <p
+                  className="text-sm text-muted-foreground"
+                  title={new Date(record.createdAt).toLocaleString()}
+                  data-testid="text-added-detail"
+                >
+                  {formatAddedDate(record.createdAt)}
+                </p>
               </div>
             )}
 

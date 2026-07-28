@@ -28,8 +28,12 @@ import {
   getAddressRecordsByImportanceTierPage,
   getRecordsPageByTypeIdReverseKeyset,
   getRecordsPageByTypeAndImportanceTiersKeyset,
+  getRecordsPageByCreatedAtKeyset,
+  countRecordsByCreatedAtWindow,
+  type CreatedAtCursor,
   bulkGetRecords,
 } from "@/lib/data/record-crud";
+import { DateAddedFilter, type DateAddedSort } from "@/components/DateAddedFilter";
 import {
   engineGetRecordPage,
   engineCountRecords,
@@ -65,7 +69,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { searchPendingClass } from "@/lib/search-pending-class";
-import { buildRecordsCollection, buildIdentifierSearchCollection, looksLikeBitcoinIdentifier, fetchRecordsPage } from "@/lib/records-query";
+import { buildRecordsCollection, buildIdentifierSearchCollection, looksLikeBitcoinIdentifier, fetchRecordsPage, MAX_MATERIALIZE } from "@/lib/records-query";
 import { getActivityBus } from "@/lib/activity-bus";
 import { batchPreloadIdentifiers } from "@/lib/metadata-hover";
 
@@ -159,6 +163,15 @@ export default function Records() {
   const [engineReadySignal, setEngineReadySignal] = useState(0);
   
   const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
+  // Date Added controls. 'default' = the control is untouched: keep the legacy
+  // id-desc branches (and the engine fast path). Once the user engages the
+  // sort toggle — explicit 'newest' OR 'oldest' — or sets a recency window,
+  // ALL pages route through the createdAt keyset branch so the displayed
+  // ordering is truly by date added (createdAt can diverge from id order,
+  // e.g. restored records carry their original createdAt).
+  const [dateSort, setDateSort] = useState<DateAddedSort>('default');
+  const [addedSince, setAddedSince] = useState<number | null>(null);
+  const dateAddedActive = dateSort !== 'default' || addedSince !== null;
   // Behavior-label filter (Dormant, Accumulator, etc.). Derived client-side from
   // the cached on-chain stats already on each loaded record — no DB scan. Applied
   // to the loaded page only, so it is intentionally absent from the load effect.
@@ -245,7 +258,7 @@ export default function Records() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearch, columnFilters, includeBlockchainDiscovered, behaviorFilters]);
+  }, [debouncedSearch, columnFilters, includeBlockchainDiscovered, behaviorFilters, dateSort, addedSince]);
 
   const loadVersionRef = useRef(0);
   const inFlightRef = useRef(0);
@@ -255,9 +268,12 @@ export default function Records() {
   // Next/Previous, so adjacent navigation is O(PAGE_SIZE) instead of O(offset).
   // `signature` captures the query identity (filters/search/include/db version);
   // when it changes the cache is reset so stale boundaries are never reused.
-  const pageAnchorsRef = useRef<{ signature: string; anchors: Map<number, number | undefined> }>({
+  // Anchor values are the plain id boundary for the id-desc branches, or a
+  // (createdAt, id) cursor for the date-added branch; the signature includes
+  // the sort/recency mode so the two shapes are never mixed.
+  const pageAnchorsRef = useRef<{ signature: string; anchors: Map<number, number | CreatedAtCursor | undefined> }>({
     signature: '',
-    anchors: new Map<number, number | undefined>([[1, undefined]]),
+    anchors: new Map<number, number | CreatedAtCursor | undefined>([[1, undefined]]),
   });
 
   const retryLoad = useCallback(() => {
@@ -319,6 +335,11 @@ export default function Records() {
         const filtersActive = search !== '' || columnFilters.length > 0;
         
         const filterFn = (record: DbRecord): boolean => {
+          // Recency window composes with every branch (identifier lookup,
+          // substring search, date-added keyset) as a residual predicate.
+          if (addedSince !== null && (record.createdAt ?? 0) < addedSince) {
+            return false;
+          }
           if (!includeBlockchainDiscovered) {
             if (record.addressImportance === 'blockchain-discovered' || 
                 record.addressImportance === 'pending-review') {
@@ -360,13 +381,17 @@ export default function Records() {
           search,
           filters: columnFilters,
           db: dbChangeSignal,
+          dateSort,
+          addedSince,
         });
         if (anchorState.signature !== querySignature) {
           anchorState.signature = querySignature;
           anchorState.anchors = new Map<number, number | undefined>([[1, undefined]]);
         }
         const hasAnchor = anchorState.anchors.has(currentPage);
-        const beforeIdExclusive = anchorState.anchors.get(currentPage);
+        const anchorValue = anchorState.anchors.get(currentPage);
+        const beforeIdExclusive = typeof anchorValue === 'number' ? anchorValue : undefined;
+        const createdAtCursor = anchorValue && typeof anchorValue === 'object' ? anchorValue : undefined;
         // Record the boundary for the next page once a full page is loaded; a
         // short page means there is no next page, so we leave it unset.
         const recordNextAnchor = (rows: DbRecord[]) => {
@@ -401,8 +426,12 @@ export default function Records() {
         // (pasted full address/txid) have EXACT inputString semantics via
         // buildIdentifierSearchCollection — the engine's `search` is a cross-field
         // substring — so they must stay on the dedicated Dexie identifier branch.
+        // Date-added sort/recency queries are NOT expressible on the engine
+        // (its record page is id-keyset only), so they fall back to the Dexie
+        // createdAt keyset branch below — same clean-fallback pattern as the
+        // freshness gate.
         const engineExpressible =
-          engineTypeFilter !== undefined && !identifierSearch;
+          engineTypeFilter !== undefined && !identifierSearch && !dateAddedActive;
         // Readiness alone is not enough: the mirror is a manually (re)seeded read
         // replica, so it can stay READY while drifting from the live vault after a
         // create/edit/delete. evaluateEngineFreshness() confirms it is CURRENT
@@ -428,6 +457,27 @@ export default function Records() {
         // identifier/substring branches already derive their totals from the
         // awaited page fetch, so here they only refresh the hidden-records badge.
         const runDeferredCounts = () => {
+          // Date-added branch: count the recency window (capped, early-stop)
+          // with the same residual predicate the page fetch used, plus the
+          // hidden-records badge. Identifier searches keep their own totals.
+          if (dateAddedActive && !identifierSearch) {
+            setCountLoading(true);
+            countRecordsByCreatedAtWindow(addedSince ?? undefined, filterFn, MAX_MATERIALIZE)
+              .then(({ count, truncated }) => {
+                if (loadVersionRef.current !== version) return;
+                setTotalCount(count);
+                setNavigableCount(count);
+                setResultsTruncated(truncated);
+              })
+              .catch(e => { console.warn('[Records] Date-added count failed:', e); })
+              .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
+            countBlockchainDiscovered().then(c => {
+              if (loadVersionRef.current !== version) return;
+              setTotalBlockchainDiscovered(c);
+            }).catch(e => { console.warn('[Records] Background blockchain count failed:', e); });
+            return;
+          }
+
           // Engine path: exact counts come straight from SQLite. The visible total
           // honors the active type/search/include; the hidden-records badge is the
           // global discovered count (all rows minus non-discovered rows).
@@ -525,6 +575,46 @@ export default function Records() {
           // Keyset boundary uses the engine page (authoritative id ordering) so a
           // missing-from-Dexie row in `hydrated` can't break Next/Previous.
           recordNextAnchor(pageRows as unknown as DbRecord[]);
+
+        } else if (dateAddedActive && !identifierSearch) {
+          // Date Added sort / "Recently added" window: keyset-paginate on the
+          // createdAt index (id tiebreak via index iteration order) with the
+          // residual filterFn composing type/tags/search/tier-exclude. Counts
+          // are deferred (capped early-stop walk) in runDeferredCounts.
+          const direction = dateSort === 'oldest' ? 'oldest' : 'newest';
+          let pageRows: DbRecord[];
+          if (hasAnchor) {
+            pageRows = await getRecordsPageByCreatedAtKeyset({
+              limit: PAGE_SIZE,
+              direction,
+              addedSince: addedSince ?? undefined,
+              cursor: createdAtCursor,
+              filter: filterFn,
+            });
+          } else {
+            // Rare non-adjacent jump (e.g. clamp after a count shrink): fetch a
+            // wider window from the top and slice — bounded by the page number.
+            const wide = await getRecordsPageByCreatedAtKeyset({
+              limit: pgOffset + PAGE_SIZE,
+              direction,
+              addedSince: addedSince ?? undefined,
+              filter: filterFn,
+            });
+            pageRows = wide.slice(pgOffset, pgOffset + PAGE_SIZE);
+          }
+          if (loadVersionRef.current !== version) return;
+
+          rawRecords = pageRows;
+          setResultsTruncated(false);
+          if (pageRows.length === PAGE_SIZE) {
+            const last = pageRows[pageRows.length - 1];
+            if (typeof last.id === 'number') {
+              anchorState.anchors.set(currentPage + 1, {
+                createdAt: last.createdAt ?? 0,
+                id: last.id,
+              });
+            }
+          }
 
         } else if (!filtersActive && includeBlockchainDiscovered) {
           // Await only the lightweight page fetch (keyset when possible). Counts
@@ -719,7 +809,7 @@ export default function Records() {
     };
     
     loadRecords();
-  }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, debouncedSearch, columnFilters, retrySig, engineReadySignal]);
+  }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, debouncedSearch, columnFilters, retrySig, engineReadySignal, dateSort, addedSince]);
 
   // Watchdog: while a load is continuously in progress, tick an elapsed-seconds
   // counter. On very large vaults the first load after a big update can take a
@@ -1019,6 +1109,13 @@ export default function Records() {
             uniqueValues={uniqueFilterValues}
           />
 
+          <DateAddedFilter
+            sort={dateSort}
+            onSortChange={setDateSort}
+            since={addedSince}
+            onSinceChange={setAddedSince}
+          />
+
           <BehaviorFilter
             selected={behaviorFilters}
             onChange={setBehaviorFilters}
@@ -1189,6 +1286,7 @@ export default function Records() {
                   <>
                     <RecordTable 
                       records={displayRecords}
+                      showAddedColumn={dateAddedActive}
                       onRowClick={setSelectedRecordId}
                       onDelete={handleDeleteRequest}
                       selectionEnabled={true}

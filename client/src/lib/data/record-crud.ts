@@ -960,6 +960,122 @@ export async function getRecordsPageByTypeAndImportanceTiersKeyset(
     .toArray();
 }
 
+// ---------------------------------------------------------------------------
+// Date-added (createdAt) keyset pagination + recency window (Task: Recently
+// Added view). Uses the existing `createdAt` index. Within equal createdAt
+// values the index iterates by primary key (id) ascending, so plain index
+// iteration gives (createdAt asc, id asc) and `.reverse()` gives
+// (createdAt desc, id desc) — a deterministic id tiebreaker for free. The
+// cursor is therefore a (createdAt, id) pair and ties are resolved with a
+// small equals() query before continuing strictly past the boundary.
+//
+// NOTE: this ordering is NOT expressible on the native engine fast path (the
+// engine's record page is id-keyset only), so the Records page routes any
+// date-added sort/recency query to this Dexie path per the freshness-gate
+// fallback pattern.
+// ---------------------------------------------------------------------------
+
+export interface CreatedAtCursor {
+  createdAt: number;
+  /** id of the last row of the previous page (exclusive boundary within ties). */
+  id: number;
+}
+
+export interface CreatedAtPageOptions {
+  limit: number;
+  /** 'newest' = createdAt desc (id desc within ties); 'oldest' = asc/asc. */
+  direction: 'newest' | 'oldest';
+  /** Inclusive lower bound on createdAt (ms). Omit for no recency window. */
+  addedSince?: number;
+  /** Exclusive keyset boundary from the previous page. Omit for the first page. */
+  cursor?: CreatedAtCursor;
+  /** Residual predicate (type/tags/search/tier-exclude) applied during iteration. */
+  filter?: (r: Record) => boolean;
+}
+
+export async function getRecordsPageByCreatedAtKeyset(
+  opts: CreatedAtPageOptions
+): Promise<Record[]> {
+  const { limit, direction, addedSince, cursor, filter } = opts;
+  const residual = filter ?? (() => true);
+  const rows: Record[] = [];
+
+  if (cursor) {
+    // Rows sharing the boundary createdAt: keep only those strictly past the
+    // boundary id in iteration order.
+    let tie = db.records.where('createdAt').equals(cursor.createdAt);
+    if (direction === 'newest') tie = tie.reverse();
+    const tieRows = await tie
+      .and((r) => {
+        const id = r.id ?? 0;
+        const pastBoundary = direction === 'newest' ? id < cursor.id : id > cursor.id;
+        return pastBoundary && residual(r);
+      })
+      .limit(limit)
+      .toArray();
+    rows.push(...tieRows);
+  }
+
+  if (rows.length < limit) {
+    const remaining = limit - rows.length;
+    let coll: Dexie.Collection<Record, number>;
+    if (direction === 'newest') {
+      coll = db.records
+        .where('createdAt')
+        .between(
+          addedSince ?? Dexie.minKey,
+          cursor ? cursor.createdAt : Dexie.maxKey,
+          true,
+          cursor == null // upper bound exclusive when continuing past a cursor
+        )
+        .reverse();
+    } else {
+      // Ascending: the cursor (when present) is always >= addedSince because it
+      // came from inside the window, so it supersedes addedSince as lower bound.
+      coll = db.records
+        .where('createdAt')
+        .between(
+          cursor ? cursor.createdAt : (addedSince ?? Dexie.minKey),
+          Dexie.maxKey,
+          cursor == null,
+          true
+        );
+    }
+    const more = await coll.and(residual).limit(remaining).toArray();
+    rows.push(...more);
+  }
+
+  return rows;
+}
+
+export interface CreatedAtWindowCount {
+  count: number;
+  /** True when counting stopped at `cap`; UI should render "cap+" semantics. */
+  truncated: boolean;
+}
+
+/**
+ * Count records with createdAt >= addedSince matching the residual predicate,
+ * stopping early at `cap` so a broad window over a huge vault never walks
+ * millions of rows just to render a number.
+ */
+export async function countRecordsByCreatedAtWindow(
+  addedSince: number | undefined,
+  filter: ((r: Record) => boolean) | undefined,
+  cap: number
+): Promise<CreatedAtWindowCount> {
+  let count = 0;
+  const residual = filter ?? (() => true);
+  await db.records
+    .where('createdAt')
+    .between(addedSince ?? Dexie.minKey, Dexie.maxKey, true, true)
+    .until(() => count >= cap)
+    .each((r) => {
+      if (residual(r)) count++;
+    });
+  return { count: Math.min(count, cap), truncated: count >= cap };
+}
+
 export async function countRecordsByTypeAndImportanceTiers(
   type: string,
   tiers: AddressImportance[]

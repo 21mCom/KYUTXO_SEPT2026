@@ -35,6 +35,7 @@ import { db, type CustomField } from "@/lib/database";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBTC } from "@/lib/bitcoin";
+import { formatAddedDate } from "@/lib/format-added-date";
 
 type SortDirection = "asc" | "desc" | null;
 type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | "balance" | "lastTxDate" | "txCount" | string;
@@ -103,6 +104,7 @@ interface Record {
   syncDepth?: number;
   maxSyncedDepth?: number;
   firstSeenBlockTime?: number;
+  createdAt?: number;
   cachedBalanceSats?: number;
   cachedTxCount?: number;
   cachedLastActivityTime?: number;
@@ -124,6 +126,9 @@ interface RecordTableProps {
   onSelectionChange?: (selectedIds: Set<string>) => void;
   precomputedAddressStats?: Map<string, AddressStats>;
   statsLoading?: boolean;
+  /** Show the "Added" (createdAt) column — enabled by the Records page when a
+   *  Date Added sort/recency filter is active. */
+  showAddedColumn?: boolean;
 }
 
 interface SortableHeaderProps {
@@ -174,6 +179,7 @@ export function RecordTable({
   onSelectionChange,
   precomputedAddressStats,
   statsLoading: externalStatsLoading,
+  showAddedColumn = false,
 }: RecordTableProps) {
   const { tableColumns, customFieldColumns } = useSettings();
   const { enabledCustomFields } = useCustomFields();
@@ -555,6 +561,9 @@ export function RecordTable({
                 onSort={handleSort}
               />
             )}
+            {showAddedColumn && (
+              <TableHead data-testid="header-added">Added</TableHead>
+            )}
             {tableColumns.balance && (
               <SortableHeader
                 column="balance"
@@ -611,6 +620,7 @@ export function RecordTable({
                   (tableColumns.owner ? 1 : 0) +
                   (tableColumns.walletName ? 1 : 0) +
                   (tableColumns.firstSeen ? 1 : 0) +
+                  (showAddedColumn ? 1 : 0) +
                   enabledCustomFields.filter(f => customFieldColumns[f.slug]).length
                 } 
                 className="h-24 text-center text-muted-foreground"
@@ -745,6 +755,15 @@ export function RecordTable({
                 {tableColumns.firstSeen && (
                   <TableCell className="text-sm text-muted-foreground">
                     {formatBlockTime(record.firstSeenBlockTime)}
+                  </TableCell>
+                )}
+                {showAddedColumn && (
+                  <TableCell
+                    className="text-sm text-muted-foreground whitespace-nowrap"
+                    title={record.createdAt ? new Date(record.createdAt).toLocaleString() : undefined}
+                    data-testid={`text-added-${record.id}`}
+                  >
+                    {formatAddedDate(record.createdAt)}
                   </TableCell>
                 )}
                 {tableColumns.balance && (
