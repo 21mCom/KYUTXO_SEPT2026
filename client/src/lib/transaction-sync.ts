@@ -437,7 +437,8 @@ export class TransactionSyncService {
       });
 
       const currentHeight = await this.cancellableCall(this.provider.getBlockHeight(), 30000);
-      const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS;
+      // A tx in the tip block has 1 confirmation, so height <= tip - (MIN - 1) has >= MIN confs.
+      const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS + 1;
 
       this.updateProgress({
         phase: 'syncing-addresses',
@@ -775,7 +776,8 @@ export class TransactionSyncService {
       });
 
       const currentHeight = await this.cancellableCall(this.provider.getBlockHeight(), 30000);
-      const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS;
+      // A tx in the tip block has 1 confirmation, so height <= tip - (MIN - 1) has >= MIN confs.
+      const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS + 1;
       const syncRunTimestamp = Date.now();
 
       // Track which record IDs we've already processed in this sync session

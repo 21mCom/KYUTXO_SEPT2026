@@ -431,7 +431,8 @@ export async function runTxidBackfill(
 
         // Confirmation check (only if we have a valid block height)
         if (currentHeight > 0 && rawTx.status.block_height) {
-          const confirmations = currentHeight - rawTx.status.block_height;
+          // A tx in the tip block has 1 confirmation, hence the +1.
+          const confirmations = currentHeight - rawTx.status.block_height + 1;
           if (confirmations < MINIMUM_CONFIRMATIONS) {
             return { txid, status: 'skipped' as const, reason: 'insufficient-confirmations' };
           }

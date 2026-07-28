@@ -435,9 +435,10 @@ describe("runTxidBackfill", () => {
   });
 
   it("skips a transaction with insufficient confirmations", async () => {
-    // tip is only 2 blocks above the tx → below MINIMUM_CONFIRMATIONS (5)
+    // tip 800003 vs height 800000 → 4 confirmations (tip block counts as 1),
+    // one short of MINIMUM_CONFIRMATIONS (5)
     const provider = makeProvider({
-      blockHeight: 800002,
+      blockHeight: 800003,
       txs: new Map([[TXID_A, makeApiTx(TXID_A, { blockHeight: 800000 })]]),
     });
 
@@ -446,6 +447,21 @@ describe("runTxidBackfill", () => {
     expect(result.skipped).toBe(1);
     expect(result.rebuilt).toBe(0);
     expect(result.skippedReasons['insufficient-confirmations']).toBe(1);
+  });
+
+  it("rebuilds a transaction with exactly MINIMUM_CONFIRMATIONS confirmations", async () => {
+    // tip 800004 vs height 800000 → exactly 5 confirmations (tip block = 1),
+    // meeting MINIMUM_CONFIRMATIONS — must be rebuilt, not skipped.
+    const provider = makeProvider({
+      blockHeight: 800004,
+      txs: new Map([[TXID_A, makeApiTx(TXID_A, { blockHeight: 800000 })]]),
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+
+    expect(result.rebuilt).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.skippedReasons['insufficient-confirmations']).toBeUndefined();
   });
 
   it("counts a provider error as failed and records the message", async () => {

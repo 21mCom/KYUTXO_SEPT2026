@@ -317,7 +317,8 @@ export function RecordFormDialog({
         return;
       }
 
-      const confirmations = currentHeight - (rawTx.status.block_height || 0);
+      // A tx in the tip block has 1 confirmation, hence the +1.
+      const confirmations = currentHeight - (rawTx.status.block_height || 0) + 1;
       if (confirmations < MINIMUM_CONFIRMATIONS) {
         setTxFetchError(`Transaction has only ${confirmations} confirmations. Minimum ${MINIMUM_CONFIRMATIONS} required.`);
         return;
