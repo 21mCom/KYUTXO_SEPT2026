@@ -51,4 +51,5 @@
 - [PofF shared PDF builder pattern](pof-shared-pdf-builder.md) — `buildPofPdf(isSample)` useCallback with `eff*` vars; sample AML needs explicit placeholder SOW/SOF strings; sample inline amlResult needs full EntityListDescriptionInput fields (entityListSource etc.).
 - [Elevate CSS vs positioning utilities](elevate-css-specificity.md) — elevate base rule must stay 0-specificity (:where()) or Tailwind `absolute` on Buttons/Badges silently loses; browser-only bug class.
 - [Curated-tier balance surfaces](curated-tier-balance-surfaces.md) — cached-stats aggregations must ALLOWLIST curated tiers; discovered counterparty rows inherit walletName + stamped stats and inflate totals; import helpers from db-types not database.
+- [Bulk-import vocabulary ensure*](bulk-import-vocabulary-ensure.md) — strict create* after a record loop always throws "already exists" (loop auto-syncs vocab); use ensure*, keep vocab non-fatal, verify counts vs DB.
 - [Electrum txid confirmations](electrum-txid-confirmations.md) — verbose tx.get has confirmations but NO height; derive tip−conf+1 via cached tip; never cache unconfirmed conversions in session caches.

@@ -58,8 +58,7 @@ import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useTags, createTag as createTagHook } from "@/hooks/use-tags";
 import { useCategories, createCategory as createCategoryHook } from "@/hooks/use-categories";
-import { createRecord, updateRecord, lookupRecordsByInputStrings } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin } from "@/lib/dataFacade";
+import { saveDescriptorAddresses, type DescriptorSaveResult } from "@/pages/descriptor-import/save-addresses";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
@@ -115,6 +114,7 @@ export default function DescriptorImport() {
   /** Set when BSMS address verification fails; cleared when going back to step 1. */
   const [bsmsMismatch, setBsmsMismatch] = useState<{ bsms: string; derived: string } | null>(null);
   const [saveProgress, setSaveProgress] = useState({ current: 0, total: 0 });
+  const [saveResult, setSaveResult] = useState<DescriptorSaveResult | null>(null);
 
   const [seedName, setSeedName] = useState("");
   const [walletSoftware, setWalletSoftware] = useState("Sparrow");
@@ -561,6 +561,7 @@ export default function DescriptorImport() {
     
     setIsSaving(true);
     setSaveProgress({ current: 0, total: 0 });
+    setSaveResult(null);
     beginBulkOperation();
     
     try {
@@ -588,160 +589,59 @@ export default function DescriptorImport() {
 
       setSaveProgress({ current: 0, total: allSelected.length });
       
-      const allAddresses = allSelected.map(a => a.address);
-      const recordLookup = await lookupRecordsByInputStrings(allAddresses);
-      
       const sourcePrefix = walletNameInput || seedName || 'descriptor-import';
       const now = new Date();
       const dateStr = now.toISOString().split('T')[0];
       const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '');
       const sourceName = `descriptorImport-${sourcePrefix}_${dateStr}_${timeStr}`;
       
-      const parsedTags = selectedTags.filter(t => t.trim() !== '');
-      const parsedCategories = selectedCategories.filter(c => c.trim() !== '');
-      
-      let created = 0;
-      let updated = 0;
-      let skipped = 0;
-      
-      for (let ai = 0; ai < allSelected.length; ai++) {
-        const addr = allSelected[ai];
-        if (ai % 10 === 0) {
-          setSaveProgress({ current: ai + 1, total: allSelected.length });
-          await new Promise(r => setTimeout(r, 0));
-        }
-        const existingRecord = recordLookup.get(addr.address.trim().toLowerCase());
-        
-        if (existingRecord) {
-          const existingTags = existingRecord.tags || [];
-          const existingCategories = existingRecord.categories || [];
-          
-          const mergedTags = Array.from(new Set([...existingTags, ...parsedTags]));
-          const mergedCategories = Array.from(new Set([...existingCategories, ...parsedCategories]));
-          
-          let newImportance = existingRecord.addressImportance;
-          if (markAsVerified && existingRecord.addressImportance !== 'verified') {
-            newImportance = 'verified';
-          } else if (existingRecord.addressImportance !== 'verified' && 
-                     existingRecord.addressImportance !== 'manual' && 
-                     existingRecord.addressImportance !== 'wallet-import') {
-            newImportance = 'xpub-derived';
-          }
-          
-          if (existingRecord.id === undefined) {
-            skipped++;
-            continue;
-          }
-          
-          await updateRecord(existingRecord.id, {
-            tags: mergedTags,
-            categories: mergedCategories,
-            notes: existingRecord.notes || notes || undefined,
-            seedName: existingRecord.seedName || seedName || undefined,
-            walletSoftware: existingRecord.walletSoftware || walletSoftware || undefined,
-            derivationPath: existingRecord.derivationPath || `${addr.chainType}/${addr.index}`,
-            owner: existingRecord.owner || ownerInput || undefined,
-            walletName: existingRecord.walletName || walletNameInput || undefined,
-            addressImportance: newImportance,
-            ...(parsedDescriptor.isMultisig ? {
-              vault: {
-                isVaultXpub: true,
-                vaultName: walletNameInput || seedName || 'Multisig Vault',
-                m: parsedDescriptor.threshold,
-                n: parsedDescriptor.keys.length,
-                vaultNotes: `${parsedDescriptor.threshold}-of-${parsedDescriptor.keys.length} ${parsedDescriptor.scriptType}`,
-              },
-            } : {}),
-          });
-          
-          const walletLabel = parsedDescriptor.isTaproot ? (walletNameInput || 'Taproot') : (walletNameInput || 'Multisig');
-          
-          if (existingRecord.id !== undefined) {
-            try {
-              await createRecordOrigin({
-                recordId: existingRecord.id,
-                originType: 'xpub-derived',
-                label: `${walletLabel} ${addr.chainType === 'receive' ? 'Receive' : 'Change'} #${addr.index}`,
-                notes: notes || undefined,
-                tags: parsedTags,
-                categories: parsedCategories,
-                source: sourceName,
-              });
-            } catch (e) {
-              console.error('Failed to create record origin:', e);
-            }
-          }
-          updated++;
-        } else {
-          const walletLabel = parsedDescriptor.isTaproot ? (walletNameInput || 'Taproot') : (walletNameInput || 'Multisig');
-          
-          const recordId = await createRecord({
-            type: 'address',
-            inputString: addr.address,
-            label: `${walletLabel} ${addr.chainType === 'receive' ? 'Receive' : 'Change'} #${addr.index}`,
-            tags: parsedTags,
-            categories: parsedCategories,
-            notes: notes || undefined,
-            seedName: seedName || undefined,
-            walletSoftware: walletSoftware || undefined,
-            derivationPath: `${addr.chainType}/${addr.index}`,
-            owner: ownerInput || undefined,
-            walletName: walletNameInput || undefined,
-            addressImportance: markAsVerified ? 'verified' : 'xpub-derived',
-            ...(parsedDescriptor.isMultisig ? {
-              vault: {
-                isVaultXpub: true,
-                vaultName: walletNameInput || seedName || 'Multisig Vault',
-                m: parsedDescriptor.threshold,
-                n: parsedDescriptor.keys.length,
-                vaultNotes: `${parsedDescriptor.threshold}-of-${parsedDescriptor.keys.length} ${parsedDescriptor.scriptType}`,
-              },
-            } : {}),
-          });
-          
-          if (recordId) {
-            try {
-              await createRecordOrigin({
-                recordId,
-                originType: 'xpub-derived',
-                label: `${walletLabel} ${addr.chainType === 'receive' ? 'Receive' : 'Change'} #${addr.index}`,
-                notes: notes || undefined,
-                tags: parsedTags,
-                categories: parsedCategories,
-                source: sourceName,
-              });
-            } catch (e) {
-              console.error('Failed to create record origin:', e);
-            }
-          }
-          created++;
-        }
+      const result = await saveDescriptorAddresses(
+        allSelected,
+        {
+          isMultisig: parsedDescriptor.isMultisig,
+          isTaproot: !!parsedDescriptor.isTaproot,
+          threshold: parsedDescriptor.threshold,
+          keysCount: parsedDescriptor.keys.length,
+          scriptType: parsedDescriptor.scriptType,
+          tags: selectedTags,
+          categories: selectedCategories,
+          notes: notes || undefined,
+          seedName: seedName || undefined,
+          walletSoftware: walletSoftware || undefined,
+          owner: ownerInput || undefined,
+          walletName: walletNameInput || undefined,
+          markAsVerified,
+          sourceName,
+        },
+        (current, total) => setSaveProgress({ current, total }),
+      );
+
+      setSaveResult(result);
+
+      const problemCount = result.failures.length + result.missing.length;
+      if (problemCount > 0) {
+        const problemAddrs = [
+          ...result.failures.map(f => f.address),
+          ...result.missing,
+        ];
+        toast({
+          title: "Import finished with problems",
+          description:
+            `Saved ${result.verifiedCount} of ${allSelected.length} addresses (verified in database). ` +
+            `${problemCount} not saved: ${problemAddrs.slice(0, 3).join(', ')}` +
+            (problemAddrs.length > 3 ? ` and ${problemAddrs.length - 3} more` : '') +
+            '. See the details on the completion screen.',
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Import complete",
+          description: `Created ${result.created} new, updated ${result.updated} addresses (${result.verifiedCount} verified in database)`,
+        });
       }
-      
-      if (parsedTags.length > 0) {
-        await syncTagsToMaster(parsedTags);
+      if (result.warnings.length > 0) {
+        console.warn('[DescriptorImport] Non-fatal import warnings:', result.warnings);
       }
-      if (parsedCategories.length > 0) {
-        await syncCategoriesToMaster(parsedCategories);
-      }
-      
-      if (ownerInput && !existingOwners.find(o => o.name === ownerInput)) {
-        await createOwner(ownerInput);
-      }
-      if (walletNameInput && !existingWalletNames.find(w => w.name === walletNameInput)) {
-        await createWalletName(walletNameInput);
-      }
-      if (seedName && !existingSeedNames.find(s => s.name === seedName)) {
-        await createSeedName(seedName);
-      }
-      if (walletSoftware && !existingWalletSoftware.find(w => w.name === walletSoftware)) {
-        await createWalletSoftware(walletSoftware);
-      }
-      
-      toast({
-        title: "Import complete",
-        description: `Created ${created} new, updated ${updated}, skipped ${skipped} addresses`,
-      });
       
       setStep(3);
     } catch (error) {
@@ -1504,7 +1404,41 @@ export default function DescriptorImport() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <p>Your multisig addresses have been imported successfully.</p>
+              {saveResult && (saveResult.failures.length > 0 || saveResult.missing.length > 0) ? (
+                <Alert variant="destructive" data-testid="alert-save-problems">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>
+                    {saveResult.failures.length + saveResult.missing.length} address(es) were NOT saved
+                  </AlertTitle>
+                  <AlertDescription>
+                    <p className="mb-2">
+                      {saveResult.verifiedCount} address(es) verified in the database
+                      ({saveResult.created} created, {saveResult.updated} updated).
+                      The following could not be written:
+                    </p>
+                    <ScrollArea className="max-h-40">
+                      <ul className="space-y-1 font-mono text-xs">
+                        {saveResult.failures.map((f) => (
+                          <li key={f.address} data-testid={`text-failed-${f.address.slice(0, 8)}`}>
+                            {f.address} — {f.reason}
+                          </li>
+                        ))}
+                        {saveResult.missing.map((a) => (
+                          <li key={a} data-testid={`text-missing-${a.slice(0, 8)}`}>
+                            {a} — reported saved but not found in the database
+                          </li>
+                        ))}
+                      </ul>
+                    </ScrollArea>
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <p data-testid="text-save-summary">
+                  {saveResult
+                    ? `${saveResult.verifiedCount} address(es) imported and verified in the database (${saveResult.created} created, ${saveResult.updated} updated).`
+                    : 'Your addresses have been imported successfully.'}
+                </p>
+              )}
               
               <div className="flex gap-4">
                 <Button onClick={() => navigate("/records")} data-testid="button-view-records">
@@ -1517,6 +1451,8 @@ export default function DescriptorImport() {
                     setDescriptorInput("");
                     setParsedDescriptor(null);
                     setMultisigResult(null);
+                    setTaprootResult(null);
+                    setSaveResult(null);
                     setSelectedReceiveAddresses(new Set());
                     setSelectedChangeAddresses(new Set());
                     setBsmsMismatch(null);
