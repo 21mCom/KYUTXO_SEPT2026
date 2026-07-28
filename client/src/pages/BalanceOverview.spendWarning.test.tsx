@@ -68,6 +68,14 @@ vi.mock("@/hooks/use-db-change-signal", () => ({
   useDbChangeSignal: () => 0,
 }));
 
+// settings-crud reads the real Dexie db at mount (getSettings('default')); in
+// jsdom that throws DatabaseClosedError as an unhandled rejection. Report the
+// formula as already upgraded (version 2) so the one-time backfill is skipped.
+vi.mock("@/lib/data/settings-crud", () => ({
+  getSettings: vi.fn(() => Promise.resolve({ balanceFormulaVersion: 2 })),
+  updateSettings: vi.fn(() => Promise.resolve()),
+}));
+
 vi.mock("dexie-react-hooks", () => ({
   useLiveQuery: () => undefined,
 }));

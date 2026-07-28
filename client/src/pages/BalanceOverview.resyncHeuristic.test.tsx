@@ -141,6 +141,14 @@ vi.mock("@/lib/data/node-settings-crud", () => ({
   getNodeSettings: (...a: unknown[]) => getNodeSettings(...a),
 }));
 
+// settings-crud reads the real Dexie db at mount (getSettings('default')); in
+// jsdom that throws DatabaseClosedError as an unhandled rejection. Report the
+// formula as already upgraded (version 2) so the one-time backfill is skipped.
+vi.mock("@/lib/data/settings-crud", () => ({
+  getSettings: vi.fn(() => Promise.resolve({ balanceFormulaVersion: 2 })),
+  updateSettings: vi.fn(() => Promise.resolve()),
+}));
+
 const getBlockHeight = vi.fn(() => Promise.resolve(800_000));
 const createProviderFromSettings = vi.fn(() => ({ getBlockHeight }));
 vi.mock("@/lib/blockchain-api", () => ({
