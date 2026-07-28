@@ -120,4 +120,72 @@ describe("AddressChecker — unreachable node isolation", () => {
     ).toBeTruthy();
     expect(within(screen.getByTestId("row-address-2")).getByText("Done")).toBeTruthy();
   });
+
+  it("highlights only completed rows with a positive balance", async () => {
+    cleanup();
+    getAddressCoreStats.mockImplementation(async (address: string) => {
+      if (address === ADDR_B) {
+        throw new Error(ERROR_MESSAGE);
+      }
+      if (address === ADDR_C) {
+        // Zero balance — must not be highlighted.
+        return { txCount: 2, receivedSats: 50000, sentSats: 50000, balanceSats: 0 };
+      }
+      return { txCount: 3, receivedSats: 100000, sentSats: 40000, balanceSats: 60000 };
+    });
+
+    render(<AddressChecker />);
+    fireEvent.change(screen.getByTestId("textarea-address-input"), {
+      // Include an invalid line as row 3.
+      target: { value: `${ADDR_A}\n${ADDR_B}\n${ADDR_C}\nnot-an-address` },
+    });
+    fireEvent.click(screen.getByTestId("button-run-check"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("button-reset-check")).toBeTruthy();
+    });
+
+    // Positive balance, done → highlighted.
+    expect(screen.getByTestId("row-address-0").getAttribute("data-funded")).toBe("true");
+    // Error row → not highlighted.
+    expect(screen.getByTestId("row-address-1").getAttribute("data-funded")).toBeNull();
+    // Zero balance → not highlighted.
+    expect(screen.getByTestId("row-address-2").getAttribute("data-funded")).toBeNull();
+    // Invalid row → not highlighted, still dimmed.
+    const invalidRow = screen.getByTestId("row-address-3");
+    expect(invalidRow.getAttribute("data-funded")).toBeNull();
+    expect(invalidRow.className).toContain("opacity-50");
+  });
+
+  it("does not highlight a pending/loading row before its result arrives", async () => {
+    cleanup();
+    let resolveA: ((v: unknown) => void) | null = null;
+    getAddressCoreStats.mockImplementation(
+      (address: string) =>
+        new Promise(resolve => {
+          if (address === ADDR_A) {
+            resolveA = resolve;
+          }
+        }),
+    );
+
+    render(<AddressChecker />);
+    fireEvent.change(screen.getByTestId("textarea-address-input"), {
+      target: { value: ADDR_A },
+    });
+    fireEvent.click(screen.getByTestId("button-run-check"));
+
+    // The lookup is in flight — no highlight yet.
+    await waitFor(() => {
+      expect(getAddressCoreStats).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByTestId("row-address-0").getAttribute("data-funded")).toBeNull();
+
+    // Result streams in with a positive balance — the highlight appears live.
+    await waitFor(() => expect(resolveA).toBeTruthy());
+    resolveA!({ txCount: 1, receivedSats: 1000, sentSats: 0, balanceSats: 1000 });
+    await waitFor(() => {
+      expect(screen.getByTestId("row-address-0").getAttribute("data-funded")).toBe("true");
+    });
+  });
 });

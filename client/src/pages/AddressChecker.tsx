@@ -556,7 +556,23 @@ export default function AddressChecker() {
                       <TableRow
                         key={i}
                         data-testid={`row-address-${i}`}
-                        className={row.isInvalid ? "opacity-50" : undefined}
+                        data-funded={
+                          !row.isInvalid &&
+                          row.status === "done" &&
+                          (row.info?.balanceSats ?? 0) > 0
+                            ? "true"
+                            : undefined
+                        }
+                        className={[
+                          row.isInvalid ? "opacity-50" : "",
+                          !row.isInvalid &&
+                          row.status === "done" &&
+                          (row.info?.balanceSats ?? 0) > 0
+                            ? "bg-primary/10 hover:bg-primary/15 dark:bg-primary/15 dark:hover:bg-primary/20"
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ") || undefined}
                       >
                         <TableCell className="font-mono text-xs">
                           <Tooltip>
