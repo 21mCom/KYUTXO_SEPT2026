@@ -61,6 +61,37 @@ function pureRenderRegex(fields) {
 const NOTE_RENDER = pureRenderRegex(NOTE_FIELDS);
 const FINDING_RENDER = pureRenderRegex(FINDING_FIELDS);
 
+// The shared safe renderer this guard routes everything through. If it moves,
+// the guard's advice (and the whole premise) is stale — fail loudly.
+const SAFE_RENDERER = path.resolve(ROOT, 'client/src/lib/renderSourceNote.tsx');
+
+// Self-check: if any hardcoded file (the safe renderer or a FINDING_FILES
+// entry) no longer exists (renamed/moved/deleted), fail loudly instead of
+// silently scanning nothing.
+{
+  const missing = [];
+  if (!fs.existsSync(SAFE_RENDERER)) missing.push([SAFE_RENDERER, ' (safe renderer SAFE_RENDERER)']);
+  if (!fs.existsSync(SCAN_DIR)) missing.push([SCAN_DIR, ' (SCAN_DIR)']);
+  for (const rel of FINDING_FILES) {
+    const abs = path.resolve(ROOT, rel);
+    if (!fs.existsSync(abs)) missing.push([abs, ' (FINDING_FILES entry)']);
+  }
+  if (missing.length > 0) {
+    console.error(
+      '\x1b[31m%s\x1b[0m',
+      'check-note-rendering self-check failed: expected file(s) missing:\n',
+    );
+    for (const [f, label] of missing) {
+      console.error(`  ${path.relative(ROOT, f)}${label}`);
+    }
+    console.error(
+      '\n  -> If a file was renamed/moved, update SAFE_RENDERER / FINDING_FILES in scripts/check-note-rendering.js.',
+    );
+    console.error('     If it was deleted, remove the stale entry.');
+    process.exit(1);
+  }
+}
+
 function collectFiles(dir, files = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);

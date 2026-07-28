@@ -71,6 +71,39 @@ const NON_EXPANDABLE = new Set([
 // Escape hatch for genuinely-safe exceptions, keyed as "relative/path:line".
 const ALLOWED_LINES = new Set([]);
 
+// The shared sanitizer module every PDF text sink must route through. If it
+// moves, this guard's premise (and its advice) is stale — fail loudly.
+const SANITIZER_FILE = path.resolve(ROOT, 'client/src/lib/pdfText.ts');
+
+// Self-check: if any hardcoded file (the sanitizer module, SCAN_DIR, or a file
+// referenced by an ALLOWED_LINES entry) no longer exists (renamed/moved/
+// deleted), fail loudly instead of silently scanning nothing / allow-listing
+// stale paths.
+{
+  const missing = [];
+  if (!fs.existsSync(SANITIZER_FILE)) missing.push([SANITIZER_FILE, ' (sanitizer SANITIZER_FILE)']);
+  if (!fs.existsSync(SCAN_DIR)) missing.push([SCAN_DIR, ' (SCAN_DIR)']);
+  for (const key of ALLOWED_LINES) {
+    const rel = key.slice(0, key.lastIndexOf(':'));
+    const abs = path.resolve(ROOT, rel);
+    if (!fs.existsSync(abs)) missing.push([abs, ' (ALLOWED_LINES entry)']);
+  }
+  if (missing.length > 0) {
+    console.error(
+      '\x1b[31m%s\x1b[0m',
+      'check-pdf-text-sanitized self-check failed: expected file(s) missing:\n',
+    );
+    for (const [f, label] of missing) {
+      console.error(`  ${path.relative(ROOT, f)}${label}`);
+    }
+    console.error(
+      '\n  -> If a file was renamed/moved, update SANITIZER_FILE / ALLOWED_LINES in scripts/check-pdf-text-sanitized.js.',
+    );
+    console.error('     If it was deleted, remove the stale entry.');
+    process.exit(1);
+  }
+}
+
 // ───────────────────────── lexical helpers ──────────────────────────────────
 
 // Blank out comments while preserving strings and newlines (keeps line numbers

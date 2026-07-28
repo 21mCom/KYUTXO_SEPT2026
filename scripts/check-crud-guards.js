@@ -131,7 +131,6 @@ const ALWAYS_ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/lib/database.ts'),
   path.resolve(ROOT, 'client/src/lib/legacy-decrypt.ts'),
   path.resolve(ROOT, 'client/src/lib/legacy-decrypt-files.ts'),
-  path.resolve(ROOT, 'client/src/lib/decryption-verification.ts'),
   path.resolve(ROOT, 'client/src/lib/transaction-sync.ts'),
   path.resolve(ROOT, 'client/src/lib/lineageEngine.ts'),
   path.resolve(ROOT, 'client/src/lib/provenance.ts'),
@@ -179,6 +178,33 @@ const ALLOWED_FILES_SET = new Set([
 
 const SCAN_DIR = path.resolve(ROOT, 'client/src');
 const EXTENSIONS = new Set(['.ts', '.tsx']);
+
+// Self-check: if any hardcoded file (a CRUD layer or an allow-listed file) no
+// longer exists (renamed/moved/deleted), fail loudly instead of silently
+// guarding nothing / allow-listing stale paths.
+const CRUD_FILES = new Set(GUARDED_TABLES.map(g => g.crudFile));
+const missingRefs = [...ALLOWED_FILES_SET].filter(f => !fs.existsSync(f));
+if (!fs.existsSync(SCAN_DIR)) missingRefs.push(SCAN_DIR);
+if (missingRefs.length > 0) {
+  console.error(
+    '\x1b[31m%s\x1b[0m',
+    'check-crud-guards self-check failed: expected file(s) missing:\n'
+  );
+  for (const f of missingRefs) {
+    const label =
+      f === SCAN_DIR
+        ? ' (SCAN_DIR)'
+        : CRUD_FILES.has(f)
+          ? ' (GUARDED_TABLES crudFile)'
+          : ' (ALWAYS_ALLOWED_FILES entry)';
+    console.error(`  ${path.relative(ROOT, f)}${label}`);
+  }
+  console.error(
+    '\n  -> If a file was renamed/moved, update GUARDED_TABLES / ALWAYS_ALLOWED_FILES in scripts/check-crud-guards.js.'
+  );
+  console.error('     If it was deleted, remove the stale entry.');
+  process.exit(1);
+}
 
 function collectFiles(dir, files = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

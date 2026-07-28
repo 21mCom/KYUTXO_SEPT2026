@@ -86,6 +86,36 @@ const KNOWN_COMPONENT_JSX = new RegExp(
   `<(?:${KNOWN_TOOLTIP_COMPONENTS.join('|')})[\\s/>]`,
 );
 
+// The shared harness this guard points authors at. If it moves, the guard's
+// advice (and the SHARED_HARNESS exemption) is stale — fail loudly.
+const HARNESS_FILE = path.resolve(ROOT, 'client/src/test/testProviders.tsx');
+
+// Self-check: if any hardcoded file (the shared harness or an ALLOWED_FILES
+// entry) no longer exists (renamed/moved/deleted), fail loudly instead of
+// silently allow-listing stale paths.
+{
+  const missing = [];
+  if (!fs.existsSync(HARNESS_FILE)) missing.push([HARNESS_FILE, ' (shared harness HARNESS_FILE)']);
+  if (!fs.existsSync(SCAN_DIR)) missing.push([SCAN_DIR, ' (SCAN_DIR)']);
+  for (const f of ALLOWED_FILES) {
+    if (!fs.existsSync(f)) missing.push([f, ' (ALLOWED_FILES entry)']);
+  }
+  if (missing.length > 0) {
+    console.error(
+      '\x1b[31m%s\x1b[0m',
+      'check-test-providers self-check failed: expected file(s) missing:\n',
+    );
+    for (const [f, label] of missing) {
+      console.error(`  ${path.relative(ROOT, f)}${label}`);
+    }
+    console.error(
+      '\n  -> If a file was renamed/moved, update HARNESS_FILE / ALLOWED_FILES in scripts/check-test-providers.js.',
+    );
+    console.error('     If it was deleted, remove the stale entry.');
+    process.exit(1);
+  }
+}
+
 function collectFiles(dir, files = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
