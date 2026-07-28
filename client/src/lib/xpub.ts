@@ -34,6 +34,8 @@ export interface XpubInfo {
   needsAdvancedMode: boolean;
   reason?: string;
   parentFingerprint?: string;
+  /** True when the key has the Coinomi-era malformed header (depth 0 with nonzero index/fingerprint). */
+  nonStandardHeader?: boolean;
 }
 
 export type XpubPrefix = 'xpub' | 'ypub' | 'zpub' | 'tpub' | 'upub' | 'vpub';
@@ -90,6 +92,85 @@ function convertToXpub(extendedKey: string, prefix: XpubPrefix): string {
   return bs58check.encode(data);
 }
 
+function readUInt32BE(data: Uint8Array, offset: number): number {
+  return ((data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
+}
+
+/**
+ * Detects the Coinomi-era (2016-2017) malformed BIP32 header: depth byte is 0
+ * while the parent-fingerprint and/or child-number fields are nonzero.
+ * Strict bip32.fromBase58 rejects these keys even though the key material
+ * (public key + chain code) is cryptographically valid.
+ */
+export function hasNonStandardHeader(extendedKey: string): boolean {
+  try {
+    const decoded = bs58check.decode(extendedKey.trim());
+    if (decoded.length !== 78) return false;
+    const depth = decoded[4];
+    const parentFingerprint = readUInt32BE(decoded, 5);
+    const childIndex = readUInt32BE(decoded, 9);
+    return depth === 0 && (parentFingerprint !== 0 || childIndex !== 0);
+  } catch {
+    return false;
+  }
+}
+
+interface LenientParseResult {
+  node: ReturnType<ReturnType<typeof BIP32Factory>['fromBase58']>;
+  /** True when the strict parse failed and the key was rebuilt from raw key material. */
+  usedLenientParse: boolean;
+  /** Raw header metadata (only meaningful when usedLenientParse is true). */
+  rawDepth?: number;
+  rawParentFingerprint?: string;
+  rawChildIndex?: number;
+}
+
+/**
+ * Parses an extended public key, falling back to a lenient path for keys with
+ * the Coinomi-era malformed header (depth 0 but nonzero index/fingerprint).
+ * The lenient path validates length, checksum, version bytes, and that the key
+ * data is a valid compressed public key, then rebuilds the node from the raw
+ * public key + chain code. Genuinely corrupt keys still throw.
+ */
+function fromBase58Lenient(
+  convertedKey: string,
+  network: bitcoin.Network
+): LenientParseResult {
+  const bip32 = BIP32Factory(ecc);
+  try {
+    return { node: bip32.fromBase58(convertedKey, network), usedLenientParse: false };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    // Only the two header-consistency errors are eligible for the lenient path.
+    if (message !== 'Invalid index' && message !== 'Invalid parent fingerprint') {
+      throw error;
+    }
+    // bs58check.decode validates the checksum; a failure here rethrows.
+    const decoded = bs58check.decode(convertedKey);
+    if (decoded.length !== 78) {
+      throw new Error('Invalid extended key length');
+    }
+    const version = readUInt32BE(decoded, 0);
+    const expectedVersion = network === bitcoin.networks.testnet ? XPUB_VERSIONS.tpub : XPUB_VERSIONS.xpub;
+    if (version !== expectedVersion) {
+      throw new Error('Unknown extended key version bytes');
+    }
+    const keyData = decoded.slice(45, 78);
+    if ((keyData[0] !== 0x02 && keyData[0] !== 0x03) || !ecc.isPoint(keyData)) {
+      throw new Error('Invalid public key data in extended key');
+    }
+    const chainCode = decoded.slice(13, 45);
+    const node = bip32.fromPublicKey(keyData, chainCode, network);
+    return {
+      node,
+      usedLenientParse: true,
+      rawDepth: decoded[4],
+      rawParentFingerprint: Array.from(decoded.slice(5, 9)).map(b => b.toString(16).padStart(2, '0')).join(''),
+      rawChildIndex: readUInt32BE(decoded, 9),
+    };
+  }
+}
+
 function getKeyDepth(extendedKey: string): number {
   try {
     const decoded = bs58check.decode(extendedKey);
@@ -116,6 +197,24 @@ export function analyzeXpub(extendedKey: string): XpubInfo {
   const prefixInfo = PREFIX_TO_BIP[prefix];
   const depth = getKeyDepth(trimmed);
   const parentFingerprint = getParentFingerprint(trimmed);
+  const nonStandardHeader = hasNonStandardHeader(trimmed);
+  
+  if (nonStandardHeader) {
+    // Depth byte is untrustworthy on these keys - treat as account-level.
+    return {
+      prefix,
+      bipStandard: prefixInfo.bip,
+      network: prefixInfo.network,
+      suggestedPath: "0",
+      depth,
+      isAccountLevel: true,
+      isChainLevel: false,
+      needsAdvancedMode: false,
+      reason: 'Key has non-standard header metadata (common with older Coinomi exports). Treated as an account-level key; the suggested path and fingerprint may be approximate.',
+      parentFingerprint,
+      nonStandardHeader: true,
+    };
+  }
   
   const isAccountLevel = depth === 3;
   const isChainLevel = depth === 4;
@@ -188,11 +287,17 @@ export async function deriveAddressesForChain(
     const bip32 = BIP32Factory(ecc);
     
     const convertedKey = convertToXpub(trimmed, prefix);
-    let node = bip32.fromBase58(convertedKey, network);
+    const parsed = fromBase58Lenient(convertedKey, network);
+    let node = parsed.node;
     
     let pathPrefix: string;
     
-    if (depth === 4) {
+    if (parsed.usedLenientParse) {
+      // Non-standard header (Coinomi-era): depth byte is untrustworthy.
+      // Treat as account-level: derive chain, then indices.
+      node = node.derive(chain);
+      pathPrefix = `${prefixInfo.accountPath}/${chain}`;
+    } else if (depth === 4) {
       // Already at chain level - just derive indices
       pathPrefix = `chain-level/${chain}`;
     } else if (depth === 3) {
@@ -352,7 +457,8 @@ export async function deriveTaprootAddressesForChain(
     const bip32 = BIP32Factory(ecc);
     
     const convertedKey = convertToXpub(trimmed, getXpubPrefix(trimmed));
-    const baseNode = bip32.fromBase58(convertedKey, network);
+    const parsedBase = fromBase58Lenient(convertedKey, network);
+    const baseNode = parsedBase.node;
     
     const depth = getKeyDepth(trimmed);
     
@@ -364,6 +470,10 @@ export async function deriveTaprootAddressesForChain(
     if (skipChainDerivation) {
       chainNode = baseNode;
       pathPrefix = `taproot`;
+    } else if (parsedBase.usedLenientParse) {
+      // Non-standard header (Coinomi-era): depth byte untrustworthy - treat as account-level
+      chainNode = baseNode.derive(chain);
+      pathPrefix = `m/86'/${networkType === 'testnet' ? '1' : '0'}'/0'/${chain}`;
     } else if (depth === 4) {
       // Depth 4 could be chain level (BIP-86) or script type level (custom)
       // For descriptor imports, trust the skipChainDerivation flag
@@ -463,7 +573,7 @@ export async function deriveAddressesAdvanced(
     const bip32 = BIP32Factory(ecc);
     
     const convertedKey = convertToXpub(trimmed, prefix);
-    let node = bip32.fromBase58(convertedKey, network);
+    let node = fromBase58Lenient(convertedKey, network).node;
     
     const cleanPath = customPath.trim();
     
@@ -687,7 +797,8 @@ function getPubkeyAtIndex(
   const depth = getKeyDepth(trimmed);
   
   const convertedKey = convertToXpub(trimmed, prefix);
-  let node = bip32.fromBase58(convertedKey, network);
+  const parsedNode = fromBase58Lenient(convertedKey, network);
+  let node = parsedNode.node;
   
   if (customPath) {
     // Parse custom path like "0" or "0/0" and derive

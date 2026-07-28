@@ -730,12 +730,18 @@ export default function BulkImport() {
                           <Badge variant="secondary">{xpubInfo.prefix.toUpperCase()}</Badge>
                           <Badge variant="outline">{xpubInfo.bipStandard}</Badge>
                           <Badge variant="outline">{xpubInfo.network}</Badge>
-                          <Badge variant="outline">{getDepthDescription(xpubInfo.depth)}</Badge>
+                          <Badge variant="outline">{xpubInfo.nonStandardHeader ? 'Non-standard header (account-level)' : getDepthDescription(xpubInfo.depth)}</Badge>
                         </div>
                         <p className="text-sm mt-2">{getBipDescription(xpubInfo.bipStandard)}</p>
                         {xpubInfo.needsAdvancedMode && xpubInfo.reason && (
                           <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
                             {xpubInfo.reason}
+                          </p>
+                        )}
+                        {xpubInfo.nonStandardHeader && (
+                          <p className="text-sm mt-2" data-testid="text-nonstandard-header-note">
+                            This key has non-standard header metadata (common with older Coinomi exports).
+                            It was treated as an account-level key, so the suggested path and fingerprint may be approximate.
                           </p>
                         )}
                       </AlertDescription>
@@ -882,7 +888,7 @@ export default function BulkImport() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant="secondary">{xpubInfo.bipStandard}</Badge>
                       <Badge variant="outline">{xpubInfo.network}</Badge>
-                      <Badge variant="outline">{getDepthDescription(xpubInfo.depth)}</Badge>
+                      <Badge variant="outline">{xpubInfo.nonStandardHeader ? 'Non-standard header (account-level)' : getDepthDescription(xpubInfo.depth)}</Badge>
                     </div>
                   </div>
                   <p className="text-sm text-muted-foreground">

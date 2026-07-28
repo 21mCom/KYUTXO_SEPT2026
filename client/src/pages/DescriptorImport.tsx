@@ -74,6 +74,7 @@ import {
   type MultisigXpubEntry,
   type TaprootDualChainResult,
   type TaprootDerivedAddress,
+  hasNonStandardHeader,
 } from "@/lib/xpub";
 import {
   parseDescriptor,
@@ -879,6 +880,17 @@ export default function DescriptorImport() {
                         ))}
                       </div>
                     </div>
+                  </AlertDescription>
+                </Alert>
+              )}
+              
+              {parsedDescriptor && parsedDescriptor.keys.some(k => hasNonStandardHeader(k.xpub)) && (
+                <Alert data-testid="alert-nonstandard-header">
+                  <Info className="h-4 w-4" />
+                  <AlertTitle>Non-standard key metadata</AlertTitle>
+                  <AlertDescription>
+                    One or more keys have non-standard header metadata (common with older Coinomi exports).
+                    They were treated as account-level keys, so displayed paths and fingerprints may be approximate.
                   </AlertDescription>
                 </Alert>
               )}
