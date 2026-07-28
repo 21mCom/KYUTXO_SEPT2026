@@ -320,6 +320,103 @@ describe("runLegacyJsonRestore: encrypted backups", () => {
   });
 });
 
+describe("runLegacyJsonRestore: Electron attachment file routing", () => {
+  // Stub window.electronAPI so isElectron() is true and the pipeline takes
+  // the desktop branch: linked files via api.writeAttachment, orphans via
+  // api.writeNeedsReview.
+  let writeAttachment: ReturnType<typeof vi.fn>;
+  let writeNeedsReview: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    writeAttachment = vi.fn(async (_path: string, _data: ArrayBuffer) => ({ success: true }));
+    writeNeedsReview = vi.fn(async (_name: string, _data: ArrayBuffer) => ({ success: true }));
+    (window as any).electronAPI = {
+      isElectron: true,
+      writeAttachment,
+      writeNeedsReview,
+    };
+  });
+
+  afterEach(() => {
+    delete (window as any).electronAPI;
+  });
+
+  it("routes linked files through writeAttachment and orphans through writeNeedsReview, counting orphanedFilesRouted", async () => {
+    const file = await makePlainZip(makeBackupData());
+    const { cb } = makeCallbacks();
+
+    const summary = await runLegacyJsonRestore(file, "", "replace", cb);
+
+    // Linked files went through writeAttachment (never the web endpoint).
+    expect(new Set(writeAttachment.mock.calls.map((c) => c[0]))).toEqual(
+      new Set(["hash-a", "hash-b"]),
+    );
+    expect(writtenPaths).toHaveLength(0);
+
+    // Orphan routed to Needs Review under its ORIGINAL filename.
+    expect(writeNeedsReview).toHaveBeenCalledTimes(1);
+    expect(writeNeedsReview.mock.calls[0][0]).toBe("orphan.pdf");
+
+    expect(summary.orphanedFilesRouted).toBe(1);
+    expect(summary.orphanedFilesLost).toBe(0);
+    expect(summary.baseMessage).toContain("2 attachment files");
+    expect(summary.baseMessage).not.toContain("failed");
+  });
+
+  it("counts a failing writeNeedsReview into orphanedFilesLost without throwing (rejection)", async () => {
+    writeNeedsReview.mockRejectedValue(new Error("disk full"));
+    const file = await makePlainZip(makeBackupData());
+    const { cb } = makeCallbacks();
+
+    const summary = await runLegacyJsonRestore(file, "", "replace", cb);
+
+    expect(summary.orphanedFilesRouted).toBe(0);
+    expect(summary.orphanedFilesLost).toBe(1);
+    // The lost orphan must NOT bleed into the attachment-file error count.
+    expect(summary.baseMessage).toContain("2 attachment files");
+    expect(summary.baseMessage).not.toContain("failed");
+    // The rest of the restore still completed.
+    expect(await getAllRecords()).toHaveLength(2);
+  });
+
+  it("counts a { success: false } writeNeedsReview result into orphanedFilesLost", async () => {
+    writeNeedsReview.mockResolvedValue({ success: false, error: "permission denied" });
+    const file = await makePlainZip(makeBackupData());
+    const { cb } = makeCallbacks();
+
+    const summary = await runLegacyJsonRestore(file, "", "replace", cb);
+
+    expect(summary.orphanedFilesRouted).toBe(0);
+    expect(summary.orphanedFilesLost).toBe(1);
+  });
+
+  it("counts failed writeAttachment calls into the '(N failed)' summary message", async () => {
+    writeAttachment.mockImplementation(async (path: string) =>
+      path === "hash-b" ? { success: false, error: "nope" } : { success: true },
+    );
+    const file = await makePlainZip(makeBackupData());
+    const { cb } = makeCallbacks();
+
+    const summary = await runLegacyJsonRestore(file, "", "replace", cb);
+
+    expect(summary.baseMessage).toContain("1 attachment files (1 failed)");
+    // Orphan routing unaffected by the linked-file failure.
+    expect(summary.orphanedFilesRouted).toBe(1);
+    expect(summary.orphanedFilesLost).toBe(0);
+  });
+
+  it("counts a throwing writeAttachment into the failed-only message when every linked write fails", async () => {
+    writeAttachment.mockRejectedValue(new Error("io error"));
+    const file = await makePlainZip(makeBackupData());
+    const { cb } = makeCallbacks();
+
+    const summary = await runLegacyJsonRestore(file, "", "replace", cb);
+
+    expect(summary.baseMessage).toContain("(2 attachment files failed)");
+    expect(summary.orphanedFilesRouted).toBe(1);
+  });
+});
+
 describe("runLegacyJsonRestore: invalid backups", () => {
   it("throws 'Invalid backup file' when the ZIP has no backup.json", async () => {
     const zip = new JSZip();
