@@ -31,6 +31,14 @@ export class ElectrumProvider implements BlockchainProvider {
   private cachedTipHeight: number | null = null;
   private cachedTipHeightAt = 0;
   private tipHeightFetch: Promise<number> | null = null;
+  // blockhash → derived block height, remembered for the session. All
+  // transactions in one block share one exact height, so this memo both
+  // (a) keeps heights exact for repeat blocks without any tip lookup, and
+  // (b) detects a chain tip that advanced mid-batch: if a fetch derives a
+  // LOWER height for a blockhash we've already seen, the server's
+  // `confirmations` grew against a new tip while we still hold the old
+  // cached one — refresh the tip instead of storing an off-by-one height.
+  private derivedHeightByBlockHash: Map<string, number> = new Map();
 
   constructor(host: string, port: number = 50001, useSSL: boolean = false, timeout: number = 30000) {
     if (!host || host.trim() === '') {
@@ -283,17 +291,45 @@ export class ElectrumProvider implements BlockchainProvider {
     //
     // NOTE: the address-history path (getAddressTransactions) is untouched —
     // it converts with real per-transaction heights from history entries.
-    const raw = result.transaction as { confirmations?: unknown };
+    const raw = result.transaction as { confirmations?: unknown; blockhash?: unknown };
     const confirmations =
       typeof raw?.confirmations === 'number' && Number.isFinite(raw.confirmations)
         ? raw.confirmations
         : 0;
+    const blockHash =
+      typeof raw?.blockhash === 'string' && raw.blockhash.length > 0
+        ? raw.blockhash
+        : undefined;
     
     let height = 0;
     if (confirmations > 0) {
       const tip = await this.getTipHeightForDerivation();
       if (tip !== null) {
-        const derived = tip - confirmations + 1;
+        let derived = tip - confirmations + 1;
+        if (blockHash !== undefined) {
+          const known = this.derivedHeightByBlockHash.get(blockHash);
+          if (known !== undefined && derived < known) {
+            // Evidence of a new block found mid-batch: this blockhash was
+            // already derived at `known`, so a lower value can only mean the
+            // server's `confirmations` are now computed against a newer tip
+            // than our cached one. Invalidate the cache and re-derive from a
+            // fresh tip so this row — and every later one in the batch —
+            // stays exact. Costs one extra tip round-trip per real new block,
+            // not per transaction.
+            this.cachedTipHeightAt = 0;
+            const freshTip = await this.getTipHeightForDerivation();
+            if (freshTip !== null) derived = freshTip - confirmations + 1;
+            // If the refresh failed (or the server raced yet another block),
+            // fall back to the memoized exact height for this block.
+            if (derived < known) derived = known;
+          }
+          if (derived > 0) {
+            this.derivedHeightByBlockHash.set(
+              blockHash,
+              Math.max(known ?? 0, derived),
+            );
+          }
+        }
         // Guard against inconsistent server data (confirmations beyond the
         // tip): treat as unconfirmed rather than writing a bogus height.
         if (derived > 0) height = derived;

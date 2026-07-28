@@ -2386,6 +2386,52 @@ describe("runTxidBackfill (real Electrum provider)", () => {
     // per-transaction derivations reuse it instead of re-fetching the tip.
     expect(electrumIpc.electrumTest).toHaveBeenCalledTimes(1);
   });
+
+  it("stores the exact height when a new block arrives mid-batch", async () => {
+    // Both orphans sit in the same block. The up-front probe caches tip
+    // ELECTRUM_TIP; after the first fetch a block is found, so the server
+    // reports one extra confirmation for the second orphan. Without the
+    // stale-tip detection the second row would land one block too low —
+    // permanently, since the has-row skip never rewrites it.
+    await testDb.records.add(makeTxRecord(TXID_A));
+    await testDb.records.add(makeTxRecord(TXID_B));
+    const BLOCK_HASH = "f".repeat(64);
+    electrumIpc.electrumTest
+      .mockResolvedValueOnce({ success: true, blockHeight: ELECTRUM_TIP })
+      .mockResolvedValueOnce({ success: true, blockHeight: ELECTRUM_TIP + 1 });
+    let fetches = 0;
+    electrumIpc.electrumGetTransaction.mockImplementation(
+      async ({ txid }: { txid: string }) => {
+        if (txid === TXID_A || txid === TXID_B) {
+          fetches += 1;
+          // First orphan: 12 confs against the old tip. Later orphan: the
+          // chain advanced, same block now shows 13 confs against the new tip.
+          const confirmations = fetches === 1 ? 12 : 13;
+          return {
+            success: true,
+            transaction: {
+              ...makeVerboseElectrumTx(txid, confirmations),
+              blockhash: BLOCK_HASH,
+            },
+          };
+        }
+        return { success: false, error: "not found" };
+      },
+    );
+
+    const provider = new ElectrumProvider("umbrel.local", 50001);
+    // concurrency: 1 makes the "tip advances between fetches" ordering exact.
+    const result = await runTxidBackfill(provider, [TXID_A, TXID_B], { concurrency: 1 });
+
+    expect(result.rebuilt).toBe(2);
+    const exact = ELECTRUM_TIP - 12 + 1;
+    const rowA = await testDb.blockchainTransactions.where("txid").equals(TXID_A).first();
+    const rowB = await testDb.blockchainTransactions.where("txid").equals(TXID_B).first();
+    expect(rowA?.blockHeight).toBe(exact);
+    expect(rowB?.blockHeight).toBe(exact); // exact, not off by one
+    // One extra tip round-trip for the whole batch, not one per transaction.
+    expect(electrumIpc.electrumTest).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ---- hasOnlyUnresolvableLeftovers -------------------------------------------
