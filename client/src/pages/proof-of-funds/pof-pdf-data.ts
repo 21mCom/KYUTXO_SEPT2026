@@ -45,6 +45,8 @@ export async function computePofPdfData(
     attestationPlaceOfSigning,
     attestationWitnessLine,
     includeGlossary,
+    verifierReference,
+    freshnessAnchor,
   } = params;
 
   // ── Sample placeholder data (used only when isSample=true) ──────────────
@@ -158,12 +160,19 @@ export async function computePofPdfData(
       // declaration fields, so these lines are fully reproducible from the printed document.
       ...verifiedRows.flatMap((r) => {
         const cs = controlStates[r.raw]!;
+        // Must pass verifierReference / freshnessAnchor exactly as the live
+        // verification flow (proof-of-control-card) and the printed challenge
+        // section (pof-pdf-section-proof-of-control) do, so the CTRL_*_CHALLENGE
+        // line hashed into the fingerprint equals the message signers actually
+        // signed.
         const challengeMsg = buildChallengeMessage({
           address: r.raw,
           declarantName,
           declarationDate,
           purpose,
           nonce: declarationNonce,
+          verifierReference: verifierReference || undefined,
+          freshnessAnchor: freshnessAnchor ?? undefined,
         });
         return [
           `CTRL_${r.raw}_CHALLENGE: ${challengeMsg}`,
