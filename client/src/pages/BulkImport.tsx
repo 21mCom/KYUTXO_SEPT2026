@@ -50,6 +50,8 @@ import {
 } from "@/lib/xpub";
 import { expandLabelTokens } from "@/lib/label-tokens";
 import MultisigConfigPanel from "./bulk-import/MultisigConfigPanel";
+import SavedTemplatesDialog from "./bulk-import/SavedTemplatesDialog";
+import type { DerivationTemplate } from "@/lib/database";
 import AddressPreviewTable from "./bulk-import/AddressPreviewTable";
 import MetadataForm from "./bulk-import/MetadataForm";
 
@@ -110,7 +112,33 @@ export default function BulkImport() {
   // Save template for future derivations (xpub storage)
   const [saveTemplate, setSaveTemplate] = useState(false);
 
+  // Re-derive from a previously saved derivation template
+  const [templatesDialogOpen, setTemplatesDialogOpen] = useState(false);
+
   const { toast } = useToast();
+
+  const applySavedTemplate = (template: DerivationTemplate) => {
+    if (!template.xpub || !template.xpub.trim()) return;
+    setIsMultisigMode(false);
+    setXpub(template.xpub);
+    // Gap limit maps back to 0-based end indices for both chains
+    const endIndex = Math.max(0, template.gapLimit - 1);
+    setReceiveStartIndex(0);
+    setChangeStartIndex(0);
+    setReceiveEndIndex(endIndex);
+    setChangeEndIndex(endIndex);
+    // Pre-fill metadata saved with the template (script type is re-detected
+    // from the stored key by analyzeXpub, including Coinomi-era malformed keys)
+    if (template.owner) setOwnerInput(template.owner);
+    if (template.walletName) setWalletNameInput(template.walletName);
+    if (template.seedName) setSeedName(template.seedName);
+    if (template.notes) setNotes(template.notes);
+    setTemplatesDialogOpen(false);
+    toast({
+      title: "Template Applied",
+      description: `Key, gap limit (${template.gapLimit}), and metadata pre-filled. Continue to derive addresses.`,
+    });
+  };
 
   const analyzeXpubInput = useCallback((input: string) => {
     if (!input.trim()) {
@@ -702,7 +730,18 @@ export default function BulkImport() {
               {!isMultisigMode && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="xpub">Extended Public Key</Label>
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="xpub">Extended Public Key</Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setTemplatesDialogOpen(true)}
+                        data-testid="button-open-saved-templates"
+                      >
+                        Use saved template
+                      </Button>
+                    </div>
                     <Textarea
                       id="xpub"
                       value={xpub}
@@ -1208,6 +1247,12 @@ export default function BulkImport() {
           </Card>
         )}
       </div>
+
+      <SavedTemplatesDialog
+        open={templatesDialogOpen}
+        onOpenChange={setTemplatesDialogOpen}
+        onApply={applySavedTemplate}
+      />
     </div>
   );
 }
