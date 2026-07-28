@@ -283,6 +283,48 @@ describe("runLegacyJsonRestore: merge mode (plaintext)", () => {
   });
 });
 
+describe("runLegacyJsonRestore: web-mode attachment write failures", () => {
+  it("counts a non-ok /api/attachments/write response into the '(N failed)' summary while the other file restores", async () => {
+    // Re-stub fetch so the write for hash-b fails with a non-ok response.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url) === "/api/attachments/write") {
+          const form = init?.body as FormData;
+          const relativePath = String(form.get("relativePath"));
+          if (relativePath === "hash-b") {
+            return {
+              ok: false,
+              statusText: "Internal Server Error",
+              json: async () => ({ error: "disk full" }),
+            } as Response;
+          }
+          writtenPaths.push(relativePath);
+          return { ok: true, json: async () => ({}) } as Response;
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+
+    const file = await makePlainZip(makeBackupData());
+    const { cb } = makeCallbacks();
+
+    const summary = await runLegacyJsonRestore(file, "", "replace", cb);
+
+    // The failed web write surfaces as "(1 failed)" alongside the one
+    // successfully restored file.
+    expect(summary.baseMessage).toContain("1 attachment files (1 failed)");
+
+    // The other linked file was still written and the restore completed.
+    expect(writtenPaths).toEqual(["hash-a"]);
+    expect(await getAllRecords()).toHaveLength(2);
+
+    // Orphan routing unaffected by the linked-file failure.
+    expect(summary.orphanedFilesRouted).toBe(1);
+    expect(summary.orphanedFilesLost).toBe(0);
+  });
+});
+
 describe("runLegacyJsonRestore: encrypted backups", () => {
   it("decrypts with the correct password and restores", async () => {
     const file = await makeEncryptedZip(makeBackupData(), "hunter2");
