@@ -166,20 +166,30 @@ async function prepareDeclaration(
   });
 
   // The Generate button only enables once a row reaches "done" and the
-  // declarant fields are present (canGeneratePdf).
-  await waitFor(() => {
-    expect(
-      (getByTestId("button-generate-pdf") as HTMLButtonElement).disabled,
-    ).toBe(false);
-  });
+  // declarant fields are present (canGeneratePdf). Use a generous timeout:
+  // under parallel validation load the async balance check can exceed the
+  // 1s testing-library default, which made this test flaky.
+  await waitFor(
+    () => {
+      expect(
+        (getByTestId("button-generate-pdf") as HTMLButtonElement).disabled,
+      ).toBe(false);
+    },
+    { timeout: 15_000 },
+  );
 }
 
 async function generateAndCapture(h: Harness): Promise<Blob> {
   pdfCapture.blob = null;
   fireEvent.click(h.getByTestId("button-generate-pdf"));
-  await waitFor(() => {
-    expect(pdfCapture.blob).toBeInstanceOf(Blob);
-  });
+  // PDF assembly is async and can exceed the 1s testing-library default
+  // under load, so give it a generous budget.
+  await waitFor(
+    () => {
+      expect(pdfCapture.blob).toBeInstanceOf(Blob);
+    },
+    { timeout: 30_000 },
+  );
   return pdfCapture.blob as unknown as Blob;
 }
 
@@ -218,7 +228,9 @@ function extractFingerprint(text: string): string {
   return (m as RegExpMatchArray)[1];
 }
 
-describe("Proof of Funds PDF — Document Integrity & footers", () => {
+// Generous per-test budget: PDF generation + the async balance check are slow
+// under parallel validation load (see prepareDeclaration's waitFor timeout).
+describe("Proof of Funds PDF — Document Integrity & footers", { timeout: 60_000 }, () => {
   it("renders footers, a 64-hex fingerprint, and the live block-height time-anchor", async () => {
     const h = renderWithProviders(<ProofOfFundsDeclaration />);
     await prepareDeclaration(h, { live: true });

@@ -14,8 +14,8 @@ The validation suite runs several real-Chromium checks (sample-pdf, pof-empty, p
 Completion-validation runs the browser checks in PARALLEL; they all share port 5000. Whichever script spawns the dev server tears it down when it finishes, yanking it from the still-running checks (EADDRINUSE / ERR_CONNECTION_REFUSED, failures rotate between runs).
 **How to apply:** before markTaskComplete, start the "Start application" workflow so every check "reuses" the server and none owns/kills it — flakiness disappears.
 
-## Parallel validation runs kill the shared dev server
-Completion-validation runs the browser checks in PARALLEL; they all share port 5000. Whichever script spawns the dev server tears it down when it finishes, yanking it from still-running checks (EADDRINUSE / ERR_CONNECTION_REFUSED, failures rotate between runs).
-**How to apply:** before markTaskComplete, start the "Start application" workflow so every check reuses the server and none owns/kills it.
-
 **Update (2026-07-28):** contention also shows up as `pthread_create: Resource temporarily unavailable` inside Chromium — a different random subset of browser checks fails on each validation run while every check passes standalone. After several genuinely failed full-validation attempts, verify the change-relevant suites locally and use an audited `skip_validation_reason` rather than retrying indefinitely.
+
+## jsdom vitest suites also flake under validation load
+Heavy page-level vitest suites (e.g. ProofOfFundsDeclaration.*) hit the 5s default testTimeout / 1s waitFor defaults when running alongside the parallel Chromium checks, failing with "Test timed out in 5000ms" while passing standalone.
+**How to apply:** harden such suites with `describe("...", { timeout: 60_000 }, ...)` and explicit `waitFor(..., { timeout })` on slow async steps (PDF assembly, balance checks) instead of retrying validation forever.

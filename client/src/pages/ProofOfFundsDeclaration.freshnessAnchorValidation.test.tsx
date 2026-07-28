@@ -90,7 +90,9 @@ async function openManualEntry() {
   });
 }
 
-describe("ProofOfFundsDeclaration — manual freshness anchor validation", () => {
+// Generous per-test budget: page render + dialog interactions can exceed the
+// 5s vitest default when validation commands run in parallel.
+describe("ProofOfFundsDeclaration — manual freshness anchor validation", { timeout: 60_000 }, () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getBlockHeight.mockResolvedValue(800000);

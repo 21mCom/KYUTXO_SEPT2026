@@ -62,7 +62,9 @@ function startLiveCheck(addresses: string[]) {
   fireEvent.click(screen.getByTestId("button-check-balances"));
 }
 
-describe("ProofOfFundsDeclaration — live check node-unreachable fast fail", () => {
+// Generous per-test budget: page render + async balance checks can exceed the
+// 5s vitest default when validation commands run in parallel.
+describe("ProofOfFundsDeclaration — live check node-unreachable fast fail", { timeout: 60_000 }, () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getBlockHeight.mockResolvedValue(800000);
