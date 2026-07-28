@@ -35,7 +35,7 @@ export async function runPostRestoreTxidBackfill(
     cb.onMessage(
       `Rebuilding on-chain data for ${txids.length} transaction${txids.length !== 1 ? "s" : ""}…`,
     );
-    const deferSuffix = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
+    const deferSuffix = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""} ${txids.length !== 1 ? "need" : "needs"} on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
 
     const nodeSettings = await getNodeSettings("default");
     if (!nodeSettings) return { suffix: deferSuffix, orphansFound: true };
