@@ -23,6 +23,14 @@ export class ElectrumProvider implements BlockchainProvider {
   private timeout: number;
   private transactionCache: Map<string, ApiTransaction> = new Map();
   private static readonly TX_FETCH_CONCURRENCY = 5;
+  // Chain-tip cache backing getTipHeightForDerivation(). Refreshed by every
+  // getBlockHeight() call and kept for a short TTL so a batch of txid-driven
+  // getTransaction() calls derives heights from one tip lookup instead of one
+  // network round-trip per transaction.
+  private static readonly TIP_HEIGHT_TTL_MS = 60_000;
+  private cachedTipHeight: number | null = null;
+  private cachedTipHeightAt = 0;
+  private tipHeightFetch: Promise<number> | null = null;
 
   constructor(host: string, port: number = 50001, useSSL: boolean = false, timeout: number = 30000) {
     if (!host || host.trim() === '') {
@@ -57,7 +65,40 @@ export class ElectrumProvider implements BlockchainProvider {
       throw new Error(result.error || 'Failed to get block height via Electrum');
     }
     
+    // Prime the tip cache used to derive per-transaction heights from
+    // confirmation counts. The txid backfill probes getBlockHeight() before a
+    // batch run, so its getTransaction() calls reuse this tip for free.
+    this.cachedTipHeight = result.blockHeight;
+    this.cachedTipHeightAt = Date.now();
     return result.blockHeight;
+  }
+
+  /**
+   * Chain-tip height used by getTransaction() to convert the server-reported
+   * `confirmations` count into a block height. Cached for a short TTL and
+   * deduped across concurrent callers, so a batch run (the txid backfill
+   * fetches orphans in concurrent chunks) costs at most one tip lookup per
+   * TTL window rather than one per transaction. Returns null when the tip
+   * cannot be determined — the caller then reports the transaction as
+   * unconfirmed (and skips caching it) instead of guessing a height.
+   */
+  private async getTipHeightForDerivation(): Promise<number | null> {
+    if (
+      this.cachedTipHeight !== null &&
+      Date.now() - this.cachedTipHeightAt < ElectrumProvider.TIP_HEIGHT_TTL_MS
+    ) {
+      return this.cachedTipHeight;
+    }
+    if (!this.tipHeightFetch) {
+      this.tipHeightFetch = this.getBlockHeight().finally(() => {
+        this.tipHeightFetch = null;
+      });
+    }
+    try {
+      return await this.tipHeightFetch;
+    } catch {
+      return null;
+    }
   }
 
   async getAddressTransactions(
@@ -208,8 +249,13 @@ export class ElectrumProvider implements BlockchainProvider {
     if (signal?.aborted) throw new Error('Sync cancelled');
     this.ensureElectron();
     
-    if (this.transactionCache.has(txid)) {
-      return this.transactionCache.get(txid)!;
+    // Serve cache hits, but never trust a cached UNCONFIRMED entry: the cache
+    // has no TTL, so an entry cached while the transaction was in the mempool
+    // would otherwise pin "unconfirmed" for the whole session even after the
+    // transaction confirms. Re-fetching picks up the current status instead.
+    const cached = this.transactionCache.get(txid);
+    if (cached && cached.status.confirmed) {
+      return cached;
     }
     
     const api = getElectronAPI();
@@ -226,8 +272,42 @@ export class ElectrumProvider implements BlockchainProvider {
       return null;
     }
     
-    const tx = this.convertElectrumTxToApiTx(result.transaction, 0);
-    this.transactionCache.set(txid, tx);
+    // Electrum's verbose response carries no block height, but it does report
+    // a `confirmations` count computed against the server's own tip. Derive
+    // the height from the current chain tip so confirmed transactions are not
+    // mis-reported as unconfirmed (hardcoding height 0 here made the
+    // txid-driven backfill skip every confirmed transaction as "not yet
+    // confirmed", so the startup rebuild could never converge). Zero, missing,
+    // or negative confirmations (mempool / conflicted) keep the unconfirmed
+    // status.
+    //
+    // NOTE: the address-history path (getAddressTransactions) is untouched —
+    // it converts with real per-transaction heights from history entries.
+    const raw = result.transaction as { confirmations?: unknown };
+    const confirmations =
+      typeof raw?.confirmations === 'number' && Number.isFinite(raw.confirmations)
+        ? raw.confirmations
+        : 0;
+    
+    let height = 0;
+    if (confirmations > 0) {
+      const tip = await this.getTipHeightForDerivation();
+      if (tip !== null) {
+        const derived = tip - confirmations + 1;
+        // Guard against inconsistent server data (confirmations beyond the
+        // tip): treat as unconfirmed rather than writing a bogus height.
+        if (derived > 0) height = derived;
+      }
+    }
+    
+    const tx = this.convertElectrumTxToApiTx(result.transaction, height);
+    // Only cache entries whose status is settled. Caching an unconfirmed
+    // conversion would poison the cache shared with the address-history sync
+    // path (and, before the confirmations handling above, DID poison it with
+    // a false "unconfirmed" for every txid-driven fetch).
+    if (tx.status.confirmed) {
+      this.transactionCache.set(txid, tx);
+    }
     return tx;
   }
 

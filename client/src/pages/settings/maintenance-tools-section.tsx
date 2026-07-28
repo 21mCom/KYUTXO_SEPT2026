@@ -19,6 +19,7 @@ import {
   detectAndBackfill,
   resolveAllBlankInputAddresses,
   formatSkippedReasons,
+  hasOnlyUnresolvableLeftovers,
   type BackfillResult,
 } from "@/lib/txid-backfill";
 import { describeResolveError } from "@/lib/resolve-error";
@@ -181,9 +182,19 @@ export function MaintenanceToolsSection() {
           parts.push(skippedDetail || `${result.skipped} skipped`);
         }
         if (result.failed > 0) parts.push(`${result.failed} failed`);
+        // A completed run that rebuilt nothing, where every leftover is one a
+        // re-run cannot fix (e.g. not found on the provider), would otherwise
+        // loop forever: the startup reminder re-flags the same orphans every
+        // session. Say so, and point at the toggle that ends the loop.
+        const unresolvable = hasOnlyUnresolvableLeftovers(result);
         toast({
           title: "Transaction Rebuild Complete",
-          description: `Found ${result.orphansFound} orphaned transaction${result.orphansFound !== 1 ? "s" : ""}. ${parts.join("; ")}.`,
+          description: `Found ${result.orphansFound} orphaned transaction${result.orphansFound !== 1 ? "s" : ""}. ${parts.join("; ")}.${
+            unresolvable
+              ? " Running the rebuild again can't fix these, so the startup missing-data reminder will keep flagging them. To stop it, turn off the Startup Missing-Data Reminder toggle in this section."
+              : ""
+          }`,
+          ...(unresolvable ? { duration: 15000 } : {}),
         });
       }
     } catch (err) {
@@ -436,6 +447,11 @@ export function MaintenanceToolsSection() {
                               {hasNotFound && (
                                 <p className="text-muted-foreground/80 text-xs mt-1">
                                   Transactions not found on your provider usually mean a network mismatch (e.g. testnet IDs against a mainnet node) or a node that does not carry the full transaction history.
+                                </p>
+                              )}
+                              {hasOnlyUnresolvableLeftovers(backfillResult) && (
+                                <p className="text-muted-foreground/80 text-xs mt-1" data-testid="text-rebuild-unresolvable-hint">
+                                  Nothing was rebuilt, and running the rebuild again can't fix the remaining transactions — so the startup missing-data reminder will keep flagging them each session. If you want to keep these records as they are, turn off the Startup Missing-Data Reminder toggle below.
                                 </p>
                               )}
                             </>

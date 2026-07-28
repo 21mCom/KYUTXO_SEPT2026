@@ -126,6 +126,48 @@ export function formatSkippedReasons(
   return text;
 }
 
+// Skip reasons that a re-run cannot fix. "not-found": the connected provider
+// does not have the transaction at all (wrong network, or a node without full
+// transaction history). "parse-failed": the provider returned data our parser
+// rejects. Both come back identical on every re-run against the same provider.
+// Confirmation-related skips are deliberately NOT here — those resolve on
+// their own once the transaction confirms, so a later run CAN make progress.
+const UNRESOLVABLE_SKIP_REASONS: ReadonlySet<string> = new Set(['not-found', 'parse-failed']);
+
+/**
+ * True when a completed backfill rebuilt nothing and every remaining orphan
+ * was skipped for a reason a re-run cannot fix (e.g. "not found on your
+ * provider"). In that state the startup missing-data reminder will keep
+ * flagging the same transactions every session even though re-running the
+ * rebuild can never clear them; the UI uses this to explain the loop and
+ * point at the Startup Missing-Data Reminder toggle as the way out.
+ *
+ * Deliberately conservative: any rebuild progress, any transient failure, any
+ * retryable or unknown skip reason, or a partially-processed (cancelled) run
+ * returns false — in all of those a re-run may still help.
+ */
+export function hasOnlyUnresolvableLeftovers(result: BackfillResult): boolean {
+  if (result.deferred || result.orphansFound === 0) return false;
+  // A cancelled run leaves unprocessed txids behind; only a fully-processed
+  // run can prove the leftovers are unresolvable.
+  if (result.rebuilt + result.skipped + result.failed !== result.orphansFound) return false;
+  // Rebuild progress or transient (network) failures → a re-run could help.
+  if (result.rebuilt > 0 || result.failed > 0) return false;
+
+  let unresolvable = 0;
+  for (const [reason, count] of Object.entries(result.skippedReasons)) {
+    if (count <= 0) continue;
+    // Already had on-chain data — not an orphan anymore, so it will not
+    // re-trigger the startup reminder. Neutral for this check.
+    if (reason === 'has-row') continue;
+    // Retryable (unconfirmed / insufficient-confirmations) or unknown future
+    // reasons: assume a re-run may fix them.
+    if (!UNRESOLVABLE_SKIP_REASONS.has(reason)) return false;
+    unresolvable += count;
+  }
+  return unresolvable > 0;
+}
+
 export interface BackfillOptions {
   signal?: AbortSignal;
   onProgress?: BackfillProgressCallback;

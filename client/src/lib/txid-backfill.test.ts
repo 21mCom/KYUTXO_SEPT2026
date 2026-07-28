@@ -74,13 +74,39 @@ vi.mock("@/lib/blockchain-api", async () => {
   };
 });
 
+// Electron IPC mock so the REAL ElectrumProvider can run inside these tests.
+// The "real Electrum provider" regression below drives runTxidBackfill through
+// an actual ElectrumProvider instance (not a hand-rolled fake): the provider
+// must derive confirmed status + block height from the verbose response's
+// `confirmations` field. Before that fix it hardcoded height 0, every orphan
+// was skipped as "not yet confirmed", nothing was written, and the startup
+// rebuild re-detected the same orphans forever.
+const electrumIpc = vi.hoisted(() => ({
+  electrumTest: vi.fn(),
+  electrumGetTransaction: vi.fn(),
+}));
+
+vi.mock("@/lib/electron", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/electron")>();
+  return {
+    ...actual,
+    isElectron: () => true,
+    getElectronAPI: () => electrumIpc,
+  };
+});
+
 const {
   detectOrphanedTxRecords,
   runTxidBackfill,
   detectAndBackfill,
   resolveAllBlankInputAddresses,
   formatSkippedReasons,
+  hasOnlyUnresolvableLeftovers,
 } = await import("./txid-backfill");
+// Imported AFTER the mocks so the real ElectrumProvider binds to the mocked
+// Electron IPC boundary above.
+const { ElectrumProvider } = await import("./providers/electrum");
+type BackfillResult = import("./txid-backfill").BackfillResult;
 
 // ---- Fixtures --------------------------------------------------------------
 
@@ -249,6 +275,8 @@ function makeProvider(opts: {
 
 beforeEach(async () => {
   nextProvider = null;
+  electrumIpc.electrumTest.mockReset();
+  electrumIpc.electrumGetTransaction.mockReset();
   await testDb.records.clear();
   await testDb.blockchainTransactions.clear();
   await testDb.transactionParticipants.clear();
@@ -2249,5 +2277,214 @@ describe("detectAndBackfill", () => {
     expect(result.deferred).toBe(false);
     expect(result.rebuilt).toBe(1);
     expect(await testDb.blockchainTransactions.where("txid").equals(TXID_A).count()).toBe(1);
+  });
+});
+
+// ---- runTxidBackfill (real Electrum provider) -------------------------------
+//
+// Regression for the never-converging startup rebuild: ElectrumProvider used to
+// hardcode block height 0 when fetching a transaction by txid, so every
+// confirmed orphan came back "unconfirmed", the backfill skipped all of them,
+// nothing was written, and the same orphans re-triggered the startup reminder
+// at every launch. These tests drive runTxidBackfill through the REAL
+// ElectrumProvider (Electron IPC mocked at the boundary) and prove confirmed
+// orphans are rebuilt with a height derived from the server's `confirmations`
+// count, while genuinely unconfirmed transactions are still skipped.
+
+const ELECTRUM_TIP = 800011;
+
+/** Bitcoin Core-style verbose transaction, as Electrum servers return it. */
+function makeVerboseElectrumTx(txid: string, confirmations: number | undefined) {
+  return {
+    txid,
+    version: 2,
+    locktime: 0,
+    size: 200,
+    vsize: 150,
+    weight: 600,
+    fee: 0.00001,
+    time: 1700000100,
+    blocktime: 1700000100,
+    ...(confirmations !== undefined ? { confirmations } : {}),
+    // Electrum verbose vin has no prevout data — input addresses start blank.
+    vin: [{ txid: PREV_TXID, vout: 0, sequence: 0xfffffffd }],
+    vout: [
+      {
+        value: 0.00099,
+        n: 0,
+        scriptPubKey: { hex: "0014aa", type: "witness_v0_keyhash", address: ADDR_OUT },
+      },
+    ],
+  };
+}
+
+describe("runTxidBackfill (real Electrum provider)", () => {
+  beforeEach(() => {
+    electrumIpc.electrumTest.mockResolvedValue({ success: true, blockHeight: ELECTRUM_TIP });
+  });
+
+  it("rebuilds a confirmed Electrum-fetched orphan instead of skipping it as unconfirmed", async () => {
+    await testDb.records.add(makeTxRecord(TXID_A));
+    electrumIpc.electrumGetTransaction.mockImplementation(
+      async ({ txid }: { txid: string }) => {
+        if (txid === TXID_A) {
+          return { success: true, transaction: makeVerboseElectrumTx(TXID_A, 12) };
+        }
+        // Prevout fetches during input resolution: unknown on this "server".
+        return { success: false, error: "not found" };
+      },
+    );
+
+    const provider = new ElectrumProvider("umbrel.local", 50001);
+    const result = await runTxidBackfill(provider, [TXID_A]);
+
+    expect(result.skippedReasons["unconfirmed"]).toBeUndefined();
+    expect(result.skipped).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(result.rebuilt).toBe(1);
+
+    // The derived height/time satisfied parseTransaction and the row landed.
+    const row = await testDb.blockchainTransactions.where("txid").equals(TXID_A).first();
+    expect(row?.blockHeight).toBe(ELECTRUM_TIP - 12 + 1);
+    expect(row?.blockTime).toBe(1700000100);
+
+    const participants = await testDb.transactionParticipants.where("txid").equals(TXID_A).toArray();
+    expect(participants.some((p) => p.role === "output" && p.address === ADDR_OUT)).toBe(true);
+  });
+
+  it("still skips a zero-confirmation Electrum transaction as unconfirmed", async () => {
+    await testDb.records.add(makeTxRecord(TXID_B));
+    electrumIpc.electrumGetTransaction.mockResolvedValue({
+      success: true,
+      transaction: makeVerboseElectrumTx(TXID_B, 0),
+    });
+
+    const provider = new ElectrumProvider("umbrel.local", 50001);
+    const result = await runTxidBackfill(provider, [TXID_B]);
+
+    expect(result.rebuilt).toBe(0);
+    expect(result.skippedReasons["unconfirmed"]).toBe(1);
+    expect(await testDb.blockchainTransactions.count()).toBe(0);
+  });
+
+  it("derives heights for a whole batch from a single tip lookup", async () => {
+    const txids = [TXID_A, TXID_B, TXID_C, TXID_D];
+    electrumIpc.electrumGetTransaction.mockImplementation(
+      async ({ txid }: { txid: string }) => {
+        if (txids.includes(txid)) {
+          return { success: true, transaction: makeVerboseElectrumTx(txid, 20) };
+        }
+        return { success: false, error: "not found" };
+      },
+    );
+
+    const provider = new ElectrumProvider("umbrel.local", 50001);
+    const result = await runTxidBackfill(provider, txids);
+
+    expect(result.rebuilt).toBe(4);
+    // runTxidBackfill's up-front getBlockHeight() probe primes the tip cache;
+    // per-transaction derivations reuse it instead of re-fetching the tip.
+    expect(electrumIpc.electrumTest).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- hasOnlyUnresolvableLeftovers -------------------------------------------
+
+describe("hasOnlyUnresolvableLeftovers", () => {
+  function makeResult(over: Partial<BackfillResult> = {}): BackfillResult {
+    return {
+      orphansFound: 2,
+      rebuilt: 0,
+      skipped: 2,
+      skippedReasons: { "not-found": 2 },
+      failed: 0,
+      prevoutsResolved: 0,
+      deferred: false,
+      errors: [],
+      ...over,
+    };
+  }
+
+  it("is true when nothing was rebuilt and every skip is not-found", () => {
+    expect(hasOnlyUnresolvableLeftovers(makeResult())).toBe(true);
+  });
+
+  it("is true for a mix of not-found and parse-failed skips", () => {
+    expect(
+      hasOnlyUnresolvableLeftovers(
+        makeResult({ skippedReasons: { "not-found": 1, "parse-failed": 1 } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("treats has-row skips as neutral (they no longer re-trigger the reminder)", () => {
+    expect(
+      hasOnlyUnresolvableLeftovers(
+        makeResult({ skippedReasons: { "not-found": 1, "has-row": 1 } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false when only has-row skips remain", () => {
+    expect(
+      hasOnlyUnresolvableLeftovers(makeResult({ skippedReasons: { "has-row": 2 } })),
+    ).toBe(false);
+  });
+
+  it("is false when any transaction was rebuilt", () => {
+    expect(
+      hasOnlyUnresolvableLeftovers(
+        makeResult({ orphansFound: 3, rebuilt: 1, skipped: 2 }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false while unconfirmed skips remain (a later run can pick them up)", () => {
+    expect(
+      hasOnlyUnresolvableLeftovers(
+        makeResult({ skippedReasons: { "not-found": 1, "unconfirmed": 1 } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false while insufficient-confirmations skips remain", () => {
+    expect(
+      hasOnlyUnresolvableLeftovers(
+        makeResult({ skippedReasons: { "insufficient-confirmations": 2 } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when transient failures occurred", () => {
+    expect(
+      hasOnlyUnresolvableLeftovers(
+        makeResult({ orphansFound: 3, failed: 1, skippedReasons: { "not-found": 2 } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false for an unknown future skip reason", () => {
+    expect(
+      hasOnlyUnresolvableLeftovers(
+        makeResult({ skippedReasons: { "not-found": 1, "future-reason": 1 } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false for deferred results and empty scans", () => {
+    expect(hasOnlyUnresolvableLeftovers(makeResult({ deferred: true }))).toBe(false);
+    expect(
+      hasOnlyUnresolvableLeftovers(
+        makeResult({ orphansFound: 0, skipped: 0, skippedReasons: {} }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when the run did not process every orphan (cancelled midway)", () => {
+    expect(
+      hasOnlyUnresolvableLeftovers(
+        makeResult({ orphansFound: 5, skipped: 2, skippedReasons: { "not-found": 2 } }),
+      ),
+    ).toBe(false);
   });
 });
