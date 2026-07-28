@@ -18,9 +18,12 @@
 // vault, seeds THREE saved address records via the live Vite module singletons
 // (record-crud / transaction-crud — the same Dexie instance the page uses):
 //
-//   - ADDR_FUNDED  (owner "Alice Holdings") — later funded with a confirmed tx
-//   - ADDR_EMPTY   (owner "Alice Holdings") — never funded (genuine zero)
-//   - ADDR_DECOY   (owner "Bob Reserves")   — FUNDED, but a different owner
+//   - ADDR_FUNDED  (owner "Alice Holdings", wallet "Cold Storage A") — later
+//     funded with a confirmed tx
+//   - ADDR_EMPTY   (owner "Alice Holdings", wallet "Cold Storage A") — never
+//     funded (genuine zero)
+//   - ADDR_DECOY   (owner "Bob Reserves", wallet "Hot Wallet B") — FUNDED, but
+//     a different owner AND a different wallet name
 //
 // then selects addresses via the "From Vault" tab (never touching the paste
 // textarea), runs the OFFLINE balance check, and asserts:
@@ -39,6 +42,12 @@
 //       decoy is funded, so if the filter leaked it would show up)
 //     - the generated PDF contains the funded address and neither the empty
 //       address nor the decoy
+//
+//   Wallet-filter case (vault tab, owner = all, wallet = "Cold Storage A"):
+//     - `use-balance-check.ts` filters on `r.walletName` in a SEPARATE branch
+//       from the owner filter, so the owner case above does not cover it
+//     - same assertions: excluded alert, funded listed, empty + funded decoy
+//       (different wallet name) absent from the table AND the generated PDF
 //
 // pdf.js is only the verification *oracle* (KYUTXO never reads PDFs). We load
 // pdf.js's *legacy* build because the Nix-pinned test Chromium (v125) predates
@@ -62,6 +71,8 @@ const ADDR_EMPTY = '12higDjoCCNXSA95xZMWUdPvXNmkAduhWv';
 const ADDR_DECOY = 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq';
 const OWNER_SELECTED = 'Alice Holdings';
 const OWNER_DECOY = 'Bob Reserves';
+const WALLET_SELECTED = 'Cold Storage A';
+const WALLET_DECOY = 'Hot Wallet B';
 const FUNDED_SATS = 500_000;
 const DECOY_SATS = 750_000;
 const FUNDED_TXID =
@@ -161,7 +172,8 @@ async function main() {
   });
 
   const steps = [];
-  let pdfBytes = null;
+  let ownerPdfBytes = null;
+  let walletPdfBytes = null;
 
   try {
     // Fresh context => empty IndexedDB => the login screen shows the "Create
@@ -179,11 +191,23 @@ async function main() {
       }
     });
 
-    await page.goto(PROOF_URL, { waitUntil: 'load', timeout: 60_000 });
-
-    // ── Create the vault (setup flow) ──────────────────────────────────────
+    // Under completion validation several sibling browser checks hammer the
+    // same Vite dev server at once, so the first load can be very slow. Retry
+    // the initial navigation until the login form actually renders.
     const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 30_000 });
+    let loaded = false;
+    for (let attempt = 1; attempt <= 3 && !loaded; attempt++) {
+      try {
+        await page.goto(PROOF_URL, { waitUntil: 'load', timeout: 90_000 });
+        await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
+        loaded = true;
+      } catch (err) {
+        if (attempt === 3) throw err;
+        console.log(
+          `[pof-empty-vault-browser] initial load attempt ${attempt} failed (${err.message}); retrying...`,
+        );
+      }
+    }
     await pwInput.fill(SETUP_PASSWORD);
     const confirmInput = page.getByTestId('input-confirm-password');
     await confirmInput.waitFor({ state: 'visible', timeout: 10_000 });
@@ -198,7 +222,7 @@ async function main() {
     //    live Vite module singletons (same Dexie instance the page uses). No
     //    transaction data yet, so every saved address has a zero balance. ─────
     const seedRecords = await page.evaluate(
-      async ({ funded, empty, decoy, ownerA, ownerB }) => {
+      async ({ funded, empty, decoy, ownerA, ownerB, walletA, walletB }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
         const vocabCrud = await import('/src/lib/data/vocabulary-crud.ts');
         for (const name of [ownerA, ownerB]) {
@@ -213,18 +237,21 @@ async function main() {
           inputString: funded,
           label: 'Vault funded address',
           owner: ownerA,
+          walletName: walletA,
         });
         await recordCrud.createRecord({
           type: 'address',
           inputString: empty,
           label: 'Vault empty address',
           owner: ownerA,
+          walletName: walletA,
         });
         await recordCrud.createRecord({
           type: 'address',
           inputString: decoy,
-          label: 'Vault decoy address (other owner)',
+          label: 'Vault decoy address (other owner + other wallet)',
           owner: ownerB,
+          walletName: walletB,
         });
         return true;
       },
@@ -234,12 +261,16 @@ async function main() {
         decoy: ADDR_DECOY,
         ownerA: OWNER_SELECTED,
         ownerB: OWNER_DECOY,
+        walletA: WALLET_SELECTED,
+        walletB: WALLET_DECOY,
       },
     );
     steps.push({
-      name: 'seed: three saved vault address records (two owners) created',
+      name: 'seed: three saved vault address records (two owners, two wallets) created',
       passed: seedRecords === true,
-      detail: `${ADDR_FUNDED} + ${ADDR_EMPTY} (${OWNER_SELECTED}), ${ADDR_DECOY} (${OWNER_DECOY})`,
+      detail:
+        `${ADDR_FUNDED} + ${ADDR_EMPTY} (${OWNER_SELECTED} / ${WALLET_SELECTED}), ` +
+        `${ADDR_DECOY} (${OWNER_DECOY} / ${WALLET_DECOY})`,
     });
 
     // ════════════════════════════════════════════════════════════════════════
@@ -423,10 +454,134 @@ async function main() {
       page.waitForEvent('download', { timeout: 60_000 }),
       pdfBtn.click(),
     ]);
-    pdfBytes = await readDownloadBytes(download);
+    ownerPdfBytes = await readDownloadBytes(download);
     console.log(
-      `[pof-empty-vault-browser] captured PDF (${pdfBytes.byteLength} bytes, ` +
+      `[pof-empty-vault-browser] captured owner-filter PDF (${ownerPdfBytes.byteLength} bytes, ` +
         `name: ${download.suggestedFilename()})`,
+    );
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CASE 3 — vault tab + WALLET filter (owner reset to "all"): the wallet
+    // filter is a SEPARATE branch in use-balance-check's resolveAddresses
+    // (`r.walletName`), so the owner case above does not cover it. The funded
+    // decoy carries a different wallet name — if the wallet filter leaked it,
+    // it would show up in the table and PDF.
+    // ════════════════════════════════════════════════════════════════════════
+    await page.getByTestId('button-reset').click();
+    await page.getByTestId('tab-vault-addresses').click();
+
+    // handleReset does NOT clear the filters — owner is still set from CASE 2.
+    // Reset it to "All owners" so the decoy's exclusion below can only come
+    // from the wallet filter.
+    const ownerTrigger2 = page.getByTestId('select-filter-owner');
+    await ownerTrigger2.waitFor({ state: 'visible', timeout: 10_000 });
+    await ownerTrigger2.click();
+    await page
+      .getByRole('option', { name: 'All owners' })
+      .click({ timeout: 10_000 });
+    await page.waitForFunction(
+      (owner) => {
+        const el = document.querySelector('[data-testid="select-filter-owner"]');
+        return el && el.textContent && !el.textContent.includes(owner);
+      },
+      OWNER_SELECTED,
+      { timeout: 10_000 },
+    );
+
+    const walletTrigger = page.getByTestId('select-filter-wallet');
+    await walletTrigger.waitFor({ state: 'visible', timeout: 10_000 });
+    await walletTrigger.click();
+    await page
+      .getByRole('option', { name: WALLET_SELECTED })
+      .click({ timeout: 10_000 });
+    await page.waitForFunction(
+      (wallet) => {
+        const el = document.querySelector('[data-testid="select-filter-wallet"]');
+        return el && el.textContent && el.textContent.includes(wallet);
+      },
+      WALLET_SELECTED,
+      { timeout: 10_000 },
+    );
+    steps.push({
+      name: 'wallet (vault): owner reset to all + wallet filter set via the vault selection UI',
+      passed: true,
+      detail: `select-filter-wallet now shows "${WALLET_SELECTED}", owner filter back to All owners`,
+    });
+
+    await page.getByTestId('button-source-offline').click();
+    await page.getByTestId('button-check-balances').click();
+
+    await page
+      .getByTestId('text-total-balance')
+      .waitFor({ state: 'visible', timeout: 20_000 });
+
+    {
+      const excludedVisible = await page
+        .getByTestId('alert-empty-excluded')
+        .isVisible()
+        .catch(() => false);
+      steps.push({
+        name: 'wallet (vault): "N empty addresses excluded" alert is shown',
+        passed: excludedVisible === true,
+        detail: excludedVisible
+          ? 'alert-empty-excluded is visible'
+          : 'alert-empty-excluded was missing',
+      });
+    }
+
+    {
+      const rowsText = (
+        await page.locator('[data-testid^="row-address-"]').allTextContents()
+      ).join(' ');
+      const fundedListed = rowsText.includes(ADDR_FUNDED);
+      const emptyListed = rowsText.includes(ADDR_EMPTY);
+      const decoyListed = rowsText.includes(ADDR_DECOY);
+      steps.push({
+        name: 'wallet (vault): funded address IS listed in the results table',
+        passed: fundedListed === true,
+        detail: fundedListed
+          ? 'funded address found in a results-table row'
+          : 'funded address missing from the results table',
+      });
+      steps.push({
+        name: 'wallet (vault): empty address is NOT listed in the results table',
+        passed: emptyListed === false,
+        detail: emptyListed
+          ? 'empty address unexpectedly appeared in a results-table row'
+          : 'empty address correctly excluded from the results table',
+      });
+      steps.push({
+        name: 'wallet (vault): funded DECOY under another wallet is NOT listed (wallet filter applied)',
+        passed: decoyListed === false,
+        detail: decoyListed
+          ? 'decoy address leaked past the wallet filter into the results table'
+          : 'decoy address correctly filtered out by wallet selection',
+      });
+    }
+
+    // ── Fill required declarant fields again and generate the wallet-case PDF ─
+    await page.getByTestId('input-declarant-name').fill('Alice Example');
+    await page.getByTestId('input-declaration-date').fill('2026-06-30');
+    await page.getByTestId('input-purpose').fill('Bank account opening');
+
+    const walletPdfBtn = page.getByTestId('button-generate-pdf');
+    await walletPdfBtn.waitFor({ state: 'visible', timeout: 10_000 });
+    await page.waitForFunction(
+      () => {
+        const b = document.querySelector('[data-testid="button-generate-pdf"]');
+        return b && !b.hasAttribute('disabled');
+      },
+      { timeout: 15_000 },
+    );
+    await walletPdfBtn.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    const [walletDownload] = await Promise.all([
+      page.waitForEvent('download', { timeout: 60_000 }),
+      walletPdfBtn.click(),
+    ]);
+    walletPdfBytes = await readDownloadBytes(walletDownload);
+    console.log(
+      `[pof-empty-vault-browser] captured wallet-filter PDF (${walletPdfBytes.byteLength} bytes, ` +
+        `name: ${walletDownload.suggestedFilename()})`,
     );
   } finally {
     await browser.close();
@@ -443,15 +598,29 @@ async function main() {
     }
   }
 
-  // ── Verify the generated PDF excludes the empty address AND the decoy ─────
-  if (!pdfBytes || pdfBytes.byteLength === 0) {
-    steps.push({
-      name: 'mixed (vault): a PDF was generated',
-      passed: false,
-      detail: 'no PDF bytes were captured',
-    });
-  } else {
-    const fullText = await extractPdfText(pdfBytes);
+  // ── Verify both generated PDFs exclude the empty address AND the decoy ────
+  const pdfCases = [
+    {
+      label: 'mixed (vault)',
+      filterLabel: 'owner filter',
+      bytes: ownerPdfBytes,
+    },
+    {
+      label: 'wallet (vault)',
+      filterLabel: 'wallet filter',
+      bytes: walletPdfBytes,
+    },
+  ];
+  for (const { label, filterLabel, bytes } of pdfCases) {
+    if (!bytes || bytes.byteLength === 0) {
+      steps.push({
+        name: `${label}: a PDF was generated`,
+        passed: false,
+        detail: 'no PDF bytes were captured',
+      });
+      continue;
+    }
+    const fullText = await extractPdfText(bytes);
     // pdf.js can split a long mono token across text runs; compare against a
     // whitespace-stripped copy too so a wrapped address still matches.
     const stripped = fullText.replace(/\s+/g, '');
@@ -461,24 +630,24 @@ async function main() {
     const emptyInPdf = has(ADDR_EMPTY);
     const decoyInPdf = has(ADDR_DECOY);
     steps.push({
-      name: 'mixed (vault): funded address appears in the generated PDF',
+      name: `${label}: funded address appears in the generated PDF`,
       passed: fundedInPdf === true,
       detail: fundedInPdf
         ? 'funded address found in the PDF text layer'
         : 'funded address missing from the PDF text layer',
     });
     steps.push({
-      name: 'mixed (vault): empty address does NOT appear in the generated PDF',
+      name: `${label}: empty address does NOT appear in the generated PDF`,
       passed: emptyInPdf === false,
       detail: emptyInPdf
         ? 'empty address unexpectedly leaked into the PDF'
         : 'empty address correctly absent from the PDF',
     });
     steps.push({
-      name: 'mixed (vault): funded decoy (other owner) does NOT appear in the generated PDF',
+      name: `${label}: funded decoy does NOT appear in the generated PDF`,
       passed: decoyInPdf === false,
       detail: decoyInPdf
-        ? 'decoy address leaked past the owner filter into the PDF'
+        ? `decoy address leaked past the ${filterLabel} into the PDF`
         : 'decoy address correctly absent from the PDF',
     });
   }
@@ -500,7 +669,7 @@ async function main() {
 
   console.log(
     '[pof-empty-vault-browser] PASSED: empty-address exclusion holds when addresses ' +
-      'come from the saved vault (owner-filtered) in a real browser (table, alerts and PDF).',
+      'come from the saved vault (owner- AND wallet-filtered) in a real browser (table, alerts and PDFs).',
   );
 }
 
