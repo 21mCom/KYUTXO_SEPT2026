@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // These tests lock in the heuristic-mode banner's one-click "Re-sync
@@ -199,8 +199,8 @@ describe("BalanceOverview heuristic re-sync", () => {
     fireEvent.click(screen.getByTestId("button-resync-heuristic"));
 
     await waitFor(() => expect(syncSingleAddress).toHaveBeenCalledTimes(2));
-    expect(syncSingleAddress).toHaveBeenCalledWith("A");
-    expect(syncSingleAddress).toHaveBeenCalledWith("B");
+    expect(syncSingleAddress).toHaveBeenCalledWith("A", expect.any(Function));
+    expect(syncSingleAddress).toHaveBeenCalledWith("B", expect.any(Function));
     expect(updateProvider).toHaveBeenCalledTimes(1);
 
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
@@ -211,6 +211,49 @@ describe("BalanceOverview heuristic re-sync", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("banner-heuristic-warning")).toBeNull();
       expect(screen.queryByTestId("button-resync-heuristic")).toBeNull();
+    });
+  });
+
+  it("shows the current address and live tx-fetch counter while re-syncing", async () => {
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    followUpHeuristicCount = 0;
+
+    // Hold the first address's sync open so we can observe the banner state,
+    // and drive its onProgress callback to simulate streaming fetch progress.
+    let capturedOnProgress: ((p: { transactionsNew: number; transactionsFound: number }) => void) | undefined;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+    syncSingleAddress.mockImplementation(async (_addr: unknown, onProgress?: unknown) => {
+      if (!capturedOnProgress) {
+        capturedOnProgress = onProgress as typeof capturedOnProgress;
+        await firstGate;
+      }
+      return { success: true };
+    });
+
+    await renderAndShowBanner();
+    fireEvent.click(screen.getByTestId("button-resync-heuristic"));
+
+    // Before any progress event: fallback "fetching transactions…" line with the address.
+    await waitFor(() => {
+      const line = screen.getByTestId("text-heuristic-resync-address-progress");
+      expect(line.textContent).toContain("A");
+      expect(line.textContent).toContain("fetching transactions");
+    });
+
+    // A streamed progress event updates the counter.
+    act(() => {
+      capturedOnProgress!({ transactionsNew: 25, transactionsFound: 120 });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("text-heuristic-resync-current-address").textContent).toBe("A");
+      expect(screen.getByTestId("text-heuristic-resync-tx-progress").textContent).toContain("25/120 transactions fetched");
+    });
+
+    // Finishing the run clears the per-address progress line.
+    act(() => releaseFirst());
+    await waitFor(() => {
+      expect(screen.queryByTestId("text-heuristic-resync-address-progress")).toBeNull();
     });
   });
 

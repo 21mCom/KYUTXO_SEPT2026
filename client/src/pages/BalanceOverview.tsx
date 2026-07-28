@@ -515,6 +515,14 @@ export default function BalanceOverview() {
   // Per-address progress for the heuristic re-sync: { processed, total }.
   const [heuristicResyncProgress, setHeuristicResyncProgress] = useState<{ processed: number; total: number } | null>(null);
   const [cancellingResyncHeuristic, setCancellingResyncHeuristic] = useState(false);
+  // Per-address fetch progress for the in-flight heuristic re-sync: which
+  // address is currently being fetched and how many of its transactions have
+  // been processed so far, as reported by syncSingleAddress's onProgress.
+  const [heuristicResyncAddressProgress, setHeuristicResyncAddressProgress] = useState<{
+    address: string;
+    fetched: number;
+    total: number;
+  } | null>(null);
   const resyncHeuristicAbortRef = useRef<AbortController | null>(null);
   // Expandable detail under the heuristic banner: the specific address strings
   // still on FIFO matching, loaded lazily when the user opens the list (and kept
@@ -1188,8 +1196,18 @@ export default function BalanceOverview() {
       let failed = 0;
       for (const address of addresses) {
         if (controller.signal.aborted) break;
+        setHeuristicResyncAddressProgress({ address, fetched: 0, total: 0 });
         try {
-          const result = await transactionSyncService.syncSingleAddress(address);
+          const result = await transactionSyncService.syncSingleAddress(address, (progress) => {
+            // Live per-address fetch counter so a large address doesn't look
+            // frozen. transactionsNew/transactionsFound carry the streaming
+            // "processed / total" counts during the syncing-addresses phase.
+            setHeuristicResyncAddressProgress({
+              address,
+              fetched: progress.transactionsNew,
+              total: progress.transactionsFound,
+            });
+          });
           if (result.success) synced += 1;
           else failed += 1;
         } catch (err) {
@@ -1198,6 +1216,7 @@ export default function BalanceOverview() {
         }
         setHeuristicResyncProgress({ processed: synced + failed, total: addresses.length });
       }
+      setHeuristicResyncAddressProgress(null);
 
       const cancelled = controller.signal.aborted;
       // Recount so the banner reflects reality immediately; the dbSignal effect
@@ -1241,6 +1260,7 @@ export default function BalanceOverview() {
       setCancellingResyncHeuristic(false);
       setResyncingHeuristic(false);
       setHeuristicResyncProgress(null);
+      setHeuristicResyncAddressProgress(null);
     }
   }, [toast]);
 
@@ -1986,6 +2006,32 @@ export default function BalanceOverview() {
               </button>
             </div>
           </div>
+
+          {resyncingHeuristic && heuristicResyncAddressProgress && (
+            <div
+              className="ml-7 flex items-center gap-2 text-xs text-yellow-700/80 dark:text-yellow-300/70"
+              data-testid="text-heuristic-resync-address-progress"
+            >
+              <Loader2 className="h-3 w-3 animate-spin flex-none" />
+              <span className="min-w-0 truncate">
+                Re-syncing{" "}
+                <span className="font-mono" data-testid="text-heuristic-resync-current-address">
+                  {heuristicResyncAddressProgress.address}
+                </span>
+                {heuristicResyncAddressProgress.total > 0 ? (
+                  <>
+                    {" — "}
+                    <span data-testid="text-heuristic-resync-tx-progress">
+                      {heuristicResyncAddressProgress.fetched.toLocaleString()}/
+                      {heuristicResyncAddressProgress.total.toLocaleString()} transactions fetched
+                    </span>
+                  </>
+                ) : (
+                  " — fetching transactions…"
+                )}
+              </span>
+            </div>
+          )}
 
           {heuristicDetailsOpen && (
             <div className="ml-7" data-testid="list-heuristic-addresses">
