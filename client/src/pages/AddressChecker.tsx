@@ -621,7 +621,7 @@ export default function AddressChecker() {
                         </TableCell>
 
                         <TableCell className="text-right tabular-nums" data-testid={`cell-txcount-${i}`}>
-                          {row.info ? row.info.txCount.toLocaleString() : "—"}
+                          {row.info && row.info.txCount !== 0 ? row.info.txCount.toLocaleString() : "—"}
                         </TableCell>
 
                         <TableCell className="text-right tabular-nums" data-testid={`cell-received-${i}`}>
@@ -637,7 +637,7 @@ export default function AddressChecker() {
                         </TableCell>
 
                         <TableCell className="text-right tabular-nums" data-testid={`cell-balance-${i}`}>
-                          {row.info ? (
+                          {row.info && row.info.balanceSats !== 0 ? (
                             <span className="font-mono text-xs">{formatBTC(row.info.balanceSats)}</span>
                           ) : "—"}
                         </TableCell>
