@@ -306,10 +306,16 @@
   }
 
   /* Does not work on elements with overflow:hidden! */
-  .hover-elevate:not(.no-default-hover-elevate),
-  .active-elevate:not(.no-default-active-elevate),
-  .hover-elevate-2:not(.no-default-hover-elevate),
-  .active-elevate-2:not(.no-default-active-elevate) {
+  /* :where() keeps specificity at 0 so single-class positioning utilities
+     (e.g. Tailwind's `absolute`/`fixed`) still win; elements without an
+     explicit positioning class keep the `position: relative` that the
+     ::after elevate overlay needs. */
+  :where(
+    .hover-elevate:not(.no-default-hover-elevate),
+    .active-elevate:not(.no-default-active-elevate),
+    .hover-elevate-2:not(.no-default-hover-elevate),
+    .active-elevate-2:not(.no-default-active-elevate)
+  ) {
     position: relative;
     z-index: 0;
   }
