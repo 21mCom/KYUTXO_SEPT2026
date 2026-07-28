@@ -14,7 +14,11 @@
 //   4. Clicks the alert's "Switch to Transactions" button and asserts the
 //      roles flip: TXID row enabled+checked ("TXID"), address row disabled+
 //      unchecked ("Address — wrong mode").
-//   5. Continues to metadata in Transactions mode, applies a label, and
+//   5. Bulk select buttons: Deselect All clears the selectable TXID row and
+//      disables Continue (count 0); Select All re-checks ONLY the same-mode
+//      TXID row — the wrong-mode address row stays disabled+unchecked — and
+//      the summary counts exactly 1 valid transaction (mismatches excluded).
+//   6. Continues to metadata in Transactions mode, applies a label, and
 //      verifies in IndexedDB that exactly ONE record was created — a
 //      transaction record for the TXID — and no address record leaked through.
 //
@@ -209,7 +213,49 @@ async function main() {
       });
     }
 
-    // ── Step 4: apply metadata in Transactions mode ────────────────────────
+    // ── Step 4: bulk select buttons only affect same-mode rows ────────────
+    // Deselect All: clears the selectable TXID row; the wrong-mode address
+    // row stays unchecked+disabled; Continue disables (selected count 0).
+    await page.getByTestId('button-deselect-all').click();
+    {
+      const addr = await rowState(page, 0);
+      const tx = await rowState(page, 1);
+      const continueDisabled = await page
+        .getByTestId('button-continue-to-metadata')
+        .isDisabled();
+      steps.push({
+        name: 'deselect-all (Transactions mode): TXID row unchecked, address row untouched, Continue disabled',
+        passed:
+          !tx.checked && !tx.disabled && !addr.checked && addr.disabled && continueDisabled,
+        detail: `tx checked=${tx.checked} disabled=${tx.disabled}; addr checked=${addr.checked} disabled=${addr.disabled}; continueDisabled=${continueDisabled}`,
+      });
+    }
+
+    // Select All: must re-check ONLY the same-mode TXID row. The wrong-mode
+    // address row must remain disabled+unchecked, and the summary count must
+    // exclude it ("Found 1 valid transactions").
+    await page.getByTestId('button-select-all').click();
+    {
+      const addr = await rowState(page, 0);
+      const tx = await rowState(page, 1);
+      const continueDisabled = await page
+        .getByTestId('button-continue-to-metadata')
+        .isDisabled();
+      const bodyText = (await page.locator('body').textContent()) ?? '';
+      const countOk = /Found 1 valid transactions\./.test(bodyText);
+      steps.push({
+        name: 'select-all (Transactions mode): only TXID row re-checked; wrong-mode address row stays unchecked+disabled',
+        passed: tx.checked && !tx.disabled && !addr.checked && addr.disabled,
+        detail: `tx checked=${tx.checked} disabled=${tx.disabled}; addr checked=${addr.checked} disabled=${addr.disabled}`,
+      });
+      steps.push({
+        name: 'select-all: valid count excludes mismatched rows and Continue re-enables',
+        passed: countOk && !continueDisabled,
+        detail: `foundCountText=${countOk} continueDisabled=${continueDisabled}`,
+      });
+    }
+
+    // ── Step 5: apply metadata in Transactions mode ────────────────────────
     await page.getByTestId('button-continue-to-metadata').click();
     const labelInput = page.getByTestId('input-label');
     await labelInput.waitFor({ state: 'visible', timeout: 15_000 });
@@ -228,7 +274,7 @@ async function main() {
     await page.getByTestId('button-apply-metadata').click();
     await page.getByTestId('button-tag-more').waitFor({ state: 'visible', timeout: 30_000 });
 
-    // ── Step 5: exactly one record — a transaction — was created ──────────
+    // ── Step 6: exactly one record — a transaction — was created ──────────
     // Vite serves a singleton module graph, so the dynamically-imported db is
     // the exact same Dexie instance the page wrote to.
     const dbCheck = await page.evaluate(
