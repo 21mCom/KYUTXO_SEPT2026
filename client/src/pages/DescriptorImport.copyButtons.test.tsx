@@ -48,6 +48,8 @@ vi.mock("@/lib/descriptor-parser", () => ({
   parseSparrowExport: vi.fn(() => ({ error: "not a sparrow export" })),
   descriptorKeysToXpubEntries: vi.fn(() => []),
   getDescriptorSummary: vi.fn(() => "Taproot Singlesig"),
+  isSparrowWalletFile: vi.fn(() => false),
+  SPARROW_WALLET_FILE_MESSAGE: "sparrow wallet file message",
 }));
 
 vi.mock("@/lib/bsms-parser", () => ({
@@ -61,6 +63,7 @@ vi.mock("@/lib/xpub", () => ({
     change: [{ index: 0, address: CHANGE_ADDRESS }],
   })),
   deriveMultisigDualChain: vi.fn(async () => ({ receive: [], change: [] })),
+  hasNonStandardHeader: vi.fn(() => false),
 }));
 
 vi.mock("@/hooks/use-tags", () => ({ useTags: () => ({ tags: [] }), createTag: vi.fn() }));

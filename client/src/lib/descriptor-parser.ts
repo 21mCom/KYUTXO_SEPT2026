@@ -354,6 +354,20 @@ export function parseDescriptor(descriptorInput: string): DescriptorParseResult 
   }
 }
 
+/**
+ * Sparrow's native wallet file (.mv or .mv.db) is a binary H2 MVStore database
+ * (often encrypted) that cannot be parsed here. Detect it by file name so we
+ * can guide the user to Sparrow's supported exports instead.
+ */
+export function isSparrowWalletFile(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  return lower.endsWith('.mv.db') || lower.endsWith('.mv');
+}
+
+export const SPARROW_WALLET_FILE_MESSAGE =
+  "This looks like Sparrow's internal wallet file (.mv.db), which is a binary database that can't be imported directly. " +
+  "In Sparrow, open your wallet and use File → Export → Output Descriptor (or Sparrow wallet JSON), then import that exported file here instead.";
+
 export function parseSparrowExport(content: string): { export?: SparrowExport; error?: string } {
   try {
     const json = JSON.parse(content);

@@ -81,6 +81,8 @@ import {
   parseSparrowExport,
   descriptorKeysToXpubEntries,
   getDescriptorSummary,
+  isSparrowWalletFile,
+  SPARROW_WALLET_FILE_MESSAGE,
   type ParsedDescriptor,
 } from "@/lib/descriptor-parser";
 import { parseBSMS, isBSMSFile } from "@/lib/bsms-parser";
@@ -174,6 +176,18 @@ export default function DescriptorImport() {
     if (acceptedFiles.length === 0) return;
     
     const file = acceptedFiles[0];
+
+    if (isSparrowWalletFile(file.name)) {
+      setParsedDescriptor(null);
+      setParseError(SPARROW_WALLET_FILE_MESSAGE);
+      toast({
+        title: "Sparrow wallet file detected",
+        description: SPARROW_WALLET_FILE_MESSAGE,
+        variant: "destructive",
+      });
+      return;
+    }
+
     const reader = new FileReader();
     
     reader.onload = (e) => {
@@ -247,11 +261,28 @@ export default function DescriptorImport() {
     reader.readAsText(file);
   }, [walletNameInput, toast]);
   
+  const onDropRejected = useCallback((rejections: { file: File }[]) => {
+    const rejected = rejections[0]?.file;
+    if (rejected && isSparrowWalletFile(rejected.name)) {
+      setParsedDescriptor(null);
+      setParseError(SPARROW_WALLET_FILE_MESSAGE);
+      toast({
+        title: "Sparrow wallet file detected",
+        description: SPARROW_WALLET_FILE_MESSAGE,
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
+    onDropRejected,
     accept: {
       'application/json': ['.json'],
       'text/plain': ['.txt', '.bsms'],
+      // Sparrow's internal wallet file — accepted only so we can show a
+      // tailored message pointing to Sparrow's supported exports.
+      'application/octet-stream': ['.mv', '.db'],
     },
     multiple: false,
   });
@@ -783,7 +814,7 @@ export default function DescriptorImport() {
           <h1 className="text-2xl font-bold">Descriptor Import</h1>
         </div>
         <p className="text-muted-foreground">
-          Import multisig or taproot addresses from a Bitcoin output descriptor (Sparrow wallet export)
+          Import multisig or taproot addresses from a Bitcoin output descriptor (Sparrow wallet exports — JSON / descriptor)
         </p>
       </div>
       
@@ -813,7 +844,7 @@ export default function DescriptorImport() {
             <CardHeader>
               <CardTitle>Upload Descriptor File</CardTitle>
               <CardDescription>
-                Upload a Sparrow wallet export file (.json) or paste the multisig/taproot descriptor directly
+                Upload a Sparrow wallet export (JSON or output descriptor) or paste the multisig/taproot descriptor directly. Sparrow's internal wallet file (.mv.db) is not supported — use File → Export in Sparrow.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -827,8 +858,8 @@ export default function DescriptorImport() {
               >
                 <input {...getInputProps()} data-testid="input-file-descriptor" />
                 <Upload className="h-10 w-10 mx-auto mb-4 text-muted-foreground" />
-                <p className="font-medium">Drop your Sparrow wallet export here</p>
-                <p className="text-sm text-muted-foreground mt-1">or click to browse (.json file)</p>
+                <p className="font-medium">Drop your Sparrow wallet export (JSON / descriptor) here</p>
+                <p className="text-sm text-muted-foreground mt-1">or click to browse (.json, .txt, .bsms)</p>
               </div>
               
               <div className="relative">
