@@ -64,6 +64,26 @@ function collectFiles(dir, files = []) {
   return files;
 }
 
+// Self-check: if the shared validator or any allow-listed file no longer
+// exists (renamed/moved/deleted), fail loudly instead of silently guarding
+// nothing / allow-listing stale paths.
+const missing = [...ALLOWED_FILES].filter(f => !fs.existsSync(f));
+if (missing.length > 0) {
+  console.error(
+    '\x1b[31m%s\x1b[0m',
+    'check-block-validation self-check failed: expected file(s) missing:\n'
+  );
+  for (const f of missing) {
+    const label = f === SHARED_LIB ? ' (shared validator SHARED_LIB)' : ' (ALLOWED_FILES entry)';
+    console.error(`  ${path.relative(ROOT, f)}${label}`);
+  }
+  console.error(
+    '\n  -> If a file was renamed/moved, update SHARED_LIB / ALLOWED_FILES in scripts/check-block-validation.js.'
+  );
+  console.error('     If it was deleted, remove the stale allow-list entry.');
+  process.exit(1);
+}
+
 const violations = [];
 
 for (const file of collectFiles(SCAN_DIR)) {
