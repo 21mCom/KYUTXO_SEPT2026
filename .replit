@@ -209,6 +209,10 @@ args = "descriptor-import-scroll-browser-check"
 task = "workflow.run"
 args = "calendar-dropdown-caption-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-singlesig-handoff-browser-check"
+
 [[workflows.workflow]]
 name = "saved-template-derive-browser-check"
 author = "agent"
@@ -714,6 +718,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/components/ui/calendar.dropdownCaption.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "descriptor-singlesig-handoff-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-descriptor-singlesig-handoff-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
