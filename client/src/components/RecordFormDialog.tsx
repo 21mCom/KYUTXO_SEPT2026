@@ -115,6 +115,10 @@ interface RecordFormDialogProps {
   onAttachmentDeleted?: () => void;
   // When set, the dialog scrolls to the named section after it opens.
   scrollToSection?: "acquisition";
+  // Explicit edit/create mode. Defaults to "edit mode when initialData is
+  // present" (the historical behavior); pass false to open a prefilled
+  // CREATE form (e.g. adding metadata for a clicked address with no record).
+  isEditing?: boolean;
 }
 
 export function RecordFormDialog({ 
@@ -135,7 +139,9 @@ export function RecordFormDialog({
   existingAttachments = [],
   onAttachmentDeleted,
   scrollToSection,
+  isEditing: isEditingProp,
 }: RecordFormDialogProps) {
+  const isEditing = isEditingProp ?? Boolean(initialData);
   const getDefaultFormData = () => ({
     inputString: "",
     label: "",
@@ -236,7 +242,7 @@ export function RecordFormDialog({
 
   // Check for duplicate when inputString changes (debounced)
   const checkForDuplicate = useCallback(async (inputString: string) => {
-    if (!onCheckDuplicate || !inputString.trim() || initialData) {
+    if (!onCheckDuplicate || !inputString.trim() || isEditing) {
       setDuplicateRecord(undefined);
       return;
     }
@@ -262,7 +268,7 @@ export function RecordFormDialog({
     } finally {
       setIsCheckingDuplicate(false);
     }
-  }, [onCheckDuplicate, initialData]);
+  }, [onCheckDuplicate, isEditing]);
 
   // Debounced duplicate check on inputString change
   const handleInputStringChange = useCallback((value: string) => {
@@ -277,13 +283,13 @@ export function RecordFormDialog({
     }
     
     // Don't check for duplicates when editing an existing record
-    if (initialData) return;
+    if (isEditing) return;
     
     // Debounce the duplicate check
     duplicateCheckTimeoutRef.current = setTimeout(() => {
       checkForDuplicate(value);
     }, 500);
-  }, [checkForDuplicate, initialData]);
+  }, [checkForDuplicate, isEditing]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -518,9 +524,9 @@ export function RecordFormDialog({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{initialData ? "Edit Record" : "Create New Record"}</DialogTitle>
+          <DialogTitle>{isEditing ? "Edit Record" : "Create New Record"}</DialogTitle>
           <DialogDescription>
-            {initialData ? "Update record details below." : "Fill in the details to create a new record."}
+            {isEditing ? "Update record details below." : "Fill in the details to create a new record."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -581,7 +587,7 @@ export function RecordFormDialog({
                   <Loader2 className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
                 )}
               </div>
-              {formData.type === "transaction" && !initialData && (
+              {formData.type === "transaction" && !isEditing && (
                 <Button
                   type="button"
                   variant="outline"
@@ -601,7 +607,7 @@ export function RecordFormDialog({
               )}
             </div>
             
-            {duplicateRecord && !initialData && (
+            {duplicateRecord && !isEditing && (
               <Alert className="mt-2">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription>
@@ -1527,7 +1533,7 @@ export function RecordFormDialog({
                 </>
               ) : (
                 <>
-                  {initialData ? "Save Changes" : (
+                  {isEditing ? "Save Changes" : (
                     fetchedTxData ? `Create ${1 + fetchedTxData.inputs.length + fetchedTxData.outputs.length} Records` : "Create Record"
                   )}
                 </>

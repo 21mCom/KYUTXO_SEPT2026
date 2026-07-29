@@ -651,7 +651,15 @@ export function RecordDetailPanel({
         <SheetHeader className="p-6 pb-4 space-y-0">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">
-              <SheetTitle className="text-xl mb-2">{record.label}</SheetTitle>
+              <SheetTitle className="text-xl mb-1">{record.label}</SheetTitle>
+              {record.inputString && (
+                <p
+                  className="font-mono text-xs text-muted-foreground break-all mb-2"
+                  data-testid="text-panel-identifier"
+                >
+                  {record.inputString}
+                </p>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <RecordTypeBadge type={record.type} />
                 {record.addressImportance && (

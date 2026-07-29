@@ -1,10 +1,11 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
-import { useLocation } from "wouter";
 import { type Record as DbRecord, type Attachment, type CustomField } from "@/lib/database";
 import { type PanelRecord, toPanelRecord } from "@/lib/recordToPanel";
 import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
 import { getAttachmentsByRecordIdOrIdentifier } from "@/lib/data/attachments-crud";
-import { getRecord, getRecordsByInputString, updateRecord } from "@/lib/data/record-crud";
+import { getRecord, getRecordsByInputString, updateRecord, createRecord } from "@/lib/data/record-crud";
+import { beginBulkOperation, endBulkOperation } from "@/lib/database";
+import type { TransactionAddresses } from "@/components/RecordFormDialog";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
 import { useToast } from "@/hooks/use-toast";
@@ -80,7 +81,6 @@ function selectBestRecord(records: DbRecord[]): DbRecord {
 }
 
 export function RecordPreviewProvider({ children }: { children: ReactNode }) {
-  const [, navigate] = useLocation();
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -91,6 +91,9 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
   // Edit form state (shared across every surface that opens a preview)
   const [editingRecord, setEditingRecord] = useState<DbRecord | null>(null);
   const [editingAttachments, setEditingAttachments] = useState<Attachment[]>([]);
+  // When the user clicks an identifier with no record, we open the same form
+  // dialog in create mode, prefilled with that identifier and detected type.
+  const [createInitialData, setCreateInitialData] = useState<Partial<DbRecord> | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editScrollSection, setEditScrollSection] = useState<"acquisition" | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -166,13 +169,23 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     try {
       const rawRecords = await getRecordsByInputString(inputString);
       if (rawRecords.length === 0) {
-        // No record found - navigate to Records page with search
+        // No record found — open a prefilled create form so the user can add
+        // metadata for this exact identifier right away (instead of dumping
+        // them on the Records page with a search that may match nothing).
         setIsLoading(false);
-        toast({
-          title: "No record found",
-          description: "Navigating to search for this address/transaction...",
+        const validation = validateBitcoinInput(inputString);
+        const detectedType: "address" | "transaction" | "other" =
+          validation.isValid && validation.type ? validation.type : "other";
+        setEditingRecord(null);
+        setEditingAttachments([]);
+        setCreateInitialData({
+          type: detectedType,
+          inputString,
+          label: "",
+          tags: [],
+          categories: [],
         });
-        navigate(`/records?search=${encodeURIComponent(inputString)}`);
+        setIsFormOpen(true);
         return;
       }
 
@@ -193,7 +206,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [loadAttachments, navigate, toast]);
+  }, [loadAttachments, toast]);
 
   const closePreview = useCallback(() => {
     setIsOpen(false);
@@ -219,6 +232,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         return;
       }
       setEditingRecord(raw);
+      setCreateInitialData(null);
       setEditScrollSection(scrollToSection);
       setIsFormOpen(true);
       try {
@@ -243,6 +257,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     setIsFormOpen(false);
     setEditingRecord(null);
     setEditingAttachments([]);
+    setCreateInitialData(null);
     setEditScrollSection(undefined);
   }, [isSubmitting]);
 
@@ -261,6 +276,167 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     const matches = await getRecordsByInputString(inputString);
     return matches.find((r) => r.id !== editingRecord?.id);
   }, [editingRecord]);
+
+  // Mirror of Dashboard's createAddressRecordsFromTx: when the create dialog
+  // fetched a transaction's data, honor its promise to also create pending
+  // address records for the tx's inputs/outputs (skipping any that exist).
+  const createAddressRecordsFromTx = useCallback(async (
+    transactionAddresses: TransactionAddresses,
+  ): Promise<{ created: number; skipped: number }> => {
+    let created = 0;
+    let skipped = 0;
+    const txidShort = transactionAddresses.txid.substring(0, 8);
+    const txDate = new Date(transactionAddresses.blockTime * 1000).toLocaleDateString();
+
+    const allAddrs = [
+      ...transactionAddresses.inputs.map(i => ({ address: i.address, role: 'Input' })),
+      ...transactionAddresses.outputs.map(o => ({ address: o.address, role: 'Output' })),
+    ];
+
+    const seen = new Set<string>();
+    beginBulkOperation();
+    try {
+      for (let i = 0; i < allAddrs.length; i++) {
+        const { address, role } = allAddrs[i];
+        const key = address.trim().toLowerCase();
+        if (seen.has(key)) {
+          skipped++;
+          continue;
+        }
+        seen.add(key);
+        const existing = await getRecordsByInputString(address);
+        if (existing.length > 0) {
+          skipped++;
+        } else {
+          try {
+            await createRecord({
+              type: 'address',
+              inputString: address,
+              label: `TX ${role} ${txDate}`,
+              notes: `${role} address from transaction ${txidShort}...`,
+              tags: [],
+              categories: [],
+              owner: 'Pending Review',
+              walletName: '',
+              source: `tx-import:${transactionAddresses.txid}`,
+              addressImportance: 'pending-review',
+            } as any);
+            created++;
+          } catch (createError) {
+            console.error(`Failed to create ${role.toLowerCase()} address record for ${address}:`, createError);
+          }
+        }
+        if (i % 10 === 9) await new Promise(r => setTimeout(r, 0));
+      }
+    } finally {
+      endBulkOperation();
+    }
+
+    return { created, skipped };
+  }, []);
+
+  const handleCreateRecord = useCallback(async (data: any, files: File[] = [], transactionAddresses?: TransactionAddresses) => {
+    try {
+      let recordType = data.type;
+      // Bitcoin types must validate; "other" type skips validation
+      if (data.type !== "other") {
+        const validation = validateBitcoinInput(data.inputString);
+        if (!validation.isValid) {
+          toast({
+            variant: "destructive",
+            title: "Invalid Input",
+            description: validation.error || "Please enter a valid Bitcoin address or transaction ID",
+          });
+          return;
+        }
+        recordType = validation.type || data.type;
+      }
+
+      setIsSubmitting(true);
+
+      const newId = await createRecord({
+        type: recordType,
+        vault: data.vault,
+        inputString: data.inputString,
+        label: data.label,
+        notes: data.notes || "",
+        amount: data.amount ? parseFloat(data.amount) : undefined,
+        date: data.date || "",
+        tags: data.tags || [],
+        categories: data.categories || [],
+        seedName: data.seedName || "",
+        walletSoftware: data.walletSoftware || "",
+        owner: data.owner || "",
+        walletName: data.walletName || "",
+        privateKeyStatus: data.privateKeyStatus || "",
+        source: data.source || 'manual',
+        customFields: data.customFields,
+        addressImportance: data.markAsVerified || data.addressImportance === 'verified'
+          ? 'verified'
+          : (data.addressImportance || 'manual'),
+        flowType: data.flowType,
+        acquisitionMethod: data.acquisitionMethod,
+        dispositionType: data.dispositionType,
+        costBasisUsd: data.costBasisUsd,
+        counterpartyType: data.counterpartyType,
+        counterpartyName: data.counterpartyName,
+      });
+
+      // Upload any files attached during creation
+      if (files.length > 0) {
+        setUploadProgress({ current: 0, total: files.length });
+        const { uploadAttachment } = await import("@/lib/attachments");
+
+        let uploadedCount = 0;
+        for (let i = 0; i < files.length; i++) {
+          try {
+            await uploadAttachment(newId, files[i], data.inputString);
+            uploadedCount++;
+          } catch (error) {
+            console.error(`Failed to upload ${files[i].name}:`, error);
+          }
+          setUploadProgress({ current: i + 1, total: files.length });
+        }
+
+        toast({
+          title: "Record Created",
+          description: `${data.label} created with ${uploadedCount} file(s)`,
+        });
+      } else if (transactionAddresses && recordType === 'transaction') {
+        // The dialog fetched tx data and promised input/output address
+        // records — create them so the UI contract holds.
+        const { created } = await createAddressRecordsFromTx(transactionAddresses);
+        toast({
+          title: "Record Created",
+          description: `${data.label} created with ${created} new address records`,
+        });
+      } else {
+        toast({
+          title: "Record Created",
+          description: `${data.label} has been created successfully`,
+        });
+      }
+
+      // Refresh the hover tooltip / note-icon cache for the new identifier
+      if (data.inputString) invalidateCachedRecord(data.inputString);
+
+      setIsFormOpen(false);
+      setCreateInitialData(null);
+
+      // Show the freshly created record so the user can confirm their entry
+      await openRecordPreview(newId);
+    } catch (error) {
+      console.error('[RecordPreview] Failed to create record:', error);
+      toast({
+        variant: "destructive",
+        title: "Create failed",
+        description: "Failed to create the record. Please try again.",
+      });
+    } finally {
+      setIsSubmitting(false);
+      setUploadProgress(null);
+    }
+  }, [openRecordPreview, createAddressRecordsFromTx, toast]);
 
   const handleUpdateRecord = useCallback(async (data: any, files: File[] = []) => {
     if (!editingRecord?.id) return;
@@ -391,11 +567,11 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
       <RecordFormDialog
         open={isFormOpen}
         onClose={closeForm}
-        onSave={handleUpdateRecord}
+        onSave={editingRecord ? handleUpdateRecord : handleCreateRecord}
         initialData={editingRecord ? {
           ...editingRecord,
           amount: editingRecord.amount?.toString() || "",
-        } : undefined}
+        } : (createInitialData ?? undefined)}
         isSubmitting={isSubmitting}
         uploadProgress={uploadProgress}
         availableSeedNames={seedNames.map((s) => s.name).filter((n) => n)}
@@ -409,6 +585,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         existingAttachments={editingAttachments}
         onAttachmentDeleted={refreshEditingAttachments}
         scrollToSection={editScrollSection}
+        isEditing={editingRecord != null}
       />
     </RecordPreviewContext.Provider>
   );

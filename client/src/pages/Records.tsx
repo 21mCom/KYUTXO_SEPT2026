@@ -248,12 +248,16 @@ export default function Records() {
     }
   }, [location]);
 
+  // Apply a `?search=` deep link unconditionally. Gating this on a non-empty,
+  // already-loaded record list used to silently drop the search on empty
+  // vaults or while the first page was still loading, dumping the user on the
+  // full unfiltered list with no sign of the identifier they clicked.
   useEffect(() => {
-    if (urlSearchQuery !== null && records.length > 0 && !isLoading) {
+    if (urlSearchQuery !== null) {
       setSearchQuery(urlSearchQuery);
       setUrlSearchQuery(null);
     }
-  }, [urlSearchQuery, records.length, isLoading]);
+  }, [urlSearchQuery]);
 
   const hasActiveFilters = debouncedSearch !== '' || columnFilters.length > 0;
 
