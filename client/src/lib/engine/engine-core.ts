@@ -736,6 +736,15 @@ export interface RecordQueryOptions {
   type?: string;
 }
 
+/**
+ * Escape LIKE metacharacters (%, _) and the escape char itself so a bound
+ * search term matches literally, mirroring the Dexie path's String.includes.
+ * Every LIKE clause using this MUST carry `ESCAPE '\'`.
+ */
+function escapeLikeTerm(term: string): string {
+  return term.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 function buildRecordWhere(opts: RecordQueryOptions): { sql: string; bind: unknown[] } {
   const clauses: string[] = [];
   const bind: unknown[] = [];
@@ -748,9 +757,9 @@ function buildRecordWhere(opts: RecordQueryOptions): { sql: string; bind: unknow
   }
   const search = opts.search?.trim().toLowerCase();
   if (search) {
-    const like = `%${search}%`;
+    const like = `%${escapeLikeTerm(search)}%`;
     clauses.push(
-      '(inputStringLower LIKE ? OR lower(label) LIKE ? OR lower(owner) LIKE ? OR lower(walletName) LIKE ? OR lower(notes) LIKE ?)',
+      "(inputStringLower LIKE ? ESCAPE '\\' OR lower(label) LIKE ? ESCAPE '\\' OR lower(owner) LIKE ? ESCAPE '\\' OR lower(walletName) LIKE ? ESCAPE '\\' OR lower(notes) LIKE ? ESCAPE '\\')",
     );
     bind.push(like, like, like, like, like);
   }
@@ -1317,8 +1326,8 @@ export function getVaultSummaries(db: EngineDb, opts: { search?: string } = {}):
   const bind: unknown[] = [];
   const search = opts.search?.trim().toLowerCase();
   if (search) {
-    const like = `%${search}%`;
-    clauses.push("(lower(COALESCE(vaultName, '')) LIKE ? OR lower(COALESCE(vaultNotes, '')) LIKE ?)");
+    const like = `%${escapeLikeTerm(search)}%`;
+    clauses.push("(lower(COALESCE(vaultName, '')) LIKE ? ESCAPE '\\' OR lower(COALESCE(vaultNotes, '')) LIKE ? ESCAPE '\\')");
     bind.push(like, like);
   }
   return selectRows<VaultSummaryRow>(
