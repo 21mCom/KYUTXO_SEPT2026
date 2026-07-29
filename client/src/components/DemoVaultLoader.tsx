@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { PlayCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,25 @@ import { blobChunks } from "@/lib/backup/zip-stream";
 import { isV3Manifest } from "@/lib/backup/format";
 import { runPostRestoreTxidBackfill } from "@/lib/backup/post-restore-backfill";
 import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
+import { getElectronAPISafe } from "@/lib/electron";
+
+// Stream the on-disk demo vault zip out of the Electron main process in
+// sequential fixed-size chunks. Called twice per load (manifest peek, then the
+// real restore), so it must be a fresh iterable each time — hence a generator.
+async function* electronDemoVaultChunks(): AsyncIterable<Uint8Array> {
+  const api = getElectronAPISafe();
+  if (!api?.readDemoVault) throw new Error("Demo vault reading is not available in this build.");
+  let offset = 0;
+  for (;;) {
+    const res = await api.readDemoVault(offset);
+    if (!res.success || !res.data) {
+      throw new Error(res.error || "Could not read the demo vault file from disk.");
+    }
+    if (res.data.byteLength > 0) yield new Uint8Array(res.data);
+    offset += res.data.byteLength;
+    if (res.eof) return;
+  }
+}
 
 // One-click demo-vault loading for presenters. Shown ONLY on a truly fresh
 // vault (zero records in the database — not merely a filtered-empty view), so
@@ -27,6 +46,28 @@ export function DemoVaultLoader() {
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("");
+  // Absolute path of an on-disk demo vault detected via Electron IPC, or null
+  // when absent / on web builds (→ keep the file-picker behaviour).
+  const [electronDemoPath, setElectronDemoPath] = useState<string | null>(null);
+
+  // Electron-only: probe for kyutxo-demo-vault.zip next to the executable or
+  // in the data directory. When found, the button loads it with one click.
+  useEffect(() => {
+    const api = getElectronAPISafe();
+    if (!api?.checkDemoVault) return;
+    let cancelled = false;
+    api
+      .checkDemoVault()
+      .then((res) => {
+        if (!cancelled && res.present && res.path) setElectronDemoPath(res.path);
+      })
+      .catch(() => {
+        // Probe failure just means we fall back to the picker.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Gate on the real record count, not the page's filtered list: the demo
   // restore uses replace semantics, so it must be impossible to trigger on a
@@ -39,7 +80,12 @@ export function DemoVaultLoader() {
     // Allow re-selecting the same file after a failure.
     event.target.value = "";
     if (!file) return;
+    await runDemoRestore(() => blobChunks(file));
+  };
 
+  // Shared restore pipeline. `makeChunks` must return a FRESH byte stream each
+  // call — it is consumed twice (manifest peek, then the actual restore).
+  const runDemoRestore = async (makeChunks: () => AsyncIterable<Uint8Array>) => {
     setIsLoading(true);
     setProgress(0);
     setMessage("Reading demo vault...");
@@ -51,7 +97,7 @@ export function DemoVaultLoader() {
       // The demo vault is a standard plaintext v3 backup. Anything else
       // (legacy/encrypted/random zip) should go through the full Settings
       // restore flow, which handles passwords and legacy formats.
-      const manifestPeek = await peekManifest(blobChunks(file));
+      const manifestPeek = await peekManifest(makeChunks());
       if (!isV3Manifest(manifestPeek)) {
         toast({
           variant: "destructive",
@@ -72,7 +118,7 @@ export function DemoVaultLoader() {
       }
 
       const result = await restoreV3Backup({
-        source: blobChunks(file),
+        source: makeChunks(),
         attachmentWriter: createRestoreAttachmentWriter(),
         onProgress: (p) => {
           setProgress(p.percent);
@@ -139,7 +185,11 @@ export function DemoVaultLoader() {
       />
       <Button
         variant="outline"
-        onClick={() => fileInputRef.current?.click()}
+        onClick={() =>
+          electronDemoPath
+            ? runDemoRestore(electronDemoVaultChunks)
+            : fileInputRef.current?.click()
+        }
         disabled={isLoading}
         data-testid="button-load-demo-vault"
       >
@@ -157,8 +207,17 @@ export function DemoVaultLoader() {
         </div>
       ) : (
         <p className="text-xs text-muted-foreground text-center max-w-xs">
-          Presenting? Pick <span className="font-mono">demo/kyutxo-demo-vault.zip</span> to
-          fill this fresh vault with the demo dataset in one step.
+          {electronDemoPath ? (
+            <span data-testid="text-demo-vault-detected">
+              Demo vault found at <span className="font-mono break-all">{electronDemoPath}</span>.
+              One click fills this fresh vault with the demo dataset.
+            </span>
+          ) : (
+            <>
+              Presenting? Pick <span className="font-mono">demo/kyutxo-demo-vault.zip</span> to
+              fill this fresh vault with the demo dataset in one step.
+            </>
+          )}
         </p>
       )}
     </div>

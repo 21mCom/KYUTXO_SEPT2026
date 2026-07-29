@@ -454,6 +454,84 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     }
   });
 
+  // --- One-click demo vault (presenters) -------------------------------------
+  // The demo vault zip (kyutxo-demo-vault.zip) is intentionally NOT bundled
+  // with the app. A presenter can instead drop an on-disk copy in one of two
+  // documented locations, checked in this order:
+  //   1. Next to the executable:   <dir of the app binary>/kyutxo-demo-vault.zip
+  //   2. In the data directory:    <dataDir>/kyutxo-demo-vault.zip
+  //      (dataDir is userData in installed builds, ./kyutxo-data in portable mode)
+  // When present, the renderer's "Load demo vault" button skips the file picker
+  // and streams the zip straight through these handlers. Only this fixed
+  // filename in these two fixed locations is ever readable — no renderer-chosen
+  // paths cross the bridge.
+  const DEMO_VAULT_FILENAME = 'kyutxo-demo-vault.zip';
+  const DEMO_VAULT_CHUNK_BYTES = 4 * 1024 * 1024;
+
+  const findDemoVault = () => {
+    const candidates = [
+      path.join(path.dirname(process.execPath), DEMO_VAULT_FILENAME),
+      path.join(dataDir, DEMO_VAULT_FILENAME),
+    ];
+    for (const candidate of candidates) {
+      try {
+        const stat = fs.statSync(candidate);
+        if (stat.isFile()) {
+          return { filePath: candidate, size: stat.size };
+        }
+      } catch {
+        // Not present at this candidate — try the next.
+      }
+    }
+    return null;
+  };
+
+  // Presence probe: lets the renderer decide between one-click load (present)
+  // and the web-style file picker (absent) without reading any bytes.
+  ipcMain.handle('check-demo-vault', () => {
+    try {
+      const found = findDemoVault();
+      if (!found) return { present: false };
+      return { present: true, path: found.filePath, size: found.size };
+    } catch (error) {
+      return { present: false, error: error.message };
+    }
+  });
+
+  // Stateless chunked read: the renderer pulls sequential windows so the whole
+  // zip never has to be buffered in main-process memory. The path is
+  // re-resolved per call (cheap; chunks are 4 MB) so no open-handle state can
+  // leak if the renderer abandons a read mid-stream.
+  ipcMain.handle('read-demo-vault', async (event, { offset }) => {
+    try {
+      if (!Number.isInteger(offset) || offset < 0) {
+        return { success: false, error: 'Invalid offset' };
+      }
+      const found = findDemoVault();
+      if (!found) {
+        return { success: false, error: 'Demo vault file not found' };
+      }
+      const handle = await fs.promises.open(found.filePath, 'r');
+      try {
+        const buffer = Buffer.alloc(DEMO_VAULT_CHUNK_BYTES);
+        const { bytesRead } = await handle.read(buffer, 0, DEMO_VAULT_CHUNK_BYTES, offset);
+        // Slice to exactly the bytes read — never expose a Buffer's backing
+        // ArrayBuffer directly (pooled Buffers share it with unrelated data).
+        const data = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + bytesRead);
+        return {
+          success: true,
+          data,
+          bytesRead,
+          eof: offset + bytesRead >= found.size || bytesRead === 0,
+        };
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // --- Streaming backup writer (for export) ---------------------------------
   // The renderer streams ZIP byte-chunks straight to a user-chosen file via a
   // Node write stream, so the full archive never has to be buffered in memory.

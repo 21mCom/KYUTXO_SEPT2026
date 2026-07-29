@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteNeedsReview: (name) =>
     ipcRenderer.invoke('delete-needs-review', { name }),
 
+  // One-click demo vault: probe for an on-disk kyutxo-demo-vault.zip (next to
+  // the executable or in the data dir) and stream its bytes in fixed chunks.
+  checkDemoVault: () => ipcRenderer.invoke('check-demo-vault'),
+  readDemoVault: (offset) => ipcRenderer.invoke('read-demo-vault', { offset }),
+
   // Streaming backup writer (export): chunks go straight to disk, so the full
   // archive never has to be buffered in renderer memory.
   backupOpen: (suggestedName) => ipcRenderer.invoke('backup-open', { suggestedName }),

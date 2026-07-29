@@ -167,6 +167,23 @@ export interface EngineEnvelope<T = unknown> {
   error?: string;
 }
 
+// One-click demo vault (presenters): probe/stream an on-disk copy of
+// kyutxo-demo-vault.zip found next to the executable or in the data directory.
+export interface DemoVaultCheckResult {
+  present: boolean;
+  path?: string;
+  size?: number;
+  error?: string;
+}
+
+export interface DemoVaultReadResult {
+  success: boolean;
+  data?: ArrayBuffer;
+  bytesRead?: number;
+  eof?: boolean;
+  error?: string;
+}
+
 // One orphaned attachment file sitting in the Needs Review folder.
 export interface NeedsReviewFile {
   name: string;
@@ -213,6 +230,9 @@ interface ElectronAPI {
   backupWrite: (id: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
   backupClose: (id: string) => Promise<{ success: boolean; error?: string }>;
   backupAbort: (id: string) => Promise<{ success: boolean; error?: string }>;
+  // One-click demo vault (optional — older desktop builds lack these channels).
+  checkDemoVault?: () => Promise<DemoVaultCheckResult>;
+  readDemoVault?: (offset: number) => Promise<DemoVaultReadResult>;
   isPortableMode: () => Promise<boolean>;
   // Free/total disk space on the attachments filesystem (pre-flight restore check)
   getDiskSpace: () => Promise<{ success: boolean; freeBytes?: number; totalBytes?: number; error?: string }>;

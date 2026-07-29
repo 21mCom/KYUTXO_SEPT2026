@@ -46,6 +46,16 @@ vi.mock("@/lib/orphan-check-session", () => ({
   resetOrphanCheckGate: (...args: unknown[]) => resetOrphanCheckGate(...args),
 }));
 
+// Electron bridge: null by default (web build); per-test override drives the
+// one-click on-disk demo vault path.
+let electronAPI: {
+  checkDemoVault?: () => Promise<unknown>;
+  readDemoVault?: (offset: number) => Promise<unknown>;
+} | null = null;
+vi.mock("@/lib/electron", () => ({
+  getElectronAPISafe: () => electronAPI,
+}));
+
 import { DemoVaultLoader } from "./DemoVaultLoader";
 
 // jsdom's location.reload is non-configurable — replace window.location
@@ -55,6 +65,7 @@ const originalLocation = window.location;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  electronAPI = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   delete (window as any).location;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -132,6 +143,96 @@ describe("DemoVaultLoader", () => {
 
     await waitFor(() => expect(peekManifest).toHaveBeenCalledTimes(1));
     expect(restoreV3Backup).not.toHaveBeenCalled();
+  });
+
+  it("skips the picker and restores from IPC chunks when Electron reports an on-disk demo vault", async () => {
+    liveCount = 0;
+    const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const readDemoVault = vi.fn(async (offset: number) =>
+      offset === 0
+        ? { success: true, data: bytes, bytesRead: 4, eof: true }
+        : { success: true, data: new ArrayBuffer(0), bytesRead: 0, eof: true },
+    );
+    electronAPI = {
+      checkDemoVault: vi.fn(async () => ({
+        present: true,
+        path: "/apps/kyutxo/kyutxo-demo-vault.zip",
+        size: 4,
+      })),
+      readDemoVault,
+    };
+    peekManifest.mockImplementation(async (source: AsyncIterable<Uint8Array>) => {
+      // Drain the stream like the real peek would, proving the IPC chunk
+      // generator is actually consumed.
+      for await (const _chunk of source) {
+        // consume
+      }
+      return { formatVersion: 3, encrypted: false };
+    });
+    isV3Manifest.mockReturnValue(true);
+    restoreV3Backup.mockResolvedValue({
+      counts: { records: 4500, blockchainTransactions: 700 },
+    });
+
+    render(<DemoVaultLoader />);
+    // Detection banner replaces the pick-a-file hint.
+    await waitFor(() => expect(screen.getByTestId("text-demo-vault-detected")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("button-load-demo-vault"));
+
+    await waitFor(() => expect(restoreV3Backup).toHaveBeenCalledTimes(1));
+    // Peek consumed the IPC stream — the file picker was never involved.
+    expect(readDemoVault).toHaveBeenCalledWith(0);
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalled(), { timeout: 3000 });
+  });
+
+  it("keeps the picker when Electron reports no on-disk demo vault", async () => {
+    liveCount = 0;
+    electronAPI = {
+      checkDemoVault: vi.fn(async () => ({ present: false })),
+      readDemoVault: vi.fn(),
+    };
+
+    render(<DemoVaultLoader />);
+    await waitFor(() => expect(electronAPI!.checkDemoVault).toHaveBeenCalled());
+    expect(screen.queryByTestId("text-demo-vault-detected")).toBeNull();
+
+    // Clicking the button opens the picker instead of restoring.
+    const input = screen.getByTestId("input-demo-vault-file") as HTMLInputElement;
+    const clickSpy = vi.spyOn(input, "click");
+    fireEvent.click(screen.getByTestId("button-load-demo-vault"));
+    expect(clickSpy).toHaveBeenCalled();
+    expect(restoreV3Backup).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failed IPC chunk read and re-enables the button", async () => {
+    liveCount = 0;
+    electronAPI = {
+      checkDemoVault: vi.fn(async () => ({
+        present: true,
+        path: "/apps/kyutxo/kyutxo-demo-vault.zip",
+        size: 4,
+      })),
+      readDemoVault: vi.fn(async () => ({ success: false, error: "EACCES: permission denied" })),
+    };
+    peekManifest.mockImplementation(async (source: AsyncIterable<Uint8Array>) => {
+      for await (const _chunk of source) {
+        // consume — throws when the IPC read fails
+      }
+      return {};
+    });
+
+    render(<DemoVaultLoader />);
+    await waitFor(() => expect(screen.getByTestId("text-demo-vault-detected")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("button-load-demo-vault"));
+
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("button-load-demo-vault") as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    expect(restoreV3Backup).not.toHaveBeenCalled();
+    expect(reloadSpy).not.toHaveBeenCalled();
   });
 
   it("surfaces restore failures and re-enables the button", async () => {
