@@ -41,16 +41,18 @@ describe('analyzeDescriptorInput', () => {
     expect(res.source).toBe('bsms');
   });
 
-  it('BSMS with a single-sig wpkh descriptor fails with an actionable error (not a generic multisig error)', () => {
+  it('BSMS with a single-sig wpkh descriptor offers an Address Importer handoff (not a generic multisig error)', () => {
     const content = [
       'BSMS 1.0',
-      "wpkh([aabbccdd/84'/0'/0']xpub6DUcLc2N3S1sQxOnEkKfeq8hVkjuA5U2DSXBUvBHzeqWaKrKPn5CJZZUYtQVGh3xkGYPGZZKfLRJTM2mFf1U8h9M6FN8DlPMFqXHqcQtG7a/**)",
+      "wpkh([aabbccdd/84'/0'/0']xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8/**)",
       'No path restrictions',
       'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4',
     ].join('\n');
     const res = analyzeDescriptorInput(content, 'single.bsms');
     expect(res.ok).toBe(false);
     expect(res.source).toBe('bsms');
+    expect(res.singleSig?.scriptType).toBe('p2wpkh');
+    expect(res.singleSig?.chainType).toBe('dual-chain');
     expect(res.error).toMatch(/single-signature/i);
     expect(res.error).not.toMatch(/multisig content/i);
   });
@@ -165,5 +167,133 @@ describe('describeKeptFieldCounts', () => {
 
   it('returns no lines when nothing was kept', () => {
     expect(describeKeptFieldCounts({})).toEqual([]);
+  });
+});
+
+// ── Single-sig descriptor handling ──────────────────────────────────────────
+// Real (checksum-valid) keys: BIP32 test-vector xpub and BIP84 test-vector zpub.
+const REAL_XPUB =
+  'xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8';
+const REAL_ZPUB =
+  'zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs';
+
+import {
+  buildBulkImportHandoffUrl,
+  parseBulkImportHandoffParams,
+  singleSigTargetPrefix,
+} from './descriptor-import-utils';
+import { parseSingleSigDescriptor, parseDescriptor } from './descriptor-parser';
+
+describe('parseSingleSigDescriptor', () => {
+  it('parses wpkh with key origin, <0;1> wildcard, and checksum', () => {
+    const res = parseSingleSigDescriptor(
+      `wpkh([aabbccdd/84'/0'/0']${REAL_XPUB}/<0;1>/*)#abcd1234`,
+    );
+    expect(res.success).toBe(true);
+    expect(res.descriptor?.scriptType).toBe('p2wpkh');
+    expect(res.descriptor?.key.fingerprint).toBe('aabbccdd');
+    expect(res.descriptor?.key.derivationPath).toBe("84'/0'/0'");
+    expect(res.descriptor?.key.xpub).toBe(REAL_XPUB);
+    expect(res.descriptor?.chainType).toBe('dual-chain');
+    expect(res.descriptor?.network).toBe('mainnet');
+  });
+
+  it('parses plain pkh(xpub) without origin as receive-only when /0/*', () => {
+    const res = parseSingleSigDescriptor(`pkh(${REAL_XPUB}/0/*)`);
+    expect(res.success).toBe(true);
+    expect(res.descriptor?.scriptType).toBe('p2pkh');
+    expect(res.descriptor?.key.fingerprint).toBe('00000000');
+    expect(res.descriptor?.chainType).toBe('receive-only');
+  });
+
+  it('parses sh(wpkh(...)) as nested segwit', () => {
+    const res = parseSingleSigDescriptor(
+      `sh(wpkh([11223344/49'/0'/0']${REAL_XPUB}/0/*))#deadbeef`,
+    );
+    expect(res.success).toBe(true);
+    expect(res.descriptor?.scriptType).toBe('p2sh-p2wpkh');
+    expect(res.descriptor?.key.fingerprint).toBe('11223344');
+  });
+
+  it('parses zpub-based wpkh and BSMS /** unified wildcard as dual-chain', () => {
+    const res = parseSingleSigDescriptor(`wpkh(${REAL_ZPUB}/**)`);
+    expect(res.success).toBe(true);
+    expect(res.descriptor?.scriptType).toBe('p2wpkh');
+    expect(res.descriptor?.chainType).toBe('dual-chain');
+  });
+
+  it('rejects a malformed key with a helpful error', () => {
+    const res = parseSingleSigDescriptor('wpkh(notakey/0/*)');
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/extended public key/i);
+  });
+
+  it('rejects a checksum-invalid xpub via existing xpub validation', () => {
+    const corrupted = REAL_XPUB.slice(0, -4) + 'aaaa';
+    const res = parseSingleSigDescriptor(`wpkh(${corrupted}/0/*)`);
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/invalid/i);
+  });
+});
+
+describe('parseDescriptor single-sig integration', () => {
+  it('returns singleSig payload (success=false) for a valid wpkh descriptor', () => {
+    const res = parseDescriptor(`wpkh([aabbccdd/84'/0'/0']${REAL_XPUB}/<0;1>/*)`);
+    expect(res.success).toBe(false);
+    expect(res.singleSig?.scriptType).toBe('p2wpkh');
+    expect(res.error).toMatch(/single-signature/i);
+  });
+
+  it('analyzeDescriptorInput surfaces singleSig for raw pasted content', () => {
+    const res = analyzeDescriptorInput(`wpkh(${REAL_XPUB}/<0;1>/*)`, '');
+    expect(res.ok).toBe(false);
+    expect(res.singleSig?.scriptType).toBe('p2wpkh');
+    expect(res.singleSig?.chainType).toBe('dual-chain');
+  });
+
+  it('still errors (no singleSig) for a genuinely malformed wpkh descriptor', () => {
+    const res = analyzeDescriptorInput('wpkh(garbage)', '');
+    expect(res.ok).toBe(false);
+    expect(res.singleSig).toBeUndefined();
+    expect(res.error).toBeTruthy();
+  });
+});
+
+describe('Address Importer handoff', () => {
+  it('re-encodes the key to match the script type and round-trips via URL params', () => {
+    const parsed = parseSingleSigDescriptor(
+      `wpkh([aabbccdd/84'/0'/0']${REAL_XPUB}/<0;1>/*)`,
+    );
+    const url = buildBulkImportHandoffUrl(parsed.descriptor!);
+    expect(url.startsWith('/import?')).toBe(true);
+    const handoff = parseBulkImportHandoffParams(url.split('?')[1]);
+    expect(handoff).not.toBeNull();
+    // wpkh + xpub-prefixed key must arrive as a zpub so prefix-driven
+    // derivation produces bc1q addresses as the descriptor specifies.
+    expect(handoff!.xpub.startsWith('zpub')).toBe(true);
+    expect(handoff!.scriptType).toBe('p2wpkh');
+    expect(handoff!.chainType).toBe('dual-chain');
+    expect(handoff!.fingerprint).toBe('aabbccdd');
+    expect(handoff!.derivationPath).toBe("84'/0'/0'");
+  });
+
+  it('keeps an already-matching prefix unchanged', () => {
+    const parsed = parseSingleSigDescriptor(`wpkh(${REAL_ZPUB}/**)`);
+    const url = buildBulkImportHandoffUrl(parsed.descriptor!);
+    const handoff = parseBulkImportHandoffParams(url.split('?')[1]);
+    expect(handoff!.xpub).toBe(REAL_ZPUB);
+  });
+
+  it('singleSigTargetPrefix maps script types on both networks', () => {
+    expect(singleSigTargetPrefix('p2wpkh', 'mainnet')).toBe('zpub');
+    expect(singleSigTargetPrefix('p2wpkh', 'testnet')).toBe('vpub');
+    expect(singleSigTargetPrefix('p2sh-p2wpkh', 'mainnet')).toBe('ypub');
+    expect(singleSigTargetPrefix('p2pkh', 'testnet')).toBe('tpub');
+  });
+
+  it('parseBulkImportHandoffParams ignores unrelated query strings', () => {
+    expect(parseBulkImportHandoffParams('')).toBeNull();
+    expect(parseBulkImportHandoffParams('?foo=bar')).toBeNull();
+    expect(parseBulkImportHandoffParams('?source=descriptor')).toBeNull();
   });
 });

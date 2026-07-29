@@ -19,7 +19,7 @@
 //      "Some existing metadata was kept" alert appears — proving both that
 //      the first import persisted the owner AND that merges are no longer
 //      silent.
-//   6. Pastes a single-sig wpkh BSMS and asserts the actionable error.
+//   6. Pastes a single-sig wpkh BSMS and asserts the Address Importer handoff panel.
 //
 // Usage: node scripts/check-descriptor-bsms-import-browser.mjs
 // Requires: `chromium` on PATH (Nix) and `playwright-core`.
@@ -333,32 +333,32 @@ async function runSession(exe, steps) {
       round: 2,
     });
 
-    // ── Single-sig BSMS produces an actionable error, not a dead end ────
+    // ── Single-sig BSMS is recognized and offers an Address Importer handoff ──
     await page.getByTestId('button-import-another').click();
     const textarea = page.getByTestId('textarea-descriptor');
     await textarea.waitFor({ state: 'visible', timeout: 30_000 });
     await textarea.fill(SINGLESIG_BSMS);
-    let errText = '';
+    let handoffOk = false;
+    let handoffDetail = '';
     try {
-      const alert = page.getByText('Parse Error');
-      await alert.waitFor({ state: 'visible', timeout: 10_000 });
-      errText =
-        (await page
-          .locator('[role="alert"], .text-destructive, [data-testid], div')
-          .filter({ hasText: 'single-signature' })
-          .first()
-          .textContent()
-          .catch(() => '')) || '';
-      if (!errText) errText = (await page.textContent('body')) || '';
-    } catch {
-      errText = (await page.textContent('body').catch(() => '')) || '';
+      const panel = page.getByTestId('alert-singlesig-handoff');
+      await panel.waitFor({ state: 'visible', timeout: 10_000 });
+      const panelText = (await panel.textContent()) || '';
+      const buttonVisible = await page
+        .getByTestId('button-continue-address-importer')
+        .isVisible()
+        .catch(() => false);
+      handoffOk = buttonVisible && /Single-Signature Descriptor Recognized/i.test(panelText);
+      handoffDetail = handoffOk
+        ? 'handoff panel + Continue in Address Importer button shown'
+        : `panel text or button missing (button=${buttonVisible}, len=${panelText.length})`;
+    } catch (e) {
+      handoffDetail = `handoff panel did not appear: ${e && e.message}`;
     }
     steps.push({
-      name: 'single-sig wpkh BSMS shows an actionable parse error',
-      passed: /single-signature/i.test(errText),
-      detail: /single-signature/i.test(errText)
-        ? 'error mentions single-signature guidance'
-        : `body did not contain guidance (len=${errText.length})`,
+      name: 'single-sig wpkh BSMS offers Address Importer handoff (no dead-end error)',
+      passed: handoffOk,
+      detail: handoffDetail,
     });
   } finally {
     await browser.close().catch(() => {});

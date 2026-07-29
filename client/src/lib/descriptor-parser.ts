@@ -1,4 +1,4 @@
-import { MultisigScriptType, MultisigXpubEntry, DescriptorScriptType } from './xpub';
+import { MultisigScriptType, MultisigXpubEntry, DescriptorScriptType, validateExtendedPublicKey } from './xpub';
 
 export interface DescriptorKey {
   fingerprint: string;
@@ -32,7 +32,96 @@ export interface SparrowExport {
 export interface DescriptorParseResult {
   success: boolean;
   descriptor?: ParsedDescriptor;
+  /**
+   * Set when the input is a recognized, valid single-signature descriptor
+   * (wpkh/pkh/sh(wpkh)). The multisig/taproot import flow cannot save these
+   * (success stays false), but the UI can offer an Address Importer handoff
+   * with the extracted key and settings prefilled.
+   */
+  singleSig?: ParsedSingleSigDescriptor;
   error?: string;
+}
+
+export type SingleSigScriptType = 'p2wpkh' | 'p2pkh' | 'p2sh-p2wpkh';
+
+export interface ParsedSingleSigDescriptor {
+  scriptType: SingleSigScriptType;
+  key: DescriptorKey;
+  network: 'mainnet' | 'testnet';
+  chainType: DescriptorChainType;
+  rawDescriptor: string;
+}
+
+export interface SingleSigParseResult {
+  success: boolean;
+  descriptor?: ParsedSingleSigDescriptor;
+  error?: string;
+}
+
+/**
+ * Parses a single-signature descriptor: wpkh(KEY), pkh(KEY), or sh(wpkh(KEY)).
+ * KEY may carry an optional [fingerprint/path] origin, an optional checksum
+ * suffix, and receive/change chain paths including the <0;1> wildcard or the
+ * BSMS /** unified wildcard. The extracted extended key is validated with the
+ * same validation the Address Importer uses.
+ */
+export function parseSingleSigDescriptor(descriptorInput: string): SingleSigParseResult {
+  const raw = descriptorInput.trim();
+  const clean = removeChecksum(raw).trim();
+
+  let scriptType: SingleSigScriptType | null = null;
+  let inner: string | null = null;
+
+  const shWpkhMatch = clean.match(/^sh\(\s*wpkh\(\s*([^()]+?)\s*\)\s*\)$/i);
+  const wpkhMatch = clean.match(/^wpkh\(\s*([^()]+?)\s*\)$/i);
+  const pkhMatch = clean.match(/^pkh\(\s*([^()]+?)\s*\)$/i);
+
+  if (shWpkhMatch) {
+    scriptType = 'p2sh-p2wpkh';
+    inner = shWpkhMatch[1];
+  } else if (wpkhMatch) {
+    scriptType = 'p2wpkh';
+    inner = wpkhMatch[1];
+  } else if (pkhMatch) {
+    scriptType = 'p2pkh';
+    inner = pkhMatch[1];
+  }
+
+  if (!scriptType || !inner) {
+    return {
+      success: false,
+      error:
+        'Could not parse single-sig descriptor. Expected format: wpkh([fingerprint/path]xpub/<0;1>/*), pkh(...), or sh(wpkh(...))',
+    };
+  }
+
+  const key = parseKeyExpression(inner);
+  if (!key) {
+    return {
+      success: false,
+      error:
+        'Could not extract an extended public key from this single-sig descriptor. Expected an xpub/ypub/zpub-style key, optionally with a [fingerprint/path] origin.',
+    };
+  }
+
+  const validation = validateExtendedPublicKey(key.xpub);
+  if (!validation.valid) {
+    return {
+      success: false,
+      error: `The extended public key in this descriptor is invalid: ${validation.error || 'unknown validation error'}`,
+    };
+  }
+
+  return {
+    success: true,
+    descriptor: {
+      scriptType,
+      key,
+      network: detectNetwork(key.xpub),
+      chainType: detectChainType(key.rawChainPath),
+      rawDescriptor: raw,
+    },
+  };
 }
 
 const XPUB_PREFIXES_MAINNET = ['xpub', 'ypub', 'zpub', 'Xpub', 'Ypub', 'Zpub'];
@@ -266,14 +355,22 @@ export function parseDescriptor(descriptorInput: string): DescriptorParseResult 
       return { success: false, error: 'Descriptor is empty' };
     }
     
-    // Single-sig descriptors (wpkh/pkh, incl. sh(wpkh(...))) are not handled
-    // by this multisig/taproot importer. Fail with a clear pointer instead of
-    // the confusing generic "could not parse multisig content" error.
+    // Single-sig descriptors (wpkh/pkh, incl. sh(wpkh(...))) can't be saved by
+    // this multisig/taproot flow, but we parse them fully so the UI can hand
+    // the user off to the Address Importer with everything prefilled.
     if (/^(sh\s*\(\s*)?w?pkh\s*\(/i.test(descriptor)) {
+      const single = parseSingleSigDescriptor(descriptor);
+      if (single.success && single.descriptor) {
+        return {
+          success: false,
+          singleSig: single.descriptor,
+          error:
+            'This is a single-signature (wpkh/pkh) descriptor. Use "Continue in Address Importer" to import it with the extracted key and settings prefilled.',
+        };
+      }
       return {
         success: false,
-        error:
-          'This is a single-signature (wpkh/pkh) descriptor. Descriptor Import supports multisig and taproot descriptors — for single-sig wallets, import the xpub via the Address Importer instead.',
+        error: single.error || 'Could not parse single-sig descriptor.',
       };
     }
 

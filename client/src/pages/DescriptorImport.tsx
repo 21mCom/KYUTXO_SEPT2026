@@ -85,7 +85,9 @@ import {
 import {
   analyzeDescriptorInput,
   describeKeptFieldCounts,
+  buildBulkImportHandoffUrl,
 } from "@/lib/descriptor-import-utils";
+import type { ParsedSingleSigDescriptor } from "@/lib/descriptor-parser";
 import { SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
 import { useDropzone } from "react-dropzone";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -108,6 +110,8 @@ export default function DescriptorImport() {
   const [descriptorInput, setDescriptorInput] = useState("");
   const [parsedDescriptor, setParsedDescriptor] = useState<ParsedDescriptor | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
+  /** Set when the input is a valid single-sig descriptor — offer an Address Importer handoff. */
+  const [singleSigHandoff, setSingleSigHandoff] = useState<ParsedSingleSigDescriptor | null>(null);
   const [walletLabel, setWalletLabel] = useState("");
   const [bsmsFirstAddress, setBsmsFirstAddress] = useState<string | null>(null);
   
@@ -237,6 +241,7 @@ export default function DescriptorImport() {
       if (analysis.ok && analysis.descriptor) {
         setParsedDescriptor(analysis.descriptor);
         setParseError(null);
+        setSingleSigHandoff(null);
         if (analysis.suggestedSoftware) {
           setWalletSoftware(analysis.suggestedSoftware);
         }
@@ -247,8 +252,17 @@ export default function DescriptorImport() {
           title: analysis.source === 'bsms' ? "BSMS file loaded" : "Descriptor loaded",
           description: `${getDescriptorSummary(analysis.descriptor)}${analysis.firstAddress ? ` (will verify first address)` : ''}`,
         });
+      } else if (analysis.singleSig) {
+        setParsedDescriptor(null);
+        setParseError(null);
+        setSingleSigHandoff(analysis.singleSig);
+        toast({
+          title: "Single-sig descriptor recognized",
+          description: "Continue in the Address Importer to derive and save addresses with the extracted key.",
+        });
       } else {
         setParsedDescriptor(null);
+        setSingleSigHandoff(null);
         setParseError(analysis.error || "Could not parse file");
         toast({
           title: analysis.source === 'bsms' ? "BSMS parse error" : "Parse error",
@@ -293,6 +307,7 @@ export default function DescriptorImport() {
     if (!value.trim()) {
       setParsedDescriptor(null);
       setParseError(null);
+      setSingleSigHandoff(null);
       return;
     }
     
@@ -306,11 +321,17 @@ export default function DescriptorImport() {
     if (analysis.ok && analysis.descriptor) {
       setParsedDescriptor(analysis.descriptor);
       setParseError(null);
+      setSingleSigHandoff(null);
       if (analysis.suggestedSoftware) {
         setWalletSoftware(analysis.suggestedSoftware);
       }
+    } else if (analysis.singleSig) {
+      setParsedDescriptor(null);
+      setParseError(null);
+      setSingleSigHandoff(analysis.singleSig);
     } else {
       setParsedDescriptor(null);
+      setSingleSigHandoff(null);
       setParseError(analysis.error || "Unknown parse error");
     }
   };
@@ -768,6 +789,49 @@ export default function DescriptorImport() {
                 </Alert>
               )}
               
+              {singleSigHandoff && (
+                <Alert data-testid="alert-singlesig-handoff">
+                  <CheckCircle className="h-4 w-4 text-green-600" />
+                  <AlertTitle>Single-Signature Descriptor Recognized</AlertTitle>
+                  <AlertDescription>
+                    <div className="mt-2 space-y-1">
+                      <p>
+                        <strong>Script Type:</strong>{' '}
+                        {singleSigHandoff.scriptType === 'p2wpkh' && 'Native SegWit (bc1q...)'}
+                        {singleSigHandoff.scriptType === 'p2sh-p2wpkh' && 'Nested SegWit (3...)'}
+                        {singleSigHandoff.scriptType === 'p2pkh' && 'Legacy (1...)'}
+                      </p>
+                      {singleSigHandoff.key.fingerprint !== '00000000' && (
+                        <p><strong>Fingerprint:</strong> <span className="font-mono">{singleSigHandoff.key.fingerprint}</span></p>
+                      )}
+                      {singleSigHandoff.key.derivationPath && (
+                        <p><strong>Origin Path:</strong> <span className="font-mono">m/{singleSigHandoff.key.derivationPath}</span></p>
+                      )}
+                      <p>
+                        <strong>Chains:</strong>{' '}
+                        {singleSigHandoff.chainType === 'dual-chain' && 'Receive + change'}
+                        {singleSigHandoff.chainType === 'receive-only' && 'Receive only'}
+                        {singleSigHandoff.chainType === 'change-only' && 'Change only'}
+                      </p>
+                      <p><strong>Network:</strong> {singleSigHandoff.network}</p>
+                      <p className="font-mono text-xs truncate">{singleSigHandoff.key.xpub.substring(0, 24)}...</p>
+                    </div>
+                    <p className="mt-3">
+                      Single-signature wallets are imported through the Address Importer.
+                      Continue there with the extracted key and settings prefilled.
+                    </p>
+                    <Button
+                      className="mt-3"
+                      onClick={() => navigate(buildBulkImportHandoffUrl(singleSigHandoff))}
+                      data-testid="button-continue-address-importer"
+                    >
+                      Continue in Address Importer
+                      <ChevronRight className="h-4 w-4 ml-2" />
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+
               {parsedDescriptor && (
                 <Alert>
                   <CheckCircle className="h-4 w-4 text-green-600" />

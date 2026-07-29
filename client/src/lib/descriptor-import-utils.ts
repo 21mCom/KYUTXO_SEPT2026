@@ -19,7 +19,11 @@ import {
   parseDescriptor,
   parseSparrowExport,
   type ParsedDescriptor,
+  type ParsedSingleSigDescriptor,
+  type SingleSigScriptType,
+  type DescriptorChainType,
 } from './descriptor-parser';
+import { convertExtendedKeyPrefix, type XpubPrefix } from './xpub';
 
 export type DescriptorInputSource = 'bsms' | 'sparrow' | 'raw';
 
@@ -36,6 +40,12 @@ export interface DescriptorInputAnalysis {
   walletLabel?: string;
   /** Wallet software to preselect (e.g. Nunchuk for BSMS) */
   suggestedSoftware?: string;
+  /**
+   * Set when the input is a valid single-sig descriptor (wpkh/pkh/sh(wpkh)).
+   * ok stays false — this flow can't save single-sig — but the UI should
+   * offer an Address Importer handoff instead of a dead-end error.
+   */
+  singleSig?: ParsedSingleSigDescriptor;
   error?: string;
 }
 
@@ -64,6 +74,7 @@ export function analyzeDescriptorInput(
         source: 'bsms',
         rawDescriptor: bsms.descriptor,
         firstAddress: bsms.firstAddress,
+        singleSig: parsed.singleSig,
         error: `The BSMS file was read, but its descriptor could not be parsed: ${parsed.error || 'unknown parse error'}`,
       };
     }
@@ -85,6 +96,7 @@ export function analyzeDescriptorInput(
         ok: false,
         source: 'raw',
         rawDescriptor: trimmed,
+        singleSig: parsed.singleSig,
         error: parsed.error || 'Unknown parse error',
       };
     }
@@ -105,6 +117,7 @@ export function analyzeDescriptorInput(
         source: 'sparrow',
         rawDescriptor: sparrow.export.descriptor,
         walletLabel: sparrow.export.label,
+        singleSig: parsed.singleSig,
         error: parsed.error || 'Unknown parse error',
       };
     }
@@ -123,6 +136,72 @@ export function analyzeDescriptorInput(
     error:
       sparrow.error ||
       'Could not find a descriptor in this JSON file. Expected a Sparrow wallet export with a "descriptor" field.',
+  };
+}
+
+// ── Single-sig → Address Importer handoff ──────────────────────────────────
+
+/**
+ * The SLIP-132 prefix whose derivation produces the script type the
+ * descriptor specified (prefix drives address type in the Address Importer).
+ */
+export function singleSigTargetPrefix(
+  scriptType: SingleSigScriptType,
+  network: 'mainnet' | 'testnet',
+): XpubPrefix {
+  if (scriptType === 'p2wpkh') return network === 'testnet' ? 'vpub' : 'zpub';
+  if (scriptType === 'p2sh-p2wpkh') return network === 'testnet' ? 'upub' : 'ypub';
+  return network === 'testnet' ? 'tpub' : 'xpub';
+}
+
+export interface BulkImportHandoff {
+  xpub: string;
+  scriptType: SingleSigScriptType;
+  chainType: DescriptorChainType;
+  fingerprint?: string;
+  derivationPath?: string;
+}
+
+/**
+ * Builds the Address Importer URL for a parsed single-sig descriptor. The key
+ * is re-encoded under the prefix matching the descriptor's script type so the
+ * derived addresses match what the descriptor specifies.
+ */
+export function buildBulkImportHandoffUrl(descriptor: ParsedSingleSigDescriptor): string {
+  const targetPrefix = singleSigTargetPrefix(descriptor.scriptType, descriptor.network);
+  const xpub = convertExtendedKeyPrefix(descriptor.key.xpub, targetPrefix);
+  const params = new URLSearchParams();
+  params.set('source', 'descriptor');
+  params.set('xpub', xpub);
+  params.set('scriptType', descriptor.scriptType);
+  params.set('chains', descriptor.chainType);
+  if (descriptor.key.fingerprint && descriptor.key.fingerprint !== '00000000') {
+    params.set('fingerprint', descriptor.key.fingerprint);
+  }
+  if (descriptor.key.derivationPath) {
+    params.set('path', descriptor.key.derivationPath);
+  }
+  return `/import?${params.toString()}`;
+}
+
+/** Parses the handoff query params on the Address Importer side. */
+export function parseBulkImportHandoffParams(search: string): BulkImportHandoff | null {
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  if (params.get('source') !== 'descriptor') return null;
+  const xpub = (params.get('xpub') || '').trim();
+  if (!xpub) return null;
+  const scriptTypeRaw = params.get('scriptType');
+  const scriptType: SingleSigScriptType =
+    scriptTypeRaw === 'p2pkh' || scriptTypeRaw === 'p2sh-p2wpkh' ? scriptTypeRaw : 'p2wpkh';
+  const chainsRaw = params.get('chains');
+  const chainType: DescriptorChainType =
+    chainsRaw === 'receive-only' || chainsRaw === 'change-only' ? chainsRaw : 'dual-chain';
+  return {
+    xpub,
+    scriptType,
+    chainType,
+    fingerprint: params.get('fingerprint') || undefined,
+    derivationPath: params.get('path') || undefined,
   };
 }
 

@@ -54,6 +54,7 @@ import SavedTemplatesDialog from "./bulk-import/SavedTemplatesDialog";
 import type { DerivationTemplate } from "@/lib/database";
 import AddressPreviewTable from "./bulk-import/AddressPreviewTable";
 import MetadataForm from "./bulk-import/MetadataForm";
+import { parseBulkImportHandoffParams } from "@/lib/descriptor-import-utils";
 
 export default function BulkImport() {
   const [, navigate] = useLocation();
@@ -170,6 +171,24 @@ export default function BulkImport() {
       setValidationError(error instanceof Error ? error.message : 'Failed to analyze key');
       setXpubInfo(null);
     }
+  }, []);
+
+  // Prefill from a Descriptor Import handoff (?source=descriptor&xpub=...).
+  // The key arrives already re-encoded under the prefix matching the
+  // descriptor's script type, so prefix-driven derivation matches it.
+  useEffect(() => {
+    const handoff = parseBulkImportHandoffParams(window.location.search);
+    if (!handoff) return;
+    setIsMultisigMode(false);
+    setXpub(handoff.xpub);
+    const details: string[] = [];
+    if (handoff.fingerprint) details.push(`fingerprint ${handoff.fingerprint}`);
+    if (handoff.derivationPath) details.push(`origin path m/${handoff.derivationPath}`);
+    toast({
+      title: "Prefilled from descriptor",
+      description: `Extended key and script type were taken from your single-sig descriptor${details.length ? ` (${details.join(', ')})` : ''}. ${handoff.chainType === 'receive-only' ? 'The descriptor covers the receive chain only.' : handoff.chainType === 'change-only' ? 'The descriptor covers the change chain only.' : 'The descriptor covers receive and change chains.'}`,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

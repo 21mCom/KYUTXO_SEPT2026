@@ -690,6 +690,23 @@ export function validateExtendedPublicKey(key: string): { valid: boolean; type?:
   }
 }
 
+/**
+ * Re-encodes an extended public key under a different SLIP-132 version prefix
+ * (e.g. xpub → zpub) so downstream prefix-driven derivation produces the
+ * script type a descriptor specified. Key material is unchanged.
+ */
+export function convertExtendedKeyPrefix(extendedKey: string, targetPrefix: XpubPrefix): string {
+  const trimmed = extendedKey.trim();
+  if (trimmed.startsWith(targetPrefix)) return trimmed;
+  const decoded = bs58check.decode(trimmed);
+  if (decoded.length !== 78) {
+    throw new Error('Invalid extended key length');
+  }
+  const data = new Uint8Array(decoded);
+  writeUInt32BE(data, XPUB_VERSIONS[targetPrefix], 0);
+  return bs58check.encode(data);
+}
+
 export function getBipDescription(bip: BipStandard): string {
   switch (bip) {
     case 'BIP44':
