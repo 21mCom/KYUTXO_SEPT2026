@@ -203,6 +203,10 @@ args = "utxo-resync-affected-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "electrum-spend-discovery-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "descriptor-import-scroll-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -212,6 +216,17 @@ args = "calendar-dropdown-caption-node-check"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "descriptor-singlesig-handoff-browser-check"
+
+[[workflows.workflow]]
+name = "electrum-spend-discovery-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/record-queries.outpointSpendDiscovery.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
 
 [[workflows.workflow]]
 name = "saved-template-derive-browser-check"

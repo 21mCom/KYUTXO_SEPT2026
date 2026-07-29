@@ -50,10 +50,12 @@ export async function runAmlScreening(addresses: string[]): Promise<AmlScreening
     });
   }
 
-  const { getParticipantsByAddresses } = await import("@/lib/data/record-queries");
+  const { getParticipantsByAddressesWithOutpointSpends } = await import("@/lib/data/record-queries");
   const { getParticipantsByTxids } = await import("@/lib/data/transaction-crud");
 
-  const ownParticipants = await getParticipantsByAddresses(addresses);
+  // Includes spend txs reachable only via blank-address (Electrum-synced)
+  // outpoint inputs, which a pure address-keyed load would miss.
+  const ownParticipants = await getParticipantsByAddressesWithOutpointSpends(addresses);
 
   if (ownParticipants.length === 0) {
     return {
@@ -95,6 +97,29 @@ export async function runAmlScreening(addresses: string[]): Promise<AmlScreening
     const list = txidToParticipants.get(p.txid);
     if (list) list.push(p);
     else txidToParticipants.set(p.txid, [p]);
+  }
+
+  // Electrum-synced spend inputs carry a BLANK address (only
+  // prevTxid/prevVout), so they contribute no address→txid edge above. Link
+  // each such spend tx to the address that owns the spent output so the hop
+  // walk can traverse through it; otherwise a spend tx whose only link to an
+  // owned address is a blank-address input is unreachable in the graph.
+  const outpointOwner = new Map<string, string>();
+  for (const p of allParts) {
+    if (p.role === "output" && p.address && p.vout !== undefined && p.vout !== null) {
+      outpointOwner.set(`${p.txid}:${p.vout}`, p.address);
+    }
+  }
+  for (const p of allParts) {
+    if (p.role !== "input" || p.address || p.prevTxid === undefined) continue;
+    const owner = outpointOwner.get(`${p.prevTxid}:${p.prevVout}`);
+    if (!owner) continue;
+    const list = addressToTxids.get(owner);
+    if (list) {
+      if (!list.includes(p.txid)) list.push(p.txid);
+    } else {
+      addressToTxids.set(owner, [p.txid]);
+    }
   }
 
   const graphAddresses = Array.from(addressToTxids.keys());

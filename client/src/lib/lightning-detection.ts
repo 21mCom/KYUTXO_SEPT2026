@@ -1,5 +1,5 @@
 import { db, BlockchainTransaction, TransactionParticipant, Record } from './database';
-import { getParticipantsByTxid, getParticipantsByAddresses } from './dataFacade';
+import { getParticipantsByTxid, getParticipantsByAddressesWithOutpointSpends } from './dataFacade';
 
 // Lightning Channel Classification Types
 export type LightningClassification = 
@@ -535,7 +535,9 @@ export async function scanForLightningActivity(
   // Find all transactions involving these addresses
   let participants: TransactionParticipant[];
   if (filteredAddresses.size > 0) {
-    participants = await getParticipantsByAddresses(Array.from(filteredAddresses), signal);
+    // Includes spend txs reachable only via blank-address (Electrum-synced)
+    // outpoint inputs, which a pure address-keyed load would miss.
+    participants = await getParticipantsByAddressesWithOutpointSpends(Array.from(filteredAddresses), signal);
   } else {
     participants = [];
   }

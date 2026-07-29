@@ -71,6 +71,42 @@ export async function getSpendInputsByOutpoints(
   return results;
 }
 
+/**
+ * Address-keyed participant load PLUS blank-address outpoint spend inputs.
+ *
+ * Electrum-synced spend inputs are stored with a blank address (only
+ * prevTxid/prevVout), so `getParticipantsByAddresses` alone misses spend
+ * transactions whose only link to an owned address is such an input. This
+ * helper follows up with an outpoint-keyed load for inputs spending the
+ * owned outputs found in the first pass and merges the missing rows in
+ * (deduped by participant id), so tx-set discovery (AML screening,
+ * Lightning detection, ...) sees those spends too.
+ */
+export async function getParticipantsByAddressesWithOutpointSpends(
+  addresses: string[],
+  signal?: AbortSignal,
+): Promise<TransactionParticipant[]> {
+  const participants = await getParticipantsByAddresses(addresses, signal);
+  if (participants.length === 0) return participants;
+
+  const seenIds = new Set<number>();
+  const ownedOutpoints: Array<[string, number]> = [];
+  for (const p of participants) {
+    if (p.id !== undefined) seenIds.add(p.id);
+    if (p.role === 'output' && p.vout !== undefined && p.vout !== null) {
+      ownedOutpoints.push([p.txid, p.vout]);
+    }
+  }
+
+  const spendInputs = await getSpendInputsByOutpoints(ownedOutpoints, signal);
+  for (const p of spendInputs) {
+    if (p.id !== undefined && seenIds.has(p.id)) continue;
+    if (p.id !== undefined) seenIds.add(p.id);
+    participants.push(p);
+  }
+  return participants;
+}
+
 export async function getParticipantsByRecordId(recordId: number): Promise<TransactionParticipant[]> {
   return db.transactionParticipants.where('recordId').equals(recordId).toArray();
 }
