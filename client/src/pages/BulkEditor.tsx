@@ -396,6 +396,12 @@ function VirtualizedConfirmationTable({
                   } else if (action.type === 'remove' && Array.isArray(currentValue)) {
                     const arr = (currentValue as string[]).filter(v => v !== action.value);
                     newValue = arr.join(', ') || '(empty)';
+                  } else if (action.type === 'append' && !Array.isArray(currentValue)) {
+                    const existing = (currentValue as string) || '';
+                    newValue = (existing ? existing + '\n' + action.value : action.value) || '(empty)';
+                  } else if (action.type === 'prepend' && !Array.isArray(currentValue)) {
+                    const existing = (currentValue as string) || '';
+                    newValue = (existing ? action.value + '\n' + existing : action.value) || '(empty)';
                   }
                   
                   const changed = displayCurrent !== newValue;
@@ -662,6 +668,16 @@ export default function BulkEditor() {
                   break;
                 case 'clear':
                   (updates as any)[action.field] = '';
+                  break;
+                case 'append':
+                  (updates as any)[action.field] = currentValue
+                    ? currentValue + '\n' + action.value
+                    : action.value;
+                  break;
+                case 'prepend':
+                  (updates as any)[action.field] = currentValue
+                    ? action.value + '\n' + currentValue
+                    : action.value;
                   break;
                 default:
                   (updates as any)[action.field] = currentValue;
@@ -1235,6 +1251,9 @@ export default function BulkEditor() {
                 if (at.value === 'add' || at.value === 'remove') {
                   return isArrayField;
                 }
+                if (at.value === 'append' || at.value === 'prepend') {
+                  return fieldDef?.type === 'text';
+                }
                 return true;
               });
               
@@ -1246,9 +1265,11 @@ export default function BulkEditor() {
                       const newFieldDef = FIELD_DEFS.find(f => f.key === v);
                       const newIsArray = newFieldDef?.type === 'array';
                       let newType = action.type;
-                      if (newIsArray && (action.type === 'set' || action.type === 'clear')) {
+                      if (newIsArray && (action.type === 'set' || action.type === 'clear' || action.type === 'append' || action.type === 'prepend')) {
                         newType = 'add';
                       } else if (!newIsArray && (action.type === 'add' || action.type === 'remove')) {
+                        newType = 'set';
+                      } else if (newFieldDef?.type !== 'text' && (action.type === 'append' || action.type === 'prepend')) {
                         newType = 'set';
                       }
                       updateAction(action.id, { field: v as keyof Record, type: newType });

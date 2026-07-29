@@ -70,10 +70,12 @@ const OPERATORS: { value: Operator; label: string; needsValue: boolean }[] = [
   { value: 'is_not_empty', label: 'is not empty', needsValue: false },
 ];
 
-type ActionType = 'set' | 'add' | 'remove' | 'clear' | 'attach_file';
+type ActionType = 'set' | 'add' | 'remove' | 'clear' | 'append' | 'prepend' | 'attach_file';
 
 const ACTION_TYPES: { value: ActionType; label: string; description: string }[] = [
   { value: 'set', label: 'Set', description: 'Replace the value' },
+  { value: 'append', label: 'Append', description: 'Append to end of existing text' },
+  { value: 'prepend', label: 'Prepend', description: 'Prepend to start of existing text' },
   { value: 'add', label: 'Add', description: 'Add to array (tags/categories)' },
   { value: 'remove', label: 'Remove', description: 'Remove from array (tags/categories)' },
   { value: 'clear', label: 'Clear', description: 'Set to empty' },
