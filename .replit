@@ -169,6 +169,10 @@ args = "browser-check-lock-guard"
 task = "workflow.run"
 args = "saved-template-derive-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bulk-editor-notes-append-browser-check"
+
 [[workflows.workflow]]
 name = "saved-template-derive-browser-check"
 author = "agent"
@@ -558,3 +562,14 @@ integrations = ["javascript_object_storage:1.0.0"]
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000
+
+[[workflows.workflow]]
+name = "bulk-editor-notes-append-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bulk-editor-notes-append-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
