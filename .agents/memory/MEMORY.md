@@ -54,4 +54,5 @@
 - [Curated-tier balance surfaces](curated-tier-balance-surfaces.md) — cached-stats aggregations must ALLOWLIST curated tiers; discovered counterparty rows inherit walletName + stamped stats and inflate totals; import helpers from db-types not database.
 - [Bulk-import vocabulary ensure*](bulk-import-vocabulary-ensure.md) — strict create* after a record loop always throws "already exists" (loop auto-syncs vocab); use ensure*, keep vocab non-fatal, verify counts vs DB.
 - [Theme-toggle transition lag](browser-theme-toggle-transition.md) — after toggling .dark, wait out transition-colors before getComputedStyle or you read the OLD theme's color.
+- [Vitest fork teardown timeout](vitest-fork-teardown-timeout.md) — green runs exiting 1 with "Timeout terminating forks worker" = load-slow shutdown, not leaks; raise teardownTimeout after hanging-process check.
 - [Electrum txid confirmations](electrum-txid-confirmations.md) — verbose tx.get has confirmations but NO height; derive tip−conf+1 via cached tip; never cache unconfirmed conversions in session caches.
