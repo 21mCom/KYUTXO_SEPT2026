@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, LibraryBig } from "lucide-react";
+import { Loader2, LibraryBig, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -9,7 +9,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { getAllDerivationTemplates } from "@/lib/data/derivation-templates-crud";
+import {
+  getAllDerivationTemplates,
+  deleteDerivationTemplate,
+} from "@/lib/data/derivation-templates-crud";
 import type { DerivationTemplate } from "@/lib/database";
 
 interface SavedTemplatesDialogProps {
@@ -25,12 +28,31 @@ export default function SavedTemplatesDialog({
 }: SavedTemplatesDialogProps) {
   const [templates, setTemplates] = useState<DerivationTemplate[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleDelete = async (id: number) => {
+    setDeletingId(id);
+    setDeleteError(null);
+    try {
+      await deleteDerivationTemplate(id);
+      const rows = await getAllDerivationTemplates();
+      setTemplates([...rows].sort((a, b) => b.createdAt - a.createdAt));
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error ? error.message : "Failed to delete template"
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setTemplates(null);
     setLoadError(null);
+    setDeleteError(null);
     getAllDerivationTemplates()
       .then((rows) => {
         if (cancelled) return;
@@ -65,6 +87,12 @@ export default function SavedTemplatesDialog({
         {loadError && (
           <p className="text-sm text-destructive" data-testid="text-templates-error">
             {loadError}
+          </p>
+        )}
+
+        {deleteError && (
+          <p className="text-sm text-destructive" data-testid="text-template-delete-error">
+            {deleteError}
           </p>
         )}
 
@@ -104,14 +132,31 @@ export default function SavedTemplatesDialog({
                         {hasXpub ? ` · ${t.xpub!.substring(0, 16)}…` : ""}
                       </p>
                     </div>
-                    <Button
-                      size="sm"
-                      disabled={!hasXpub}
-                      onClick={() => onApply(t)}
-                      data-testid={`button-use-template-${t.id}`}
-                    >
-                      Use
-                    </Button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Button
+                        size="sm"
+                        disabled={!hasXpub}
+                        onClick={() => onApply(t)}
+                        data-testid={`button-use-template-${t.id}`}
+                      >
+                        Use
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        disabled={deletingId !== null}
+                        onClick={() => handleDelete(t.id!)}
+                        aria-label="Delete template"
+                        data-testid={`button-delete-template-${t.id}`}
+                      >
+                        {deletingId === t.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     <Badge variant="secondary">{t.scriptType}</Badge>

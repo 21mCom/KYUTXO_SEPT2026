@@ -29,6 +29,17 @@ export async function addDerivationTemplate(
   return id as number;
 }
 
+export async function deleteDerivationTemplate(
+  id: number,
+  options?: DerivationTemplateWriteOptions
+): Promise<void> {
+  await db.derivationTemplates.delete(id);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('derivationTemplates');
+  }
+}
+
 export async function clearDerivationTemplates(
   options?: DerivationTemplateWriteOptions
 ): Promise<void> {
