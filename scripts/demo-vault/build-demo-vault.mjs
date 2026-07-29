@@ -458,6 +458,100 @@ async function main() {
     }
   }
 
+  // 5b) chain adoption: adopt address chains where owned withdrawal outputs
+  //     are re-spent, so custody segments get 3+ internal owned->owned hops.
+  //     For each owned funding output, follow its spend; adopt the recipient
+  //     (if sane), fetch its history, and repeat up to CHAIN_DEPTH times.
+  const CHAIN_DEPTH = 3;
+  const CHAIN_TARGET = 3; // build at least this many deep chains
+  const CHAIN_ADOPT_CAP = 12;
+  {
+    // Spend txs must survive the assembly-phase size cap (addTx drops txs
+    // with > 400 participants even when they touch owned addresses),
+    // otherwise the custody walk can't follow them.
+    const txSmallEnough = (t) => t.vin.length + t.vout.length <= 400;
+    const findSpendingTx = (history, txid, vout) => {
+      const t = (history || []).find((t) =>
+        t.vin.some((v) => v.txid === txid && v.vout === vout),
+      );
+      return t && txSmallEnough(t) ? t : null;
+    };
+    const chainExclude = () => new Set([...ownedSet(), ...entities.keys()]);
+    let chainsBuilt = 0;
+    let adoptedForChains = 0;
+    const baseOwned = [...owned];
+    for (const o of baseOwned) {
+      if (chainsBuilt >= CHAIN_TARGET || adoptedForChains >= CHAIN_ADOPT_CAP) break;
+      const history = txsByOwned.get(o.addr) || [];
+      // Funding outputs of this owned address, oldest first (deterministic).
+      const fundings = [];
+      for (const tx of history) {
+        tx.vout.forEach((v, i) => {
+          if (v.scriptpubkey_address === o.addr) fundings.push({ tx, vout: i });
+        });
+      }
+      for (const f of fundings) {
+        if (chainsBuilt >= CHAIN_TARGET || adoptedForChains >= CHAIN_ADOPT_CAP) break;
+        let curTxid = f.tx.txid;
+        let curVout = f.vout;
+        let curHistory = history;
+        let depth = 0;
+        const adoptedThisChain = [];
+        while (depth < CHAIN_DEPTH) {
+          const spend = findSpendingTx(curHistory, curTxid, curVout);
+          if (!spend) break;
+          // Pick the best non-owned, non-entity recipient output.
+          const excl = chainExclude();
+          const candidates = spend.vout
+            .map((v, i) => ({ addr: v.scriptpubkey_address, value: v.value, vout: i }))
+            .filter((c) => c.addr && !excl.has(c.addr))
+            .sort((a, b) => b.value - a.value || a.vout - b.vout);
+          let advanced = false;
+          for (const c of candidates) {
+            const st = await addressStats(c.addr);
+            if (!st || !st.chain_stats) continue;
+            const txc = st.chain_stats.tx_count;
+            if (txc < 2 || txc > 60) continue;
+            if (detectScriptType(c.addr) === 'unknown') continue;
+            const hist = await addressTxs(c.addr, 2);
+            // Only adopt if this address actually re-spends the received output
+            // (except at max depth, where a terminal recipient is fine too).
+            const respend = findSpendingTx(hist, spend.txid, c.vout);
+            if (!respend && depth < CHAIN_DEPTH - 1) continue;
+            owned.push({ addr: c.addr, txCount: txc, type: detectScriptType(c.addr), role: 'chain' });
+            txsByOwned.set(c.addr, hist);
+            adoptedForChains++;
+            adoptedThisChain.push(c.addr);
+            curTxid = spend.txid;
+            curVout = c.vout;
+            curHistory = hist;
+            depth++;
+            advanced = true;
+            break;
+          }
+          if (!advanced) break;
+        }
+        if (depth >= 2) {
+          chainsBuilt++;
+          console.log(
+            `Chain adoption: ${o.addr.slice(0, 10)}… -> ${adoptedThisChain
+              .map((a) => a.slice(0, 10) + '…')
+              .join(' -> ')} (${depth} internal hop(s))`,
+          );
+        } else if (adoptedThisChain.length) {
+          // Keep partial adoptions (they still deepen the graph) but don't
+          // count them as full chains.
+          console.log(
+            `Chain adoption (partial): ${o.addr.slice(0, 10)}… -> ${adoptedThisChain
+              .map((a) => a.slice(0, 10) + '…')
+              .join(' -> ')}`,
+          );
+        }
+      }
+    }
+    console.log(`Chain adoption: ${chainsBuilt} deep chain(s), ${adoptedForChains} address(es) adopted`);
+  }
+
   // 6) watch set (hop-2): frequent counterparties of owned txs
   const ownedAddrs = ownedSet();
   const cpFreq = new Map();
@@ -523,7 +617,9 @@ async function main() {
           ? { label: 'Shop donation address (reused)', tags: [...p.tags, 'address-reuse'] }
           : o.role === 'quantum'
             ? { label: 'Legacy P2PKH (pubkey exposed)', tags: [...p.tags, 'legacy'] }
-            : { label: `${p.labelPrefix} #${n}`, tags: p.tags };
+            : o.role === 'chain'
+              ? { label: `Internal transfer hop #${n}`, tags: [...p.tags, 'internal-transfer'] }
+              : { label: `${p.labelPrefix} #${n}`, tags: p.tags };
     pushRecord({
       type: 'address',
       inputString: o.addr,
@@ -749,12 +845,13 @@ async function main() {
   const recById = new Map(records.map((r) => [r.id, r]));
   outer: for (const o of owned) {
     const rec = recById.get(recordIdByAddress.get(o.addr));
-    let taken = 0;
+    // Walk every funding output first, then keep the deepest 2 per address
+    // (so multi-hop owned->owned chains are never crowded out by shallow
+    // fundings appearing earlier in the history).
+    const walks = [];
     for (const tx of txsByOwned.get(o.addr) || []) {
-      if (taken >= 2) continue;
       const vIdx = tx.vout.findIndex((v) => v.scriptpubkey_address === o.addr);
       if (vIdx < 0) continue;
-      taken++;
       const segmentId = crypto
         .createHash('sha1')
         .update(`seg:${tx.txid}:${vIdx}`)
@@ -791,6 +888,10 @@ async function main() {
         };
         status = 'transferred';
       }
+      walks.push({ tx, vIdx, segmentId, evidence, cur, hops, status });
+    }
+    walks.sort((a, b) => b.hops - a.hops || a.tx.status.block_time - b.tx.status.block_time);
+    for (const { tx, vIdx, segmentId, evidence, cur, hops, status } of walks.slice(0, 2)) {
       segments.push({
         id: segments.length + 1,
         segmentId,
@@ -974,7 +1075,7 @@ async function main() {
   const total = records.length + txs.length;
   const matrix = {
     totals: { records: records.length, transactions: txs.length, participants: participants.length, combined: total, inRange: total >= 5000 && total <= 10000 },
-    fundTrail: { lineageRows: lineage.length, custodySegments: segments.length, multiHopSegments, timeSpanDays: Math.round(spanDays), pass: lineage.length > 100 && spanDays > 180 },
+    fundTrail: { lineageRows: lineage.length, custodySegments: segments.length, multiHopSegments, timeSpanDays: Math.round(spanDays), pass: lineage.length > 100 && spanDays > 180 && multiHopSegments >= 3 },
     entityScreening: { bundledEntitiesPresent: [...entityAddrsInTxs].filter((a) => entities.has(a)).length, demoEntities: demoEntities.length, directOwnedContact: directEntityContact, pass: directEntityContact },
     addressReuse: { maxReceiptsOnOwned: maxReuse, pass: maxReuse >= 10 },
     dusted: { dustOutputToOwned: dustToOwned, pass: dustToOwned },

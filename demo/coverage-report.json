@@ -1,15 +1,15 @@
 {
   "totals": {
-    "records": 4511,
-    "transactions": 689,
-    "participants": 30429,
+    "records": 4501,
+    "transactions": 699,
+    "participants": 31568,
     "combined": 5200,
     "inRange": true
   },
   "fundTrail": {
-    "lineageRows": 715,
-    "custodySegments": 59,
-    "multiHopSegments": 0,
+    "lineageRows": 720,
+    "custodySegments": 69,
+    "multiHopSegments": 15,
     "timeSpanDays": 4348,
     "pass": true
   },
@@ -32,18 +32,18 @@
     "pass": true
   },
   "lightning": {
-    "p2wshOutputs": 18,
+    "p2wshOutputs": 23,
     "pass": true
   },
   "vaults": {
-    "vaultRecords": 7,
+    "vaultRecords": 10,
     "pass": true
   },
   "adversaryClustering": {
-    "ownedCoSpendTxs": 307,
+    "ownedCoSpendTxs": 311,
     "pass": true
   },
-  "httpRequests": 0,
+  "httpRequests": 34,
   "highlights": {
     "personas": [
       {
@@ -61,6 +61,22 @@
           {
             "address": "14f82ZcYBfgsj9j6pd8ps1Gt5XvRM7tZsa",
             "label": "Cold storage #3"
+          },
+          {
+            "address": "1GiEk1wYLUocRLTC5u7WuS9U1MpyT6Nakx",
+            "label": "Internal transfer hop #4"
+          },
+          {
+            "address": "bc1qekndkf8hpjc9fltuut7j6xree3d7px5xgewknl",
+            "label": "Internal transfer hop #5"
+          },
+          {
+            "address": "bc1qlc9ef35hfkl6dal38wplkwwkkvqu0nvejr2txp",
+            "label": "Internal transfer hop #6"
+          },
+          {
+            "address": "bc1qwnmek7fex40lhaw03lkszmg6sk0fvkvkddxutc",
+            "label": "Internal transfer hop #7"
           }
         ]
       },
@@ -139,6 +155,18 @@
           {
             "address": "15XFNHYgZg2kuwDNuv5c8FiNkucZANuyB2",
             "label": "Exchange withdrawal #18"
+          },
+          {
+            "address": "15zhHecvkVWhzTudAUDuRQ8FmZwMCK3DTS",
+            "label": "Internal transfer hop #19"
+          },
+          {
+            "address": "16Z2CDtfuwAo27p8Rf7L7WFgFdRSQ36dAk",
+            "label": "Internal transfer hop #20"
+          },
+          {
+            "address": "1DdMdJMQ7F35WHwW7QYB9jbbPdZRZowjAT",
+            "label": "Internal transfer hop #21"
           }
         ]
       },
@@ -187,6 +215,18 @@
           {
             "address": "35vZmghTtHZ6A4xz6j9wRU5hKEXuqiR1yo",
             "label": "Vault address #7"
+          },
+          {
+            "address": "3NdFgZZeakt6hGdF4DYnLgqzZR9xRSz5eS",
+            "label": "Internal transfer hop #8"
+          },
+          {
+            "address": "33kcGwNjfduEYoKucFKZrJQTD6oZhkFz14",
+            "label": "Internal transfer hop #9"
+          },
+          {
+            "address": "32uSfb9UxXoPfCzAjjB4kJpt85vhhU637B",
+            "label": "Internal transfer hop #10"
           }
         ]
       }
@@ -217,22 +257,21 @@
       {
         "origin": "1KsCB7H72C3CYCEenBpuMe5BRBMDuHta6g",
         "txids": [
-          "3ee9402329c03f6ca0c846c3c143e1cb33939fcfb45a7027ded65d3f727f3b0d",
-          "3608a42d551779e1f4b425fd74e45e07e1d95a68f75bbb11f9d54249cc97374a"
+          "ee09a6cb3f361c255c9a1e3c522657d198a414ac511572cf7f7b1ea14b6c059b",
+          "93214e62cd4cff85b193a3d6767ccb3cf539350c4fdac384f8166a339eb34630",
+          "3d9e47470cdc2d9efbefa55ac33ec660269424f17952d1692c1bb31c39491761",
+          "fe3ed96e321aebc88e4c80ee028e14f44d32e4a95f31db3a27130a8f26e55154",
+          "42ffc8d5e062028bd2441073e3931208561bed2dd533694e267dff25a4d96e94"
         ]
       },
       {
         "origin": "1KsCB7H72C3CYCEenBpuMe5BRBMDuHta6g",
         "txids": [
-          "aa7076f4a349d69ae4e4778ffff798ff5f6867dfbe3f91fca9369139a1942562",
-          "c2c7df914a0d9a231ed27282a5c7053990f23906b3fe8a87ff85df0f301da4f7"
-        ]
-      },
-      {
-        "origin": "3K1DNumpDvo7bHsrHi8pk3i2XsZUnBomFi",
-        "txids": [
-          "e2a1dceccf13a9dd0977b7bb29cbf18590bc705ad704d6a25ba04e82c9ddad4e",
-          "7d2b699093f84ef42d29ae0a3e899ee01cda69292c517faecec95dc5da26b34d"
+          "7f96e063b422913db9adb4d3f1acdcb4cb5e17ee68d6523d5439a84931a78c9f",
+          "49b72ec4d6e0036eb96e4326f1779587dd77cbd68d5cba3fc5d1cf6cfe72edb1",
+          "a02a1457eccfd4665ae0546e3e3e732d0523caa1bad307403a8313114626b537",
+          "21ba111a0ac5cc5c438ec43b2973dccd4e1bf437c5b63224b75ce5922362a705",
+          "2e199f7dc908f3cec7250b76bb8cd6390f761a23368a01bb9af795d0e7cb8d48"
         ]
       },
       {
@@ -243,10 +282,17 @@
         ]
       },
       {
+        "origin": "3K1DNumpDvo7bHsrHi8pk3i2XsZUnBomFi",
+        "txids": [
+          "e2a1dceccf13a9dd0977b7bb29cbf18590bc705ad704d6a25ba04e82c9ddad4e",
+          "7d2b699093f84ef42d29ae0a3e899ee01cda69292c517faecec95dc5da26b34d"
+        ]
+      },
+      {
         "origin": "1P2gJuKorixxMZnAYHsXLj4kk2NPVrWk7x",
         "txids": [
-          "48d2fd483423d30bc9f7c5c13da70ce300b0866d3340bfc7aa87bc9e808011c4",
-          "eac3f6c18b86cf70b66b859bd24d853acf79bbb58e0d511a702c4684237a213e"
+          "9194c4d1687e6d63524b4b4481c6adc844609c3b544d665c2bd85f0bbb825688",
+          "7a6fea55466c795a6437d5ebb41f97aff2ae412122f77f0eca106d312991a6ea"
         ]
       }
     ]
