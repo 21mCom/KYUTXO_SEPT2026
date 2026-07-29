@@ -105,7 +105,7 @@ const {
 } = await import("./txid-backfill");
 // Imported AFTER the mocks so the real ElectrumProvider binds to the mocked
 // Electron IPC boundary above.
-const { ElectrumProvider } = await import("./providers/electrum");
+const { ElectrumProvider, ConfirmationStatusUnknownError } = await import("./providers/electrum");
 type BackfillResult = import("./txid-backfill").BackfillResult;
 
 // ---- Fixtures --------------------------------------------------------------
@@ -473,6 +473,72 @@ describe("runTxidBackfill", () => {
     expect(result.rebuilt).toBe(0);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("fetch failed");
+  });
+
+  it("treats ConfirmationStatusUnknownError as a transient failure, not a permanent skip", async () => {
+    // The Electrum provider throws ConfirmationStatusUnknownError when the
+    // server returns raw hex, omits the confirmations count, or the tip lookup
+    // fails. This must surface as a transient `failed` (retried on the next
+    // startup pass), never as a skip — reporting "unconfirmed" for a possibly
+    // long-confirmed transaction is factually wrong and would mislead the user.
+    const base = makeProvider({ txs: new Map([[TXID_B, makeApiTx(TXID_B)]]) });
+    const provider: BlockchainProvider = {
+      ...base,
+      async getTransaction(txid: string) {
+        if (txid === TXID_A) {
+          throw new ConfirmationStatusUnknownError();
+        }
+        return base.getTransaction(txid);
+      },
+    };
+
+    const result = await runTxidBackfill(provider, [TXID_A, TXID_B]);
+
+    // Counted as failed (transient), never skipped.
+    expect(result.failed).toBe(1);
+    expect(result.rebuilt).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.skippedReasons).toEqual({});
+    // Never mis-filed under a confirmation-related skip reason.
+    expect(result.skippedReasons["unconfirmed"]).toBeUndefined();
+    // The error message is reported, not silently dropped.
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain(TXID_A.slice(0, 8));
+    expect(result.errors[0]).toContain("confirmation status");
+
+    // No blockchain row is written for the failed txid…
+    const rows = await testDb.blockchainTransactions
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    expect(rows).toHaveLength(0);
+
+    // …so the orphan stays eligible for the next backfill run.
+    await testDb.records.add(makeTxRecord(TXID_A));
+    const { txids } = await detectOrphanedTxRecords();
+    expect(txids).toContain(TXID_A);
+
+    // And the "unresolvable leftovers" heuristic must NOT report a dead end:
+    // a transient failure means a re-run can still make progress.
+    expect(hasOnlyUnresolvableLeftovers(result)).toBe(false);
+  });
+
+  it("a run with only ConfirmationStatusUnknownError failures is never flagged as unresolvable", async () => {
+    const base = makeProvider();
+    const provider: BlockchainProvider = {
+      ...base,
+      async getTransaction() {
+        throw new ConfirmationStatusUnknownError();
+      },
+    };
+
+    const result = await runTxidBackfill(provider, [TXID_A, TXID_B]);
+
+    expect(result.failed).toBe(2);
+    expect(result.rebuilt).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toHaveLength(2);
+    expect(hasOnlyUnresolvableLeftovers(result)).toBe(false);
   });
 
   it("tallies a mix of rebuilt, skipped and failed across many txids", async () => {
