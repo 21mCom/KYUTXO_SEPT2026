@@ -42,3 +42,5 @@ counter ticks, install a MutationObserver before clicking and scope the
 monotonic check to the leading run of samples sharing the first observed
 total. Pick a real address with 3-60 txs (block-vin walk) so the counter has
 several distinct values but the fetch stays fast.
+
+**Known flake (2026-07):** the live tx-counter assertion (>=2 distinct samples) fails deterministically when the picked real address has few txs (e.g. 4) — the fetch completes within one render so only one "4/4" sample is captured. Unrelated tasks blocked on this used an audited validation skip; a real fix is to pick an address with more txs or throttle the provider fetch during the check.
