@@ -193,6 +193,10 @@ args = "rebuild-toast-details-node-check"
 task = "workflow.run"
 args = "utxo-balance-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "utxo-resync-affected-node-check"
+
 [[workflows.workflow]]
 name = "saved-template-derive-browser-check"
 author = "agent"
@@ -654,6 +658,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-utxo-balance-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "utxo-resync-affected-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/UTXOs.resyncAffected.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

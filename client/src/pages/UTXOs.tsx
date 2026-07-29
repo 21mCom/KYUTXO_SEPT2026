@@ -14,6 +14,9 @@ import { BlockchainTransaction, TransactionParticipant, Record as DbRecord, Pric
 import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
 import { getDustFlaggedOutpointSet } from "@/lib/data/dust-flags-crud";
 import { getPriceDataByAsset } from "@/lib/data/price-data-crud";
+import { transactionSyncService } from "@/lib/transaction-sync";
+import { createProviderFromSettings } from "@/lib/blockchain-api";
+import { getNodeSettings } from "@/lib/data/node-settings-crud";
 import { countRecordsByTypeAndImportanceTiers, getTransactionsByTxids } from "@/lib/dataFacade";
 import {
   engineGetOwnedUtxos,
@@ -1002,15 +1005,26 @@ export default function UTXOs() {
   }, [engineRawUtxos, addressToRecord, getPriceForTimestamp]);
 
   const { value: outpointDataStatus, isComputing: outpointDataStatusComputing } = useAsyncMemo(async (signal) => {
-    if (!participants) return { hasData: false, percentage: 0, total: 0, withData: 0 };
+    if (!participants) return { hasData: false, percentage: 0, total: 0, withData: 0, affectedAddresses: [] as string[] };
     let inputCount = 0;
     let withDataCount = 0;
+    // Owned addresses whose transactions contain outpoint-less input rows.
+    // These are the addresses a targeted re-sync must refresh to backfill
+    // prevTxid/prevVout. When a legacy input row carries an owned address we
+    // take it directly; when it carries a blank/foreign address (some legacy
+    // rows do), we fall back to every owned address participating in that tx.
+    const affected = new Set<string>();
+    const txidsNeedingOwners = new Set<string>();
     for (let i = 0; i < participants.length; i++) {
       const p = participants[i];
       if (p.role === 'input') {
         inputCount++;
         if (p.prevTxid !== undefined && p.prevTxid !== null) {
           withDataCount++;
+        } else if (p.address && addressToRecord.has(p.address)) {
+          affected.add(p.address);
+        } else {
+          txidsNeedingOwners.add(p.txid);
         }
       }
       if (i % 1000 === 999) {
@@ -1018,18 +1032,162 @@ export default function UTXOs() {
         await yieldToUI();
       }
     }
-    if (inputCount === 0) return { hasData: true, percentage: 100, total: 0, withData: 0 };
+    if (txidsNeedingOwners.size > 0) {
+      for (let i = 0; i < participants.length; i++) {
+        const p = participants[i];
+        if (txidsNeedingOwners.has(p.txid) && p.address && addressToRecord.has(p.address)) {
+          affected.add(p.address);
+        }
+        if (i % 1000 === 999) {
+          checkAbort(signal);
+          await yieldToUI();
+        }
+      }
+    }
+    const affectedAddresses = Array.from(affected).sort();
+    if (inputCount === 0) return { hasData: true, percentage: 100, total: 0, withData: 0, affectedAddresses: [] as string[] };
     const percentage = Math.round((withDataCount / inputCount) * 100);
     return {
       hasData: percentage > 0,
       percentage,
       total: inputCount,
-      withData: withDataCount
+      withData: withDataCount,
+      affectedAddresses
     };
-  }, [participants], { hasData: false, percentage: 0, total: 0, withData: 0 });
+  }, [participants, addressToRecord], { hasData: false, percentage: 0, total: 0, withData: 0, affectedAddresses: [] as string[] });
 
   // For backward compatibility
   const hasOutpointData = outpointDataStatus.hasData && outpointDataStatus.percentage >= 50;
+
+  // Targeted re-sync of just the addresses whose transactions still carry
+  // outpoint-less input rows (legacy pre-migration data). Same provider checks
+  // and per-address loop as the Balance page's heuristic re-sync, scoped to the
+  // affected list computed alongside the coverage warning above.
+  const [resyncingAffected, setResyncingAffected] = useState(false);
+  const [cancellingResyncAffected, setCancellingResyncAffected] = useState(false);
+  const [affectedResyncProgress, setAffectedResyncProgress] = useState<{ processed: number; total: number } | null>(null);
+  const [affectedResyncAddressProgress, setAffectedResyncAddressProgress] = useState<{
+    address: string;
+    fetched: number;
+    total: number;
+  } | null>(null);
+  const resyncAffectedAbortRef = useRef<AbortController | null>(null);
+
+  const handleResyncAffected = useCallback(async (addresses: string[]) => {
+    const controller = new AbortController();
+    resyncAffectedAbortRef.current = controller;
+    setCancellingResyncAffected(false);
+    setResyncingAffected(true);
+    setAffectedResyncProgress(null);
+    try {
+      if (addresses.length === 0) {
+        toast({
+          title: "Nothing to re-sync",
+          description: "No affected addresses were identified.",
+        });
+        return;
+      }
+
+      const nodeSettings = await getNodeSettings("default");
+      if (!nodeSettings) {
+        toast({
+          title: "No blockchain provider configured",
+          description: "Configure a provider in Settings to re-sync these addresses.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      try {
+        const probe = createProviderFromSettings(nodeSettings);
+        await probe.getBlockHeight();
+      } catch (connErr) {
+        console.warn("[UTXOs] Provider unreachable for affected-address re-sync:", connErr);
+        toast({
+          title: "Can't reach the blockchain provider",
+          description: "Check your connection or provider settings in Settings, then try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      transactionSyncService.updateProvider(nodeSettings);
+
+      setAffectedResyncProgress({ processed: 0, total: addresses.length });
+      let synced = 0;
+      let failed = 0;
+      for (const address of addresses) {
+        if (controller.signal.aborted) break;
+        setAffectedResyncAddressProgress({ address, fetched: 0, total: 0 });
+        try {
+          const result = await transactionSyncService.syncSingleAddress(address, (progress) => {
+            // Live per-address fetch counter so a large address doesn't look
+            // frozen; transactionsNew/transactionsFound carry the streaming
+            // "processed / total" counts during the syncing-addresses phase.
+            setAffectedResyncAddressProgress({
+              address,
+              fetched: progress.transactionsNew,
+              total: progress.transactionsFound,
+            });
+          });
+          if (result.success) synced += 1;
+          else failed += 1;
+        } catch (err) {
+          console.warn(`[UTXOs] Affected-address re-sync failed for ${address}:`, err);
+          failed += 1;
+        }
+        setAffectedResyncProgress({ processed: synced + failed, total: addresses.length });
+      }
+      setAffectedResyncAddressProgress(null);
+
+      const cancelled = controller.signal.aborted;
+      if (cancelled) {
+        toast({
+          title: "Re-sync stopped",
+          description:
+            synced > 0
+              ? `Re-synced ${synced.toLocaleString()} address${synced !== 1 ? "es" : ""} before stopping.`
+              : "Stopped before any addresses were re-synced.",
+        });
+      } else if (failed > 0) {
+        toast({
+          title: synced > 0 ? "Partially re-synced" : "Re-sync failed",
+          description:
+            synced > 0
+              ? `Re-synced ${synced.toLocaleString()} address${synced !== 1 ? "es" : ""}, but ${failed.toLocaleString()} couldn't be re-synced.`
+              : "None of the addresses could be re-synced. Check your provider settings and try again.",
+          variant: synced > 0 ? undefined : "destructive",
+        });
+      } else {
+        toast({
+          title: "Re-synced",
+          description: `Re-synced ${synced.toLocaleString()} affected address${synced !== 1 ? "es" : ""}. Outpoint data will refresh automatically.`,
+        });
+      }
+    } catch (err) {
+      console.warn("[UTXOs] Affected-address re-sync failed:", err);
+      toast({
+        title: "Re-sync failed",
+        description: "Couldn't re-sync the affected addresses. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      resyncAffectedAbortRef.current = null;
+      setCancellingResyncAffected(false);
+      setResyncingAffected(false);
+      setAffectedResyncProgress(null);
+      setAffectedResyncAddressProgress(null);
+    }
+  }, [toast]);
+
+  // Aborting stops cleanly between addresses; addresses already re-synced keep
+  // their new exact outpoint data.
+  const handleCancelResyncAffected = useCallback(() => {
+    if (resyncAffectedAbortRef.current) {
+      setCancellingResyncAffected(true);
+      resyncAffectedAbortRef.current.abort();
+    }
+  }, []);
 
   const { value: utxosHeuristic, isComputing: utxosHeuristicComputing } = useAsyncMemo(async (signal) => {
     if (!participants || !transactions) return [];
@@ -1571,6 +1729,43 @@ export default function UTXOs() {
               <span className="text-amber-600 dark:text-amber-400" data-testid="text-heuristic-coverage-warning">
                 Standard mode: only {outpointDataStatus.percentage}% of inputs have outpoint data — spends of the rest are estimated by amount matching (re-sync for accurate balances)
               </span>
+              {outpointDataStatus.affectedAddresses.length > 0 && !resyncingAffected && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto p-0 ml-2 text-primary hover:underline"
+                  onClick={() => handleResyncAffected(outpointDataStatus.affectedAddresses)}
+                  data-testid="button-resync-affected"
+                >
+                  <RefreshCw className="h-3 w-3 mr-1" />
+                  Re-sync {outpointDataStatus.affectedAddresses.length.toLocaleString()} affected address{outpointDataStatus.affectedAddresses.length !== 1 ? "es" : ""}
+                </Button>
+              )}
+              {resyncingAffected && (
+                <span className="ml-2 inline-flex items-center gap-2" data-testid="status-resync-affected">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span>
+                    {affectedResyncProgress
+                      ? `Re-syncing ${affectedResyncProgress.processed.toLocaleString()}/${affectedResyncProgress.total.toLocaleString()} addresses`
+                      : "Preparing re-sync..."}
+                    {affectedResyncAddressProgress && affectedResyncAddressProgress.total > 0 && (
+                      <span className="ml-1 text-xs">
+                        ({affectedResyncAddressProgress.fetched.toLocaleString()}/{affectedResyncAddressProgress.total.toLocaleString()} transactions)
+                      </span>
+                    )}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto p-0 text-destructive hover:underline"
+                    onClick={handleCancelResyncAffected}
+                    disabled={cancellingResyncAffected}
+                    data-testid="button-stop-resync-affected"
+                  >
+                    {cancellingResyncAffected ? "Stopping..." : "Stop"}
+                  </Button>
+                </span>
+              )}
             </>
           )}
           {utxoMode === 'heuristic' && (outpointDataStatus.total === 0 || outpointDataStatus.percentage === 100) && (
