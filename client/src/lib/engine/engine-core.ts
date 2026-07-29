@@ -279,6 +279,12 @@ export const INDEX_BUILD_STEPS: readonly IndexBuildStep[] = [
   { label: 'records by owner', sql: 'CREATE INDEX IF NOT EXISTS idx_records_owner ON records(owner);' },
   { label: 'records by wallet', sql: 'CREATE INDEX IF NOT EXISTS idx_records_walletName ON records(walletName);' },
   { label: 'owned-address lookup', sql: 'CREATE INDEX IF NOT EXISTS idx_records_addr_owned ON records(inputString, type, addressImportance);' },
+  // Keyset order for the Records page's Date Added sort: (createdAt, id) matches
+  // the Dexie createdAt-index iteration order (id ascending within ties), so the
+  // engine can serve (createdAt asc/desc, id asc/desc) pages with a seek instead
+  // of a full sort. NULL createdAt rows are excluded by the query (parity with
+  // IndexedDB, which never indexes missing keys), so no COALESCE is needed.
+  { label: 'records by date added (keyset)', sql: 'CREATE INDEX IF NOT EXISTS idx_records_createdAt_id ON records(createdAt, id);' },
   { label: 'transactions by txid', sql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid ON blockchainTransactions(txid);' },
   { label: 'transactions by time', sql: 'CREATE INDEX IF NOT EXISTS idx_bt_blockTime ON blockchainTransactions(blockTime);' },
   // Keyset order for the Transactions page: COALESCE(blockTime,0) DESC, id DESC.
@@ -412,9 +418,14 @@ function setEngineMeta(db: EngineDb, key: string, value: string): void {
 // so a half-built/interrupted mirror never advertises the new shape.
 //   v2: added records.{derivationPath, discoveredInTxid, vaultIsVaultXpub, vaultM,
 //       vaultN, vaultName, vaultNotes} for Vaults + Wallet Overview aggregates.
+//   v4: added idx_records_createdAt_id so the Records page's Date Added sort can
+//       stay on the engine fast path. An index is a perf (not correctness) shape,
+//       but without it a pre-v4 mirror would serve createdAt-keyset pages with a
+//       full sort — exactly the slowdown the fast path exists to avoid — so the
+//       bump forces a reseed that builds the index.
 // ---------------------------------------------------------------------------
 
-export const ENGINE_SCHEMA_VERSION = 3;
+export const ENGINE_SCHEMA_VERSION = 4;
 const SCHEMA_VERSION_KEY = 'schemaVersion';
 
 /** Schema version stamped by the last successful finalize; 0 if never written. */
@@ -734,6 +745,17 @@ export interface RecordQueryOptions {
   search?: string;
   /** Restrict to a record type (e.g. 'address'). */
   type?: string;
+  /**
+   * Inclusive lower bound on createdAt (ms) — the Records page's "Recently
+   * added" window. Implies createdAt IS NOT NULL.
+   */
+  addedSince?: number;
+  /**
+   * Exclude rows with NULL createdAt, matching the Dexie createdAt-index walk
+   * (IndexedDB never indexes missing keys). Set by the date-added count path
+   * even when no addedSince window is active so counts agree across paths.
+   */
+  requireCreatedAt?: boolean;
 }
 
 /**
@@ -751,6 +773,12 @@ function buildRecordWhere(opts: RecordQueryOptions): { sql: string; bind: unknow
   if (opts.type) {
     clauses.push('type = ?');
     bind.push(opts.type);
+  }
+  if (opts.addedSince != null) {
+    clauses.push('createdAt >= ?');
+    bind.push(opts.addedSince);
+  } else if (opts.requireCreatedAt) {
+    clauses.push('createdAt IS NOT NULL');
   }
   if (!opts.includeBlockchainDiscovered) {
     clauses.push("(addressImportance IS NULL OR addressImportance NOT IN ('blockchain-discovered','pending-review'))");
@@ -772,16 +800,32 @@ export function countRecords(db: EngineDb, opts: RecordQueryOptions = {}): numbe
   return selectScalar(db, `SELECT COUNT(*) AS v FROM records ${sql}`, bind);
 }
 
+/** Keyset cursor for the createdAt-ordered page: the last row of the prior page. */
+export interface CreatedAtEngineCursor {
+  createdAt: number;
+  id: number;
+}
+
 export interface RecordPageOptions extends RecordQueryOptions {
   /** Keyset cursor: return rows with id < beforeId (for id-descending order). */
   beforeId?: number;
+  /**
+   * When set, order by (createdAt, id) instead of id — 'newest' = both DESC,
+   * 'oldest' = both ASC — matching the Dexie createdAt-index iteration order.
+   * Rows with NULL createdAt are excluded (IndexedDB parity). `beforeId` is
+   * ignored in this mode; use `createdAtCursor`.
+   */
+  createdAtSort?: 'newest' | 'oldest';
+  /** Exclusive (createdAt, id) boundary from the previous createdAt-sorted page. */
+  createdAtCursor?: CreatedAtEngineCursor;
   limit: number;
 }
 
 /**
- * Keyset-paginated records in id-descending order (newest first), matching the
- * Records page ordering. Uses id < beforeId so paging never re-scans skipped
- * rows the way OFFSET does.
+ * Keyset-paginated records. Default order is id-descending (newest first),
+ * matching the Records page ordering; with `createdAtSort` set it is
+ * (createdAt, id) asc/desc for the Date Added sort. Both use a seek predicate
+ * so paging never re-scans skipped rows the way OFFSET does.
  */
 export function getRecordPage(db: EngineDb, opts: RecordPageOptions): RecordRow[] {
   const where = buildRecordWhere(opts);
@@ -791,6 +835,31 @@ export function getRecordPage(db: EngineDb, opts: RecordPageOptions): RecordRow[
     clauses.push(where.sql.replace(/^WHERE /, ''));
     bind.push(...where.bind);
   }
+
+  if (opts.createdAtSort) {
+    // Dexie's createdAt-index walk never yields rows missing the key; exclude
+    // NULLs so both read paths agree. (buildRecordWhere already added a
+    // createdAt bound when addedSince/requireCreatedAt is set — the extra
+    // clause is redundant then, but harmless and keeps this branch safe.)
+    clauses.push('createdAt IS NOT NULL');
+    const desc = opts.createdAtSort === 'newest';
+    if (opts.createdAtCursor) {
+      const cmp = desc ? '<' : '>';
+      clauses.push(
+        `(createdAt ${cmp} ? OR (createdAt = ? AND id ${cmp} ?))`,
+      );
+      bind.push(opts.createdAtCursor.createdAt, opts.createdAtCursor.createdAt, opts.createdAtCursor.id);
+    }
+    const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const dir = desc ? 'DESC' : 'ASC';
+    bind.push(opts.limit);
+    return selectRows<RecordRow>(
+      db,
+      `SELECT * FROM records ${whereSql} ORDER BY createdAt ${dir}, id ${dir} LIMIT ?`,
+      bind,
+    );
+  }
+
   if (opts.beforeId != null) {
     clauses.push('id < ?');
     bind.push(opts.beforeId);

@@ -247,6 +247,7 @@ var MIRROR_TABLES = [
   "transactionParticipants"
 ];
 var OWNED_TIERS = ["verified", "manual", "wallet-import", "xpub-derived"];
+var CURATED_ADDRESS_SQL = `(addressImportance IS NULL OR addressImportance IN (${OWNED_TIERS.map((t) => `'${t}'`).join(", ")}))`;
 var PARAM_BATCH_SIZE = 800;
 var OWNED_UTXOS_TIERS_KEY = "owned_utxos_tiers";
 var OWNED_UTXOS_COUNT_KEY = "owned_utxos_count";
@@ -343,6 +344,12 @@ var INDEX_BUILD_STEPS = [
   { label: "records by owner", sql: "CREATE INDEX IF NOT EXISTS idx_records_owner ON records(owner);" },
   { label: "records by wallet", sql: "CREATE INDEX IF NOT EXISTS idx_records_walletName ON records(walletName);" },
   { label: "owned-address lookup", sql: "CREATE INDEX IF NOT EXISTS idx_records_addr_owned ON records(inputString, type, addressImportance);" },
+  // Keyset order for the Records page's Date Added sort: (createdAt, id) matches
+  // the Dexie createdAt-index iteration order (id ascending within ties), so the
+  // engine can serve (createdAt asc/desc, id asc/desc) pages with a seek instead
+  // of a full sort. NULL createdAt rows are excluded by the query (parity with
+  // IndexedDB, which never indexes missing keys), so no COALESCE is needed.
+  { label: "records by date added (keyset)", sql: "CREATE INDEX IF NOT EXISTS idx_records_createdAt_id ON records(createdAt, id);" },
   { label: "transactions by txid", sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid ON blockchainTransactions(txid);" },
   { label: "transactions by time", sql: "CREATE INDEX IF NOT EXISTS idx_bt_blockTime ON blockchainTransactions(blockTime);" },
   // Keyset order for the Transactions page: COALESCE(blockTime,0) DESC, id DESC.
@@ -399,7 +406,7 @@ function setEngineMeta(db2, key, value) {
     [key, value]
   );
 }
-var ENGINE_SCHEMA_VERSION = 2;
+var ENGINE_SCHEMA_VERSION = 4;
 var SCHEMA_VERSION_KEY = "schemaVersion";
 function getEngineSchemaVersion(db2) {
   const v = getEngineMeta(db2, SCHEMA_VERSION_KEY);
@@ -609,6 +616,12 @@ function buildRecordWhere(opts) {
     clauses.push("type = ?");
     bind.push(opts.type);
   }
+  if (opts.addedSince != null) {
+    clauses.push("createdAt >= ?");
+    bind.push(opts.addedSince);
+  } else if (opts.requireCreatedAt) {
+    clauses.push("createdAt IS NOT NULL");
+  }
   if (!opts.includeBlockchainDiscovered) {
     clauses.push("(addressImportance IS NULL OR addressImportance NOT IN ('blockchain-discovered','pending-review'))");
   }
@@ -634,6 +647,25 @@ function getRecordPage(db2, opts) {
   if (where.sql) {
     clauses.push(where.sql.replace(/^WHERE /, ""));
     bind.push(...where.bind);
+  }
+  if (opts.createdAtSort) {
+    clauses.push("createdAt IS NOT NULL");
+    const desc = opts.createdAtSort === "newest";
+    if (opts.createdAtCursor) {
+      const cmp = desc ? "<" : ">";
+      clauses.push(
+        `(createdAt ${cmp} ? OR (createdAt = ? AND id ${cmp} ?))`
+      );
+      bind.push(opts.createdAtCursor.createdAt, opts.createdAtCursor.createdAt, opts.createdAtCursor.id);
+    }
+    const whereSql2 = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const dir = desc ? "DESC" : "ASC";
+    bind.push(opts.limit);
+    return selectRows(
+      db2,
+      `SELECT * FROM records ${whereSql2} ORDER BY createdAt ${dir}, id ${dir} LIMIT ?`,
+      bind
+    );
   }
   if (opts.beforeId != null) {
     clauses.push("id < ?");
@@ -671,8 +703,6 @@ function getAddressAggregates(db2, addresses) {
       db2,
       `
       SELECT p.address AS address,
-             SUM(CASE WHEN p.role='output' THEN p.amount ELSE 0 END) AS outSats,
-             SUM(CASE WHEN p.role='input'  THEN p.amount ELSE 0 END) AS inSats,
              COUNT(DISTINCT p.txid) AS txCount,
              MAX(t.blockTime) AS lastTime
       FROM transactionParticipants p
@@ -685,7 +715,7 @@ function getAddressAggregates(db2, addresses) {
     for (const r of aggRows) {
       out2.set(r.address, {
         address: r.address,
-        balanceSats: (r.outSats ?? 0) - (r.inSats ?? 0),
+        balanceSats: 0,
         txCount: r.txCount ?? 0,
         lastActivityTime: r.lastTime ?? 0,
         utxoCount: 0
@@ -694,7 +724,9 @@ function getAddressAggregates(db2, addresses) {
     const utxoRows = selectRows(
       db2,
       `
-      SELECT o.address AS address, COUNT(*) AS utxoCount
+      SELECT o.address AS address,
+             COUNT(*) AS utxoCount,
+             COALESCE(SUM(o.amount), 0) AS balanceSats
       FROM transactionParticipants o
       JOIN blockchainTransactions t ON t.txid = o.txid
       WHERE o.role = 'output'
@@ -711,15 +743,18 @@ function getAddressAggregates(db2, addresses) {
     );
     for (const r of utxoRows) {
       const existing = out2.get(r.address);
-      if (existing) existing.utxoCount = r.utxoCount ?? 0;
-      else
+      if (existing) {
+        existing.utxoCount = r.utxoCount ?? 0;
+        existing.balanceSats = r.balanceSats ?? 0;
+      } else {
         out2.set(r.address, {
           address: r.address,
-          balanceSats: 0,
+          balanceSats: r.balanceSats ?? 0,
           txCount: 0,
           lastActivityTime: 0,
           utxoCount: r.utxoCount ?? 0
         });
+      }
     }
   }
   return out2;
@@ -813,7 +848,7 @@ var BALANCE_GROUP_EMPTY = {
 function getBalanceGroupSummaries(db2, opts) {
   const col = BALANCE_GROUP_COLUMN[opts.groupBy];
   const empty = BALANCE_GROUP_EMPTY[opts.groupBy];
-  const baseFilter = "type = 'address' AND cachedUtxoCount > 0";
+  const baseFilter = `type = 'address' AND cachedUtxoCount > 0 AND ${CURATED_ADDRESS_SQL}`;
   let summaries;
   if (opts.groupBy === "tag" || opts.groupBy === "category") {
     summaries = selectRows(
@@ -869,7 +904,8 @@ function getBalanceGroupSummaries(db2, opts) {
     db2,
     `SELECT COUNT(*) AS n
        FROM records
-      WHERE type = 'address' AND statsComputedAt IS NOT NULL AND cachedUtxoCount IS NULL`
+      WHERE type = 'address' AND ${CURATED_ADDRESS_SQL}
+        AND statsComputedAt IS NOT NULL AND cachedUtxoCount IS NULL`
   )[0];
   return {
     summaries: summaries.map((s) => ({

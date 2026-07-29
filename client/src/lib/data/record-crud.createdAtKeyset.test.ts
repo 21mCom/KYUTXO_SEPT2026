@@ -8,10 +8,10 @@
 // fixture — the read-path-equivalence approach (compare orderings page by
 // page against a known-total oracle).
 //
-// Engine parity note: date-added ordering/recency is intentionally NOT
-// expressible on the native engine fast path; the Records page gates the
-// engine off (engineExpressible && !dateAddedActive) so this Dexie path is
-// the only read path for these queries. There is no second path to diverge.
+// Engine parity note: date-added ordering/recency is ALSO expressible on the
+// native engine fast path (createdAtSort keyset + addedSince); this Dexie path
+// is the fallback per the freshness gate. Engine-vs-Dexie ordering parity is
+// covered by client/src/lib/engine/__tests__/records-read-equivalence.test.ts.
 import "fake-indexeddb/auto";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import Dexie from "dexie";

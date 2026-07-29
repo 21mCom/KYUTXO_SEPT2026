@@ -166,9 +166,10 @@ export default function Records() {
   // Date Added controls. 'default' = the control is untouched: keep the legacy
   // id-desc branches (and the engine fast path). Once the user engages the
   // sort toggle — explicit 'newest' OR 'oldest' — or sets a recency window,
-  // ALL pages route through the createdAt keyset branch so the displayed
-  // ordering is truly by date added (createdAt can diverge from id order,
-  // e.g. restored records carry their original createdAt).
+  // ALL pages route through a createdAt keyset branch (engine when READY +
+  // CURRENT, Dexie otherwise) so the displayed ordering is truly by date added
+  // (createdAt can diverge from id order, e.g. restored records carry their
+  // original createdAt).
   const [dateSort, setDateSort] = useState<DateAddedSort>('default');
   const [addedSince, setAddedSince] = useState<number | null>(null);
   const dateAddedActive = dateSort !== 'default' || addedSince !== null;
@@ -426,12 +427,12 @@ export default function Records() {
         // (pasted full address/txid) have EXACT inputString semantics via
         // buildIdentifierSearchCollection — the engine's `search` is a cross-field
         // substring — so they must stay on the dedicated Dexie identifier branch.
-        // Date-added sort/recency queries are NOT expressible on the engine
-        // (its record page is id-keyset only), so they fall back to the Dexie
-        // createdAt keyset branch below — same clean-fallback pattern as the
-        // freshness gate.
+        // Date-added sort/recency queries ARE engine-expressible (Task #1561):
+        // the record page supports (createdAt, id) keyset ordering plus an
+        // addedSince bound, so they stay on the fast path; the Dexie createdAt
+        // keyset branch below remains the fallback per the freshness gate.
         const engineExpressible =
-          engineTypeFilter !== undefined && !identifierSearch && !dateAddedActive;
+          engineTypeFilter !== undefined && !identifierSearch;
         // Readiness alone is not enough: the mirror is a manually (re)seeded read
         // replica, so it can stay READY while drifting from the live vault after a
         // create/edit/delete. evaluateEngineFreshness() confirms it is CURRENT
@@ -447,6 +448,11 @@ export default function Records() {
           includeBlockchainDiscovered,
           type: engineTypeFilter ?? undefined,
           search: search || undefined,
+          // Date-added mode: the recency window is a native engine predicate,
+          // and requireCreatedAt keeps counts aligned with the Dexie createdAt
+          // index walk (which never yields rows missing the key).
+          addedSince: dateAddedActive ? (addedSince ?? undefined) : undefined,
+          requireCreatedAt: dateAddedActive || undefined,
         };
 
         // Counts run AFTER the first page is rendered for the winning version —
@@ -457,10 +463,12 @@ export default function Records() {
         // identifier/substring branches already derive their totals from the
         // awaited page fetch, so here they only refresh the hidden-records badge.
         const runDeferredCounts = () => {
-          // Date-added branch: count the recency window (capped, early-stop)
-          // with the same residual predicate the page fetch used, plus the
-          // hidden-records badge. Identifier searches keep their own totals.
-          if (dateAddedActive && !identifierSearch) {
+          // Date-added Dexie branch: count the recency window (capped,
+          // early-stop) with the same residual predicate the page fetch used,
+          // plus the hidden-records badge. Identifier searches keep their own
+          // totals. Engine-served date-added queries fall through to the engine
+          // count block below (exact SQL counts honoring addedSince).
+          if (dateAddedActive && !identifierSearch && !useEngine) {
             setCountLoading(true);
             countRecordsByCreatedAtWindow(addedSince ?? undefined, filterFn, MAX_MATERIALIZE)
               .then(({ count, truncated }) => {
@@ -558,7 +566,22 @@ export default function Records() {
           // wider id-descending window and slice — same shape as the tier
           // branches' offset fallback.
           let pageRows;
-          if (hasAnchor) {
+          if (dateAddedActive) {
+            // Date Added sort: (createdAt, id) keyset on the engine's createdAt
+            // index. The cursor cache holds a (createdAt, id) pair for this mode.
+            const createdAtSort = dateSort === 'oldest' ? 'oldest' as const : 'newest' as const;
+            if (hasAnchor) {
+              pageRows = await engineGetRecordPage({
+                ...engineOpts,
+                createdAtSort,
+                createdAtCursor,
+                limit: PAGE_SIZE,
+              });
+            } else {
+              const wide = await engineGetRecordPage({ ...engineOpts, createdAtSort, limit: pgOffset + PAGE_SIZE });
+              pageRows = wide.slice(pgOffset, pgOffset + PAGE_SIZE);
+            }
+          } else if (hasAnchor) {
             pageRows = await engineGetRecordPage({ ...engineOpts, beforeId: beforeIdExclusive, limit: PAGE_SIZE });
           } else {
             const wide = await engineGetRecordPage({ ...engineOpts, limit: pgOffset + PAGE_SIZE });
@@ -572,13 +595,25 @@ export default function Records() {
 
           rawRecords = hydrated;
           setResultsTruncated(false);
-          // Keyset boundary uses the engine page (authoritative id ordering) so a
-          // missing-from-Dexie row in `hydrated` can't break Next/Previous.
-          recordNextAnchor(pageRows as unknown as DbRecord[]);
+          // Keyset boundary uses the engine page (authoritative ordering) so a
+          // missing-from-Dexie row in `hydrated` can't break Next/Previous. The
+          // date-added mode stores a (createdAt, id) cursor; id mode a plain id.
+          if (dateAddedActive) {
+            if (pageRows.length === PAGE_SIZE) {
+              const last = pageRows[pageRows.length - 1];
+              anchorState.anchors.set(currentPage + 1, {
+                createdAt: last.createdAt ?? 0,
+                id: last.id,
+              });
+            }
+          } else {
+            recordNextAnchor(pageRows as unknown as DbRecord[]);
+          }
 
         } else if (dateAddedActive && !identifierSearch) {
-          // Date Added sort / "Recently added" window: keyset-paginate on the
-          // createdAt index (id tiebreak via index iteration order) with the
+          // Date Added sort / "Recently added" window, Dexie fallback (engine
+          // not READY/CURRENT or query has residual filters): keyset-paginate on
+          // the createdAt index (id tiebreak via index iteration order) with the
           // residual filterFn composing type/tags/search/tier-exclude. Counts
           // are deferred (capped early-stop walk) in runDeferredCounts.
           const direction = dateSort === 'oldest' ? 'oldest' : 'newest';

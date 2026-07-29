@@ -78,6 +78,8 @@ const {
   getAddressRecordsByImportanceTierPage,
   getRecordsPageByTypeIdReverseKeyset,
   getRecordsPageByTypeAndImportanceTiersKeyset,
+  getRecordsPageByCreatedAtKeyset,
+  countRecordsByCreatedAtWindow,
 } = await import("../../data/record-crud");
 
 const { buildRecordsCollection, fetchRecordsPage } = await import(
@@ -127,6 +129,14 @@ interface Fixture {
 
 const TOTAL = 130;
 
+// createdAt deliberately NOT monotonic with id, with ~3-wide ties, so the
+// date-added parity tests exercise the (createdAt, id) tiebreaker on both
+// paths. BASE + bucket minutes; bucket scrambles by (i*37 mod TOTAL)/3.
+const CREATED_BASE = 1_700_000_000_000;
+function createdAtFor(i: number): number {
+  return CREATED_BASE + Math.floor(((i * 37) % TOTAL) / 3) * 60_000;
+}
+
 function makeFixture(i: number): Fixture {
   const inputString = `addr-${String(i).padStart(5, "0")}`;
   return {
@@ -167,7 +177,7 @@ function toEngineRow(f: Fixture): RecordRow {
     cachedTxCount: null,
     cachedUtxoCount: null,
     statsComputedAt: null,
-    createdAt: 1000 + f.id,
+    createdAt: createdAtFor(f.id),
     updatedAt: 1000 + f.id,
     tags: "[]",
     categories: "[]",
@@ -189,7 +199,7 @@ function toDexieRow(f: Fixture): DbRecord {
     tags: [],
     categories: [],
     addressImportance: f.addressImportance,
-    createdAt: 1000 + f.id,
+    createdAt: createdAtFor(f.id),
     updatedAt: 1000 + f.id,
   } as unknown as DbRecord;
 }
@@ -498,5 +508,149 @@ describe("Records read-path equivalence: engine vs Dexie", () => {
         });
       }
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // Date Added sort / recency window (Task #1561). Records.tsx routes these to
+  // the engine (createdAtSort keyset + addedSince) when READY + CURRENT, or to
+  // the Dexie createdAt keyset helper otherwise. Both paginate with a
+  // (createdAt, id) cursor, so the full sequence of pages — including
+  // boundaries falling inside createdAt ties — must be identical.
+  // -------------------------------------------------------------------------
+  describe("date-added (createdAt) sort", () => {
+    const PAGE = 20; // small so boundaries land mid-tie (ties are ~3 wide)
+
+    function dateFilterFn(opts: {
+      includeBlockchainDiscovered: boolean;
+      type?: string;
+      search?: string;
+      addedSince?: number;
+    }) {
+      const base = makeFilterFn(opts.search ?? "", opts.includeBlockchainDiscovered);
+      return (r: DbRecord) => {
+        if (opts.addedSince != null && ((r.createdAt as number) ?? 0) < opts.addedSince) return false;
+        if (opts.type && r.type !== opts.type) return false;
+        return base(r);
+      };
+    }
+
+    async function dexieAllPages(opts: {
+      direction: "newest" | "oldest";
+      includeBlockchainDiscovered: boolean;
+      type?: string;
+      search?: string;
+      addedSince?: number;
+    }): Promise<number[]> {
+      const filter = dateFilterFn(opts);
+      const out: number[] = [];
+      let cursor: { createdAt: number; id: number } | undefined;
+      for (let guard = 0; guard < 100; guard++) {
+        const page = await getRecordsPageByCreatedAtKeyset({
+          limit: PAGE,
+          direction: opts.direction,
+          addedSince: opts.addedSince,
+          cursor,
+          filter,
+        });
+        out.push(...ids(page as { id?: number | null }[]));
+        if (page.length < PAGE) break;
+        const last = page[page.length - 1];
+        cursor = { createdAt: last.createdAt as number, id: last.id as number };
+      }
+      return out;
+    }
+
+    function engineAllPages(opts: {
+      direction: "newest" | "oldest";
+      includeBlockchainDiscovered: boolean;
+      type?: string;
+      search?: string;
+      addedSince?: number;
+    }): number[] {
+      const out: number[] = [];
+      let cursor: { createdAt: number; id: number } | undefined;
+      for (let guard = 0; guard < 100; guard++) {
+        const page = getRecordPage(engine, {
+          includeBlockchainDiscovered: opts.includeBlockchainDiscovered,
+          type: opts.type,
+          search: opts.search,
+          addedSince: opts.addedSince,
+          requireCreatedAt: true,
+          createdAtSort: opts.direction,
+          createdAtCursor: cursor,
+          limit: PAGE,
+        });
+        out.push(...ids(page));
+        if (page.length < PAGE) break;
+        const last = page[page.length - 1];
+        cursor = { createdAt: last.createdAt as number, id: last.id };
+      }
+      return out;
+    }
+
+    const SINCE = CREATED_BASE + 15 * 60_000;
+
+    for (const direction of ["newest", "oldest"] as const) {
+      for (const include of [true, false]) {
+        const label = include ? "include" : "exclude";
+        it(`${direction} full pagination matches Dexie (${label} blockchain-discovered)`, async () => {
+          const eng = engineAllPages({ direction, includeBlockchainDiscovered: include });
+          const dex = await dexieAllPages({ direction, includeBlockchainDiscovered: include });
+          expect(eng).toEqual(dex);
+          expect(eng.length).toBeGreaterThan(PAGE); // multiple pages actually crossed
+        });
+      }
+    }
+
+    it("addedSince window matches Dexie (newest, exclude)", async () => {
+      const opts = { direction: "newest" as const, includeBlockchainDiscovered: false, addedSince: SINCE };
+      expect(engineAllPages(opts)).toEqual(await dexieAllPages(opts));
+    });
+
+    it("type filter + addedSince + oldest matches Dexie", async () => {
+      const opts = {
+        direction: "oldest" as const,
+        includeBlockchainDiscovered: false,
+        type: "address",
+        addedSince: SINCE,
+      };
+      expect(engineAllPages(opts)).toEqual(await dexieAllPages(opts));
+    });
+
+    it("substring search composes with the createdAt ordering identically", async () => {
+      const opts = { direction: "newest" as const, includeBlockchainDiscovered: true, search: "wallet" };
+      expect(engineAllPages(opts)).toEqual(await dexieAllPages(opts));
+    });
+
+    it("ordering is truly by createdAt, not id (fixture is scrambled)", () => {
+      const eng = engineAllPages({ direction: "newest", includeBlockchainDiscovered: true });
+      const idDesc = [...eng].sort((a, b) => b - a);
+      expect(eng).not.toEqual(idDesc);
+      expect(new Set(eng).size).toBe(eng.length); // no dupes across tie boundaries
+    });
+
+    it("engine count with addedSince matches Dexie's window count", async () => {
+      for (const include of [true, false]) {
+        const filter = dateFilterFn({ includeBlockchainDiscovered: include, addedSince: SINCE });
+        const dex = await countRecordsByCreatedAtWindow(SINCE, filter, 10_000);
+        const eng = engineCountRecords(engine, {
+          includeBlockchainDiscovered: include,
+          addedSince: SINCE,
+          requireCreatedAt: true,
+        });
+        expect(eng).toBe(dex.count);
+        expect(dex.truncated).toBe(false);
+      }
+    });
+
+    it("engine count without a window (sort-only) matches Dexie", async () => {
+      const filter = dateFilterFn({ includeBlockchainDiscovered: false });
+      const dex = await countRecordsByCreatedAtWindow(undefined, filter, 10_000);
+      const eng = engineCountRecords(engine, {
+        includeBlockchainDiscovered: false,
+        requireCreatedAt: true,
+      });
+      expect(eng).toBe(dex.count);
+    });
   });
 });

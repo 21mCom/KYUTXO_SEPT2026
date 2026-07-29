@@ -969,10 +969,11 @@ export async function getRecordsPageByTypeAndImportanceTiersKeyset(
 // cursor is therefore a (createdAt, id) pair and ties are resolved with a
 // small equals() query before continuing strictly past the boundary.
 //
-// NOTE: this ordering is NOT expressible on the native engine fast path (the
-// engine's record page is id-keyset only), so the Records page routes any
-// date-added sort/recency query to this Dexie path per the freshness-gate
-// fallback pattern.
+// NOTE: this ordering is ALSO expressible on the native engine fast path
+// (getRecordPage's createdAtSort/createdAtCursor/addedSince options, Task
+// #1561); the Records page prefers the engine when READY + CURRENT and uses
+// this Dexie path as the fallback per the freshness-gate pattern. The two
+// paths must stay ordering-equivalent — see the read-equivalence suite.
 // ---------------------------------------------------------------------------
 
 export interface CreatedAtCursor {

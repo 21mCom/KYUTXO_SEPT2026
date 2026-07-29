@@ -39,3 +39,11 @@ code path.
 **How to apply:** see
 `client/src/lib/engine/__tests__/records-read-equivalence.test.ts` for the
 working replica of both paths.
+
+- **Date-added (createdAt) parity:** the engine's createdAt-keyset page/count
+  must exclude NULL createdAt (`requireCreatedAt` / addedSince bound), because
+  the Dexie path walks the createdAt index and IndexedDB never indexes missing
+  keys. Tiebreak is (createdAt, id) in the SAME direction on both paths; fixture
+  createdAt must be non-monotonic with id and include ties or the tests prove
+  nothing. Adding an engine index warrants an ENGINE_SCHEMA_VERSION bump so
+  pre-existing mirrors reseed and actually get the fast plan.
