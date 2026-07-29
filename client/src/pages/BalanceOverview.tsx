@@ -335,6 +335,7 @@ const HEURISTIC_ROW_HEIGHT = 44;
 function VirtualizedHeuristicList({
   addresses,
   resyncingAddresses,
+  resyncTxProgress,
   resyncDisabled,
   copiedKey,
   onCopy,
@@ -342,6 +343,8 @@ function VirtualizedHeuristicList({
 }: {
   addresses: string[];
   resyncingAddresses: Set<string>;
+  /** address -> live { fetched, total } tx counter for an in-flight per-address re-sync. */
+  resyncTxProgress: Map<string, { fetched: number; total: number }>;
   resyncDisabled: boolean;
   copiedKey: string | null;
   onCopy: (address: string) => void;
@@ -387,6 +390,7 @@ function VirtualizedHeuristicList({
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const address = addresses[virtualRow.index];
           const isResyncing = resyncingAddresses.has(address);
+          const txProgress = isResyncing ? resyncTxProgress.get(address) : undefined;
           return (
             <div
               key={address}
@@ -426,7 +430,16 @@ function VirtualizedHeuristicList({
                 {isResyncing ? (
                   <>
                     <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                    Re-syncing…
+                    {txProgress && txProgress.total > 0 ? (
+                      <span
+                        data-testid={`text-heuristic-single-resync-tx-progress-${address}`}
+                      >
+                        {txProgress.fetched.toLocaleString()}/
+                        {txProgress.total.toLocaleString()} transactions fetched
+                      </span>
+                    ) : (
+                      "Re-syncing…"
+                    )}
                   </>
                 ) : (
                   "Re-sync"
@@ -533,6 +546,9 @@ export default function BalanceOverview() {
   // Addresses currently running a one-off per-address re-sync (so each row's
   // button can show its own spinner and the rest stay enabled).
   const [resyncingHeuristicAddresses, setResyncingHeuristicAddresses] = useState<Set<string>>(new Set());
+  // address -> live { fetched, total } tx counter for an in-flight per-address
+  // re-sync, so a single large address doesn't look frozen while it fetches.
+  const [singleResyncTxProgress, setSingleResyncTxProgress] = useState<Map<string, { fetched: number; total: number }>>(new Map());
   const resolveAbortByGroupRef = useRef<Map<string, AbortController>>(new Map());
   const resolveAbortByRecordRef = useRef<Map<number, AbortController>>(new Map());
   const [cancellingGroups, setCancellingGroups] = useState<Set<string>>(new Set());
@@ -1317,7 +1333,19 @@ export default function BalanceOverview() {
 
       let ok = false;
       try {
-        const result = await transactionSyncService.syncSingleAddress(address);
+        const result = await transactionSyncService.syncSingleAddress(address, (progress) => {
+          // Live per-address fetch counter (same mapping as the bulk action):
+          // transactionsNew/transactionsFound carry the streaming
+          // "processed / total" counts during the syncing-addresses phase.
+          setSingleResyncTxProgress((prev) => {
+            const next = new Map(prev);
+            next.set(address, {
+              fetched: progress.transactionsNew,
+              total: progress.transactionsFound,
+            });
+            return next;
+          });
+        });
         ok = result.success;
       } catch (err) {
         console.warn(`[BalanceOverview] Heuristic re-sync failed for ${address}:`, err);
@@ -1351,6 +1379,12 @@ export default function BalanceOverview() {
     } finally {
       setResyncingHeuristicAddresses((prev) => {
         const next = new Set(prev);
+        next.delete(address);
+        return next;
+      });
+      setSingleResyncTxProgress((prev) => {
+        if (!prev.has(address)) return prev;
+        const next = new Map(prev);
         next.delete(address);
         return next;
       });
@@ -2047,6 +2081,7 @@ export default function BalanceOverview() {
                 <VirtualizedHeuristicList
                   addresses={heuristicAddresses}
                   resyncingAddresses={resyncingHeuristicAddresses}
+                  resyncTxProgress={singleResyncTxProgress}
                   resyncDisabled={resyncingHeuristic}
                   copiedKey={copiedKey}
                   onCopy={(address) => copy(address, { label: "Address" })}

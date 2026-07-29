@@ -348,13 +348,61 @@ describe("BalanceOverview heuristic re-sync", () => {
     fireEvent.click(screen.getByTestId("button-resync-heuristic-address-A"));
 
     await waitFor(() => expect(syncSingleAddress).toHaveBeenCalledTimes(1));
-    expect(syncSingleAddress).toHaveBeenCalledWith("A");
-    expect(syncSingleAddress).not.toHaveBeenCalledWith("B");
+    expect(syncSingleAddress).toHaveBeenCalledWith("A", expect.any(Function));
+    expect(syncSingleAddress.mock.calls.every((c) => c[0] !== "B")).toBe(true);
     expect(updateProvider).toHaveBeenCalledTimes(1);
 
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
     expect(toastCalls[0].title).toBe("Re-synced");
     expect(toastCalls[0].variant).toBeUndefined();
+  });
+
+  it("shows a live tx-fetch counter on the per-address Re-sync button", async () => {
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    followUpHeuristicCount = 1;
+
+    // Hold the sync open so we can drive its onProgress callback and observe
+    // the in-flight button state.
+    let capturedOnProgress: ((p: { transactionsNew: number; transactionsFound: number }) => void) | undefined;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    syncSingleAddress.mockImplementation(async (_addr: unknown, onProgress?: unknown) => {
+      capturedOnProgress = onProgress as typeof capturedOnProgress;
+      await gate;
+      return { success: true };
+    });
+
+    await renderAndShowBanner();
+    fireEvent.click(screen.getByTestId("button-toggle-heuristic-details"));
+    await screen.findByTestId("button-resync-heuristic-address-A");
+    fireEvent.click(screen.getByTestId("button-resync-heuristic-address-A"));
+
+    // Before any progress event: plain spinner fallback, no counter yet.
+    await waitFor(() => {
+      const btn = screen.getByTestId("button-resync-heuristic-address-A");
+      expect((btn as HTMLButtonElement).disabled).toBe(true);
+      expect(btn.textContent).toContain("Re-syncing");
+    });
+    expect(screen.queryByTestId("text-heuristic-single-resync-tx-progress-A")).toBeNull();
+    await waitFor(() => expect(capturedOnProgress).toBeDefined());
+
+    // A streamed progress event replaces the spinner label with the live counter.
+    act(() => {
+      capturedOnProgress!({ transactionsNew: 25, transactionsFound: 120 });
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("text-heuristic-single-resync-tx-progress-A").textContent,
+      ).toContain("25/120 transactions fetched");
+    });
+    // The other row stays untouched.
+    expect(screen.queryByTestId("text-heuristic-single-resync-tx-progress-B")).toBeNull();
+
+    // Finishing the sync clears the counter and re-enables the button family.
+    act(() => release());
+    await waitFor(() => {
+      expect(screen.queryByTestId("text-heuristic-single-resync-tx-progress-A")).toBeNull();
+    });
   });
 
   it("warns without syncing when a single-address re-sync has no provider", async () => {
