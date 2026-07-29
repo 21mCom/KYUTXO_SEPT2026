@@ -33,3 +33,12 @@ navigate to /balance AFTER seeding so the mount-time count read sees the data
 (the page's count effect re-reads on dbSignal, not on dynamic-import writes).
 Fresh Playwright context = empty vault = "Create Vault" screen first
 (input-password / input-confirm-password / button-submit).
+
+## Live tx-counter assertion
+The per-address "X/Y transactions fetched" counter reuses SyncProgress
+transactionsNew/transactionsFound; later phases (prevout-resolve) overwrite
+them with a DIFFERENT total (e.g. "4/4" then "3/3"). When asserting the
+counter ticks, install a MutationObserver before clicking and scope the
+monotonic check to the leading run of samples sharing the first observed
+total. Pick a real address with 3-60 txs (block-vin walk) so the counter has
+several distinct values but the fetch stays fast.
