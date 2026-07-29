@@ -62,6 +62,8 @@ import {
   FIELD_DEFS,
   OPERATORS,
   ACTION_TYPES,
+  applyTextJoin,
+  isActionTypeAllowedForField,
 } from "./bulk-editor-types";
 import { VocabularyCombobox, VocabularyMultiSelect } from "@/components/VocabularyCombobox";
 
@@ -396,12 +398,8 @@ function VirtualizedConfirmationTable({
                   } else if (action.type === 'remove' && Array.isArray(currentValue)) {
                     const arr = (currentValue as string[]).filter(v => v !== action.value);
                     newValue = arr.join(', ') || '(empty)';
-                  } else if (action.type === 'append' && !Array.isArray(currentValue)) {
-                    const existing = (currentValue as string) || '';
-                    newValue = (existing ? existing + '\n' + action.value : action.value) || '(empty)';
-                  } else if (action.type === 'prepend' && !Array.isArray(currentValue)) {
-                    const existing = (currentValue as string) || '';
-                    newValue = (existing ? action.value + '\n' + existing : action.value) || '(empty)';
+                  } else if ((action.type === 'append' || action.type === 'prepend') && !Array.isArray(currentValue)) {
+                    newValue = applyTextJoin(action.type, currentValue as string | undefined, action.value) || '(empty)';
                   }
                   
                   const changed = displayCurrent !== newValue;
@@ -670,14 +668,8 @@ export default function BulkEditor() {
                   (updates as any)[action.field] = '';
                   break;
                 case 'append':
-                  (updates as any)[action.field] = currentValue
-                    ? currentValue + '\n' + action.value
-                    : action.value;
-                  break;
                 case 'prepend':
-                  (updates as any)[action.field] = currentValue
-                    ? action.value + '\n' + currentValue
-                    : action.value;
+                  (updates as any)[action.field] = applyTextJoin(action.type, currentValue, action.value);
                   break;
                 default:
                   (updates as any)[action.field] = currentValue;
@@ -1246,16 +1238,7 @@ export default function BulkEditor() {
               const isArrayField = fieldDef?.type === 'array';
               const showValue = action.type !== 'clear';
               
-              const availableActions = ACTION_TYPES.filter(at => {
-                if (at.value === 'attach_file') return true;
-                if (at.value === 'add' || at.value === 'remove') {
-                  return isArrayField;
-                }
-                if (at.value === 'append' || at.value === 'prepend') {
-                  return fieldDef?.type === 'text';
-                }
-                return true;
-              });
+              const availableActions = ACTION_TYPES.filter(at => isActionTypeAllowedForField(at.value, fieldDef));
               
               return (
                 <div key={action.id} className="flex items-center gap-2 flex-wrap">

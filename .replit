@@ -51,6 +51,10 @@ args = "entity-list"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "bulk-editor-text-join-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "typecheck"
 
 [[workflows.workflow.tasks]]
@@ -247,6 +251,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/privacy-entity-list.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bulk-editor-text-join-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/bulk-editor-types.textJoin.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

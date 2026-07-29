@@ -106,5 +106,32 @@ interface UndoSnapshot {
   actionsApplied: { type: ActionType; field: string; value?: string }[];
 }
 
+/**
+ * Joins new text onto an existing text value for append/prepend actions.
+ * The empty-value guard lives here (and ONLY here): when the existing value
+ * is empty, no newline separator is added, so empty notes never gain a
+ * stray blank line. Both the preview column and applyChanges must use this.
+ */
+function applyTextJoin(type: 'append' | 'prepend', existing: string | undefined | null, value: string): string {
+  const current = existing || '';
+  if (!current) return value;
+  return type === 'append' ? current + '\n' + value : value + '\n' + current;
+}
+
+/**
+ * Whether an action type may be offered for a given field definition.
+ * Append/Prepend are text-only; Add/Remove are array-only.
+ */
+function isActionTypeAllowedForField(actionType: ActionType, fieldDef: FieldDef | undefined): boolean {
+  if (actionType === 'attach_file') return true;
+  if (actionType === 'add' || actionType === 'remove') {
+    return fieldDef?.type === 'array';
+  }
+  if (actionType === 'append' || actionType === 'prepend') {
+    return fieldDef?.type === 'text';
+  }
+  return true;
+}
+
 export type { FieldType, FieldDef, Operator, ActionType, FilterCondition, ActionDef, UndoSnapshot };
-export { FIELD_DEFS, OPERATORS, ACTION_TYPES };
+export { FIELD_DEFS, OPERATORS, ACTION_TYPES, applyTextJoin, isActionTypeAllowedForField };
