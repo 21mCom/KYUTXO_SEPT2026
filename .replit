@@ -217,6 +217,10 @@ args = "calendar-dropdown-caption-node-check"
 task = "workflow.run"
 args = "descriptor-singlesig-handoff-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "demo-custody-chain-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -744,6 +748,18 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-descriptor-singlesig-handoff-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "demo-custody-chain-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-demo-custody-chain-browser.mjs"
+
 
 [workflows.workflow.metadata]
 isValidation = true
