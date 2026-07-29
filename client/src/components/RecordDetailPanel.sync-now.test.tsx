@@ -12,6 +12,7 @@
 // We render the real RecordDetailPanel and stub the data-fetching chain plus the
 // transaction-sync service so the test exercises only the Sync Now behaviour.
 
+import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";

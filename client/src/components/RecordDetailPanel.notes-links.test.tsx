@@ -10,6 +10,7 @@
 // (dataFacade lookups, toast, QR code generation) so the test exercises only
 // the notes link rendering.
 
+import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { fireEvent, cleanup, within } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
