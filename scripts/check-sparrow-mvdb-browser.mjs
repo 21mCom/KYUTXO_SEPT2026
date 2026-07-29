@@ -33,6 +33,12 @@ import { execSync, spawn } from 'node:child_process';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+
+// Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
+// and crash each other (SIGTRAP, goto timeouts). Hold the lock for the whole
+// script lifetime, including any dev-server spawn.
+await acquireBrowserCheckLock();
 
 const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
 const BASE_URL = `http://localhost:${PORT}/`;
