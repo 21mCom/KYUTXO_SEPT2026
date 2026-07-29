@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { 
   Key, 
@@ -93,6 +93,17 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 export default function DescriptorImport() {
   const [, navigate] = useLocation();
   const [step, setStep] = useState(1);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    if (typeof el.scrollTo === "function") {
+      el.scrollTo({ top: 0 });
+    } else {
+      el.scrollTop = 0;
+    }
+  }, [step]);
   
   const [descriptorInput, setDescriptorInput] = useState("");
   const [parsedDescriptor, setParsedDescriptor] = useState<ParsedDescriptor | null>(null);
@@ -676,7 +687,7 @@ export default function DescriptorImport() {
   };
 
   return (
-    <div className="flex-1 overflow-auto p-6">
+    <div ref={scrollContainerRef} className="flex-1 overflow-auto p-6">
       <div className="max-w-4xl mx-auto">
       <div className="mb-6">
         <div className="flex items-center gap-3 mb-2">

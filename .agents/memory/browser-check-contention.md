@@ -30,3 +30,7 @@ Every real-Chromium check script acquires an exclusive lock (`scripts/browser-ch
 After many back-to-back validation runs, a check can fail on `input-password` timeout even on an idle machine because the long-running Vite dev server itself is wedged/stale. Restarting the "Start application" workflow (then re-running the check standalone to confirm green) fixes it; persistence + retry-on-idle eventually lands a fully green run without skip_validation_reason.
 
 **Update (2026-07):** Contention got worse with ~12 chromium checks per validation run — full runs fail as a lottery (EAGAIN spawns, "browser has been closed", vitest fork-teardown timeouts) even when every check passes standalone. Mitigations: wrap each browser-check session in a 2-3 attempt retry loop with a fresh chromium profile per attempt (fixed the descriptor-bsms check); never kill chromium processes or restart the dev workflow while a validation run is active — that dooms the run; hung checker processes from a cancelled run must be killed before starting a replacement or they starve it. If repeated runs fail only on unrelated pre-existing checks, skip_validation_reason with per-check evidence is the escape hatch.
+
+**Chromium binary:** `which chromium` can fail in ad-hoc shells (workflows have it on PATH). Fallback: `CHROMIUM_BIN=$(ls -d /nix/store/*playwright-browsers-chromium/chromium-*/chrome-linux/chrome | head -1)`.
+
+**Scroll assertions:** never select the page scroller with `div.flex-1.overflow-auto` alone — the sidebar matches too; scope to `main ... .p-6`.
