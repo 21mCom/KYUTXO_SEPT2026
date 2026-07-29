@@ -64,16 +64,41 @@ async function runImport(page, descriptor, label) {
   return summary;
 }
 
+async function launchBrowserWithRetry(attempts = 4) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await chromium.launch({
+        executablePath: chromiumBin(), headless: true,
+        args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+      });
+    } catch (e) {
+      lastErr = e;
+      console.log(`[launch retry ${i + 1}/${attempts}] ${e.message?.split('\n')[0]}`);
+      await new Promise((r) => setTimeout(r, 5_000 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 async function main() {
-  const browser = await chromium.launch({
-    executablePath: chromiumBin(), headless: true,
-    args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
-  });
+  const browser = await launchBrowserWithRetry();
   const context = await browser.newContext({ serviceWorkers: 'block' });
   const page = await context.newPage();
   page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
 
-  await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
+  let loaded = false, lastErr;
+  for (let i = 0; i < 3 && !loaded; i++) {
+    try {
+      await page.goto(BASE_URL, { waitUntil: 'load', timeout: 90_000 });
+      loaded = true;
+    } catch (e) {
+      lastErr = e;
+      console.log(`[goto retry ${i + 1}/3] ${e.message?.split('\n')[0]}`);
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
+  }
+  if (!loaded) throw lastErr;
   await unlockIfNeeded(page);
 
   const s1 = await runImport(page, TR_DESC, 'taproot');

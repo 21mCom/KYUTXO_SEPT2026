@@ -149,6 +149,10 @@ args = "recently-added-browser-check"
 task = "workflow.run"
 args = "heuristic-resync-progress-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-import-browser-check"
+
 [[workflows.workflow]]
 name = "sparrow-mvdb-browser-check"
 author = "agent"
@@ -156,6 +160,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-sparrow-mvdb-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "descriptor-import-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-descriptor-import-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
