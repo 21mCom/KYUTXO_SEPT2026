@@ -124,6 +124,7 @@ interface Fixture {
   owner: string | null;
   walletName: string | null;
   notes: string | null;
+  tags: string[];
   addressImportance: string;
 }
 
@@ -149,6 +150,10 @@ function makeFixture(i: number): Fixture {
     // the "wallet" search is broad (paging) but not literally everything.
     walletName: i % 7 === 0 ? null : i % 3 === 0 ? "ColdWallet" : "HotWallet",
     notes: i % 11 === 0 ? `note mentioning alpha ${i}` : null,
+    // "cold-storage" appears ONLY in tags (walletName has "ColdWallet" but not
+    // the hyphenated form), so the tag-search cases below prove the tag path.
+    // Mixed casing proves case-insensitivity on both paths.
+    tags: i % 6 === 0 ? ["Cold-Storage", "kyc"] : i % 9 === 0 ? ["cold-storage"] : [],
     addressImportance: ALL_TIERS[i % ALL_TIERS.length],
   };
 }
@@ -179,7 +184,7 @@ function toEngineRow(f: Fixture): RecordRow {
     statsComputedAt: null,
     createdAt: createdAtFor(f.id),
     updatedAt: 1000 + f.id,
-    tags: "[]",
+    tags: JSON.stringify(f.tags),
     categories: "[]",
   };
 }
@@ -196,7 +201,7 @@ function toDexieRow(f: Fixture): DbRecord {
     walletName: f.walletName ?? undefined,
     seedName: undefined,
     walletSoftware: undefined,
-    tags: [],
+    tags: f.tags,
     categories: [],
     addressImportance: f.addressImportance,
     createdAt: createdAtFor(f.id),
@@ -263,7 +268,8 @@ function makeFilterFn(search: string, includeBlockchainDiscovered: boolean) {
           record.inputString?.toLowerCase().includes(s) ||
           record.owner?.toLowerCase().includes(s) ||
           record.walletName?.toLowerCase().includes(s) ||
-          record.notes?.toLowerCase().includes(s)
+          record.notes?.toLowerCase().includes(s) ||
+          record.tags?.some((t) => t.toLowerCase().includes(s))
         )
       ) {
         return false;
@@ -479,7 +485,9 @@ describe("Records read-path equivalence: engine vs Dexie", () => {
     // 'wallet' is broad (hits walletName across many rows) so paging matters;
     // 'satoshi' (owner) and 'alpha' (label + notes) are narrower cross-field
     // hits that still exceed/approach a page.
-    for (const search of ["wallet", "satoshi", "alpha"]) {
+    // 'cold-storage' + 'STORAGE' hit ONLY the tags field (mixed-case tags in
+    // fixtures prove case-insensitive tag matching on both paths).
+    for (const search of ["wallet", "satoshi", "alpha", "cold-storage", "STORAGE"]) {
       for (const include of [true, false]) {
         const label = include ? "include" : "exclude";
         it(`search="${search}" page 1 matches (${label})`, async () => {

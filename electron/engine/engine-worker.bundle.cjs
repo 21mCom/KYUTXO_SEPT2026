@@ -609,6 +609,9 @@ function insertParticipants(db2, rows) {
     ])
   );
 }
+function escapeLikeTerm(term) {
+  return term.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
 function buildRecordWhere(opts) {
   const clauses = [];
   const bind = [];
@@ -627,11 +630,11 @@ function buildRecordWhere(opts) {
   }
   const search = opts.search?.trim().toLowerCase();
   if (search) {
-    const like = `%${search}%`;
+    const like = `%${escapeLikeTerm(search)}%`;
     clauses.push(
-      "(inputStringLower LIKE ? OR lower(label) LIKE ? OR lower(owner) LIKE ? OR lower(walletName) LIKE ? OR lower(notes) LIKE ?)"
+      "(inputStringLower LIKE ? ESCAPE '\\' OR lower(label) LIKE ? ESCAPE '\\' OR lower(owner) LIKE ? ESCAPE '\\' OR lower(walletName) LIKE ? ESCAPE '\\' OR lower(notes) LIKE ? ESCAPE '\\' OR (tags IS NOT NULL AND json_valid(tags) AND EXISTS (SELECT 1 FROM json_each(records.tags) WHERE lower(json_each.value) LIKE ? ESCAPE '\\')))"
     );
-    bind.push(like, like, like, like, like);
+    bind.push(like, like, like, like, like, like);
   }
   const sql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   return { sql, bind };
@@ -978,8 +981,8 @@ function getVaultSummaries(db2, opts = {}) {
   const bind = [];
   const search = opts.search?.trim().toLowerCase();
   if (search) {
-    const like = `%${search}%`;
-    clauses.push("(lower(COALESCE(vaultName, '')) LIKE ? OR lower(COALESCE(vaultNotes, '')) LIKE ?)");
+    const like = `%${escapeLikeTerm(search)}%`;
+    clauses.push("(lower(COALESCE(vaultName, '')) LIKE ? ESCAPE '\\' OR lower(COALESCE(vaultNotes, '')) LIKE ? ESCAPE '\\')");
     bind.push(like, like);
   }
   return selectRows(

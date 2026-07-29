@@ -741,7 +741,7 @@ export function insertParticipants(db: EngineDb, rows: ParticipantRow[]): void {
 export interface RecordQueryOptions {
   /** When false, blockchain-discovered + pending-review rows are excluded. */
   includeBlockchainDiscovered?: boolean;
-  /** Case-insensitive substring across label/inputString/owner/walletName/notes. */
+  /** Case-insensitive substring across label/inputString/owner/walletName/notes/tags. */
   search?: string;
   /** Restrict to a record type (e.g. 'address'). */
   type?: string;
@@ -787,9 +787,13 @@ function buildRecordWhere(opts: RecordQueryOptions): { sql: string; bind: unknow
   if (search) {
     const like = `%${escapeLikeTerm(search)}%`;
     clauses.push(
-      "(inputStringLower LIKE ? ESCAPE '\\' OR lower(label) LIKE ? ESCAPE '\\' OR lower(owner) LIKE ? ESCAPE '\\' OR lower(walletName) LIKE ? ESCAPE '\\' OR lower(notes) LIKE ? ESCAPE '\\')",
+      "(inputStringLower LIKE ? ESCAPE '\\' OR lower(label) LIKE ? ESCAPE '\\' OR lower(owner) LIKE ? ESCAPE '\\' OR lower(walletName) LIKE ? ESCAPE '\\' OR lower(notes) LIKE ? ESCAPE '\\'" +
+        // tags is JSON array text; match per-tag (json_each) to mirror the Dexie
+        // path's record.tags.some(t => t.includes(search)), never the raw JSON
+        // text (which would false-positive on quotes/commas/escapes).
+        " OR (tags IS NOT NULL AND json_valid(tags) AND EXISTS (SELECT 1 FROM json_each(records.tags) WHERE lower(json_each.value) LIKE ? ESCAPE '\\')))",
     );
-    bind.push(like, like, like, like, like);
+    bind.push(like, like, like, like, like, like);
   }
   const sql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   return { sql, bind };

@@ -356,7 +356,8 @@ export default function Records() {
               record.inputString?.toLowerCase().includes(search) ||
               record.owner?.toLowerCase().includes(search) ||
               record.walletName?.toLowerCase().includes(search) ||
-              record.notes?.toLowerCase().includes(search)
+              record.notes?.toLowerCase().includes(search) ||
+              record.tags?.some((t) => t.toLowerCase().includes(search))
             )) return false;
           }
           return true;
