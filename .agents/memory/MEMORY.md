@@ -60,4 +60,5 @@
 - [db-error-noise vitest guard](db-noise-vitest-guard.md) — global setup hook fails tests on unhandled rejections/Dexie noise; mock CRUD modules, never loosen the hook.
 - [Descriptor/BSMS import gotchas](descriptor-bsms-import.md) — BSMS `/**` wildcard = dual-chain; vocabulary "already exists" throws must be tolerated in bulk saves or imports die.
 - [Electrum txid confirmations](electrum-txid-confirmations.md) — verbose tx.get has confirmations but NO height; derive tip−conf+1 via cached tip; never cache unconfirmed conversions in session caches.
+- [Dexie .or() requires an index](dexie-or-requires-index.md) — unindexed .or() field throws SchemaError at query time; silent catch-and-empty fallbacks hide it as console noise.
 - [Demo vault builder](demo-vault-builder.md) — v3 backup zips from Node (fflate); Esplora rotate+cache; deep custody chains need chain adoption + addTx-size-aware spend walk; unlock per page load.

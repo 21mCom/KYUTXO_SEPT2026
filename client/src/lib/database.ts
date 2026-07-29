@@ -72,6 +72,15 @@ export class KYUTXODatabase extends Dexie {
   constructor() {
     super('KYUTXODatabase');
 
+    // v36: index `identifier` on attachments. The detail panel loads
+    // attachments by recordId OR identifier, and Dexie's .or() requires an
+    // index — without it every panel open threw a SchemaError and silently
+    // fell back to an empty attachment list. Delta declaration — all other
+    // tables inherit unchanged from v35.
+    this.version(36).stores({
+      attachments: '++id, recordId, createdAt, identifier',
+    });
+
     // v35: add the dustFlags table — user-flagged dust outputs keyed by unique
     // outpoint ("txid:vout"). Delta declaration — all other tables inherit
     // unchanged from v34.

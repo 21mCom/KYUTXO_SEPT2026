@@ -115,6 +115,11 @@ export async function getAttachmentsByRecordIdOrIdentifier(
   recordId: number,
   identifier: string
 ): Promise<Attachment[]> {
+  // Blank identifiers must not match rows that legitimately stored "" (or be
+  // wasted work) — only branch on identifier when one is provided.
+  if (!identifier) {
+    return db.attachments.where('recordId').equals(recordId).toArray();
+  }
   return db.attachments
     .where('recordId')
     .equals(recordId)

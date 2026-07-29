@@ -128,8 +128,13 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('[RecordPreview] Failed to load attachments:', error);
       setAttachments([]);
+      toast({
+        variant: "destructive",
+        title: "Attachments unavailable",
+        description: "Failed to load this record's attachments. The list shown may be incomplete.",
+      });
     }
-  }, []);
+  }, [toast]);
 
   const openRecordPreview = useCallback(async (recordId: number) => {
     setIsLoading(true);
