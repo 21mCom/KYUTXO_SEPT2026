@@ -1306,6 +1306,61 @@ describe("recomputeAddressStats UTXO-balance formula: exact-mode spend reduces b
   });
 });
 
+describe("recomputeAddressStats: Electrum blank-address spend inputs still reduce the balance", () => {
+  it("counts a blank-address outpoint spend against the owning address (outpoint-first)", async () => {
+    // Electrum-synced spends store the input with prevTxid/prevVout but a BLANK
+    // address and 0 amount. An address-keyed participant load alone never sees
+    // that input, so the address would fall back to heuristic mode with no
+    // matchable inputs and its balance would inflate to "total received".
+    const addr = "electrum-spend-addr";
+    await testDb.records.add(
+      mkAddr({ id: 1, inputString: addr, statsComputedAt: 0, cachedBalanceSats: 99999 }),
+    );
+    await testDb.blockchainTransactions.bulkAdd([mkTx("tx-er", 1000), mkTx("tx-es", 1001)]);
+    await testDb.transactionParticipants.bulkAdd([
+      { txid: "tx-er", address: addr, role: "output", amount: 600, vout: 0 } as unknown as TransactionParticipant,
+      { txid: "tx-er", address: addr, role: "output", amount: 700, vout: 1 } as unknown as TransactionParticipant,
+      // Electrum-style spend of tx-er:0 — blank address, zero amount, outpoint only.
+      { txid: "tx-es", address: "", role: "input", amount: 0, prevTxid: "tx-er", prevVout: 0 } as unknown as TransactionParticipant,
+    ]);
+    await testDb.addressSyncState.add({ address: addr, recordId: 1, lastSyncedAt: 1000 } as unknown as AddressSyncState);
+
+    const result = await recomputeAddressStats({ addresses: [addr] });
+    expect(result.cancelled).toBe(false);
+
+    const rec = await testDb.records.get(1);
+    // Only tx-er:1 (700 sats) is unspent; without the outpoint-keyed follow-up
+    // load this would be 1300 (total received).
+    expect(rec?.cachedBalanceSats).toBe(700);
+    expect(rec?.cachedUtxoCount).toBe(1);
+    // The spend transaction counts as activity for the owning address, just as
+    // it would if the input row had carried the resolved prevout address.
+    expect(rec?.cachedTxCount).toBe(2);
+  });
+
+  it("does not attribute a blank-address input spending an outpoint we don't own", async () => {
+    const addr = "electrum-foreign-spend-addr";
+    await testDb.records.add(
+      mkAddr({ id: 1, inputString: addr, statsComputedAt: 0, cachedBalanceSats: 0 }),
+    );
+    await testDb.blockchainTransactions.bulkAdd([mkTx("tx-fr", 1000), mkTx("tx-fs", 1001)]);
+    await testDb.transactionParticipants.bulkAdd([
+      { txid: "tx-fr", address: addr, role: "output", amount: 500, vout: 0 } as unknown as TransactionParticipant,
+      // Blank-address input spending a FOREIGN outpoint — must not touch addr.
+      { txid: "tx-fs", address: "", role: "input", amount: 0, prevTxid: "other-tx", prevVout: 0 } as unknown as TransactionParticipant,
+    ]);
+    await testDb.addressSyncState.add({ address: addr, recordId: 1, lastSyncedAt: 1000 } as unknown as AddressSyncState);
+
+    const result = await recomputeAddressStats({ addresses: [addr] });
+    expect(result.cancelled).toBe(false);
+
+    const rec = await testDb.records.get(1);
+    expect(rec?.cachedBalanceSats).toBe(500);
+    expect(rec?.cachedUtxoCount).toBe(1);
+    expect(rec?.cachedTxCount).toBe(1);
+  });
+});
+
 describe("recomputeAddressStats UTXO-balance formula: balance is never negative", () => {
   it("returns 0 when the address spent more sats than it received (old formula would go negative)", async () => {
     // addr receives 1000 sats at tx-r:0. It then spends tx-r:0 AND also

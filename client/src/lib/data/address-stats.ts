@@ -1,5 +1,6 @@
 import Dexie from 'dexie';
 import { db, notifyDbChange, type TransactionParticipant } from '../database';
+import { getSpendInputsByOutpoints } from './record-queries';
 import { bulkUpdateAddressStats, type AddressStatsCacheValues } from './record-crud';
 import { getSettings, updateSettings } from './settings-crud';
 import {
@@ -440,7 +441,37 @@ export async function computeStatsForAddresses(
 
   if (participants.length === 0) return out;
 
-  const txids = Array.from(new Set(participants.map(p => p.txid)));
+  // Address-keyed loads miss spend inputs that carry no prevout address
+  // (Electrum-synced inputs are stored with a blank address string). Follow up
+  // with an outpoint-keyed load for inputs spending the owned outputs we just
+  // fetched, and attribute each such input to the address that owns the spent
+  // output, so exact-mode spent detection sees those spends. Without this, an
+  // Electrum-synced address's spentOutpoints set stays empty and its balance
+  // inflates to "total received".
+  const seenIds = new Set<number>();
+  const ownerByOutpoint = new Map<string, string>();
+  const ownedOutpoints: Array<[string, number]> = [];
+  for (const p of participants) {
+    if (p.id !== undefined) seenIds.add(p.id);
+    if (p.role === 'output' && p.vout !== undefined && p.vout !== null) {
+      ownedOutpoints.push([p.txid, p.vout]);
+      ownerByOutpoint.set(`${p.txid}:${p.vout}`, p.address);
+    }
+  }
+  const spendInputs = await getSpendInputsByOutpoints(ownedOutpoints, signal);
+  if (isAborted(signal)) return out;
+  /** Blank/foreign-address spend inputs, attributed to the owning address. */
+  const attributedSpendInputs: Array<{ owner: string; participant: TransactionParticipant }> = [];
+  for (const p of spendInputs) {
+    if (p.id !== undefined && seenIds.has(p.id)) continue;
+    const owner = ownerByOutpoint.get(`${p.prevTxid}:${p.prevVout}`);
+    if (owner) attributedSpendInputs.push({ owner, participant: p });
+  }
+
+  const txids = Array.from(new Set([
+    ...participants.map(p => p.txid),
+    ...attributedSpendInputs.map(a => a.participant.txid),
+  ]));
   const txMap = await loadBlockTimes(txids);
 
   const addrAgg = new Map<string, AddressAgg>();
@@ -465,6 +496,20 @@ export async function computeStatsForAddresses(
       await yieldToEventLoop();
       if (isAborted(signal)) return out;
     }
+  }
+
+  // Merge the outpoint-fetched spend inputs into their owning address's
+  // aggregate. This is what a fully-resolved sync would have produced (an input
+  // row carrying the owner's address), so the spend transaction also counts
+  // toward txCount/lastActivityTime.
+  for (const { owner, participant } of attributedSpendInputs) {
+    const agg = addrAgg.get(owner);
+    if (!agg) continue;
+    agg.inputs.push(participant);
+    agg.inputSats += participant.amount;
+    agg.txids.add(participant.txid);
+    const blockTime = txMap.get(participant.txid) || 0;
+    if (blockTime > agg.lastTxTime) agg.lastTxTime = blockTime;
   }
 
   addrAgg.forEach((agg, address) => {
