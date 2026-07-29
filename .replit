@@ -229,6 +229,10 @@ args = "descriptor-singlesig-handoff-browser-check"
 task = "workflow.run"
 args = "demo-custody-chain-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-5k-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -790,6 +794,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-bip329-export-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-5k-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-5k-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

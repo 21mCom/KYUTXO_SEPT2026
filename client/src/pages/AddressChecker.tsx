@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect, memo } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Search, Loader2, AlertCircle, CheckCircle, Clock, X, RefreshCw, Info, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -171,6 +172,115 @@ function renderFirstSeen(row: AddressRow, onLoad: () => void, isHistoryRunning: 
   );
 }
 
+// One table row, memoized so the 250 ms patch flushes only re-render rows
+// whose object identity actually changed. Without this, a 5,000-address run
+// re-renders the ENTIRE table (with per-cell Radix tooltips) on every flush —
+// measured at multi-second main-thread freezes in a real browser.
+const AddressCheckRow = memo(function AddressCheckRow({
+  row,
+  i,
+  isHistoryRunning,
+  onLoadHistory,
+}: {
+  row: AddressRow;
+  i: number;
+  isHistoryRunning: boolean;
+  onLoadHistory: (index: number) => void;
+}) {
+  return (
+    <TableRow
+      data-testid={`row-address-${i}`}
+      data-funded={
+        !row.isInvalid && row.status === "done" && (row.info?.balanceSats ?? 0) > 0
+          ? "true"
+          : undefined
+      }
+      className={[
+        row.isInvalid ? "opacity-50" : "",
+        !row.isInvalid && row.status === "done" && (row.info?.balanceSats ?? 0) > 0
+          ? "bg-primary/10 hover:bg-primary/15 dark:bg-primary/15 dark:hover:bg-primary/20"
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ") || undefined}
+    >
+      {/* Native title tooltip: mounting a Radix Tooltip per address cell made
+          the initial render of a 5,000-row list freeze the main thread for
+          seconds. The full address stays reachable via the title attribute. */}
+      <TableCell className="font-mono text-xs">
+        <span className="cursor-default" title={row.raw}>
+          {row.raw.length > 24
+            ? `${row.raw.slice(0, 10)}…${row.raw.slice(-10)}`
+            : row.raw}
+        </span>
+      </TableCell>
+
+      <TableCell className="text-right">
+        {row.isInvalid ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Badge variant="destructive" className="gap-1 cursor-default">
+                  <AlertCircle className="h-3 w-3" />
+                  Invalid
+                </Badge>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              <span className="text-xs">{row.invalidReason}</span>
+            </TooltipContent>
+          </Tooltip>
+        ) : row.status === "error" ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <StatusBadge status="error" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              <span className="text-xs max-w-xs block">{row.error}</span>
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <StatusBadge status={row.status} />
+        )}
+      </TableCell>
+
+      <TableCell className="text-right tabular-nums" data-testid={`cell-txcount-${i}`}>
+        {row.info && row.info.txCount !== 0 ? row.info.txCount.toLocaleString() : "—"}
+      </TableCell>
+
+      <TableCell className="text-right tabular-nums" data-testid={`cell-received-${i}`}>
+        {row.info && row.info.receivedSats !== undefined && row.info.receivedSats !== 0 ? (
+          <span className="font-mono text-xs">{formatBTC(row.info.receivedSats)}</span>
+        ) : "—"}
+      </TableCell>
+
+      <TableCell className="text-right tabular-nums" data-testid={`cell-sent-${i}`}>
+        {row.info && row.info.sentSats !== undefined && row.info.sentSats !== 0 ? (
+          <span className="font-mono text-xs">{formatBTC(row.info.sentSats)}</span>
+        ) : "—"}
+      </TableCell>
+
+      <TableCell className="text-right tabular-nums" data-testid={`cell-balance-${i}`}>
+        {row.info && row.info.balanceSats !== 0 ? (
+          <span className="font-mono text-xs">{formatBTC(row.info.balanceSats)}</span>
+        ) : "—"}
+      </TableCell>
+
+      <TableCell className="text-right text-xs" data-testid={`cell-firstseen-${i}`}>
+        {renderFirstSeen(row, () => onLoadHistory(i), isHistoryRunning)}
+      </TableCell>
+
+      <TableCell className="text-right text-xs text-muted-foreground" data-testid={`cell-lastseen-${i}`}>
+        {row.status === "done" && row.historyPhase === "done"
+          ? formatDate(row.info?.lastSeenTime)
+          : "—"}
+      </TableCell>
+    </TableRow>
+  );
+});
+
 interface ParseResult {
   rows: AddressRow[];
   duplicatesSkipped: number;
@@ -235,8 +345,21 @@ export default function AddressChecker() {
   // run see a stale token and become no-ops instead of mutating the new run's
   // rows or prematurely re-enabling the history controls.
   const historyRunIdRef = useRef(0);
+  // Page-level scroll element + list offset for the row virtualizer: the
+  // table does not own a scroll container, the whole page scrolls as one.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
   // The provider used for the most recent check, reused for on-demand history.
   const providerRef = useRef<BlockchainProvider | null>(null);
+  // Mirrors of `rows` / `isHistoryRunning` so per-row callbacks passed to the
+  // memoized table rows can stay referentially stable across renders.
+  const rowsRef = useRef<AddressRow[]>(rows);
+  rowsRef.current = rows;
+  const isHistoryRunningRef = useRef(false);
+  useEffect(() => {
+    isHistoryRunningRef.current = isHistoryRunning;
+  }, [isHistoryRunning]);
 
   // kept for potential future use
   const _updateRow = useCallback((index: number, patch: Partial<AddressRow>) => {
@@ -478,13 +601,19 @@ export default function AddressChecker() {
       }
     }
   };
+  // Latest loadHistoryForIndexes, so stable callbacks below can call it
+  // without re-creating themselves each render.
+  const loadHistoryForIndexesRef = useRef(loadHistoryForIndexes);
+  loadHistoryForIndexesRef.current = loadHistoryForIndexes;
 
-  const runHistoryForRow = (index: number) => {
-    if (isHistoryRunning) return;
-    const row = rows[index];
+  // Stable identity (reads via refs) so memoized rows never re-render just
+  // because the parent re-rendered — see AddressCheckRow.
+  const runHistoryForRow = useCallback((index: number) => {
+    if (isHistoryRunningRef.current) return;
+    const row = rowsRef.current[index];
     if (!row || row.isInvalid || row.status !== "done") return;
-    loadHistoryForIndexes([{ i: index, address: row.raw }]);
-  };
+    loadHistoryForIndexesRef.current([{ i: index, address: row.raw }]);
+  }, []);
 
   const runHistoryForAll = () => {
     if (isHistoryRunning) return;
@@ -556,8 +685,42 @@ export default function AddressChecker() {
     : indexedRows;
   const hiddenCount = indexedRows.length - displayRows.length;
 
+  // Virtualize the results table off the page scroller: mounting 5,000 rows
+  // at once froze the main thread for seconds; only the visible window (plus
+  // overscan) is rendered now. scrollMargin = list offset inside the page
+  // scroll element (see VirtualizedUtxoList for the pattern).
+  const measureScrollMargin = useCallback(() => {
+    const scrollEl = scrollRef.current;
+    const listEl = listRef.current;
+    if (!scrollEl || !listEl) return;
+    const margin =
+      listEl.getBoundingClientRect().top -
+      scrollEl.getBoundingClientRect().top +
+      scrollEl.scrollTop;
+    // 1px guard prevents update loops from sub-pixel layout jitter.
+    setScrollMargin(prev => (Math.abs(prev - margin) > 1 ? margin : prev));
+  }, []);
+  useEffect(measureScrollMargin);
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measureScrollMargin);
+    ro.observe(scrollEl);
+    return () => ro.disconnect();
+  }, [measureScrollMargin]);
+
+  const ROW_ESTIMATE = 53;
+  const rowVirtualizer = useVirtualizer({
+    count: displayRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_ESTIMATE,
+    overscan: 20,
+    scrollMargin,
+  });
+  const virtualItems = rowVirtualizer.getVirtualItems();
+
   return (
-    <div className="flex-1 overflow-y-auto p-6">
+    <div className="flex-1 overflow-y-auto p-6" ref={scrollRef}>
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex items-center gap-3">
           <Search className="h-8 w-8 text-primary" />
@@ -715,123 +878,52 @@ export default function AddressChecker() {
 
             <Card>
               <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="min-w-[200px]">Address</TableHead>
-                      <TableHead className="text-right">Status</TableHead>
-                      <TableHead className="text-right">Transactions</TableHead>
-                      <TableHead className="text-right">Total Received</TableHead>
-                      <TableHead className="text-right">Total Sent</TableHead>
-                      <TableHead className="text-right">Balance</TableHead>
-                      <TableHead className="text-right">First Seen</TableHead>
-                      <TableHead className="text-right">Last Seen</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {displayRows.map(({ row, i }) => (
-                      <TableRow
-                        key={i}
-                        data-testid={`row-address-${i}`}
-                        data-funded={
-                          !row.isInvalid &&
-                          row.status === "done" &&
-                          (row.info?.balanceSats ?? 0) > 0
-                            ? "true"
-                            : undefined
-                        }
-                        className={[
-                          row.isInvalid ? "opacity-50" : "",
-                          !row.isInvalid &&
-                          row.status === "done" &&
-                          (row.info?.balanceSats ?? 0) > 0
-                            ? "bg-primary/10 hover:bg-primary/15 dark:bg-primary/15 dark:hover:bg-primary/20"
-                            : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ") || undefined}
-                      >
-                        <TableCell className="font-mono text-xs">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="cursor-default">
-                                {row.raw.length > 24
-                                  ? `${row.raw.slice(0, 10)}…${row.raw.slice(-10)}`
-                                  : row.raw}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="right">
-                              <span className="font-mono text-xs break-all max-w-xs block">{row.raw}</span>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TableCell>
-
-                        <TableCell className="text-right">
-                          {row.isInvalid ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span>
-                                  <Badge variant="destructive" className="gap-1 cursor-default">
-                                    <AlertCircle className="h-3 w-3" />
-                                    Invalid
-                                  </Badge>
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <span className="text-xs">{row.invalidReason}</span>
-                              </TooltipContent>
-                            </Tooltip>
-                          ) : row.status === "error" ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span>
-                                  <StatusBadge status="error" />
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <span className="text-xs max-w-xs block">{row.error}</span>
-                              </TooltipContent>
-                            </Tooltip>
-                          ) : (
-                            <StatusBadge status={row.status} />
-                          )}
-                        </TableCell>
-
-                        <TableCell className="text-right tabular-nums" data-testid={`cell-txcount-${i}`}>
-                          {row.info && row.info.txCount !== 0 ? row.info.txCount.toLocaleString() : "—"}
-                        </TableCell>
-
-                        <TableCell className="text-right tabular-nums" data-testid={`cell-received-${i}`}>
-                          {row.info && row.info.receivedSats !== undefined && row.info.receivedSats !== 0 ? (
-                            <span className="font-mono text-xs">{formatBTC(row.info.receivedSats)}</span>
-                          ) : "—"}
-                        </TableCell>
-
-                        <TableCell className="text-right tabular-nums" data-testid={`cell-sent-${i}`}>
-                          {row.info && row.info.sentSats !== undefined && row.info.sentSats !== 0 ? (
-                            <span className="font-mono text-xs">{formatBTC(row.info.sentSats)}</span>
-                          ) : "—"}
-                        </TableCell>
-
-                        <TableCell className="text-right tabular-nums" data-testid={`cell-balance-${i}`}>
-                          {row.info && row.info.balanceSats !== 0 ? (
-                            <span className="font-mono text-xs">{formatBTC(row.info.balanceSats)}</span>
-                          ) : "—"}
-                        </TableCell>
-
-                        <TableCell className="text-right text-xs" data-testid={`cell-firstseen-${i}`}>
-                          {renderFirstSeen(row, () => runHistoryForRow(i), isHistoryRunning)}
-                        </TableCell>
-
-                        <TableCell className="text-right text-xs text-muted-foreground" data-testid={`cell-lastseen-${i}`}>
-                          {row.status === "done" && row.historyPhase === "done"
-                            ? formatDate(row.info?.lastSeenTime)
-                            : "—"}
-                        </TableCell>
+                <div ref={listRef}>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="min-w-[200px]">Address</TableHead>
+                        <TableHead className="text-right">Status</TableHead>
+                        <TableHead className="text-right">Transactions</TableHead>
+                        <TableHead className="text-right">Total Received</TableHead>
+                        <TableHead className="text-right">Total Sent</TableHead>
+                        <TableHead className="text-right">Balance</TableHead>
+                        <TableHead className="text-right">First Seen</TableHead>
+                        <TableHead className="text-right">Last Seen</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {virtualItems.length > 0 && virtualItems[0].start > scrollMargin && (
+                        <TableRow>
+                          <TableCell colSpan={8} className="p-0 border-0" style={{ height: virtualItems[0].start - scrollMargin }} />
+                        </TableRow>
+                      )}
+                      {virtualItems.map(virtualRow => {
+                        const entry = displayRows[virtualRow.index];
+                        if (!entry) return null;
+                        return (
+                          <AddressCheckRow
+                            key={entry.i}
+                            row={entry.row}
+                            i={entry.i}
+                            isHistoryRunning={isHistoryRunning}
+                            onLoadHistory={runHistoryForRow}
+                          />
+                        );
+                      })}
+                      {virtualItems.length > 0 && (() => {
+                        const lastItem = virtualItems[virtualItems.length - 1];
+                        // Virtual item offsets include scrollMargin; getTotalSize() does not.
+                        const remaining = rowVirtualizer.getTotalSize() - (lastItem.end - scrollMargin);
+                        return remaining > 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={8} className="p-0 border-0" style={{ height: remaining }} />
+                          </TableRow>
+                        ) : null;
+                      })()}
+                    </TableBody>
+                  </Table>
+                </div>
               </CardContent>
             </Card>
           </>

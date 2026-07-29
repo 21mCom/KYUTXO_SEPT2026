@@ -11,6 +11,23 @@ import { render, screen, waitFor, fireEvent, within, cleanup } from "@testing-li
 
 // Radix Tooltips only render their content on hover; render the parts inline so
 // the page needs no TooltipProvider in the tree.
+// Render every virtualized row (jsdom's zero-size scroll element would
+// otherwise render none).
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: (opts: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: opts.count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * 53,
+        size: 53,
+        end: (index + 1) * 53,
+      })),
+    getTotalSize: () => opts.count * 53,
+    measureElement: () => {},
+  }),
+}));
+
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
