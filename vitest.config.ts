@@ -20,6 +20,10 @@ export default defineConfig({
     // which makes vitest exit 1 even though every test passed. Give teardown a
     // generous budget so load never turns a green run into a spurious failure.
     teardownTimeout: 60_000,
+    // Fails tests on hidden Dexie/database error noise (unhandled rejections,
+    // DatabaseClosedError console output). Guarded by
+    // scripts/check-db-noise-guard.js — do not remove without updating it.
+    setupFiles: ["client/src/test/failOnDbErrorNoise.ts"],
     include: [
       "client/src/**/*.test.ts",
       "client/src/**/*.test.tsx",

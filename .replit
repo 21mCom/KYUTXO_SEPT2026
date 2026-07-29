@@ -153,6 +153,10 @@ args = "heuristic-resync-progress-browser-check"
 task = "workflow.run"
 args = "descriptor-import-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "db-noise-guard"
+
 [[workflows.workflow]]
 name = "sparrow-mvdb-browser-check"
 author = "agent"
@@ -488,6 +492,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-heuristic-resync-progress-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "db-noise-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-db-noise-guard.js"
 
 [workflows.workflow.metadata]
 isValidation = true
