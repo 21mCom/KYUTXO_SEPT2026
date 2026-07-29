@@ -76,6 +76,11 @@ export default function BulkImport() {
   const [selectedReceiveAddresses, setSelectedReceiveAddresses] = useState<Set<number>>(new Set());
   const [selectedChangeAddresses, setSelectedChangeAddresses] = useState<Set<number>>(new Set());
   const [showChangeAddresses, setShowChangeAddresses] = useState(false);
+  // Chain coverage from a Descriptor Import handoff. When the descriptor was
+  // receive-only (/0/*) or change-only (/1/*), the uncovered chain's derived
+  // addresses start deselected so users don't save addresses the descriptor
+  // never covers. 'dual-chain' (default) behaves as before.
+  const [handoffChainType, setHandoffChainType] = useState<'dual-chain' | 'receive-only' | 'change-only'>('dual-chain');
   const [isDerivingAddresses, setIsDerivingAddresses] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -181,6 +186,11 @@ export default function BulkImport() {
     if (!handoff) return;
     setIsMultisigMode(false);
     setXpub(handoff.xpub);
+    setHandoffChainType(handoff.chainType);
+    if (handoff.chainType === 'change-only') {
+      // Make the covered chain visible up-front
+      setShowChangeAddresses(true);
+    }
     const details: string[] = [];
     if (handoff.fingerprint) details.push(`fingerprint ${handoff.fingerprint}`);
     if (handoff.derivationPath) details.push(`origin path m/${handoff.derivationPath}`);
@@ -236,8 +246,16 @@ export default function BulkImport() {
       }
       
       setDualChainResult(result);
-      setSelectedReceiveAddresses(new Set(result.receive.map((_, i) => i)));
-      setSelectedChangeAddresses(new Set(result.change.map((_, i) => i)));
+      setSelectedReceiveAddresses(
+        handoffChainType === 'change-only'
+          ? new Set<number>()
+          : new Set(result.receive.map((_, i) => i))
+      );
+      setSelectedChangeAddresses(
+        handoffChainType === 'receive-only'
+          ? new Set<number>()
+          : new Set(result.change.map((_, i) => i))
+      );
     } catch (error) {
       toast({
         variant: "destructive",
@@ -1196,6 +1214,21 @@ export default function BulkImport() {
                 </div>
               ) : (isMultisigMode ? multisigResult : dualChainResult) && (
                 <>
+                  {!isMultisigMode && handoffChainType !== 'dual-chain' && (
+                    <Alert data-testid="alert-descriptor-chain-coverage">
+                      <Info className="h-4 w-4" />
+                      <AlertTitle>
+                        {handoffChainType === 'receive-only'
+                          ? 'Descriptor covers receive addresses only'
+                          : 'Descriptor covers change addresses only'}
+                      </AlertTitle>
+                      <AlertDescription>
+                        {handoffChainType === 'receive-only'
+                          ? 'Change addresses were left deselected because your descriptor only covers the receive chain (/0/*).'
+                          : 'Receive addresses were left deselected because your descriptor only covers the change chain (/1/*).'}
+                      </AlertDescription>
+                    </Alert>
+                  )}
                   <AddressPreviewTable
                     isMultisigMode={isMultisigMode}
                     multisigResult={multisigResult}

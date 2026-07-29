@@ -586,7 +586,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/descriptor-import-utils.test.ts client/src/pages/DescriptorImport.copyButtons.test.tsx"
+args = "npx vitest run client/src/lib/descriptor-import-utils.test.ts client/src/pages/DescriptorImport.copyButtons.test.tsx client/src/pages/BulkImport.chainCoverage.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
