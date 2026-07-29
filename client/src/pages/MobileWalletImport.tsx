@@ -163,6 +163,15 @@ export default function MobileWalletImport() {
       const detection = detectWalletType(content, file.name);
       setDetectionResult(detection);
       
+      if (detection.fileFormat === 'bsms') {
+        toast({
+          title: 'BSMS wallet backup detected',
+          description: 'BSMS files describe a wallet, not transaction history. Use the Descriptor Import page to import its addresses with metadata.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      
       if (MOBILE_WALLET_TYPES.some(w => w.type === detection.walletType)) {
         setSelectedWalletType(detection.walletType);
       }
@@ -186,6 +195,7 @@ export default function MobileWalletImport() {
     accept: {
       'text/csv': ['.csv'],
       'application/json': ['.json'],
+      'text/plain': ['.bsms', '.txt'],
     },
     multiple: false,
   });

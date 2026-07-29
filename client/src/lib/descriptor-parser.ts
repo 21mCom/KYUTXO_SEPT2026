@@ -138,6 +138,10 @@ function detectChainType(rawChainPath: string): DescriptorChainType {
   if (rawChainPath.includes('<0;1>') || rawChainPath.includes('<1;0>')) {
     return 'dual-chain';
   }
+  // BSMS spec unified wildcard /** means both receive (/0/*) and change (/1/*)
+  if (rawChainPath === '/**') {
+    return 'dual-chain';
+  }
   // /* alone (no explicit chain) typically means dual-chain
   if (rawChainPath === '/*') {
     return 'dual-chain';
@@ -262,6 +266,17 @@ export function parseDescriptor(descriptorInput: string): DescriptorParseResult 
       return { success: false, error: 'Descriptor is empty' };
     }
     
+    // Single-sig descriptors (wpkh/pkh, incl. sh(wpkh(...))) are not handled
+    // by this multisig/taproot importer. Fail with a clear pointer instead of
+    // the confusing generic "could not parse multisig content" error.
+    if (/^(sh\s*\(\s*)?w?pkh\s*\(/i.test(descriptor)) {
+      return {
+        success: false,
+        error:
+          'This is a single-signature (wpkh/pkh) descriptor. Descriptor Import supports multisig and taproot descriptors — for single-sig wallets, import the xpub via the Address Importer instead.',
+      };
+    }
+
     const scriptType = detectScriptType(descriptor);
     
     if (scriptType === 'p2tr') {
@@ -460,8 +475,9 @@ export function descriptorKeysToXpubEntries(keys: DescriptorKey[]): MultisigXpub
         .replace(/<1;0>$/, ''); // Remove trailing <1;0>
       
       // If what remains is just "0", "1", or empty, it's a standard chain path
-      // No extra derivation needed
-      if (cleaned === '0' || cleaned === '1' || cleaned === '' || cleaned.includes('<')) {
+      // No extra derivation needed. "**" is the BSMS unified wildcard (/**)
+      // meaning derive both chains — also standard, no extra derivation.
+      if (cleaned === '0' || cleaned === '1' || cleaned === '' || cleaned === '**' || cleaned.includes('<')) {
         derivationPath = '';
       } else {
         // There's something extra - might be like "custom/0" or similar

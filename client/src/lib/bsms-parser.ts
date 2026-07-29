@@ -10,7 +10,9 @@ export interface BSMSParseResult {
 export function parseBSMS(content: string): BSMSParseResult {
   const rawLines = content.replace(/^\uFEFF/, '').split('\n').map(line => line.trim());
   
-  const contentLines = rawLines.filter(line => !line.startsWith('#'));
+  // Ignore comment lines and blank lines (stray blank lines / trailing
+  // newlines from real wallet exports must not shift the 4-line layout).
+  const contentLines = rawLines.filter(line => line !== '' && !line.startsWith('#'));
   
   const getLine = (index: number): string => contentLines[index] || '';
   

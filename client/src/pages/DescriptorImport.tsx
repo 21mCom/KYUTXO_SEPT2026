@@ -76,15 +76,16 @@ import {
   hasNonStandardHeader,
 } from "@/lib/xpub";
 import {
-  parseDescriptor,
-  parseSparrowExport,
   descriptorKeysToXpubEntries,
   getDescriptorSummary,
   isSparrowWalletFile,
   SPARROW_WALLET_FILE_MESSAGE,
   type ParsedDescriptor,
 } from "@/lib/descriptor-parser";
-import { parseBSMS, isBSMSFile } from "@/lib/bsms-parser";
+import {
+  analyzeDescriptorInput,
+  describeKeptFieldCounts,
+} from "@/lib/descriptor-import-utils";
 import { SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
 import { useDropzone } from "react-dropzone";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -114,6 +115,7 @@ export default function DescriptorImport() {
   /** Set when BSMS address verification fails; cleared when going back to step 1. */
   const [bsmsMismatch, setBsmsMismatch] = useState<{ bsms: string; derived: string } | null>(null);
   const [saveProgress, setSaveProgress] = useState({ current: 0, total: 0 });
+  /** Populated after a save so Step 3 can report results + merged-vs-kept metadata. */
   const [saveResult, setSaveResult] = useState<DescriptorSaveResult | null>(null);
 
   const [seedName, setSeedName] = useState("");
@@ -190,69 +192,56 @@ export default function DescriptorImport() {
 
     const reader = new FileReader();
     
+    reader.onerror = () => {
+      setParseError(`Could not read file "${file.name}"`);
+      toast({
+        title: "File read error",
+        description: `Could not read file "${file.name}"`,
+        variant: "destructive",
+      });
+    };
+    
     reader.onload = (e) => {
       const content = e.target?.result as string;
-      if (!content) return;
-      
-      if (isBSMSFile(content, file.name)) {
-        const bsmsResult = parseBSMS(content);
-        
-        if (bsmsResult.success && bsmsResult.descriptor) {
-          setDescriptorInput(bsmsResult.descriptor);
-          setBsmsFirstAddress(bsmsResult.firstAddress || null);
-          
-          const parseResult = parseDescriptor(bsmsResult.descriptor);
-          if (parseResult.success && parseResult.descriptor) {
-            setParsedDescriptor(parseResult.descriptor);
-            setParseError(null);
-            setWalletSoftware("Nunchuk");
-            
-            toast({
-              title: "BSMS file loaded",
-              description: `${getDescriptorSummary(parseResult.descriptor)}${bsmsResult.firstAddress ? ` (will verify first address)` : ''}`,
-            });
-          } else {
-            setParsedDescriptor(null);
-            setParseError(parseResult.error || "Unknown parse error");
-          }
-        } else {
-          setParseError(bsmsResult.error || "Could not parse BSMS file");
-          setBsmsFirstAddress(null);
-          toast({
-            title: "BSMS parse error",
-            description: bsmsResult.error,
-            variant: "destructive",
-          });
-        }
+      if (!content) {
+        setParseError(`File "${file.name}" is empty`);
+        toast({
+          title: "Empty file",
+          description: `File "${file.name}" contains no content`,
+          variant: "destructive",
+        });
         return;
       }
       
-      const sparrowResult = parseSparrowExport(content);
+      const analysis = analyzeDescriptorInput(content, file.name);
       
-      if (sparrowResult.export) {
-        setDescriptorInput(sparrowResult.export.descriptor);
-        setWalletLabel(sparrowResult.export.label);
-        
-        const parseResult = parseDescriptor(sparrowResult.export.descriptor);
-        if (parseResult.success && parseResult.descriptor) {
-          setParsedDescriptor(parseResult.descriptor);
-          setParseError(null);
-          if (!walletNameInput) {
-            setWalletNameInput(sparrowResult.export.label);
-          }
-          toast({
-            title: "Descriptor loaded",
-            description: getDescriptorSummary(parseResult.descriptor),
-          });
-        } else {
-          setParsedDescriptor(null);
-          setParseError(parseResult.error || "Unknown parse error");
+      if (analysis.rawDescriptor) {
+        setDescriptorInput(analysis.rawDescriptor);
+      }
+      setBsmsFirstAddress(analysis.firstAddress || null);
+      if (analysis.walletLabel) {
+        setWalletLabel(analysis.walletLabel);
+      }
+      
+      if (analysis.ok && analysis.descriptor) {
+        setParsedDescriptor(analysis.descriptor);
+        setParseError(null);
+        if (analysis.suggestedSoftware) {
+          setWalletSoftware(analysis.suggestedSoftware);
         }
-      } else {
-        setParseError(sparrowResult.error || "Could not parse file");
+        if (analysis.walletLabel && !walletNameInput) {
+          setWalletNameInput(analysis.walletLabel);
+        }
         toast({
-          title: "Parse error",
-          description: sparrowResult.error,
+          title: analysis.source === 'bsms' ? "BSMS file loaded" : "Descriptor loaded",
+          description: `${getDescriptorSummary(analysis.descriptor)}${analysis.firstAddress ? ` (will verify first address)` : ''}`,
+        });
+      } else {
+        setParsedDescriptor(null);
+        setParseError(analysis.error || "Could not parse file");
+        toast({
+          title: analysis.source === 'bsms' ? "BSMS parse error" : "Parse error",
+          description: analysis.error,
           variant: "destructive",
         });
       }
@@ -296,41 +285,22 @@ export default function DescriptorImport() {
       return;
     }
     
-    if (isBSMSFile(value, '')) {
-      const bsmsResult = parseBSMS(value);
-      if (bsmsResult.success && bsmsResult.descriptor) {
-        setWalletSoftware("Nunchuk");
-        setBsmsFirstAddress(bsmsResult.firstAddress || null);
-        const parseResult = parseDescriptor(bsmsResult.descriptor);
-        if (parseResult.success && parseResult.descriptor) {
-          setParsedDescriptor(parseResult.descriptor);
-          setParseError(null);
-        } else {
-          setParsedDescriptor(null);
-          setParseError(parseResult.error || "Unknown parse error");
-        }
-        return;
-      } else {
-        setBsmsFirstAddress(null);
+    const analysis = analyzeDescriptorInput(value, '');
+    
+    setBsmsFirstAddress(analysis.firstAddress || null);
+    if (analysis.walletLabel) {
+      setWalletLabel(analysis.walletLabel);
+    }
+    
+    if (analysis.ok && analysis.descriptor) {
+      setParsedDescriptor(analysis.descriptor);
+      setParseError(null);
+      if (analysis.suggestedSoftware) {
+        setWalletSoftware(analysis.suggestedSoftware);
       }
     } else {
-      setBsmsFirstAddress(null);
-    }
-    
-    const sparrowResult = parseSparrowExport(value);
-    const descriptorToParse = sparrowResult.export?.descriptor || value;
-    
-    if (sparrowResult.export?.label) {
-      setWalletLabel(sparrowResult.export.label);
-    }
-    
-    const parseResult = parseDescriptor(descriptorToParse);
-    if (parseResult.success && parseResult.descriptor) {
-      setParsedDescriptor(parseResult.descriptor);
-      setParseError(null);
-    } else {
       setParsedDescriptor(null);
-      setParseError(parseResult.error || "Unknown parse error");
+      setParseError(analysis.error || "Unknown parse error");
     }
   };
 
@@ -1439,6 +1409,36 @@ export default function DescriptorImport() {
                     : 'Your addresses have been imported successfully.'}
                 </p>
               )}
+
+              {saveResult && (
+                <div className="text-sm text-muted-foreground" data-testid="text-import-summary">
+                  Created {saveResult.created} new, updated {saveResult.updated} existing,
+                  skipped {saveResult.failures.length + saveResult.missing.length} address
+                  {saveResult.failures.length + saveResult.missing.length === 1 ? '' : 'es'}.
+                </div>
+              )}
+
+              {saveResult && describeKeptFieldCounts(saveResult.keptFieldCounts).length > 0 && (
+                <Alert data-testid="alert-metadata-kept">
+                  <Info className="h-4 w-4" />
+                  <AlertTitle>Some existing metadata was kept</AlertTitle>
+                  <AlertDescription>
+                    <p className="mb-2">
+                      For addresses that already existed in your vault, the values below were
+                      already set, so your entries were not applied to them (tags and categories
+                      were merged everywhere):
+                    </p>
+                    <ul className="list-disc list-inside space-y-1 text-sm">
+                      {describeKeptFieldCounts(saveResult.keptFieldCounts).map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs">
+                      Use the Bulk Editor if you want to overwrite existing values.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              )}
               
               <div className="flex gap-4">
                 <Button onClick={() => navigate("/records")} data-testid="button-view-records">
@@ -1456,6 +1456,7 @@ export default function DescriptorImport() {
                     setSelectedReceiveAddresses(new Set());
                     setSelectedChangeAddresses(new Set());
                     setBsmsMismatch(null);
+                    setBsmsFirstAddress(null);
                   }}
                   data-testid="button-import-another"
                 >

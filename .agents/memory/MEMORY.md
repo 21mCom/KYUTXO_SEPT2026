@@ -47,7 +47,7 @@
 - [Privacy proximity hop dedup](privacy-proximity-dedup-hops.md) — closest-hop dedup + owned-only tx loading make isolated hop-3/4 findings impossible E2E; test those tiers at engine level. Also: partly-broken persisted snapshot keeps valid subset (imported+partialWarning), not bundled.
 - [Heuristic Re-sync browser verify](heuristic-resync-browser-verify.md) — Balance per-address/bulk Re-sync e2e needs REAL on-chain spend addrs to actually promote; in-flight lockout assert is racy.
 - [pdf.js browser harness](pdfjs-browser-harness.md) — Nix Chromium v125 can't run pdfjs-dist default build (Promise.try); use legacy build + legacy worker ?url in browser; pdf.js is only an oracle.
-- [Concurrent browser-check contention](browser-check-contention.md) — parallel browser checks share port 5000 and kill each other's dev server; pre-start the app workflow before completion validation.
+- [Concurrent browser-check contention](browser-check-contention.md) — parallel browser checks crash each other; retry-wrap sessions, never kill chromium/restart workflow mid-run; pre-start the app workflow.
 - [.replit validation wiring](dotreplit-validation-wiring.md) — new check gates validation only via verifyAndReplaceDotReplit (isValidation + run list); flaky-only validation failures → audited skip; harden launches with retries.
 - [PofF shared PDF builder pattern](pof-shared-pdf-builder.md) — `buildPofPdf(isSample)` useCallback with `eff*` vars; sample AML needs explicit placeholder SOW/SOF strings; sample inline amlResult needs full EntityListDescriptionInput fields (entityListSource etc.).
 - [Elevate CSS vs positioning utilities](elevate-css-specificity.md) — elevate base rule must stay 0-specificity (:where()) or Tailwind `absolute` on Buttons/Badges silently loses; browser-only bug class.
@@ -56,4 +56,5 @@
 - [Theme-toggle transition lag](browser-theme-toggle-transition.md) — after toggling .dark, wait out transition-colors before getComputedStyle or you read the OLD theme's color.
 - [Vitest fork teardown timeout](vitest-fork-teardown-timeout.md) — green runs exiting 1 with "Timeout terminating forks worker" = load-slow shutdown, not leaks; raise teardownTimeout after hanging-process check.
 - [db-error-noise vitest guard](db-noise-vitest-guard.md) — global setup hook fails tests on unhandled rejections/Dexie noise; mock CRUD modules, never loosen the hook.
+- [Descriptor/BSMS import gotchas](descriptor-bsms-import.md) — BSMS `/**` wildcard = dual-chain; vocabulary "already exists" throws must be tolerated in bulk saves or imports die.
 - [Electrum txid confirmations](electrum-txid-confirmations.md) — verbose tx.get has confirmations but NO height; derive tip−conf+1 via cached tip; never cache unconfirmed conversions in session caches.

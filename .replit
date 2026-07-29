@@ -14,10 +14,6 @@ run = ["npm", "run", "start"]
 localPort = 5000
 externalPort = 80
 
-[[ports]]
-localPort = 23636
-externalPort = 3001
-
 [env]
 PORT = "5000"
 
@@ -140,6 +136,14 @@ args = "block-validation"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "sparrow-mvdb-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-import-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-bsms-import-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -552,6 +556,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-browser-check-lock.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "descriptor-import-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/descriptor-import-utils.test.ts client/src/pages/DescriptorImport.copyButtons.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "descriptor-bsms-import-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-descriptor-bsms-import-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

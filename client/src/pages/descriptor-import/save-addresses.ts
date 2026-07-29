@@ -19,6 +19,10 @@ import {
   lookupRecordsByInputStrings,
 } from "@/hooks/use-records";
 import {
+  computeExistingRecordMerge,
+  type MetadataFieldKey,
+} from "@/lib/descriptor-import-utils";
+import {
   createRecordOrigin,
   syncTagsToMaster,
   syncCategoriesToMaster,
@@ -70,6 +74,12 @@ export interface DescriptorSaveResult {
    */
   verifiedCount: number;
   missing: string[];
+  /**
+   * Per-field counts of existing (already-set) values that were KEPT on
+   * addresses that already existed in the vault, so the UI can report which
+   * user-entered metadata was not applied instead of dropping it silently.
+   */
+  keptFieldCounts: Partial<Record<MetadataFieldKey, number>>;
 }
 
 function errMessage(e: unknown): string {
@@ -107,6 +117,7 @@ export async function saveDescriptorAddresses(
   let updated = 0;
   const failures: DescriptorSaveFailure[] = [];
   const warnings: string[] = [];
+  const keptFieldCounts: Partial<Record<MetadataFieldKey, number>> = {};
 
   for (let ai = 0; ai < addresses.length; ai++) {
     const addr = addresses[ai];
@@ -132,12 +143,21 @@ export async function saveDescriptorAddresses(
           continue;
         }
 
-        const mergedTags = Array.from(
-          new Set([...(existingRecord.tags || []), ...tags]),
-        );
-        const mergedCategories = Array.from(
-          new Set([...(existingRecord.categories || []), ...categories]),
-        );
+        // Merge policy: tags/categories are unioned; existing scalar fields
+        // are kept and reported via keptFieldCounts so entered metadata is
+        // never dropped silently.
+        const merge = computeExistingRecordMerge(existingRecord, {
+          owner: meta.owner || "",
+          walletName: meta.walletName || "",
+          seedName: meta.seedName || "",
+          walletSoftware: meta.walletSoftware || "",
+          notes: meta.notes || "",
+          tags,
+          categories,
+        });
+        for (const field of merge.keptFields) {
+          keptFieldCounts[field] = (keptFieldCounts[field] || 0) + 1;
+        }
 
         let newImportance = existingRecord.addressImportance;
         if (meta.markAsVerified && existingRecord.addressImportance !== "verified") {
@@ -151,16 +171,15 @@ export async function saveDescriptorAddresses(
         }
 
         await updateRecord(existingRecord.id, {
-          tags: mergedTags,
-          categories: mergedCategories,
-          notes: existingRecord.notes || meta.notes || undefined,
-          seedName: existingRecord.seedName || meta.seedName || undefined,
-          walletSoftware:
-            existingRecord.walletSoftware || meta.walletSoftware || undefined,
+          tags: merge.tags,
+          categories: merge.categories,
+          notes: merge.fields.notes,
+          seedName: merge.fields.seedName,
+          walletSoftware: merge.fields.walletSoftware,
           derivationPath:
             existingRecord.derivationPath || `${addr.chainType}/${addr.index}`,
-          owner: existingRecord.owner || meta.owner || undefined,
-          walletName: existingRecord.walletName || meta.walletName || undefined,
+          owner: merge.fields.owner,
+          walletName: merge.fields.walletName,
           addressImportance: newImportance,
           ...vaultFields,
         });
@@ -255,5 +274,5 @@ export async function saveDescriptorAddresses(
     verifiedCount = created + updated;
   }
 
-  return { created, updated, failures, warnings, verifiedCount, missing };
+  return { created, updated, failures, warnings, verifiedCount, missing, keptFieldCounts };
 }
