@@ -618,3 +618,11 @@ args = "node scripts/check-add-metadata-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "demo-vault-build"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/demo-vault/build-demo-vault.mjs 2>&1 | tee scripts/demo-vault/build.log"

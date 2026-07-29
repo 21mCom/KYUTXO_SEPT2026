@@ -53,7 +53,26 @@ await acquireBrowserCheckLock();
 const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
 const BASE_URL = `http://localhost:${PORT}/`;
 const SETUP_PASSWORD = 'heuristic-progress-check-123';
-const MEMPOOL_API = 'https://mempool.space/api';
+// Esplora-compatible API bases; mempool.space sometimes rate-limits/blocks an
+// IP (fetches hang), blockstream.info serves the identical API as fallback.
+const ESPLORA_BASES = ['https://mempool.space/api', 'https://blockstream.info/api'];
+let MEMPOOL_API = ESPLORA_BASES[0];
+
+async function pickReachableEsploraBase() {
+  for (const base of ESPLORA_BASES) {
+    try {
+      const res = await fetch(`${base}/blocks/tip/hash`, { signal: AbortSignal.timeout(10_000) });
+      if (res.ok) {
+        MEMPOOL_API = base;
+        console.log(`[heuristic-resync-progress] esplora base: ${base}`);
+        return;
+      }
+    } catch {
+      /* try next base */
+    }
+  }
+  throw new Error('No reachable Esplora API base (mempool.space, blockstream.info).');
+}
 
 // The counter renders one value per transaction scanned, so the address needs
 // enough txs for the poller to observe at least two distinct counter values —
@@ -86,6 +105,7 @@ async function fetchJson(url) {
  * "spent but no exact prevout data" population.
  */
 async function findRealSpentAddress() {
+  await pickReachableEsploraBase();
   const tipHash = await (await fetch(`${MEMPOOL_API}/blocks/tip/hash`)).text();
   let blockHash = tipHash.trim();
   const seen = new Set();
@@ -272,7 +292,7 @@ async function main() {
     // "Re-sync all" targets exactly this address. Node settings point at the
     // real mempool.space provider so syncSingleAddress streams real progress.
     const seed = await page.evaluate(
-      async ({ addr, txid }) => {
+      async ({ addr, txid, providerType }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
         const txCrud = await import('/src/lib/data/transaction-crud.ts');
         const nodeCrud = await import('/src/lib/data/node-settings-crud.ts');
@@ -300,7 +320,7 @@ async function main() {
         });
         await nodeCrud.putNodeSettings({
           id: 'default',
-          providerType: 'mempool-space',
+          providerType,
           useTor: false,
           requestTimeout: 30000,
           network: 'mainnet',
@@ -309,10 +329,16 @@ async function main() {
         });
         return { recordId };
       },
-      { addr: REAL_ADDR, txid: SEED_TXID },
+      {
+        addr: REAL_ADDR,
+        txid: SEED_TXID,
+        // Match the in-app provider to the Esplora base that is actually
+        // reachable from this environment (mempool.space can block an IP).
+        providerType: MEMPOOL_API.includes('blockstream') ? 'blockstream' : 'mempool-space',
+      },
     );
     steps.push({
-      name: 'seeded heuristic address + mempool-space provider settings',
+      name: 'seeded heuristic address + esplora provider settings',
       passed: Number.isInteger(seed.recordId) && seed.recordId > 0,
       detail: `recordId=${seed.recordId}, address=${REAL_ADDR}`,
     });

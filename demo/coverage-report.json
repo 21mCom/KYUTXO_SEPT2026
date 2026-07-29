@@ -1,0 +1,254 @@
+{
+  "totals": {
+    "records": 4511,
+    "transactions": 689,
+    "participants": 30429,
+    "combined": 5200,
+    "inRange": true
+  },
+  "fundTrail": {
+    "lineageRows": 715,
+    "custodySegments": 59,
+    "multiHopSegments": 0,
+    "timeSpanDays": 4348,
+    "pass": true
+  },
+  "entityScreening": {
+    "bundledEntitiesPresent": 11,
+    "demoEntities": 12,
+    "directOwnedContact": true,
+    "pass": true
+  },
+  "addressReuse": {
+    "maxReceiptsOnOwned": 64,
+    "pass": true
+  },
+  "dusted": {
+    "dustOutputToOwned": true,
+    "pass": true
+  },
+  "quantumRisk": {
+    "spentFromOwnedP2pkh": true,
+    "pass": true
+  },
+  "lightning": {
+    "p2wshOutputs": 18,
+    "pass": true
+  },
+  "vaults": {
+    "vaultRecords": 7,
+    "pass": true
+  },
+  "adversaryClustering": {
+    "ownedCoSpendTxs": 307,
+    "pass": true
+  },
+  "httpRequests": 0,
+  "highlights": {
+    "personas": [
+      {
+        "owner": "Avery Stone",
+        "walletName": "Glacier Cold Storage",
+        "addresses": [
+          {
+            "address": "13JQcJT6f1waCbDeaYozUyUtzutHtSFFn6",
+            "label": "Cold storage #1"
+          },
+          {
+            "address": "1JxUu8MBcBbKgo16uBBAuqzrnUgnEb4MdR",
+            "label": "Cold storage #2"
+          },
+          {
+            "address": "14f82ZcYBfgsj9j6pd8ps1Gt5XvRM7tZsa",
+            "label": "Cold storage #3"
+          }
+        ]
+      },
+      {
+        "owner": "Blake Rivera",
+        "walletName": "Trading Hot Wallet",
+        "addresses": [
+          {
+            "address": "1KsCB7H72C3CYCEenBpuMe5BRBMDuHta6g",
+            "label": "Exchange withdrawal #1"
+          },
+          {
+            "address": "1P2gJuKorixxMZnAYHsXLj4kk2NPVrWk7x",
+            "label": "Exchange withdrawal #2"
+          },
+          {
+            "address": "1PGX1ZxMQEBNErjo1sfupBe8FLX4ynsMMw",
+            "label": "Exchange withdrawal #3"
+          },
+          {
+            "address": "196Xq73XBX9rZkxuvuWwoXPDPu9DjZ3CyU",
+            "label": "Exchange withdrawal #4"
+          },
+          {
+            "address": "bc1qxv8n4ttgvz9xhwawc2ckrvgs9cjpwhpn7c9j2h",
+            "label": "Exchange withdrawal #5"
+          },
+          {
+            "address": "1FgGikzH8f2PqCTxemp1aQbGtaWcxQkeLa",
+            "label": "Exchange withdrawal #6"
+          },
+          {
+            "address": "197LQ2fD8oXvr5nzwetZLNj7atX76qy9Ta",
+            "label": "Exchange withdrawal #7"
+          },
+          {
+            "address": "1NvXAMknsUraciZbRnvhahYTUX5DfE8mMe",
+            "label": "Exchange withdrawal #8"
+          },
+          {
+            "address": "163Dy91HiVGkd9yWQMGktMEaRYLv5C15Jt",
+            "label": "Exchange withdrawal #9"
+          },
+          {
+            "address": "1GqJVciE18Ubp3J8L4WdtmVJ43xqKL88Ar",
+            "label": "Exchange withdrawal #10"
+          },
+          {
+            "address": "1KvWfL2jofm4wmngcp2L8FQZYeHXnCnAMy",
+            "label": "Exchange withdrawal #11"
+          },
+          {
+            "address": "13otTdiKSgwG2uN5JNnM96eqwDzkbnJAVV",
+            "label": "Exchange withdrawal #12"
+          },
+          {
+            "address": "1GGipLMhpHvVhJQCtp6dPeJuSR1sx3okoj",
+            "label": "Exchange withdrawal #13"
+          },
+          {
+            "address": "1LTcouaqeUMQesJtrWp1G1cuK6bXHsj7q2",
+            "label": "Exchange withdrawal #14"
+          },
+          {
+            "address": "16LmxqAnoudmK6oE4NedJkcmsVVLShDuE3",
+            "label": "Exchange withdrawal #15"
+          },
+          {
+            "address": "1E5h4yDttgHtCuWn9ovS2LSXpsaecszPfR",
+            "label": "Exchange withdrawal #16"
+          },
+          {
+            "address": "1HQRxiq3nAoRCfPrMSp3UHpNG4rQRppXgA",
+            "label": "Exchange withdrawal #17"
+          },
+          {
+            "address": "15XFNHYgZg2kuwDNuv5c8FiNkucZANuyB2",
+            "label": "Exchange withdrawal #18"
+          }
+        ]
+      },
+      {
+        "owner": "Casey Mora",
+        "walletName": "Shop Register",
+        "addresses": [
+          {
+            "address": "1Ez4aPHX1RBdPdoPmHQnRzHzVjix37Tv1S",
+            "label": "Shop payment address #1"
+          },
+          {
+            "address": "1NbNfVdLB3UAVcBDVc9K4RPoAMwDStVrpx",
+            "label": "Shop payment address #2"
+          }
+        ]
+      },
+      {
+        "owner": "Dana & Eli Family Trust",
+        "walletName": "Meridian Vault 2-of-3",
+        "addresses": [
+          {
+            "address": "3K1DNumpDvo7bHsrHi8pk3i2XsZUnBomFi",
+            "label": "Vault address #1"
+          },
+          {
+            "address": "32iTwCxykN8McvQJvVJZreAJxYAXyj9h3h",
+            "label": "Vault address #2"
+          },
+          {
+            "address": "3Hu4vWeZ4SKKCRjg6dxJ9jDfVzrbmPjxhp",
+            "label": "Vault address #3"
+          },
+          {
+            "address": "3Ni3fvVXWeZsRHprvc9L88cgErJxkJ9x92",
+            "label": "Vault address #4"
+          },
+          {
+            "address": "3LfpsDsjGsJ4o7KpFnfiTxc5WJCCbkeZXU",
+            "label": "Vault address #5"
+          },
+          {
+            "address": "3PhKxzPv77Ri79PS2KpXDwFsG7RycPZbE8",
+            "label": "Vault address #6"
+          },
+          {
+            "address": "35vZmghTtHZ6A4xz6j9wRU5hKEXuqiR1yo",
+            "label": "Vault address #7"
+          }
+        ]
+      }
+    ],
+    "entityContactTxids": [
+      "7809e54ec6c746add450b3b31653e74d59112f0aa10d3374bd1a1df2a1325e44",
+      "b367a0916294963b3515969bb713a398bc5775d1d58e8decd0c6111ca2221035",
+      "ce7ee023c5d6fa87ab4c0c038883d3750cc83636d02708328d0b5ce77ddf65d1",
+      "82fda9dd5eb0a8ecda777eab6dc32f58a8d0576b03306bbda2788ef5db50bfae",
+      "69b0ca6c778030b6999c4dacec6f2f57d9765a8066d796c3d498509b33f28013"
+    ],
+    "dustExample": {
+      "id": 55,
+      "txid": "7809e54ec6c746add450b3b31653e74d59112f0aa10d3374bd1a1df2a1325e44",
+      "role": "output",
+      "address": "14f82ZcYBfgsj9j6pd8ps1Gt5XvRM7tZsa",
+      "amount": 1000,
+      "vout": 48,
+      "recordId": 22,
+      "scriptType": "p2pkh"
+    },
+    "quantumAddress": "14f82ZcYBfgsj9j6pd8ps1Gt5XvRM7tZsa",
+    "reuseAddress": {
+      "addr": "197LQ2fD8oXvr5nzwetZLNj7atX76qy9Ta",
+      "receipts": 64
+    },
+    "deepSegments": [
+      {
+        "origin": "1KsCB7H72C3CYCEenBpuMe5BRBMDuHta6g",
+        "txids": [
+          "3ee9402329c03f6ca0c846c3c143e1cb33939fcfb45a7027ded65d3f727f3b0d",
+          "3608a42d551779e1f4b425fd74e45e07e1d95a68f75bbb11f9d54249cc97374a"
+        ]
+      },
+      {
+        "origin": "1KsCB7H72C3CYCEenBpuMe5BRBMDuHta6g",
+        "txids": [
+          "aa7076f4a349d69ae4e4778ffff798ff5f6867dfbe3f91fca9369139a1942562",
+          "c2c7df914a0d9a231ed27282a5c7053990f23906b3fe8a87ff85df0f301da4f7"
+        ]
+      },
+      {
+        "origin": "3K1DNumpDvo7bHsrHi8pk3i2XsZUnBomFi",
+        "txids": [
+          "e2a1dceccf13a9dd0977b7bb29cbf18590bc705ad704d6a25ba04e82c9ddad4e",
+          "7d2b699093f84ef42d29ae0a3e899ee01cda69292c517faecec95dc5da26b34d"
+        ]
+      },
+      {
+        "origin": "3K1DNumpDvo7bHsrHi8pk3i2XsZUnBomFi",
+        "txids": [
+          "9d915b94396c87499d89fe37fbf89c44a9c05fed3368a8ecff8f8051397d69f2",
+          "624617cec7bb8bc6adccbd3dd528d868d7037008ec12046d834222aaf6aa1665"
+        ]
+      },
+      {
+        "origin": "1P2gJuKorixxMZnAYHsXLj4kk2NPVrWk7x",
+        "txids": [
+          "48d2fd483423d30bc9f7c5c13da70ce300b0866d3340bfc7aa87bc9e808011c4",
+          "eac3f6c18b86cf70b66b859bd24d853acf79bbb58e0d511a702c4684237a213e"
+        ]
+      }
+    ]
+  }
+}
