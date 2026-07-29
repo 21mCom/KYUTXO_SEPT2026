@@ -15,6 +15,24 @@ function cleanElectrumHost(host: string): string {
   return cleaned;
 }
 
+/**
+ * Thrown by getTransaction() when the transaction exists but its confirmation
+ * status genuinely cannot be determined — e.g. the server returned raw hex
+ * despite the verbose flag, the verbose response carries confirmation
+ * evidence (blockhash) but no usable `confirmations` count, or the chain-tip
+ * lookup needed to derive a height failed. Callers must NOT treat this as
+ * "unconfirmed": the transaction may well be confirmed. Nothing is cached in
+ * this case, so a later retry can succeed.
+ */
+export class ConfirmationStatusUnknownError extends Error {
+  constructor(
+    message = 'Could not determine confirmation status — check your node connection.',
+  ) {
+    super(message);
+    this.name = 'ConfirmationStatusUnknownError';
+  }
+}
+
 export class ElectrumProvider implements BlockchainProvider {
   name = 'Electrum Protocol';
   private host: string;
@@ -315,19 +333,66 @@ export class ElectrumProvider implements BlockchainProvider {
     //
     // NOTE: the address-history path (getAddressTransactions) is untouched —
     // it converts with real per-transaction heights from history entries.
-    const raw = result.transaction as { confirmations?: unknown; blockhash?: unknown };
-    const confirmations =
-      typeof raw?.confirmations === 'number' && Number.isFinite(raw.confirmations)
-        ? raw.confirmations
-        : 0;
+    //
+    // When the status genuinely cannot be determined (raw-hex response, no
+    // usable `confirmations` despite confirmation evidence, or a failed tip
+    // lookup) this throws ConfirmationStatusUnknownError instead of silently
+    // converting with height 0 — reporting "unconfirmed" for a long-confirmed
+    // transaction is factually wrong and misleads the user.
+    if (typeof result.transaction === 'string') {
+      // Server ignored the verbose flag and returned raw hex: we have no
+      // confirmation data at all.
+      throw new ConfirmationStatusUnknownError(
+        'Could not determine confirmation status — the Electrum server does not support verbose transaction lookups.',
+      );
+    }
+    const raw = result.transaction as {
+      confirmations?: unknown;
+      blockhash?: unknown;
+      blocktime?: unknown;
+    };
+    const hasUsableConfirmations =
+      typeof raw?.confirmations === 'number' && Number.isFinite(raw.confirmations);
+    const confirmations = hasUsableConfirmations ? (raw.confirmations as number) : 0;
     const blockHash =
       typeof raw?.blockhash === 'string' && raw.blockhash.length > 0
         ? raw.blockhash
         : undefined;
+    const hasConfirmationEvidence =
+      blockHash !== undefined || typeof raw?.blocktime === 'number';
+    
+    if (!hasUsableConfirmations && hasConfirmationEvidence) {
+      // The response carries confirmation evidence (a blockhash/blocktime)
+      // but no usable `confirmations` count. Best-effort recovery: if this session
+      // already derived an exact height for that block, reuse it. Otherwise
+      // the status is unknown, not "unconfirmed".
+      const known =
+        blockHash !== undefined ? this.derivedHeightByBlockHash.get(blockHash) : undefined;
+      if (known !== undefined && known > 0) {
+        const tx = this.convertElectrumTxToApiTx(result.transaction, known);
+        if (tx.status.confirmed) this.transactionCache.set(txid, tx);
+        return tx;
+      }
+      throw new ConfirmationStatusUnknownError(
+        'Could not determine confirmation status — the Electrum server omitted the confirmation count.',
+      );
+    }
     
     let height = 0;
     if (confirmations > 0) {
       const tip = await this.getTipHeightForDerivation();
+      if (tip === null) {
+        // The server says the transaction is confirmed, but the tip lookup
+        // failed so we cannot derive its height. Best-effort recovery: reuse
+        // a height this session already derived for the same block. Failing
+        // that, the status is unknown — never report "unconfirmed" here.
+        const known = blockHash !== undefined ? this.derivedHeightByBlockHash.get(blockHash) : undefined;
+        if (known !== undefined && known > 0) {
+          height = known;
+        } else {
+          throw new ConfirmationStatusUnknownError();
+        }
+      }
       if (tip !== null) {
         let derived = tip - confirmations + 1;
         if (blockHash !== undefined) {
@@ -370,8 +435,13 @@ export class ElectrumProvider implements BlockchainProvider {
           }
         }
         // Guard against inconsistent server data (confirmations beyond the
-        // tip): treat as unconfirmed rather than writing a bogus height.
-        if (derived > 0) height = derived;
+        // tip): the server claims the transaction is confirmed, but we cannot
+        // derive a plausible height — status unknown, never "unconfirmed".
+        if (derived > 0) {
+          height = derived;
+        } else {
+          throw new ConfirmationStatusUnknownError();
+        }
       }
     }
     

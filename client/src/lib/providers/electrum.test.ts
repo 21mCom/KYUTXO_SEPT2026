@@ -31,7 +31,7 @@ vi.mock("@/lib/electron", () => ({
   getElectronAPI: () => mockApi,
 }));
 
-const { ElectrumProvider } = await import("./electrum");
+const { ElectrumProvider, ConfirmationStatusUnknownError } = await import("./electrum");
 
 const TXID_A = "a".repeat(64);
 const TXID_B = "b".repeat(64);
@@ -43,7 +43,12 @@ const TIP_HEIGHT = 800002;
 const BLOCK_TIME = 1700000100;
 
 /** Bitcoin Core-style verbose transaction, as Electrum servers return it. */
-function verboseTx(txid: string, confirmations?: number, blockhash?: string) {
+function verboseTx(
+  txid: string,
+  confirmations?: number,
+  blockhash?: string,
+  opts?: { omitBlockTime?: boolean },
+) {
   return {
     txid,
     ...(blockhash !== undefined ? { blockhash } : {}),
@@ -54,7 +59,7 @@ function verboseTx(txid: string, confirmations?: number, blockhash?: string) {
     weight: 600,
     fee: 0.00001,
     time: BLOCK_TIME,
-    blocktime: BLOCK_TIME,
+    ...(opts?.omitBlockTime ? {} : { blocktime: BLOCK_TIME }),
     ...(confirmations !== undefined ? { confirmations } : {}),
     // Electrum verbose vin carries no prevout data.
     vin: [{ txid: PREV_TXID, vout: 0, sequence: 0xfffffffd }],
@@ -126,16 +131,69 @@ describe("getTransaction confirmation derivation", () => {
     expect(mockApi.electrumTest).not.toHaveBeenCalled();
   });
 
-  it("treats a missing confirmations field as unconfirmed", async () => {
+  it("treats a missing confirmations field WITHOUT confirmation evidence (mempool) as unconfirmed", async () => {
     mockApi.electrumGetTransaction.mockResolvedValue({
       success: true,
-      transaction: verboseTx(TXID_A, undefined),
+      transaction: verboseTx(TXID_A, undefined, undefined, { omitBlockTime: true }),
     });
 
     const tx = await makeProvider().getTransaction(TXID_A);
 
     expect(tx?.status.confirmed).toBe(false);
     expect(mockApi.electrumTest).not.toHaveBeenCalled();
+  });
+
+  it("throws ConfirmationStatusUnknownError when confirmations is missing but blocktime shows the tx IS mined", async () => {
+    mockApi.electrumGetTransaction.mockResolvedValue({
+      success: true,
+      transaction: verboseTx(TXID_A, undefined),
+    });
+
+    await expect(makeProvider().getTransaction(TXID_A)).rejects.toBeInstanceOf(
+      ConfirmationStatusUnknownError,
+    );
+  });
+
+  it("throws ConfirmationStatusUnknownError when confirmations is missing but a blockhash is present and unknown", async () => {
+    mockApi.electrumGetTransaction.mockResolvedValue({
+      success: true,
+      transaction: verboseTx(TXID_A, undefined, "f".repeat(64)),
+    });
+
+    await expect(makeProvider().getTransaction(TXID_A)).rejects.toBeInstanceOf(
+      ConfirmationStatusUnknownError,
+    );
+  });
+
+  it("recovers a missing confirmations field from the session's blockhash→height memo", async () => {
+    const BLOCK_HASH = "f".repeat(64);
+    mockApi.electrumGetTransaction
+      // First fetch (normal): memoizes the exact height for BLOCK_HASH.
+      .mockResolvedValueOnce({ success: true, transaction: verboseTx(TXID_A, 3, BLOCK_HASH) })
+      // Second fetch: same block, but the server omitted `confirmations`.
+      .mockResolvedValueOnce({
+        success: true,
+        transaction: verboseTx(TXID_B, undefined, BLOCK_HASH),
+      });
+
+    const provider = makeProvider();
+    const a = await provider.getTransaction(TXID_A);
+    const b = await provider.getTransaction(TXID_B);
+
+    expect(a?.status.block_height).toBe(TIP_HEIGHT - 3 + 1);
+    expect(b?.status.confirmed).toBe(true);
+    expect(b?.status.block_height).toBe(TIP_HEIGHT - 3 + 1);
+  });
+
+  it("throws ConfirmationStatusUnknownError when the server returns raw hex despite the verbose flag", async () => {
+    mockApi.electrumGetTransaction.mockResolvedValue({
+      success: true,
+      transaction: "0200000001abcd",
+    });
+
+    await expect(makeProvider().getTransaction(TXID_A)).rejects.toBeInstanceOf(
+      ConfirmationStatusUnknownError,
+    );
   });
 
   it("treats negative confirmations (conflicted transaction) as unconfirmed", async () => {
@@ -150,16 +208,17 @@ describe("getTransaction confirmation derivation", () => {
     expect(mockApi.electrumTest).not.toHaveBeenCalled();
   });
 
-  it("treats confirmations beyond the chain tip as unconfirmed instead of storing a bogus height", async () => {
+  it("throws ConfirmationStatusUnknownError for confirmations beyond the chain tip instead of storing a bogus height", async () => {
+    // The server claims the tx is confirmed but the derived height is
+    // implausible — the status is unknown, NOT "unconfirmed".
     mockApi.electrumGetTransaction.mockResolvedValue({
       success: true,
       transaction: verboseTx(TXID_A, TIP_HEIGHT + 100),
     });
 
-    const tx = await makeProvider().getTransaction(TXID_A);
-
-    expect(tx?.status.confirmed).toBe(false);
-    expect(tx?.status.block_height).toBeUndefined();
+    await expect(makeProvider().getTransaction(TXID_A)).rejects.toBeInstanceOf(
+      ConfirmationStatusUnknownError,
+    );
   });
 
   it("returns null when the server does not have the transaction", async () => {
@@ -208,7 +267,7 @@ describe("tip-height caching", () => {
     expect(mockApi.electrumTest).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to unconfirmed when the tip cannot be determined, then recovers", async () => {
+  it("throws ConfirmationStatusUnknownError when the tip cannot be determined, then recovers", async () => {
     mockApi.electrumTest.mockResolvedValueOnce({ success: false, error: "connection refused" });
     mockApi.electrumGetTransaction.mockResolvedValue({
       success: true,
@@ -216,11 +275,14 @@ describe("tip-height caching", () => {
     });
 
     const provider = makeProvider();
-    const first = await provider.getTransaction(TXID_A);
-    expect(first?.status.confirmed).toBe(false);
+    // The server says confirmed but the tip lookup failed: unknown status,
+    // never a false "unconfirmed".
+    await expect(provider.getTransaction(TXID_A)).rejects.toBeInstanceOf(
+      ConfirmationStatusUnknownError,
+    );
 
-    // The failed conversion must NOT have been cached: once the tip is
-    // reachable again, the same txid comes back confirmed.
+    // Nothing was cached: once the tip is reachable again, the same txid
+    // comes back confirmed.
     const second = await provider.getTransaction(TXID_A);
     expect(second?.status.confirmed).toBe(true);
     expect(second?.status.block_height).toBe(TIP_HEIGHT - 6 + 1);

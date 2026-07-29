@@ -57,6 +57,7 @@ import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { AttachmentList } from "./AttachmentList";
 import type { Attachment } from "@/lib/database";
 import { createProviderFromSettings, parseTransaction, type ParsedTransaction, MINIMUM_CONFIRMATIONS } from "@/lib/blockchain-api";
+import { ConfirmationStatusUnknownError } from "@/lib/providers/electrum";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { useToast } from "@/hooks/use-toast";
 import { SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
@@ -348,7 +349,14 @@ export function RecordFormDialog({
         }));
       }
     } catch (error) {
-      setTxFetchError(error instanceof Error ? error.message : "Failed to fetch transaction");
+      if (error instanceof ConfirmationStatusUnknownError) {
+        // The provider could not tell whether the transaction is confirmed
+        // (server/tip failure or unsupported verbose response). This is NOT
+        // the same as "unconfirmed" — surface an accurate connection error.
+        setTxFetchError(error.message);
+      } else {
+        setTxFetchError(error instanceof Error ? error.message : "Failed to fetch transaction");
+      }
     } finally {
       setIsFetchingTx(false);
     }

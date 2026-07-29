@@ -52,6 +52,7 @@ vi.mock("@/lib/blockchain-api", async (importOriginal) => {
 
 import { RecordFormDialog } from "@/components/RecordFormDialog";
 import { MINIMUM_CONFIRMATIONS } from "@/lib/blockchain-api";
+import { ConfirmationStatusUnknownError } from "@/lib/providers/electrum";
 
 const TXID = "a".repeat(64);
 const TX_HEIGHT = 800_000;
@@ -150,5 +151,42 @@ describe("RecordFormDialog — txid import confirmation boundary", () => {
       ).toBeTruthy(),
     );
     expect(screen.queryByText("Transaction Data Fetched")).toBeNull();
+  });
+
+  it("shows an accurate connection error (NOT 'unconfirmed') when the confirmation status is undeterminable", async () => {
+    getBlockHeight.mockResolvedValue(TX_HEIGHT + 100);
+    getTransaction.mockRejectedValue(new ConfirmationStatusUnknownError());
+
+    await renderAndFetch();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Could not determine confirmation status — check your node connection.",
+        ),
+      ).toBeTruthy(),
+    );
+    // The false "unconfirmed" claim must NOT appear.
+    expect(screen.queryByText(/Transaction is unconfirmed/)).toBeNull();
+    expect(screen.queryByText("Transaction Data Fetched")).toBeNull();
+  });
+
+  it("still shows the unconfirmed message for a genuine mempool transaction", async () => {
+    getBlockHeight.mockResolvedValue(TX_HEIGHT + 100);
+    getTransaction.mockResolvedValue({
+      ...CONFIRMED_TX,
+      status: { confirmed: false },
+    });
+
+    await renderAndFetch();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Transaction is unconfirmed. Only confirmed transactions can be imported.",
+        ),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByText(/Could not determine confirmation status/)).toBeNull();
   });
 });
