@@ -22,3 +22,6 @@ Heavy page-level vitest suites (e.g. ProofOfFundsDeclaration.*) hit the 5s defau
 ## Chromium SIGTRAP crashes + hung check scripts
 Even with the dev server pre-started, concurrent runs can crash individual Chromium instances (`signal=SIGTRAP`, `browser has been closed`) at random — a different check fails each run. Worse, some check scripts print the ERROR but never exit, wedging the run until the poll budget is exhausted (POLL_BUDGET_EXCEEDED).
 **How to apply:** after a failed/wedged run, `pkill -9 -f "check-.*browser.mjs"` (expect the shell call to report exit -1 — it kills its own process group; run it alone), confirm the failed checks pass serially, then retry. If several consecutive runs fail only on rotating SIGTRAP flakes while every check passes standalone, that is the audited case for skip_validation_reason.
+
+## Long-lived dev server goes stale mid-marathon
+After many back-to-back validation runs, a check can fail on `input-password` timeout even on an idle machine because the long-running Vite dev server itself is wedged/stale. Restarting the "Start application" workflow (then re-running the check standalone to confirm green) fixes it; persistence + retry-on-idle eventually lands a fully green run without skip_validation_reason.
