@@ -159,6 +159,10 @@ args = "recently-added-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "add-metadata-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "heuristic-resync-progress-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -600,6 +604,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-bulk-editor-notes-append-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "add-metadata-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-add-metadata-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

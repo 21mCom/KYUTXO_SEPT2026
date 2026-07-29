@@ -2,7 +2,7 @@
 // Full e2e verification for Task #1556: taproot + multisig descriptor imports,
 // re-import (dedup/update path), Dexie state, and Records page visibility.
 import { chromium } from 'playwright-core';
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
@@ -81,7 +81,54 @@ async function launchBrowserWithRetry(attempts = 4) {
   throw lastErr;
 }
 
+async function isServerUp(url) {
+  try {
+    const res = await fetch(url, { method: 'GET' });
+    return res.ok || res.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForServer(url, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await isServerUp(url)) return true;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return false;
+}
+
+// Started dev-server process (if we had to spawn one) for cleanup at exit.
+let devProc = null;
+
+async function ensureServer() {
+  if (await isServerUp(BASE_URL)) {
+    console.log(`[descriptor-import-browser] reusing dev server at ${BASE_URL}`);
+    return;
+  }
+  console.log('[descriptor-import-browser] starting dev server (npm run dev) ...');
+  devProc = spawn('npm', ['run', 'dev'], {
+    stdio: ['ignore', 'inherit', 'inherit'],
+    env: process.env,
+    detached: true,
+  });
+  if (!(await waitForServer(BASE_URL, 120_000))) {
+    throw new Error(`Dev server did not become ready at ${BASE_URL} within 120s.`);
+  }
+}
+
+function stopSpawnedServer() {
+  if (!devProc) return;
+  try {
+    process.kill(-devProc.pid, 'SIGTERM');
+  } catch {
+    try { devProc.kill('SIGTERM'); } catch { /* ignore */ }
+  }
+}
+
 async function main() {
+  await ensureServer();
   const browser = await launchBrowserWithRetry();
   const context = await browser.newContext({ serviceWorkers: 'block' });
   const page = await context.newPage();
@@ -130,8 +177,9 @@ async function main() {
   check('Records page shows 400 total with imported rows', totalOk && hasRows, `totalOk=${totalOk} rows=${hasRows}`);
 
   await browser.close();
+  stopSpawnedServer();
   if (failures > 0) { console.error(`${failures} check(s) FAILED`); process.exit(1); }
   console.log('ALL CHECKS PASSED');
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => { console.error(e); stopSpawnedServer(); process.exit(1); });
