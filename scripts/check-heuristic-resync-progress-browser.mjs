@@ -56,8 +56,10 @@ const SETUP_PASSWORD = 'heuristic-progress-check-123';
 const MEMPOOL_API = 'https://mempool.space/api';
 
 // The counter renders one value per transaction scanned, so the address needs
-// a few txs to tick — but huge histories make the fetch slow/heavy.
-const MIN_TXS = 3;
+// enough txs for the poller to observe at least two distinct counter values —
+// tiny histories (e.g. 3-4 txs) fetch inside a single poll tick and flake the
+// "counter ticked" assertion. Huge histories make the fetch slow/heavy.
+const MIN_TXS = 12;
 const MAX_TXS = 60;
 
 function resolveChromium() {

@@ -161,6 +161,21 @@ args = "db-noise-guard"
 task = "workflow.run"
 args = "browser-check-lock-guard"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "saved-template-derive-browser-check"
+
+[[workflows.workflow]]
+name = "saved-template-derive-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-saved-template-derive-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
 [[workflows.workflow]]
 name = "sparrow-mvdb-browser-check"
 author = "agent"

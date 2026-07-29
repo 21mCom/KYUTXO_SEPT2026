@@ -18,6 +18,8 @@ seeded no-prevout row remains.
 
 Find suitable real addresses: walk a recent block's tx vins, take prevout
 scriptpubkey_address, keep ones with small chain_stats.tx_count and spent>=1.
+For a "live counter ticked" assertion, require tx_count >= ~12: tiny histories
+(3-4 txs) fetch inside a single poll tick, yielding only one counter sample.
 Use addresses differing in their full string (row/button testids embed the full
 address).
 
