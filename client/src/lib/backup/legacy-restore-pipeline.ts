@@ -424,6 +424,21 @@ export async function runLegacyJsonRestore(
     `[Restore] transactions: ${transactionsAdded}, enriched: ${transactionsEnriched}, participants: ${participantsAdded}, participants enriched: ${participantsEnriched}, synced addresses: ${addressSyncAdded}, dust flags: ${dustFlagsAdded}`,
   );
 
+  // Merge-mode restores can add many records/transactions the saved Privacy
+  // Audit / Adversary View session never analysed, silently leaving stale,
+  // incomplete results (e.g. "no findings" while merged-in data would flag).
+  // Replace mode already drops the session during the destructive clear above;
+  // do the same after a successful merge so saved results always describe the
+  // current vault. Best-effort: the session lives in a separate scratch
+  // IndexedDB database and its failure must never fail a completed restore.
+  if (restoreMode === "merge") {
+    try {
+      await clearAuditSession();
+    } catch (err) {
+      console.warn("Failed to clear saved privacy audit session:", err);
+    }
+  }
+
   cb.onProgress(100, "Restore complete! Checking for missing transaction data...");
 
   let attachmentFilesMsg = "";
