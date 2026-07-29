@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { createProviderFromSettings, type BlockchainProvider } from "@/lib/blockchain-api";
 import { validateAddress, formatBTC } from "@/lib/bitcoin";
@@ -204,6 +206,8 @@ export default function AddressChecker() {
   const [duplicatesSkipped, setDuplicatesSkipped] = useState(0);
   const [providerError, setProviderError] = useState<string | null>(null);
   const [isHistoryRunning, setIsHistoryRunning] = useState(false);
+  // When on, hides completed rows with 0 confirmed transactions from the table.
+  const [hideZeroTx, setHideZeroTx] = useState(false);
   const cancelledRef = useRef(false);
   const historyCancelledRef = useRef(false);
   // The provider used for the most recent check, reused for on-demand history.
@@ -377,6 +381,7 @@ export default function AddressChecker() {
     setDuplicatesSkipped(0);
     setProviderError(null);
     setPastedText("");
+    setHideZeroTx(false);
   };
 
   const handleCancel = () => {
@@ -399,6 +404,19 @@ export default function AddressChecker() {
   ).length;
   const historyDoneCount = rows.filter(r => r.historyPhase === "done").length;
   const canLoadHistory = historyEligibleCount > 0 && historyPendingCount > 0 && !isRunning && !isHistoryRunning;
+
+  // Rows shown in the table. Hiding only ever removes rows that finished with 0
+  // confirmed transactions — pending/loading/errored and invalid rows always stay
+  // visible so nothing in-flight disappears mid-run. Original indexes are kept so
+  // per-row callbacks and test-ids still target the right row in state.
+  const indexedRows = rows.map((row, i) => ({ row, i }));
+  const displayRows = hideZeroTx
+    ? indexedRows.filter(
+        ({ row }) =>
+          row.isInvalid || row.status !== "done" || (row.info?.txCount ?? 0) !== 0
+      )
+    : indexedRows;
+  const hiddenCount = indexedRows.length - displayRows.length;
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -536,6 +554,27 @@ export default function AddressChecker() {
               </Alert>
             )}
 
+            <div className="flex items-center gap-2 flex-wrap">
+              <Checkbox
+                id="hide-zero-tx"
+                checked={hideZeroTx}
+                onCheckedChange={checked => setHideZeroTx(checked === true)}
+                disabled={isRunning}
+                data-testid="checkbox-hide-zero-tx"
+              />
+              <Label
+                htmlFor="hide-zero-tx"
+                className={isRunning ? "text-muted-foreground" : undefined}
+              >
+                Hide 0-transaction addresses
+              </Label>
+              {hiddenCount > 0 && (
+                <span className="text-sm text-muted-foreground" data-testid="text-hidden-count">
+                  {hiddenCount} address{hiddenCount !== 1 ? "es" : ""} hidden
+                </span>
+              )}
+            </div>
+
             <Card>
               <CardContent className="p-0">
                 <Table>
@@ -552,7 +591,7 @@ export default function AddressChecker() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {rows.map((row, i) => (
+                    {displayRows.map(({ row, i }) => (
                       <TableRow
                         key={i}
                         data-testid={`row-address-${i}`}
