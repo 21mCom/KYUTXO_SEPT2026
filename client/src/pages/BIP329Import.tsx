@@ -24,11 +24,11 @@ import {
   analyzeRecords,
   executeImport,
   scanForPrivateKeys,
-  type ParsedRecord,
   type DuplicateInfo,
   type ImportResult,
 } from '@/lib/wallet-import/import-manager';
 import { getImportSummary } from '@/lib/wallet-import/merge-utils';
+import { parseJsonLines, convertToImportRecords, type BIP329Record } from '@/lib/bip329';
 import {
   Table,
   TableBody,
@@ -38,14 +38,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-interface BIP329Record {
-  type: 'tx' | 'addr' | 'pubkey' | 'input' | 'output' | 'xpub';
-  ref: string;
-  label?: string;
-  origin?: string;
-  spendable?: string;
-}
-
 type WizardStep = 'upload' | 'preview' | 'import';
 
 const STEPS: { key: WizardStep; label: string; icon: typeof Upload }[] = [
@@ -53,81 +45,6 @@ const STEPS: { key: WizardStep; label: string; icon: typeof Upload }[] = [
   { key: 'preview', label: 'Preview', icon: Tag },
   { key: 'import', label: 'Import', icon: CheckCircle },
 ];
-
-function parseJsonLines(content: string): BIP329Record[] {
-  const records: BIP329Record[] = [];
-  const lines = content.split('\n').filter(line => line.trim());
-  
-  for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed.type && parsed.ref) {
-        records.push(parsed as BIP329Record);
-      }
-    } catch {
-      continue;
-    }
-  }
-  
-  return records;
-}
-
-function convertToImportRecords(bip329Records: BIP329Record[]): ParsedRecord[] {
-  const records: ParsedRecord[] = [];
-  
-  for (const record of bip329Records) {
-    const label = record.label || '';
-    
-    switch (record.type) {
-      case 'tx':
-        records.push({
-          type: 'transaction',
-          inputString: record.ref,
-          label: label || 'BIP-329 Transaction',
-          notes: record.origin ? `Origin: ${record.origin}` : undefined,
-          source: 'BIP-329 Import',
-          originalData: record as unknown as { [key: string]: unknown },
-        });
-        break;
-        
-      case 'addr':
-        records.push({
-          type: 'address',
-          inputString: record.ref,
-          label: label || 'BIP-329 Address',
-          notes: record.origin ? `Origin: ${record.origin}` : undefined,
-          source: 'BIP-329 Import',
-          isInputAddress: true,
-          originalData: record as unknown as { [key: string]: unknown },
-        });
-        break;
-        
-      case 'output':
-      case 'input': {
-        const [txid, indexStr] = record.ref.split(':');
-        if (txid && txid.length >= 64) {
-          const typeLabel = record.type === 'output' ? 'Output' : 'Input';
-          const indexLabel = indexStr ? `:${indexStr}` : '';
-          records.push({
-            type: 'transaction',
-            inputString: record.ref,
-            label: label || `BIP-329 ${typeLabel}${indexLabel}`,
-            notes: `BIP-329 ${record.type} at index ${indexStr || 'unknown'}${record.origin ? `. Origin: ${record.origin}` : ''}${record.spendable ? `. Spendable: ${record.spendable}` : ''}`,
-            source: 'BIP-329 Import',
-            originalData: record as unknown as { [key: string]: unknown },
-          });
-        }
-        break;
-      }
-        
-      case 'xpub':
-      case 'pubkey':
-        break;
-    }
-  }
-  
-  return records;
-}
 
 const generateSourceName = (): string => {
   const now = new Date();

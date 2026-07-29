@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { getActivityBus } from "@/lib/activity-bus";
-import { Download, Lock, FileJson, AlertCircle, AlertTriangle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip } from "lucide-react";
+import { Download, Lock, FileJson, AlertCircle, AlertTriangle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,12 +22,13 @@ import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/database";
 import { countAttachments } from "@/lib/data/attachments-crud";
 import { countDerivationTemplates } from "@/lib/data/derivation-templates-crud";
-import { countRecords } from "@/lib/data/record-crud";
+import { countRecords, eachRecord } from "@/lib/data/record-crud";
 import { countTransactions, countTransactionParticipants } from "@/lib/data/transaction-crud";
 import { countAddressSyncState } from "@/lib/data/address-sync-crud";
 import { countUtxoLineage, countCustodySegments, countLineageSnapshots } from "@/lib/data/lineage-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { exportBackup, estimateExportBytes } from "@/lib/backup/export";
+import { recordToBip329Line, type Bip329Line } from "@/lib/bip329";
 import { evaluateDiskSpace } from "@/lib/backup/restore";
 import {
   MemorySink,
@@ -120,6 +121,7 @@ export default function ExportPage() {
   // Pre-flight low-disk-space warning (Electron streaming export). When set, the
   // export is paused and the user is asked to free space or continue anyway.
   const [diskWarning, setDiskWarning] = useState<{ requiredBytes: number; freeBytes: number } | null>(null);
+  const [exportingLabels, setExportingLabels] = useState(false);
   // When the user chooses "Export Anyway", this ref skips the disk check on the
   // re-triggered export so we don't loop back into the same warning.
   const bypassDiskCheckRef = useRef(false);
@@ -404,6 +406,48 @@ export default function ExportPage() {
     }
   };
 
+  // BIP-329 label export: stream every address/transaction record through the
+  // record -> BIP-329 line converter and download the result as a .jsonl file.
+  // Iterates the table with a Dexie cursor (instead of loading all records into
+  // an array) so only the label lines themselves are held in memory.
+  const handleExportBip329 = async () => {
+    setExportingLabels(true);
+    try {
+      const lines: string[] = [];
+      await eachRecord((record) => {
+        const line: Bip329Line | null = recordToBip329Line(record);
+        if (line) lines.push(JSON.stringify(line));
+      });
+
+      if (lines.length === 0) {
+        toast({
+          title: "No Labels To Export",
+          description: "No labeled addresses, transactions, or outputs were found to export.",
+        });
+        return;
+      }
+
+      const jsonl = lines.join("\n") + "\n";
+      const dateStr = new Date().toISOString().split("T")[0];
+      const blob = new Blob([jsonl], { type: "application/jsonl" });
+      downloadBlob(blob, `kyutxo-labels-bip329-${dateStr}.jsonl`);
+
+      toast({
+        title: "Labels Exported",
+        description: `Exported ${lines.length} label(s) in BIP-329 format. Import the .jsonl file into Sparrow, Electrum, or any BIP-329 compatible wallet.`,
+      });
+    } catch (error) {
+      console.error("BIP-329 label export failed:", error);
+      toast({
+        variant: "destructive",
+        title: "Label Export Failed",
+        description: error instanceof Error ? error.message : "Failed to export labels",
+      });
+    } finally {
+      setExportingLabels(false);
+    }
+  };
+
   const estimatedSize = () => {
     const estimate = (recordCount * 500) + (attachmentCount * 100) + (tagCount * 50) + (categoryCount * 50);
     if (estimate < 1024) return `${estimate} B`;
@@ -536,6 +580,41 @@ export default function ExportPage() {
             >
               <Download className="h-4 w-4 mr-2" />
               {exporting ? "Exporting..." : "Export & Download Backup"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Tag className="h-5 w-5" />
+              BIP-329 Label Export
+            </CardTitle>
+            <CardDescription>
+              Export your address, transaction, and output labels in the standard BIP-329 format
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Downloads a <code className="text-xs bg-muted px-1 rounded">.jsonl</code> file (one JSON label per line)
+              that can be imported into Sparrow, Electrum, and other BIP-329 compatible wallets — so the labels you
+              maintain here stay in sync with your other wallet software.
+            </p>
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                The exported file contains unencrypted addresses, transaction IDs, and labels. Store it securely.
+              </AlertDescription>
+            </Alert>
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={handleExportBip329}
+              disabled={exportingLabels}
+              data-testid="button-export-bip329"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              {exportingLabels ? "Exporting Labels..." : "Export Labels (BIP-329 .jsonl)"}
             </Button>
           </CardContent>
         </Card>

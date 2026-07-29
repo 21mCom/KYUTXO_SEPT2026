@@ -34,6 +34,8 @@ const ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/lib/bitcoin.ts'),
   path.resolve(ROOT, 'client/src/lib/attachments.ts'),
   path.resolve(ROOT, 'client/src/lib/txid-backfill.ts'),
+  // BIP-329 export: legitimate txid / txid:vout outpoint regexes, not block hashes.
+  path.resolve(ROOT, 'client/src/lib/bip329.ts'),
 ]);
 
 // Inline 64-hex regexes in any case/charset variant, e.g.

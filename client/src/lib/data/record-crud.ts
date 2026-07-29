@@ -1213,6 +1213,14 @@ export async function getRecordsByOffsetLimit(
   return db.records.offset(offset).limit(limit).toArray();
 }
 
+// Iterate every record with a Dexie cursor (no full-table array in memory).
+// Used by streaming exports (e.g. BIP-329 labels) that visit each row once.
+export async function eachRecord(
+  callback: (record: Record) => void
+): Promise<void> {
+  return db.records.each(callback);
+}
+
 export async function eachAddressRecord(
   callback: (record: Record) => void
 ): Promise<void> {

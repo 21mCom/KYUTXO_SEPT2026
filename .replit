@@ -59,6 +59,14 @@ args = "typecheck"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "bip329-export-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bip329-export-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "note-rendering"
 
 [[workflows.workflow.tasks]]
@@ -760,6 +768,28 @@ author = "agent"
 task = "shell.exec"
 args = "node scripts/check-demo-custody-chain-browser.mjs"
 
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bip329-export-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/bip329.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bip329-export-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bip329-export-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
