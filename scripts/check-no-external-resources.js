@@ -98,13 +98,25 @@ function scanFile(file) {
 function main() {
   const filesToScan = [];
 
-  for (const file of SOURCE_FILES) {
-    if (fs.existsSync(file)) {
-      filesToScan.push(file);
-    } else {
-      console.warn(`[check-no-external-resources] WARN: source file not found, skipping: ${path.relative(ROOT, file)}`);
+  // Self-check: fail loudly if a hardcoded source file no longer exists
+  // (mirrors scripts/check-crud-guards.js). If the entry HTML moves, silently
+  // skipping it would leave this guard scanning nothing meaningful.
+  const missingRefs = SOURCE_FILES.filter((f) => !fs.existsSync(f));
+  if (missingRefs.length > 0) {
+    console.error(
+      '\x1b[31m%s\x1b[0m',
+      'check-no-external-resources self-check failed: expected file(s) missing:\n'
+    );
+    for (const f of missingRefs) {
+      console.error(`  ${path.relative(ROOT, f)} (SOURCE_FILES entry)`);
     }
+    console.error(
+      '\n  -> If a file was renamed/moved, update SOURCE_FILES in scripts/check-no-external-resources.js.'
+    );
+    console.error('     If it was deleted, remove the stale entry.');
+    process.exit(1);
   }
+  filesToScan.push(...SOURCE_FILES);
 
   const buildFiles = collectBuildFiles(BUILD_DIR);
   filesToScan.push(...buildFiles);

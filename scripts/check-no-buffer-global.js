@@ -142,6 +142,27 @@ function collectFiles(dir, files = []) {
   return files;
 }
 
+// Self-check: fail loudly if any hardcoded path this guard depends on no longer
+// exists (mirrors scripts/check-crud-guards.js). Otherwise a rename of an
+// allow-listed file (or the scan dir) would silently degrade the guard.
+const missingRefs = [...ALLOWED_FILES].filter((f) => !fs.existsSync(f));
+if (!fs.existsSync(SCAN_DIR)) missingRefs.push(SCAN_DIR);
+if (missingRefs.length > 0) {
+  console.error(
+    '\x1b[31m%s\x1b[0m',
+    'check-no-buffer-global self-check failed: expected file(s) missing:\n',
+  );
+  for (const f of missingRefs) {
+    const label = f === SCAN_DIR ? ' (SCAN_DIR)' : ' (ALLOWED_FILES entry)';
+    console.error(`  ${path.relative(ROOT, f)}${label}`);
+  }
+  console.error(
+    '\n  -> If a file was renamed/moved, update ALLOWED_FILES / SCAN_DIR in scripts/check-no-buffer-global.js.',
+  );
+  console.error('     If it was deleted, remove the stale entry.');
+  process.exit(1);
+}
+
 const violations = [];
 
 for (const file of collectFiles(SCAN_DIR)) {
