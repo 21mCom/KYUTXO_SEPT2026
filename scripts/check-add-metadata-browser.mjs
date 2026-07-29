@@ -42,6 +42,7 @@ const OWNED_ADDR = 'bc1qmetaownedinputaddressxxxxxxxxxxxxxxx';
 const UNKNOWN_ADDR = 'bc1qunknownclicktargetaddressyyyyyyyyyyy';
 const FUND_TXID = 'c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4';
 const NEW_LABEL = 'Added via click-to-add';
+const TX_LABEL = 'Txid added via click-to-add';
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -288,6 +289,104 @@ async function main() {
       passed: persisted.length === 1 && persisted[0].label === NEW_LABEL,
       detail: JSON.stringify(persisted),
     });
+
+    // ═══ Part 2: txid variant — clicking a record-less TRANSACTION ID ═══════
+    // TxidLink funnels through the same openRecordPreviewByAddress path, but
+    // the txid branch exercises different wiring: validateBitcoinInput must
+    // detect "transaction", and the dialog renders tx-specific sections
+    // (Fetch Data button). Reload first so the detail panel from Part 1 is
+    // gone and the hover-resolve cache is fresh.
+    await page.goto(TX_URL, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
+
+    // Sanity: the txid itself must have NO record (Part 1 only created one
+    // for the unknown address).
+    const txidRecordsBefore = await page.evaluate(
+      async ({ txid }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        return (await recordCrud.getRecordsByInputString(txid)).length;
+      },
+      { txid: FUND_TXID },
+    );
+    steps.push({
+      name: 'seeded txid has NO record before the click',
+      passed: txidRecordsBefore === 0,
+      detail: `records for txid=${txidRecordsBefore}`,
+    });
+
+    const txidLink = page.getByTestId(`link-txid-${FUND_TXID.slice(0, 8)}`);
+    await txidLink.waitFor({ state: 'visible', timeout: 30_000 });
+    await txidLink.click();
+
+    const txDialogTitle = page.getByRole('heading', { name: 'Create New Record' });
+    const txTitleVisible = await txDialogTitle
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    steps.push({
+      name: 'clicking the record-less txid opens the Create New Record dialog',
+      passed: txTitleVisible,
+      detail: txTitleVisible ? 'dialog title visible' : 'dialog did not open (or opened in edit mode)',
+    });
+
+    const txPrefill = await page.getByTestId('input-address').inputValue().catch(() => null);
+    steps.push({
+      name: 'identifier field is prefilled with the clicked txid (64-hex)',
+      passed: txPrefill === FUND_TXID,
+      detail: `input-address = ${JSON.stringify(txPrefill)}`,
+    });
+
+    // Detected type must be "transaction": the type select shows "Transaction"
+    // and the tx-only Fetch Data button renders (enabled, since the prefilled
+    // identifier is a valid 64-hex txid).
+    const typeText = (await page.getByTestId('select-type').textContent().catch(() => '')) ?? '';
+    steps.push({
+      name: 'type is auto-detected as "transaction"',
+      passed: typeText.trim() === 'Transaction',
+      detail: `select-type shows ${JSON.stringify(typeText.trim())}`,
+    });
+
+    const fetchBtn = page.getByTestId('button-fetch-tx');
+    const fetchVisible = await fetchBtn.isVisible().catch(() => false);
+    const fetchEnabled = fetchVisible && (await fetchBtn.isEnabled().catch(() => false));
+    steps.push({
+      name: 'tx-specific Fetch Data button is visible and enabled for the valid txid',
+      passed: fetchVisible && fetchEnabled,
+      detail: `visible=${fetchVisible}, enabled=${fetchEnabled}`,
+    });
+
+    // ── Fill a label and save (no fetch — stay offline) ────────────────────
+    await page.getByTestId('input-label').fill(TX_LABEL);
+    await page.getByTestId('button-save').click();
+
+    const txPanelId = page.getByTestId('text-panel-identifier');
+    const txPanelVisible = await txPanelId
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const txPanelText = txPanelVisible ? (await txPanelId.textContent()) ?? '' : '';
+    steps.push({
+      name: 'after save, the detail panel opens showing the txid',
+      passed: txPanelVisible && txPanelText.includes(FUND_TXID),
+      detail: `panel visible=${txPanelVisible}, identifier=${JSON.stringify(txPanelText.trim())}`,
+    });
+
+    const txPersisted = await page.evaluate(
+      async ({ txid }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const records = await recordCrud.getRecordsByInputString(txid);
+        return records.map((r) => ({ label: r.label, type: r.type, inputString: r.inputString }));
+      },
+      { txid: FUND_TXID },
+    );
+    steps.push({
+      name: 'the txid record persisted with type "transaction" and the entered label',
+      passed:
+        txPersisted.length === 1 &&
+        txPersisted[0].label === TX_LABEL &&
+        txPersisted[0].type === 'transaction',
+      detail: JSON.stringify(txPersisted),
+    });
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -319,7 +418,7 @@ async function main() {
   }
 
   console.log(
-    '[add-metadata-browser] PASSED: clicking a record-less address opens the prefilled Create New Record dialog, saving creates the record, and the detail panel shows it — end-to-end in a real browser.',
+    '[add-metadata-browser] PASSED: clicking a record-less address OR txid opens the prefilled Create New Record dialog (txid detected as type "transaction" with Fetch Data), saving creates the record, and the detail panel shows it — end-to-end in a real browser.',
   );
 }
 
