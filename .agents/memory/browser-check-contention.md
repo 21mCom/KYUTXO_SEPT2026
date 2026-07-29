@@ -34,3 +34,5 @@ After many back-to-back validation runs, a check can fail on `input-password` ti
 **Chromium binary:** `which chromium` can fail in ad-hoc shells (workflows have it on PATH). Fallback: `CHROMIUM_BIN=$(ls -d /nix/store/*playwright-browsers-chromium/chromium-*/chrome-linux/chrome | head -1)`.
 
 **Scroll assertions:** never select the page scroller with `div.flex-1.overflow-auto` alone — the sidebar matches too; scope to `main ... .p-6`.
+
+**Lock starvation at validation scale:** with ~17 browser checks all serializing on /tmp/kyutxo-browser-check.lock, the 20-minute acquire timeout guarantees mass failures — most checks time out waiting while one long check holds the lock. Failures whose log says "timed out waiting for lock" are queue starvation, not regressions: verify the checks touching your change serially, then use an audited validation skip.
