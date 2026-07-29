@@ -48,6 +48,7 @@
 - [Heuristic Re-sync browser verify](heuristic-resync-browser-verify.md) — Balance per-address/bulk Re-sync e2e needs REAL on-chain spend addrs to actually promote; in-flight lockout assert is racy.
 - [pdf.js browser harness](pdfjs-browser-harness.md) — Nix Chromium v125 can't run pdfjs-dist default build (Promise.try); use legacy build + legacy worker ?url in browser; pdf.js is only an oracle.
 - [Concurrent browser-check contention](browser-check-contention.md) — parallel browser checks share port 5000 and kill each other's dev server; pre-start the app workflow before completion validation.
+- [.replit validation wiring](dotreplit-validation-wiring.md) — new check gates validation only via verifyAndReplaceDotReplit (isValidation + run list); flaky-only validation failures → audited skip; harden launches with retries.
 - [PofF shared PDF builder pattern](pof-shared-pdf-builder.md) — `buildPofPdf(isSample)` useCallback with `eff*` vars; sample AML needs explicit placeholder SOW/SOF strings; sample inline amlResult needs full EntityListDescriptionInput fields (entityListSource etc.).
 - [Elevate CSS vs positioning utilities](elevate-css-specificity.md) — elevate base rule must stay 0-specificity (:where()) or Tailwind `absolute` on Buttons/Badges silently loses; browser-only bug class.
 - [Curated-tier balance surfaces](curated-tier-balance-surfaces.md) — cached-stats aggregations must ALLOWLIST curated tiers; discovered counterparty rows inherit walletName + stamped stats and inflate totals; import helpers from db-types not database.

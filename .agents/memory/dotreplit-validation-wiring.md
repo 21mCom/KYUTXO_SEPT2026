@@ -1,0 +1,14 @@
+---
+name: .replit validation workflow wiring
+description: How to register a new check script as a completion-validation gate, and what to do when validation only fails on unrelated flaky browser checks.
+---
+
+**Rule:** A new check script only gates task completion when it has BOTH a named workflow entry with `isValidation = true` AND a `workflow.run` entry in the Project workflow list. `configureWorkflow` alone may not persist that wiring — write a full `.replit.new` and apply it via `verifyAndReplaceDotReplit` (direct `.replit` edits are forbidden).
+
+**Why:** A completion review rejected a task because the new browser check existed but never ran in validation; `configureWorkflow` had silently not persisted the validation flag.
+
+**How to apply:** After adding any `scripts/check-*.{js,mjs}` guard, verify it appears in the validation run's command list on the first `markTaskComplete` attempt.
+
+**Validation flake escape hatch:** When repeated full validation runs each fail only on *different, unrelated* browser checks (chromium `pthread_create EAGAIN`, `input-password` load timeouts, vitest worker-teardown crashes with all tests passing), that is parallel-Chromium contention, not a regression. After several genuinely different attempts with your own check + code review green, `markTaskComplete` with an audited `skip_validation_reason` is acceptable. Also: runs can wedge with hung check processes at 0% CPU — `pkill -9 -f 'check-.*browser'` forces the run to a terminal state so a replacement attempt can start.
+
+**Hardening new browser checks:** retry `chromium.launch` (EAGAIN under load) and retry the initial goto+first-selector wait with generous timeouts; single-shot 30s waits flake under parallel validation.

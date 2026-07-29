@@ -133,6 +133,21 @@ args = "block-hash-node-check"
 task = "workflow.run"
 args = "block-validation"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "sparrow-mvdb-browser-check"
+
+[[workflows.workflow]]
+name = "sparrow-mvdb-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-sparrow-mvdb-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
