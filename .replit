@@ -137,6 +137,10 @@ args = "block-validation"
 task = "workflow.run"
 args = "sparrow-mvdb-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-empty-exclusion-vault-live-browser-check"
+
 [[workflows.workflow]]
 name = "sparrow-mvdb-browser-check"
 author = "agent"
@@ -428,6 +432,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-block-validation.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-empty-exclusion-vault-live-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-empty-exclusion-vault-live-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
