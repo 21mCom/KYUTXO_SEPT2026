@@ -62,4 +62,5 @@
 - [Electrum txid confirmations](electrum-txid-confirmations.md) — verbose tx.get has confirmations but NO height; derive tip−conf+1 via cached tip; never cache unconfirmed conversions in session caches.
 - [Dexie .or() requires an index](dexie-or-requires-index.md) — unindexed .or() field throws SchemaError at query time; silent catch-and-empty fallbacks hide it as console noise.
 - [jsdom page-test harness gotchas](jsdom-page-test-harness-gotchas.md) — new .test.tsx needs @vitest-environment jsdom + manual cleanup(); no jest-dom matchers; partial-mock shared modules via importOriginal.
+- [npm audit remediation](npm-audit-remediation.md) — never audit-fix --force (downgrades electron-builder); brace-expansion ^5.0.8 override clears the chain; vite7 needs @types/node ≥20.19.
 - [Demo vault builder](demo-vault-builder.md) — v3 backup zips from Node (fflate); Esplora rotate+cache; deep custody chains need chain adoption + addTx-size-aware spend walk; unlock per page load.
