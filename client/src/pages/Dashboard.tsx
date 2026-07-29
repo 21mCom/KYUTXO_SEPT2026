@@ -18,6 +18,7 @@ import { SearchBar } from "@/components/SearchBar";
 import { FilterBar } from "@/components/FilterBar";
 import { RecordFilters, ColumnFilter, applyColumnFilters } from "@/components/RecordFilters";
 import { RecordCard } from "@/components/RecordCard";
+import { DemoVaultLoader } from "@/components/DemoVaultLoader";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { RecordFormDialog, type TransactionAddresses } from "@/components/RecordFormDialog";
@@ -979,6 +980,9 @@ export default function Dashboard() {
               <Plus className="h-4 w-4 mr-2" />
               Create First Record
             </Button>
+            {/* One-click demo loading for presenters — the component renders
+                itself only when the vault is truly empty (zero records). */}
+            <DemoVaultLoader />
           </div>
         ) : (
           <>

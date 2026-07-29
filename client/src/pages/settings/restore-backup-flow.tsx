@@ -36,18 +36,18 @@ import {
 } from "@/lib/backup/restore";
 import { BackupCancelledError } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
-import { isV3Manifest, parseInline, ATTACHMENTS_DIR } from "@/lib/backup/format";
+import { isV3Manifest, parseInline } from "@/lib/backup/format";
 import {
   previewSettingsPreferences,
   type PortablePreferencePreview,
 } from "@/lib/backup/inline-tables";
 import { runLegacyJsonRestore } from "@/lib/backup/legacy-restore-pipeline";
+import { createRestoreAttachmentWriter } from "@/lib/backup/restore-attachment-writer";
 import { runPostRestoreTxidBackfill } from "@/lib/backup/post-restore-backfill";
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
 import { base64ToBuffer, deriveKey, decrypt } from "@/lib/crypto";
 import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
 import { loadEntitySnapshotFromStorage } from "@/lib/data/entity-list-store";
-import { deleteFile } from "@/lib/attachments";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -416,65 +416,9 @@ export function RestoreBackupFlow() {
         }
         bypassDiskCheckRef.current = false;
 
-        const attachmentWriter: AttachmentFileWriter = {
-          async write(relativePath, fileData) {
-            if (isElectron()) {
-              const api = getElectronAPI();
-              const result = await api.writeAttachment(relativePath, fileData);
-              if (!result.success) {
-                throw new Error(result.error || `Failed to write attachment ${relativePath}`);
-              }
-            } else {
-              const formData = new FormData();
-              formData.append('file', new Blob([fileData]));
-              formData.append('relativePath', relativePath);
-              const response = await fetch('/api/attachments/write', {
-                method: 'POST',
-                body: formData,
-              });
-              if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || response.statusText);
-              }
-            }
-          },
-          // Used to sweep files this restore wrote if it fails/cancels after
-          // the destructive clear, AND to reclaim OLD-vault files a successful
-          // restore left behind, so neither is stranded on disk.
-          async delete(relativePath) {
-            await deleteFile(`${ATTACHMENTS_DIR}/${relativePath}`);
-          },
-          // Snapshot of every attachment file on disk before the write phase,
-          // so a successful restore can delete prior-vault files the new vault
-          // does not reference (relative paths, no `attachments/` prefix).
-          async list() {
-            if (isElectron()) {
-              const api = getElectronAPI();
-              const result = await api.listAllAttachments();
-              if (!result.success) {
-                throw new Error(result.error || "Failed to list attachments");
-              }
-              return result.files ?? [];
-            }
-            const response = await fetch("/api/attachments/list-all");
-            if (!response.ok) {
-              throw new Error(`Failed to list attachments: ${response.status}`);
-            }
-            const data = await response.json();
-            return data.files ?? [];
-          },
-          // Orphaned files: owning record absent. Route to Needs Review folder
-          // under the original filename. Best-effort in Electron; no-op in web.
-          async writeReview(originalFilename, fileData) {
-            if (isElectron()) {
-              const api = getElectronAPI();
-              const result = await api.writeNeedsReview(originalFilename, fileData);
-              if (!result.success) {
-                throw new Error(result.error ?? `Failed to write ${originalFilename} to Needs Review folder`);
-              }
-            }
-          },
-        };
+        // Shared with the one-click demo-vault loader so both restore entry
+        // points write/sweep attachment files identically.
+        const attachmentWriter: AttachmentFileWriter = createRestoreAttachmentWriter();
 
         // Populate the portable-prefs snapshot BEFORE the destructive clear so
         // that `undoInlinePrefs` (declared above the outer try) can roll back any
