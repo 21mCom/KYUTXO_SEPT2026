@@ -24,6 +24,12 @@
 // Usage: node scripts/check-descriptor-bsms-import-browser.mjs
 // Requires: `chromium` on PATH (Nix) and `playwright-core`.
 
+import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+
+// Serialize against other browser checks: parallel validation runs crash each
+// other's Chromium (SIGTRAP / goto timeouts) and fight over the dev-server port.
+await acquireBrowserCheckLock();
+
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 

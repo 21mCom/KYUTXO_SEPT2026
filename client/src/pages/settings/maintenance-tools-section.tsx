@@ -13,6 +13,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { useSettings, updateDisableOrphanCheck } from "@/hooks/use-settings";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import {
@@ -195,6 +196,20 @@ export function MaintenanceToolsSection() {
               : ""
           }`,
           ...(unresolvable ? { duration: 15000 } : {}),
+          // The persistent "Last rebuild result" panel below the Rebuild button
+          // holds the same counts plus contextual notes; let the user jump to it
+          // before the toast disappears.
+          action: (
+            <ToastAction
+              altText="View details"
+              onClick={() => {
+                rebuildSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }}
+              data-testid="button-view-rebuild-details"
+            >
+              View details
+            </ToastAction>
+          ),
         });
       }
     } catch (err) {
