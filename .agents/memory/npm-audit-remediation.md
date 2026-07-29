@@ -12,4 +12,6 @@ Rule: fix transitive vulns by upgrading direct parents or targeted `overrides`; 
 - jspdf 3→4 is drop-in here (jspdf-autotable@5 peers ^2||^3||^4); verify with sample-pdf-browser-check.
 - drizzle-orm 0.45.x is safe: only shared/schema.ts uses it.
 - After ANY npm install: sed package-firewall.replit.local URLs back to registry.npmjs.org (lockfile-urls gate).
-- Remaining moderates are unfixable without majors: uuid via vite-plugin-top-level-await, esbuild via drizzle-kit, @replit/object-storage's google-cloud chain.
+- Moderates cleared without majors: global override `"uuid": "^11.1.1"` fixes the vite-plugin-top-level-await + google-cloud/teeny-request chains (uuid 9/10→11 is API-compatible for v4()); scoped override `"@esbuild-kit/core-utils": {"esbuild": "^0.25.12"}` fixes drizzle-kit's esbuild.
+- Gotcha: a scoped override can leave the old nested copy installed ("invalid ... overridden" in npm ls) — remove the nested subtree from node_modules and the lockfile, then reinstall.
+- Firewall URL rewrite: npm writes both http and https package-firewall URLs, and a greedy `[^"]*` sed eats the package-name path segment, producing 404 tarball URLs — rewrite only the host+`/npm/` prefix and verify every `resolved` URL still contains `/-/`.
