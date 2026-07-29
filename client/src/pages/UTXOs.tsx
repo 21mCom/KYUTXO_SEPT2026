@@ -62,7 +62,7 @@ import {
   Loader2
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { getOwners, getWalletNames, getTags, getCategories, getParticipantsByAddresses } from "@/lib/dataFacade";
+import { getOwners, getWalletNames, getTags, getCategories, getParticipantsByAddresses, getSpendInputsByOutpoints } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { AddressLink } from "@/components/AddressLink";
@@ -658,7 +658,29 @@ export default function UTXOs() {
     const abortController = new AbortController();
     setParticipantsLoading(true);
 
-    getParticipantsByAddresses(addresses, abortController.signal)
+    // Address-keyed load misses spend inputs that carry no prevout address
+    // (Electrum-synced inputs are stored with a blank address). Follow up with
+    // an outpoint-keyed load for inputs spending the owned outputs we just
+    // fetched, so spent detection sees those spends too.
+    const loadWithSpendInputs = async () => {
+      const byAddress = await getParticipantsByAddresses(addresses, abortController.signal);
+      const seenIds = new Set<number>();
+      const ownedOutpoints: Array<[string, number]> = [];
+      for (const p of byAddress) {
+        if (p.id !== undefined) seenIds.add(p.id);
+        if (p.role === 'output' && p.vout !== undefined && p.vout !== null) {
+          ownedOutpoints.push([p.txid, p.vout]);
+        }
+      }
+      const spendInputs = await getSpendInputsByOutpoints(ownedOutpoints, abortController.signal);
+      const merged = byAddress.slice();
+      for (const p of spendInputs) {
+        if (p.id === undefined || !seenIds.has(p.id)) merged.push(p);
+      }
+      return merged;
+    };
+
+    loadWithSpendInputs()
       .then(result => {
         if (thisRequestId === participantsRequestId.current) {
           setParticipants(result);
@@ -1018,10 +1040,28 @@ export default function UTXOs() {
 
     const outputs: typeof participants = [];
     const inputs: typeof participants = [];
+    // Outpoint-first spent detection: an input that carries prevTxid/prevVout
+    // identifies EXACTLY which output it consumed, so that spend is applied
+    // directly (same as Exact mode) regardless of address/amount. Only inputs
+    // MISSING outpoint data fall back to FIFO address:amount matching below.
+    // Without this, Electrum-synced inputs (which have outpoints but no prevout
+    // address/amount) never match any output key, every output counts as
+    // unspent, and the page total inflates to "total received".
+    const spentOutpoints = new Set<string>();
     for (let i = 0; i < participants.length; i++) {
       const p = participants[i];
       if (p.role === 'output') outputs.push(p);
-      else if (p.role === 'input') inputs.push(p);
+      else if (p.role === 'input') {
+        if (p.prevTxid !== undefined && p.prevTxid !== null && p.prevVout !== undefined && p.prevVout !== null) {
+          const tx = txidToTx.get(p.txid);
+          const inputBlockTime = tx?.blockTime ?? 0;
+          if (inputBlockTime > 0 && inputBlockTime <= cutoffTime) {
+            spentOutpoints.add(`${p.prevTxid}:${p.prevVout}`);
+          }
+        } else {
+          inputs.push(p);
+        }
+      }
       if (i % 1000 === 999) {
         checkAbort(signal);
         await yieldToUI();
@@ -1066,6 +1106,17 @@ export default function UTXOs() {
 
     for (let i = 0; i < outputsWithTime.length; i++) {
       const { output, blockTime, blockHeight } = outputsWithTime[i];
+
+      // Spent via a known outpoint — authoritative, skip before any FIFO
+      // matching (and without consuming a FIFO input).
+      if (spentOutpoints.has(`${output.txid}:${output.vout ?? 0}`)) {
+        if (i % 1000 === 999) {
+          checkAbort(signal);
+          await yieldToUI();
+        }
+        continue;
+      }
+
       const key = `${output.address}:${output.amount}`;
       const matchingInputs = inputsByAddressAmount.get(key) || [];
       
@@ -1514,7 +1565,15 @@ export default function UTXOs() {
               ({format(new Date(lastSyncTime), "MMM d, yyyy 'at' h:mm a")})
             </span>
           )}
-          {utxoMode === 'heuristic' && (
+          {utxoMode === 'heuristic' && outpointDataStatus.total > 0 && outpointDataStatus.percentage < 100 && (
+            <>
+              <span className="mx-2">|</span>
+              <span className="text-amber-600 dark:text-amber-400" data-testid="text-heuristic-coverage-warning">
+                Standard mode: only {outpointDataStatus.percentage}% of inputs have outpoint data — spends of the rest are estimated by amount matching (re-sync for accurate balances)
+              </span>
+            </>
+          )}
+          {utxoMode === 'heuristic' && (outpointDataStatus.total === 0 || outpointDataStatus.percentage === 100) && (
             <>
               <span className="mx-2">|</span>
               <span className="text-amber-600 dark:text-amber-400">

@@ -43,6 +43,34 @@ export async function getParticipantsByAddresses(addresses: string[], signal?: A
   return results;
 }
 
+/**
+ * Fetch INPUT participant rows that spend the given outpoints ("txid:vout"),
+ * via the [prevTxid+prevVout] compound index. Needed for spent-output
+ * detection: Electrum-synced inputs carry NO prevout address (stored with a
+ * blank address string), so an address-based participant load never returns
+ * them even though they spend owned outputs.
+ */
+export async function getSpendInputsByOutpoints(
+  outpoints: Array<[string, number]>,
+  signal?: AbortSignal,
+): Promise<TransactionParticipant[]> {
+  if (outpoints.length === 0) return [];
+  const results: TransactionParticipant[] = [];
+  const batchSize = 500;
+  for (let i = 0; i < outpoints.length; i += batchSize) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const batch = outpoints.slice(i, i + batchSize);
+    const raw = await db.transactionParticipants.where('[prevTxid+prevVout]').anyOf(batch).toArray();
+    for (const p of raw) {
+      if (p.role === 'input') results.push(p);
+    }
+    if (i + batchSize < outpoints.length) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  return results;
+}
+
 export async function getParticipantsByRecordId(recordId: number): Promise<TransactionParticipant[]> {
   return db.transactionParticipants.where('recordId').equals(recordId).toArray();
 }

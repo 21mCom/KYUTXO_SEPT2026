@@ -105,7 +105,7 @@ let pid = 1;
 function out(txid: string, address: string, vout: number, amount: number): ParticipantRow {
   return { id: pid++, txid, role: "output", address, amount, vout, prevTxid: null, prevVout: null, recordId: null, scriptType: "v0_p2wpkh" };
 }
-function inp(txid: string, address: string, amount: number, prevTxid: string, prevVout: number): ParticipantRow {
+function inp(txid: string, address: string, amount: number, prevTxid: string | null, prevVout: number | null): ParticipantRow {
   return { id: pid++, txid, role: "input", address, amount, vout: null, prevTxid, prevVout, recordId: null, scriptType: "v0_p2wpkh" };
 }
 
@@ -649,11 +649,12 @@ describe("engine-core: participant lookups", () => {
   });
 });
 
-// Reference implementation of the in-browser heuristic (no-prevout) owned-UTXO
-// computation in UTXOs.tsx. Replicated here verbatim (FIFO amount-matching per
-// `address:amount` group, only owned outputs returned) so the engine SQL is held
-// to byte-for-byte parity against the exact algorithm the page runs. Returns the
-// set of unspent outpoints (`txid:vout`).
+// Reference implementation of the in-browser heuristic owned-UTXO computation
+// in UTXOs.tsx. Replicated here verbatim (outpoint-first spend detection, then
+// FIFO amount-matching per `address:amount` group for outpoint-less inputs,
+// only owned outputs returned) so the engine SQL is held to byte-for-byte
+// parity against the exact algorithm the page runs. Returns the set of unspent
+// outpoints (`txid:vout`).
 function referenceHeuristic(
   parts: ParticipantRow[],
   blockTimeOf: (txid: string) => number,
@@ -661,7 +662,19 @@ function referenceHeuristic(
   cutoff: number = Infinity,
 ): Set<string> {
   const outputs = parts.filter((p) => p.role === "output");
-  const inputs = parts.filter((p) => p.role === "input");
+  // Outpoint-first: inputs carrying prevTxid/prevVout spend exactly that
+  // output; only outpoint-less inputs join the FIFO fallback.
+  const spentOutpoints = new Set<string>();
+  const inputs: ParticipantRow[] = [];
+  for (const p of parts) {
+    if (p.role !== "input") continue;
+    if (p.prevTxid != null && p.prevVout != null) {
+      const bt = blockTimeOf(p.txid);
+      if (bt > 0 && bt <= cutoff) spentOutpoints.add(`${p.prevTxid}:${p.prevVout}`);
+    } else {
+      inputs.push(p);
+    }
+  }
 
   const outputsWithTime = outputs
     .map((output) => ({ output, blockTime: blockTimeOf(output.txid) }))
@@ -687,6 +700,7 @@ function referenceHeuristic(
   const result = new Set<string>();
   const matchedInputIndices = new Map<string, number>();
   for (const { output, blockTime } of outputsWithTime) {
+    if (spentOutpoints.has(`${output.txid}:${output.vout ?? 0}`)) continue;
     const key = `${output.address}:${output.amount}`;
     const matchingInputs = inputsByAddressAmount.get(key) || [];
     const currentIndex = matchedInputIndices.get(key) || 0;
@@ -729,13 +743,15 @@ describe("engine-core: heuristic owned-UTXO parity vs in-browser computation", (
   const parts: ParticipantRow[] = [
     out("txA1", "A", 0, 500),
     out("txA2", "A", 1, 500),
-    inp("txAspend", "A", 500, "txA1", 0),
+    // Legacy inputs (no outpoint data) so this fixture keeps exercising the
+    // FIFO amount-matching fallback path.
+    inp("txAspend", "A", 500, null, null),
     out("txA3", "A", 0, 700),
-    inp("txBin", "B", 800, "txBin0", 0),
+    inp("txBin", "B", 800, null, null),
     out("txB1", "B", 0, 800),
     out("txB1", "B", 1, 900),
     out("txB2", "B", 0, 900),
-    inp("txBspend", "B", 900, "txB1", 1),
+    inp("txBspend", "B", 900, null, null),
     out("txC1", "C", 0, 100),
     out("txZ1", "Z", 0, 300),
   ];
@@ -843,7 +859,7 @@ describe("engine-core: heuristic owned-UTXO as-of cutoff parity", () => {
   const parts: ParticipantRow[] = [
     out("t1", "A", 0, 500),
     out("t2", "A", 1, 500),
-    inp("t3", "A", 500, "t1", 0),
+    inp("t3", "A", 500, null, null), // legacy (no outpoint) -> FIFO fallback
   ];
   const owned = new Set(["A"]);
   beforeAll(async () => {
@@ -873,6 +889,104 @@ describe("engine-core: heuristic owned-UTXO as-of cutoff parity", () => {
     expect(expected.size).toBe(0);
     expect(countHeuristicOwnedUtxos(db, { asOfBlockTime: 500 })).toBe(0);
     expect(getHeuristicOwnedUtxos(db, { asOfBlockTime: 500, limit: 100 })).toHaveLength(0);
+  });
+});
+
+describe("engine-core: heuristic owned-UTXO outpoint-first spend detection", () => {
+  // Electrum-shaped inputs: outpoints present but NO prevout address/amount
+  // (blank address, 0 amount). Amount-matching can never subtract these; the
+  // outpoint pass must, or the total inflates to "total received".
+  describe("Electrum-shaped inputs (outpoint, no prevout address/amount)", () => {
+    let db: BetterSqlite3EngineDb;
+    const txs: TransactionRow[] = [tx(1, "t1", 1000), tx(2, "t2", 2000)];
+    const parts: ParticipantRow[] = [
+      out("t1", "A", 0, 500), // spent by outpoint below
+      out("t1", "A", 1, 700), // remains unspent
+      inp("t2", "", 0, "t1", 0), // Electrum-style spend of t1:0
+    ];
+    beforeAll(async () => {
+      db = await freshDb();
+      insertRecords(db, [rec({ id: 1, inputString: "A", addressImportance: "manual" })]);
+      insertTransactions(db, txs);
+      insertParticipants(db, parts);
+    });
+    const blockTimeOf = (txid: string) => txs.find((t) => t.txid === txid)?.blockTime ?? 0;
+
+    it("subtracts the outpoint-spent output (live + reference)", () => {
+      const expected = referenceHeuristic(parts, blockTimeOf, new Set(["A"]));
+      expect(expected).toEqual(new Set(["t1:1"]));
+      expect(outpointsOf(getHeuristicOwnedUtxos(db, { limit: 100 }))).toEqual(expected);
+      expect(countHeuristicOwnedUtxos(db)).toBe(1);
+    });
+
+    it("materialized table agrees", () => {
+      expect(buildHeuristicOwnedUtxos(db)).toBe(1);
+      expect(outpointsOf(getHeuristicOwnedUtxos(db, { limit: 100 }))).toEqual(new Set(["t1:1"]));
+    });
+
+    it("as-of before the spend still shows both outputs", () => {
+      expect(countHeuristicOwnedUtxos(db, { asOfBlockTime: 1500 })).toBe(2);
+    });
+  });
+
+  // Reused identical amounts at one address: the outpoint identifies the exact
+  // output spent (the LATER one), where FIFO would have consumed the earlier.
+  describe("outpoint picks the exact output among identical amounts", () => {
+    let db: BetterSqlite3EngineDb;
+    const txs: TransactionRow[] = [tx(1, "t1", 1000), tx(2, "t2", 1100), tx(3, "t3", 2000)];
+    const parts: ParticipantRow[] = [
+      out("t1", "A", 0, 500),
+      out("t2", "A", 0, 500),
+      inp("t3", "A", 500, "t2", 0), // spends the LATER output by outpoint
+    ];
+    beforeAll(async () => {
+      db = await freshDb();
+      insertRecords(db, [rec({ id: 1, inputString: "A", addressImportance: "manual" })]);
+      insertTransactions(db, txs);
+      insertParticipants(db, parts);
+    });
+    const blockTimeOf = (txid: string) => txs.find((t) => t.txid === txid)?.blockTime ?? 0;
+
+    it("leaves the earlier output unspent", () => {
+      const expected = referenceHeuristic(parts, blockTimeOf, new Set(["A"]));
+      expect(expected).toEqual(new Set(["t1:0"]));
+      expect(outpointsOf(getHeuristicOwnedUtxos(db, { limit: 100 }))).toEqual(expected);
+    });
+  });
+
+  // Mixed data: an outpoint-carrying input and a legacy (outpoint-less) input
+  // coexist; the legacy input FIFO-matches only among outputs NOT already
+  // consumed by an outpoint.
+  describe("mixed outpoint + legacy inputs", () => {
+    let db: BetterSqlite3EngineDb;
+    const txs: TransactionRow[] = [
+      tx(1, "t1", 1000),
+      tx(2, "t2", 1100),
+      tx(3, "t3", 1200),
+      tx(4, "t4", 2000),
+      tx(5, "t5", 2100),
+    ];
+    const parts: ParticipantRow[] = [
+      out("t1", "A", 0, 500),
+      out("t2", "A", 0, 500),
+      out("t3", "A", 0, 500),
+      inp("t4", "", 0, "t2", 0), // outpoint spend of the middle output
+      inp("t5", "A", 500, null, null), // legacy: FIFO-consumes earliest remaining (t1:0)
+    ];
+    beforeAll(async () => {
+      db = await freshDb();
+      insertRecords(db, [rec({ id: 1, inputString: "A", addressImportance: "manual" })]);
+      insertTransactions(db, txs);
+      insertParticipants(db, parts);
+    });
+    const blockTimeOf = (txid: string) => txs.find((t) => t.txid === txid)?.blockTime ?? 0;
+
+    it("only the last output survives", () => {
+      const expected = referenceHeuristic(parts, blockTimeOf, new Set(["A"]));
+      expect(expected).toEqual(new Set(["t3:0"]));
+      expect(outpointsOf(getHeuristicOwnedUtxos(db, { limit: 100 }))).toEqual(expected);
+      expect(countHeuristicOwnedUtxos(db)).toBe(1);
+    });
   });
 });
 
@@ -922,7 +1036,23 @@ describe("engine-core: heuristic owned-UTXO randomized parity", () => {
           if (rnd() < 0.5) {
             parts.push(out(txid, addr, k, amount));
           } else {
-            parts.push(inp(txid, addr, amount, `prev${t}_${k}`, k));
+            // Mix input flavors: legacy (no outpoint -> FIFO fallback),
+            // unknown outpoint (spends something we don't hold), or an
+            // outpoint referencing a real earlier output (authoritative spend).
+            const flavor = rnd();
+            if (flavor < 0.4) {
+              parts.push(inp(txid, addr, amount, null, null));
+            } else if (flavor < 0.7) {
+              parts.push(inp(txid, addr, amount, `prev${t}_${k}`, k));
+            } else {
+              const priorOutputs = parts.filter((p) => p.role === "output");
+              if (priorOutputs.length > 0) {
+                const target = pick(priorOutputs);
+                parts.push(inp(txid, "", 0, target.txid, target.vout ?? 0));
+              } else {
+                parts.push(inp(txid, addr, amount, null, null));
+              }
+            }
           }
         }
       }

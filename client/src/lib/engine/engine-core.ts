@@ -425,7 +425,11 @@ function setEngineMeta(db: EngineDb, key: string, value: string): void {
 //       bump forces a reseed that builds the index.
 // ---------------------------------------------------------------------------
 
-export const ENGINE_SCHEMA_VERSION = 4;
+//   v5: heuristic owned-UTXO computation became outpoint-first (inputs with
+//       prevTxid/prevVout spend that exact output; FIFO amount-matching only for
+//       outpoint-less inputs). The materialized heuristicOwnedUtxos table built
+//       by a pre-v5 build would keep serving inflated totals, so force a reseed.
+export const ENGINE_SCHEMA_VERSION = 5;
 const SCHEMA_VERSION_KEY = 'schemaVersion';
 
 /** Schema version stamped by the last successful finalize; 0 if never written. */
@@ -1651,17 +1655,25 @@ export function getOwnedUtxos(
 // Query: heuristic ("estimated", no-prevout) owned-UTXO set
 // ---------------------------------------------------------------------------
 //
-// The heuristic view never reads `prevTxid/prevVout`; it estimates which outputs
-// are still unspent by FIFO amount-matching within each (owned address, amount)
-// group. This mirrors the in-browser computation in UTXOs.tsx exactly:
+// The heuristic view is OUTPOINT-FIRST: any input that carries
+// `prevTxid/prevVout` authoritatively spends exactly that output (same as Exact
+// mode), and only inputs MISSING outpoint data participate in the FIFO
+// amount-matching fallback. Electrum-synced inputs have outpoints but no prevout
+// address/amount, so without the outpoint pass their spends were never
+// subtracted and the total inflated to "total received". This mirrors the
+// in-browser computation in UTXOs.tsx exactly:
 //
-//   - Candidate outputs: real outputs (role='output', vout set) of confirmed
-//     txs (blockTime > 0, and <= cutoff for an "as of" read) whose address is an
-//     owned record in one of the requested tiers.
-//   - Candidate inputs: inputs at those same owned addresses, same confirmation
-//     gating. (The page keys matches by `address:amount`; restricting inputs to
-//     owned addresses is equivalent because a non-owned address is a different
-//     key that owned outputs never consult — and it is also a big speedup.)
+//   - Spent outpoints: inputs of confirmed txs (blockTime > 0, <= cutoff) with
+//     both prevTxid and prevVout set mark `prevTxid:prevVout` spent. Outputs so
+//     marked are excluded up-front (from results AND the FIFO event stream).
+//   - Candidate outputs: remaining real outputs (role='output', vout set) of
+//     confirmed txs whose address is an owned record in one of the requested
+//     tiers.
+//   - Candidate inputs: outpoint-LESS inputs at those same owned addresses, same
+//     confirmation gating. (The page keys matches by `address:amount`;
+//     restricting inputs to owned addresses is equivalent because a non-owned
+//     address is a different key that owned outputs never consult — and it is
+//     also a big speedup.)
 //   - Per (address, amount) group: walk outputs in (blockTime, vout) order and
 //     greedily consume the earliest not-yet-used input whose tx confirmed
 //     STRICTLY LATER than the output. A consumed output is "spent".
@@ -1686,7 +1698,8 @@ export function getOwnedUtxos(
  * final SELECT after this prefix, so the count and the listing stay in lockstep.
  *
  * Params are pushed in the exact textual order the `?` placeholders appear:
- * output-cutoff, output tier list, input-cutoff, input tier list.
+ * spent-outpoint cutoff, output-cutoff, output tier list, input-cutoff,
+ * input tier list.
  */
 function buildHeuristicCte(
   tiers: string[],
@@ -1694,6 +1707,12 @@ function buildHeuristicCte(
 ): { cteSql: string; params: unknown[] } {
   const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
   const params: unknown[] = [];
+
+  let spTimeSql = 'AND COALESCE(t.blockTime, 0) > 0';
+  if (asOfBlockTime != null) {
+    spTimeSql += ' AND t.blockTime <= ?';
+    params.push(asOfBlockTime);
+  }
 
   let outTimeSql = 'AND COALESCE(t.blockTime, 0) > 0';
   if (asOfBlockTime != null) {
@@ -1710,7 +1729,16 @@ function buildHeuristicCte(
   params.push(...tierBind);
 
   const cteSql = `
-    WITH oo AS (
+    WITH sp AS (
+      SELECT i.prevTxid AS ptxid, i.prevVout AS pvout
+      FROM transactionParticipants i
+      JOIN blockchainTransactions t ON t.txid = i.txid
+      WHERE i.role = 'input'
+        AND i.prevTxid IS NOT NULL
+        AND i.prevVout IS NOT NULL
+        ${spTimeSql}
+    ),
+    oo AS (
       SELECT o.id AS id, o.txid AS txid, o.vout AS vout, o.address AS address,
              o.amount AS amount, o.recordId AS recordId, t.blockTime AS bt
       FROM transactionParticipants o
@@ -1718,6 +1746,9 @@ function buildHeuristicCte(
       WHERE o.role = 'output'
         AND o.vout IS NOT NULL
         ${outTimeSql}
+        AND NOT EXISTS (
+          SELECT 1 FROM sp WHERE sp.ptxid = o.txid AND sp.pvout = o.vout
+        )
         AND EXISTS (
           SELECT 1 FROM records r
           WHERE r.inputString = o.address AND r.type = 'address'
@@ -1729,6 +1760,7 @@ function buildHeuristicCte(
       FROM transactionParticipants i
       JOIN blockchainTransactions t ON t.txid = i.txid
       WHERE i.role = 'input'
+        AND (i.prevTxid IS NULL OR i.prevVout IS NULL)
         ${inTimeSql}
         AND EXISTS (
           SELECT 1 FROM records r
