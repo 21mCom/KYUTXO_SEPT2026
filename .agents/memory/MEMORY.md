@@ -64,3 +64,4 @@
 - [jsdom page-test harness gotchas](jsdom-page-test-harness-gotchas.md) — new .test.tsx needs @vitest-environment jsdom + manual cleanup(); no jest-dom matchers; partial-mock shared modules via importOriginal.
 - [npm audit remediation](npm-audit-remediation.md) — never audit-fix --force (downgrades electron-builder); brace-expansion ^5.0.8 override clears the chain; vite7 needs @types/node ≥20.19.
 - [Demo vault builder](demo-vault-builder.md) — v3 backup zips from Node (fflate); Esplora rotate+cache; deep custody chains need chain adoption + addTx-size-aware spend walk; unlock per page load.
+- [Pooled-run cancel tokens](pooled-run-cancel-tokens.md) — a shared cancel flag isn't enough for concurrent runs; bump a run token on cancel/reset/new-run so stale workers can never mutate newer state.

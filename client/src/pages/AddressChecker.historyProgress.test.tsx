@@ -41,6 +41,8 @@ interface HistoryDates {
 // Captured handles so the test can drive the in-flight history walk by hand.
 let capturedOnProgress: ((scanned: number) => void) | null = null;
 let resolveHistory: ((dates: HistoryDates) => void) | null = null;
+// Every history call, in order, so multi-run tests can resolve old walks late.
+let historyCalls: { address: string; resolve: (dates: HistoryDates) => void }[] = [];
 
 const getAddressCoreStats = vi.fn(async () => ({
   txCount: 100,
@@ -49,10 +51,11 @@ const getAddressCoreStats = vi.fn(async () => ({
   balanceSats: 300000,
 }));
 
-const getAddressHistoryDates = vi.fn((_address: string, onProgress?: (scanned: number) => void) => {
+const getAddressHistoryDates = vi.fn((address: string, onProgress?: (scanned: number) => void) => {
   capturedOnProgress = onProgress ?? null;
   return new Promise<HistoryDates>(resolve => {
     resolveHistory = resolve;
+    historyCalls.push({ address, resolve });
   });
 });
 
@@ -90,6 +93,7 @@ describe("AddressChecker — live history scan-progress counter", () => {
     vi.clearAllMocks();
     capturedOnProgress = null;
     resolveHistory = null;
+    historyCalls = [];
   });
 
   it("advances the scanned / total counter page-by-page, then shows the first-seen date", async () => {
@@ -107,17 +111,24 @@ describe("AddressChecker — live history scan-progress counter", () => {
     expect(getAddressHistoryDates).toHaveBeenCalledTimes(1);
     expect(capturedOnProgress).toBeTypeOf("function");
 
-    // First page comes back.
+    // First page comes back. Progress ticks are buffered and flushed on a short
+    // interval, so wait for the flush rather than asserting synchronously.
     act(() => capturedOnProgress!(25));
-    expect(screen.getByTestId(`text-history-scan-${ADDR}`).textContent).toContain("25 / 100");
+    await waitFor(() => {
+      expect(screen.getByTestId(`text-history-scan-${ADDR}`).textContent).toContain("25 / 100");
+    });
 
     // Second page — the counter advances.
     act(() => capturedOnProgress!(70));
-    expect(screen.getByTestId(`text-history-scan-${ADDR}`).textContent).toContain("70 / 100");
+    await waitFor(() => {
+      expect(screen.getByTestId(`text-history-scan-${ADDR}`).textContent).toContain("70 / 100");
+    });
 
     // A page count above the known total is clamped to the total.
     act(() => capturedOnProgress!(150));
-    expect(screen.getByTestId(`text-history-scan-${ADDR}`).textContent).toContain("100 / 100");
+    await waitFor(() => {
+      expect(screen.getByTestId(`text-history-scan-${ADDR}`).textContent).toContain("100 / 100");
+    });
 
     // The walk resolves: the counter is replaced by the formatted first-seen date.
     // Use a distinct last-seen instant so the first-seen label is unambiguous.
@@ -139,20 +150,150 @@ describe("AddressChecker — live history scan-progress counter", () => {
       expect(screen.getByTestId(`text-history-scan-${ADDR}`)).toBeTruthy();
     });
 
-    // One page in before the user cancels.
+    // One page in before the user cancels (wait for the buffered flush).
     act(() => capturedOnProgress!(20));
-    expect(screen.getByTestId(`text-history-scan-${ADDR}`).textContent).toContain("20 / 100");
+    await waitFor(() => {
+      expect(screen.getByTestId(`text-history-scan-${ADDR}`).textContent).toContain("20 / 100");
+    });
 
     // User cancels the history walk.
     fireEvent.click(screen.getByTestId("button-cancel-history"));
 
     // A late page callback arrives after cancellation — it must be ignored, so
-    // the counter stays frozen at its last pre-cancel value.
+    // the counter stays frozen at its last pre-cancel value. Wait past a flush
+    // interval to prove the buffered tick is dropped, not merely delayed.
     act(() => capturedOnProgress!(80));
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 400));
+    });
     const span = screen.queryByTestId(`text-history-scan-${ADDR}`);
     if (span) {
       expect(span.textContent).toContain("20 / 100");
       expect(span.textContent).not.toContain("80");
     }
+  });
+
+  it("a cancelled run's stale worker cannot mutate rows or stop a newer run", async () => {
+    cleanup();
+    // Second valid mainnet bech32 address (BIP173 P2WSH test vector).
+    const ADDR2 = "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv2";
+
+    render(<AddressChecker />);
+    fireEvent.change(screen.getByTestId("textarea-address-input"), {
+      target: { value: `${ADDR}\n${ADDR2}` },
+    });
+    fireEvent.click(screen.getByTestId("button-run-check"));
+    await waitFor(() => {
+      expect(screen.getByTestId(`button-load-history-${ADDR}`)).toBeTruthy();
+      expect(screen.getByTestId(`button-load-history-${ADDR2}`)).toBeTruthy();
+    });
+
+    // Run 1: start a walk for ADDR, then cancel it while it is in flight.
+    fireEvent.click(screen.getByTestId(`button-load-history-${ADDR}`));
+    await waitFor(() => {
+      expect(screen.getByTestId(`text-history-scan-${ADDR}`)).toBeTruthy();
+    });
+    expect(historyCalls).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("button-cancel-history"));
+    // Cancel promptly reverts the loading row to idle (Load button is back).
+    await waitFor(() => {
+      expect(screen.getByTestId(`button-load-history-${ADDR}`)).toBeTruthy();
+    });
+
+    // Run 2 starts immediately for ADDR2 while run 1's walk is still unresolved.
+    fireEvent.click(screen.getByTestId(`button-load-history-${ADDR2}`));
+    await waitFor(() => {
+      expect(screen.getByTestId(`text-history-scan-${ADDR2}`)).toBeTruthy();
+    });
+    expect(historyCalls).toHaveLength(2);
+
+    // Run 1's stale walk now resolves late — it must not mark ADDR done...
+    await act(async () => {
+      historyCalls[0].resolve({ firstSeenTime: FIRST_SEEN, lastSeenTime: FIRST_SEEN });
+    });
+    expect(screen.getByTestId(`button-load-history-${ADDR}`)).toBeTruthy();
+    expect(screen.queryByText(FIRST_SEEN_LABEL)).toBeNull();
+    // ...and its finalizer must not stop the newer run (Cancel still shown,
+    // ADDR2's walk still in flight).
+    expect(screen.getByTestId("button-cancel-history")).toBeTruthy();
+    expect(screen.getByTestId(`text-history-scan-${ADDR2}`)).toBeTruthy();
+
+    // Run 2 finishes normally: ADDR2 gets its date and the run winds down.
+    await act(async () => {
+      historyCalls[1].resolve({ firstSeenTime: FIRST_SEEN, lastSeenTime: FIRST_SEEN + 86400 * 30 });
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId(`text-history-scan-${ADDR2}`)).toBeNull();
+    });
+    expect(screen.getByText(FIRST_SEEN_LABEL)).toBeTruthy();
+    expect(screen.queryByTestId("button-cancel-history")).toBeNull();
+    // ADDR remains untouched and retryable.
+    expect(screen.getByTestId(`button-load-history-${ADDR}`)).toBeTruthy();
+  });
+
+  it("a cancelled walk stays dead across Reset + a fresh address check", async () => {
+    cleanup();
+    await renderAndCheck();
+
+    // Start a walk, then cancel it while its promise is still pending.
+    fireEvent.click(screen.getByTestId(`button-load-history-${ADDR}`));
+    await waitFor(() => {
+      expect(screen.getByTestId(`text-history-scan-${ADDR}`)).toBeTruthy();
+    });
+    expect(historyCalls).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("button-cancel-history"));
+
+    // Reset and run a brand-new check over the same address. runCheck clears
+    // the history cancel flag — the old worker must stay stale regardless.
+    fireEvent.click(screen.getByTestId("button-reset-check"));
+    fireEvent.change(screen.getByTestId("textarea-address-input"), { target: { value: ADDR } });
+    fireEvent.click(screen.getByTestId("button-run-check"));
+    await waitFor(() => {
+      expect(screen.getByTestId(`button-load-history-${ADDR}`)).toBeTruthy();
+    });
+
+    // The cancelled run's walk resolves late: it must not mark the new row done
+    // or surface a first-seen date on the fresh dataset.
+    await act(async () => {
+      historyCalls[0].resolve({ firstSeenTime: FIRST_SEEN, lastSeenTime: FIRST_SEEN });
+    });
+    expect(screen.getByTestId(`button-load-history-${ADDR}`)).toBeTruthy();
+    expect(screen.queryByText(FIRST_SEEN_LABEL)).toBeNull();
+    expect(screen.queryByTestId("button-cancel-history")).toBeNull();
+  });
+
+  it("a new check while a history walk is in flight frees the history controls", async () => {
+    cleanup();
+    await renderAndCheck();
+
+    // Start a walk and leave it in flight (promise never resolved yet).
+    fireEvent.click(screen.getByTestId(`button-load-history-${ADDR}`));
+    await waitFor(() => {
+      expect(screen.getByTestId(`text-history-scan-${ADDR}`)).toBeTruthy();
+    });
+    expect(historyCalls).toHaveLength(1);
+
+    // Start a brand-new check WITHOUT cancelling history first. The new check
+    // takes ownership of the rows and must clear the history-running state so
+    // the Load controls are usable on the fresh dataset.
+    fireEvent.click(screen.getByTestId("button-run-check"));
+    await waitFor(() => {
+      const loadButton = screen.getByTestId(`button-load-history-${ADDR}`) as HTMLButtonElement;
+      expect(loadButton.disabled).toBe(false);
+    });
+    expect(screen.queryByTestId("button-cancel-history")).toBeNull();
+
+    // The superseded walk resolving late must not mutate the new dataset...
+    await act(async () => {
+      historyCalls[0].resolve({ firstSeenTime: FIRST_SEEN, lastSeenTime: FIRST_SEEN });
+    });
+    expect(screen.queryByText(FIRST_SEEN_LABEL)).toBeNull();
+
+    // ...and a new history walk can start normally on the fresh rows.
+    fireEvent.click(screen.getByTestId(`button-load-history-${ADDR}`));
+    await waitFor(() => {
+      expect(screen.getByTestId(`text-history-scan-${ADDR}`)).toBeTruthy();
+    });
+    expect(historyCalls).toHaveLength(2);
   });
 });

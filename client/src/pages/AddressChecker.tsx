@@ -25,6 +25,9 @@ const HTTP_CONCURRENCY = 3;
 const ELECTRUM_BATCH_SIZE = 40;
 // How often accumulated row patches are flushed into React state.
 const ROW_FLUSH_INTERVAL_MS = 250;
+// On-demand history walks run a few at a time. Kept conservative because each
+// walk already fans out its own tx fetches internally.
+const HISTORY_CONCURRENCY = 3;
 
 type RowStatus = "pending" | "loading" | "done" | "error";
 // History (First/Last Seen) is loaded on demand, separately from core stats.
@@ -227,6 +230,11 @@ export default function AddressChecker() {
   // the new run's rows.
   const runIdRef = useRef(0);
   const historyCancelledRef = useRef(false);
+  // Monotonic history run token, mirroring runIdRef: a new history run bumps it
+  // and resets the cancel flag, so workers/flushes/finalizers from a superseded
+  // run see a stale token and become no-ops instead of mutating the new run's
+  // rows or prematurely re-enabling the history controls.
+  const historyRunIdRef = useRef(0);
   // The provider used for the most recent check, reused for on-demand history.
   const providerRef = useRef<BlockchainProvider | null>(null);
 
@@ -246,6 +254,13 @@ export default function AddressChecker() {
     setIsRunning(true);
     cancelledRef.current = false;
     historyCancelledRef.current = false;
+    // A new check owns the rows: permanently invalidate any prior history
+    // workers so late completions can't write onto the new dataset (clearing
+    // the cancel flag alone would re-enable them).
+    historyRunIdRef.current++;
+    // Stale history runs no longer run their finalizer, so the new check must
+    // resolve the history control state itself or it could stay stuck "running".
+    setIsHistoryRunning(false);
     const runToken = ++runIdRef.current;
     const isStale = () => runIdRef.current !== runToken;
     // "Cancelled" for this run means either the user hit Cancel/Reset or a
@@ -367,64 +382,101 @@ export default function AddressChecker() {
   };
 
   // Run the on-demand history walk for the given row indexes, filling First/Last
-  // Seen (and, on Electrum, Received/Sent). Runs sequentially and stops early if
-  // the user cancels. Errors surface per-row without aborting the others.
+  // Seen (and, on Electrum, Received/Sent). Walks run through the shared bounded
+  // worker pool (a few at a time — each walk already fans out tx fetches
+  // internally) and stop starting new rows promptly when the user cancels.
+  // Errors surface per-row without aborting the others. High-frequency progress
+  // counter updates are buffered and flushed on an interval; the once-per-row
+  // loading/done/error transitions update state directly.
   const loadHistoryForIndexes = async (targets: { i: number; address: string }[]) => {
     const provider = providerRef.current;
     if (!provider || !provider.getAddressHistoryDates || targets.length === 0) return;
 
     historyCancelledRef.current = false;
     setIsHistoryRunning(true);
+    const runToken = ++historyRunIdRef.current;
+    const isStale = () => historyRunIdRef.current !== runToken;
+    // "Cancelled" for this run means either the user hit Cancel/Reset or a
+    // newer history run has taken over (which reset historyCancelledRef).
+    const isCancelled = () => historyCancelledRef.current || isStale();
 
-    for (const { i, address } of targets) {
-      if (historyCancelledRef.current) break;
+    // Buffers the per-row scan-progress counters so a long walk over many rows
+    // re-renders the table a few times per second, not once per fetched page.
+    const progressBuffer = createPatchBuffer<AddressRow>(patches => {
+      if (isCancelled()) return;
+      setRows(prev => prev.map((r, idx) => {
+        const patch = patches.get(idx);
+        // Progress only applies while the row is still loading (mirrors the
+        // pre-pool behavior: a late progress tick never revives a settled row).
+        return patch && r.historyPhase === "loading" ? { ...r, ...patch } : r;
+      }));
+    }, ROW_FLUSH_INTERVAL_MS);
 
-      setRows(prev => prev.map((r, idx) =>
-        idx === i ? { ...r, historyPhase: "loading", historyError: undefined, historyScanned: undefined } : r
-      ));
-
-      try {
-        const dates = await provider.getAddressHistoryDates!(address, (scanned) => {
-          if (historyCancelledRef.current) return;
+    try {
+      await runWithConcurrency(
+        targets,
+        async ({ i, address }) => {
+          if (isStale()) return;
           setRows(prev => prev.map((r, idx) =>
-            idx === i && r.historyPhase === "loading" ? { ...r, historyScanned: scanned } : r
+            idx === i ? { ...r, historyPhase: "loading", historyError: undefined, historyScanned: undefined } : r
           ));
-        });
+
+          try {
+            const dates = await provider.getAddressHistoryDates!(address, (scanned) => {
+              if (isCancelled()) return;
+              progressBuffer.add(i, { historyScanned: scanned });
+            });
+            if (isCancelled()) {
+              // A newer run owns the rows now — a stale worker must not touch them.
+              if (isStale()) return;
+              setRows(prev => prev.map((r, idx) =>
+                idx === i && r.historyPhase === "loading" ? { ...r, historyPhase: "idle" } : r
+              ));
+              return;
+            }
+            setRows(prev => prev.map((r, idx) => {
+              if (idx !== i) return r;
+              const base: AddressInfo = r.info ?? { txCount: 0, balanceSats: 0 };
+              const info: AddressInfo = {
+                ...base,
+                firstSeenTime: dates.firstSeenTime,
+                lastSeenTime: dates.lastSeenTime,
+                // Only Electrum's history path supplies these; keep fast-tier values otherwise.
+                receivedSats: dates.receivedSats ?? base.receivedSats,
+                sentSats: dates.sentSats ?? base.sentSats,
+              };
+              return { ...r, historyPhase: "done", info };
+            }));
+          } catch (err) {
+            if (isCancelled()) {
+              if (isStale()) return;
+              setRows(prev => prev.map((r, idx) =>
+                idx === i && r.historyPhase === "loading" ? { ...r, historyPhase: "idle" } : r
+              ));
+              return;
+            }
+            setRows(prev => prev.map((r, idx) =>
+              idx === i
+                ? { ...r, historyPhase: "error", historyError: err instanceof Error ? err.message : "History load failed" }
+                : r
+            ));
+          }
+        },
+        { concurrency: HISTORY_CONCURRENCY, isCancelled },
+      );
+    } finally {
+      progressBuffer.stop();
+
+      // A superseded run must not touch the new run's rows or re-enable the
+      // history controls while the newer run is still going.
+      if (!isStale()) {
+        // Revert any rows still marked loading (e.g. cancelled mid-run) back to idle.
         if (historyCancelledRef.current) {
-          setRows(prev => prev.map((r, idx) =>
-            idx === i && r.historyPhase === "loading" ? { ...r, historyPhase: "idle" } : r
-          ));
-          break;
+          setRows(prev => prev.map(r => r.historyPhase === "loading" ? { ...r, historyPhase: "idle" } : r));
         }
-        setRows(prev => prev.map((r, idx) => {
-          if (idx !== i) return r;
-          const base: AddressInfo = r.info ?? { txCount: 0, balanceSats: 0 };
-          const info: AddressInfo = {
-            ...base,
-            firstSeenTime: dates.firstSeenTime,
-            lastSeenTime: dates.lastSeenTime,
-            // Only Electrum's history path supplies these; keep fast-tier values otherwise.
-            receivedSats: dates.receivedSats ?? base.receivedSats,
-            sentSats: dates.sentSats ?? base.sentSats,
-          };
-          return { ...r, historyPhase: "done", info };
-        }));
-      } catch (err) {
-        if (historyCancelledRef.current) break;
-        setRows(prev => prev.map((r, idx) =>
-          idx === i
-            ? { ...r, historyPhase: "error", historyError: err instanceof Error ? err.message : "History load failed" }
-            : r
-        ));
+        setIsHistoryRunning(false);
       }
     }
-
-    // Revert any rows still marked loading (e.g. cancelled mid-run) back to idle.
-    if (historyCancelledRef.current) {
-      setRows(prev => prev.map(r => r.historyPhase === "loading" ? { ...r, historyPhase: "idle" } : r));
-    }
-
-    setIsHistoryRunning(false);
   };
 
   const runHistoryForRow = (index: number) => {
@@ -445,12 +497,20 @@ export default function AddressChecker() {
 
   const handleCancelHistory = () => {
     historyCancelledRef.current = true;
+    // Permanently invalidate in-flight workers: even if a later run resets the
+    // cancel flag, workers from this run stay stale and cannot mutate rows.
+    historyRunIdRef.current++;
+    // Revert loading rows to idle right away: in-flight workers see the cancel
+    // flag and no-op, and if a new run starts before they settle they become
+    // stale and must not touch rows at all — so the revert happens here.
+    setRows(prev => prev.map(r => r.historyPhase === "loading" ? { ...r, historyPhase: "idle" } : r));
     setIsHistoryRunning(false);
   };
 
   const handleReset = () => {
     cancelledRef.current = true;
     historyCancelledRef.current = true;
+    historyRunIdRef.current++;
     providerRef.current = null;
     setIsRunning(false);
     setIsHistoryRunning(false);
