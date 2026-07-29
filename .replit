@@ -205,6 +205,10 @@ args = "utxo-resync-affected-node-check"
 task = "workflow.run"
 args = "descriptor-import-scroll-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "calendar-dropdown-caption-node-check"
+
 [[workflows.workflow]]
 name = "saved-template-derive-browser-check"
 author = "agent"
@@ -699,6 +703,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-descriptor-import-scroll.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "calendar-dropdown-caption-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/ui/calendar.dropdownCaption.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
