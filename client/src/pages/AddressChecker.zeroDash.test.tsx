@@ -62,12 +62,16 @@ describe("AddressChecker — zero values render as em dash", () => {
     expect(within(screen.getByTestId("row-address-0")).getByText("Done")).toBeTruthy();
     expect(within(screen.getByTestId("row-address-1")).getByText("Done")).toBeTruthy();
 
-    // Zero row: Transactions and Balance render the em dash, not "0".
+    // Zero row: Transactions, Received, Sent, and Balance render the em dash, not "0".
     expect(screen.getByTestId("cell-txcount-0").textContent).toBe("—");
+    expect(screen.getByTestId("cell-received-0").textContent).toBe("—");
+    expect(screen.getByTestId("cell-sent-0").textContent).toBe("—");
     expect(screen.getByTestId("cell-balance-0").textContent).toBe("—");
 
     // Active row: real numbers render exactly as before.
     expect(screen.getByTestId("cell-txcount-1").textContent).toBe("3");
+    expect(screen.getByTestId("cell-received-1").textContent).toContain("0.00100000");
+    expect(screen.getByTestId("cell-sent-1").textContent).toContain("0.00040000");
     expect(screen.getByTestId("cell-balance-1").textContent).toContain("0.00060000");
   });
 });

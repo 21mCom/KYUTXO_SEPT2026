@@ -625,13 +625,13 @@ export default function AddressChecker() {
                         </TableCell>
 
                         <TableCell className="text-right tabular-nums" data-testid={`cell-received-${i}`}>
-                          {row.info && row.info.receivedSats !== undefined ? (
+                          {row.info && row.info.receivedSats !== undefined && row.info.receivedSats !== 0 ? (
                             <span className="font-mono text-xs">{formatBTC(row.info.receivedSats)}</span>
                           ) : "—"}
                         </TableCell>
 
                         <TableCell className="text-right tabular-nums" data-testid={`cell-sent-${i}`}>
-                          {row.info && row.info.sentSats !== undefined ? (
+                          {row.info && row.info.sentSats !== undefined && row.info.sentSats !== 0 ? (
                             <span className="font-mono text-xs">{formatBTC(row.info.sentSats)}</span>
                           ) : "—"}
                         </TableCell>
