@@ -16,6 +16,27 @@ const { resolveDataDirs, ensureDirectories: ensureDataDirectories } = require('.
 const { registerElectrumHandlers, stopKeepalive } = require('./electrum-client.cjs');
 const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.cjs');
 
+const { z } = require('zod');
+
+// Hosts the desktop app is allowed to open in the user's external browser.
+// Keep this list tight: trusted Bitcoin explorers plus the project repo/docs.
+const EXTERNAL_OPEN_ALLOWED_HOSTS = [
+  'mempool.space',
+  'blockstream.info',
+  'github.com',
+];
+
+const torRequestSchema = z.object({
+  url: z.string().min(1),
+  method: z.string().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  body: z.unknown().optional(),
+  timeout: z.number().int().positive().optional(),
+  torProxyUrl: z.string().optional(),
+  allowedHost: z.string().optional(),
+  trustedLocalHosts: z.array(z.string()).optional(),
+});
+
 let mainWindow;
 
 const isDev = process.env.NODE_ENV === 'development';
@@ -215,7 +236,12 @@ ipcMain.handle('tor-test', async (event, { torProxyUrl }) => {
   };
 });
 
-ipcMain.handle('tor-request', async (event, { url: requestUrl, method, headers, body, timeout, torProxyUrl, allowedHost, trustedLocalHosts }) => {
+ipcMain.handle('tor-request', async (event, rawArgs) => {
+  const parsedArgs = torRequestSchema.safeParse(rawArgs);
+  if (!parsedArgs.success) {
+    return { success: false, error: `Invalid tor-request input: ${parsedArgs.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
+  }
+  const { url: requestUrl, method, headers, body, timeout, torProxyUrl, allowedHost, trustedLocalHosts } = parsedArgs.data;
   if (!requestUrl) {
     return { success: false, error: "URL is required" };
   }
@@ -320,6 +346,9 @@ app.whenReady().then(() => {
             "font-src 'self' data:",
             "img-src 'self' data: blob:",
             "connect-src 'self' https://mempool.space https://blockstream.info",
+            // NOTE: require-trusted-types-for 'script' was considered but NOT
+            // enabled: the UI uses dangerouslySetInnerHTML (e.g. chart styles),
+            // which Trusted Types enforcement would block without a policy.
           ].join('; ')
         }
       });
@@ -371,9 +400,15 @@ app.on('activate', () => {
 
 app.on('web-contents-created', (event, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://mempool.space') || 
-        url.startsWith('https://blockstream.info') ||
-        url.startsWith('https://')) {
+    let allowed = false;
+    try {
+      const parsed = new URL(url);
+      allowed = parsed.protocol === 'https:' &&
+        EXTERNAL_OPEN_ALLOWED_HOSTS.includes(parsed.hostname);
+    } catch {
+      allowed = false;
+    }
+    if (allowed) {
       require('electron').shell.openExternal(url);
     }
     return { action: 'deny' };
