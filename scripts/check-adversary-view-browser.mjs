@@ -14,9 +14,14 @@
 //   1. Creates a fresh vault via the setup form.
 //   2. Seeds (via Vite dynamic imports of the live CRUD singletons — same
 //      module graph the app uses) two owned address records that co-spend as
-//      inputs in one confirmed transaction with two external outputs. Per the
-//      CIO heuristic this yields exactly ONE exposure finding covering TWO
-//      owned addresses, and zero separation/confusion/context-merge findings.
+//      inputs in one confirmed transaction with two external outputs (ONE
+//      exposure finding covering TWO owned addresses), plus a third owned
+//      RECEIVE address (chainType ground truth) that is the smaller output of
+//      a second tx — the adversary's amount + script-type change heuristics
+//      both point at it, yielding ONE protective-confusion finding at the
+//      "certain" tier. All bc1q seeds are 42 chars and the bc1p seed 62 chars
+//      so getScriptType classifies them (short fake strings → "unknown" →
+//      the script-type heuristic silently stops firing).
 //   3. Installs a MutationObserver BEFORE clicking "Run Audit" so the
 //      transient `text-adversary-status` loading message is captured even if
 //      the analysis finishes in milliseconds.
@@ -24,10 +29,14 @@
 //        - `container-adversary-view` appears
 //        - the loading status message was observed during analysis
 //        - the summary stats are exactly what the seed predicts
-//          (2 exposed / 0 separated / 0 confusion / 0 context merges)
+//          (2 exposed / 0 separated / 1 confusion / 0 context merges)
 //        - the header exposure badge ("1 exposure") matches the section
-//          badge count, and no separation/confusion/context badges render
-//        - the no-XPUB degradation banner is shown (no chainType seeded)
+//          badge count, and no separation/context badges render
+//        - the confusion finding's confidence tier is "certain" — proving the
+//          script-type change heuristic fired on the real-length (42-char
+//          bc1q / 62-char bc1p) seed addresses, not just the amount heuristic
+//        - the partial-chaintype degradation banner is shown (1 of 3 records
+//          has chainType)
 //   5. RELOADS the page, unlocks the vault again, and asserts the persisted
 //      session (privacy-audit-session-store, its own IndexedDB DB) rehydrates
 //      both the main audit result and the adversary panel WITHOUT clicking
@@ -47,15 +56,47 @@ const BASE_URL = `http://localhost:${PORT}/`;
 const AUDIT_URL = `${BASE_URL}privacy-audit`;
 const SETUP_PASSWORD = 'adversary-view-check-123';
 
-// Two owned addresses that co-spend (fake-but-plausible bech32 strings are
-// fine: the audit + adversary engines match addresses by string equality, and
-// the first-8-chars differ so nothing collides).
-const ADDR_OWNED_A = 'bc1qadvexpo0aaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const ADDR_OWNED_B = 'bc1qadvexpo1bbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+// Two owned addresses that co-spend. The engines match addresses by string
+// equality, BUT getScriptType (adversary-view.ts) now returns "unknown" for
+// bech32-like strings with unrealistic lengths — so every seeded bc1q address
+// must be exactly 42 chars (P2WPKH) and bc1p addresses 62 chars (P2TR), or
+// the script-type change heuristic silently stops contributing to confidence
+// tiers. First-8-chars differ so testids never collide.
+const ADDR_OWNED_A = 'bc1qadvexpo0' + 'a'.repeat(30); // 42-char P2WPKH
+const ADDR_OWNED_B = 'bc1qadvexpo1' + 'b'.repeat(30); // 42-char P2WPKH
 // External (non-owned) payment + change outputs of the co-spend tx.
-const ADDR_EXT_PAY = 'bc1qextpay00cccccccccccccccccccccccccccc';
-const ADDR_EXT_CHG = 'bc1qextchg00dddddddddddddddddddddddddddd';
+const ADDR_EXT_PAY = 'bc1qextpay00' + 'c'.repeat(30); // 42-char P2WPKH
+const ADDR_EXT_CHG = 'bc1qextchg00' + 'd'.repeat(30); // 42-char P2WPKH
 const COSPEND_TXID = 'adv0'.repeat(16); // 64 hex-ish chars
+
+// Confusion seed: a second tx whose 2 outputs are one owned RECEIVE address
+// (smaller amount => the adversary's amount heuristic guesses it is change —
+// wrong, per our chainType ground truth) and one external P2TR payment. The
+// external input and the owned output are both P2WPKH while the other output
+// is P2TR, so the script-type-consistency heuristic AGREES with the amount
+// heuristic and the finding must land in the "certain" confidence tier. This
+// only works when the addresses are real-length; with short fake strings
+// getScriptType returns "unknown" and the tier degrades to "likely".
+const ADDR_OWNED_RCV = 'bc1qconfuse0' + 'e'.repeat(30); // 42-char P2WPKH, chainType: receive
+const ADDR_EXT_INP = 'bc1qextinp00' + 'f'.repeat(30); // 42-char P2WPKH external input
+const ADDR_EXT_TR_PAY = 'bc1pextpay00' + 'g'.repeat(50); // 62-char P2TR external payment
+const CONFUSION_TXID = 'adv1'.repeat(16); // 64 hex-ish chars
+
+// Guard the guard: fail fast if anyone edits a seed address back to a length
+// getScriptType would reject as "unknown".
+for (const [name, addr, len] of [
+  ['ADDR_OWNED_A', ADDR_OWNED_A, 42],
+  ['ADDR_OWNED_B', ADDR_OWNED_B, 42],
+  ['ADDR_EXT_PAY', ADDR_EXT_PAY, 42],
+  ['ADDR_EXT_CHG', ADDR_EXT_CHG, 42],
+  ['ADDR_OWNED_RCV', ADDR_OWNED_RCV, 42],
+  ['ADDR_EXT_INP', ADDR_EXT_INP, 42],
+  ['ADDR_EXT_TR_PAY', ADDR_EXT_TR_PAY, 62],
+]) {
+  if (addr.length !== len) {
+    throw new Error(`${name} must be ${len} chars (got ${addr.length}) or getScriptType returns "unknown"`);
+  }
+}
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -150,7 +191,7 @@ async function main() {
     // Vite serves a singleton module graph, so the dynamically-imported CRUD
     // modules write to the exact same Dexie instance the page reads.
     const seedResult = await page.evaluate(
-      async ({ ownedA, ownedB, extPay, extChg, txid }) => {
+      async ({ ownedA, ownedB, extPay, extChg, txid, ownedRcv, extInp, extTrPay, confusionTxid }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
         const txCrud = await import('/src/lib/data/transaction-crud.ts');
 
@@ -161,6 +202,14 @@ async function main() {
             label: `Adversary check ${addr.slice(0, 12)}`,
           });
         }
+        // Owned RECEIVE address (chainType ground truth) — the confusion-tx
+        // change-guess target.
+        await recordCrud.createRecord({
+          type: 'address',
+          inputString: ownedRcv,
+          label: `Adversary check ${ownedRcv.slice(0, 12)}`,
+          chainType: 'receive',
+        });
 
         const now = Math.floor(Date.now() / 1000);
         await txCrud.addTransaction({
@@ -179,6 +228,25 @@ async function main() {
         // finding / 2 owned addresses and confusion stays 0 (no owned output).
         await txCrud.addParticipant({ txid, role: 'output', address: extPay, amount: 90_000, vout: 0 });
         await txCrud.addParticipant({ txid, role: 'output', address: extChg, amount: 9_000, vout: 1 });
+
+        // Confusion tx: EXTERNAL P2WPKH input, owned P2WPKH receive output as
+        // the SMALLER of two outputs (amount heuristic guesses it is change),
+        // external P2TR payment output. Script-type heuristic: majority input
+        // type p2wpkh, exactly one output matches → agrees with the amount
+        // guess → confidence "certain". Ground truth says receive → one
+        // protective-confusion finding. The single external input keeps the
+        // exposure cluster untouched (no owned address is linked in).
+        await txCrud.addTransaction({
+          txid: confusionTxid,
+          blockHeight: 800_010,
+          blockTime: now - 1800,
+          fee: 800,
+          feeRate: 4,
+          syncedAt: Date.now(),
+        });
+        await txCrud.addParticipant({ txid: confusionTxid, role: 'input', address: extInp, amount: 70_000, vout: 0 });
+        await txCrud.addParticipant({ txid: confusionTxid, role: 'output', address: extTrPay, amount: 60_000, vout: 0 });
+        await txCrud.addParticipant({ txid: confusionTxid, role: 'output', address: ownedRcv, amount: 9_000, vout: 1 });
         return true;
       },
       {
@@ -187,12 +255,16 @@ async function main() {
         extPay: ADDR_EXT_PAY,
         extChg: ADDR_EXT_CHG,
         txid: COSPEND_TXID,
+        ownedRcv: ADDR_OWNED_RCV,
+        extInp: ADDR_EXT_INP,
+        extTrPay: ADDR_EXT_TR_PAY,
+        confusionTxid: CONFUSION_TXID,
       },
     );
     steps.push({
-      name: 'seed: 2 owned address records + co-spend tx written to vault',
+      name: 'seed: 3 owned address records + co-spend tx + confusion tx written to vault',
       passed: seedResult === true,
-      detail: `seeded ${ADDR_OWNED_A.slice(0, 14)}… and ${ADDR_OWNED_B.slice(0, 14)}… co-spending in ${COSPEND_TXID.slice(0, 8)}…`,
+      detail: `seeded ${ADDR_OWNED_A.slice(0, 14)}… and ${ADDR_OWNED_B.slice(0, 14)}… co-spending in ${COSPEND_TXID.slice(0, 8)}…, plus receive addr ${ADDR_OWNED_RCV.slice(0, 14)}… in confusion tx ${CONFUSION_TXID.slice(0, 8)}…`,
     });
 
     // ── Install a watcher for the TRANSIENT adversary loading status BEFORE
@@ -261,9 +333,9 @@ async function main() {
       detail: `text-adversary-stat-exposure = ${JSON.stringify(statExposure)} (expected "2")`,
     });
     steps.push({
-      name: 'stats: separated/confusion/context stats are all 0',
-      passed: statSeparated === '0' && statConfusion === '0' && statContext === '0',
-      detail: `separated=${statSeparated} confusion=${statConfusion} context=${statContext} (expected 0/0/0)`,
+      name: 'stats: confusion is 1 (script-type + amount heuristics fired), separated/context are 0',
+      passed: statSeparated === '0' && statConfusion === '1' && statContext === '0',
+      detail: `separated=${statSeparated} confusion=${statConfusion} context=${statContext} (expected 0/1/0)`,
     });
 
     // ── Header badge counts match the summary/section counts ────────────────
@@ -288,16 +360,23 @@ async function main() {
       const separationBadges = await page
         .locator('[data-testid="badge-adversary-separation-count"]')
         .count();
-      const confusionBadges = await page
-        .locator('[data-testid="badge-adversary-confusion-count"]')
-        .count();
       const contextBadges = await page
         .locator('[data-testid="badge-adversary-context-merge-count"]')
         .count();
       steps.push({
-        name: 'badges: no separation/confusion/context-merge badges render (counts are 0)',
-        passed: separationBadges === 0 && confusionBadges === 0 && contextBadges === 0,
-        detail: `separation=${separationBadges} confusion=${confusionBadges} context=${contextBadges} (expected 0/0/0)`,
+        name: 'badges: no separation/context-merge badges render (counts are 0)',
+        passed: separationBadges === 0 && contextBadges === 0,
+        detail: `separation=${separationBadges} context=${contextBadges} (expected 0/0)`,
+      });
+
+      const confusionBadgeText = ((await page
+        .getByTestId('badge-adversary-confusion-count')
+        .textContent()
+        .catch(() => '')) ?? '').trim();
+      steps.push({
+        name: 'badges: header confusion badge shows "1 confusion"',
+        passed: /1/.test(confusionBadgeText) && /confusion/.test(confusionBadgeText),
+        detail: `badge-adversary-confusion-count = ${JSON.stringify(confusionBadgeText)} (expected count 1)`,
       });
     }
 
@@ -313,14 +392,52 @@ async function main() {
       });
     }
 
-    // ── Degradation banner (no chainType seeded => no-xpub-import) ──────────
+    // ── Confusion finding: script-type-driven "certain" confidence tier ─────
+    // The confusion section is collapsed by default: open it, then read the
+    // confidence badge inside the protective-confusion finding card. With
+    // real-length addresses, the script-type heuristic (p2wpkh inputs, exactly
+    // one p2wpkh output) agrees with the amount guess → "certain". If the seed
+    // addresses regress to lengths getScriptType rejects, the heuristic gives
+    // no signal and the tier silently degrades to "likely" — this catches it.
+    {
+      const confusionTrigger = page.getByTestId('trigger-adversary-section-confusion');
+      const triggerVisible = await confusionTrigger
+        .waitFor({ state: 'visible', timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false);
+      steps.push({
+        name: 'section: the Protective Confusion section is rendered',
+        passed: triggerVisible,
+        detail: triggerVisible
+          ? 'trigger-adversary-section-confusion is visible'
+          : 'trigger-adversary-section-confusion missing',
+      });
+
+      let confidenceText = '';
+      if (triggerVisible) {
+        await confusionTrigger.click();
+        const confidenceBadge = page.locator(
+          '[data-testid="card-adversary-finding-protective-confusion"] [data-testid="badge-adversary-confidence"]',
+        );
+        confidenceText = ((await confidenceBadge
+          .textContent({ timeout: 10_000 })
+          .catch(() => '')) ?? '').trim();
+      }
+      steps.push({
+        name: 'confidence: confusion finding is "certain" (script-type heuristic fired on real-length addresses)',
+        passed: confidenceText === 'certain',
+        detail: `confusion badge-adversary-confidence = ${JSON.stringify(confidenceText)} (expected "certain"; "likely" means getScriptType returned "unknown" for the seeds)`,
+      });
+    }
+
+    // ── Degradation banner (1 of 3 addresses has chainType => partial) ──────
     {
       const bannerVisible = await page
         .getByTestId('banner-adversary-degradation')
         .isVisible()
         .catch(() => false);
       steps.push({
-        name: 'degradation: no-XPUB banner is shown for chainType-less records',
+        name: 'degradation: partial-chaintype banner is shown (1 of 3 records has chainType)',
         passed: bannerVisible === true,
         detail: bannerVisible
           ? 'banner-adversary-degradation is visible'
@@ -382,8 +499,8 @@ async function main() {
         steps.push({
           name: 'reload: adversary summary stats match the pre-reload values',
           passed:
-            rExposure === '2' && rSeparated === '0' && rConfusion === '0' && rContext === '0',
-          detail: `exposed=${rExposure} separated=${rSeparated} confusion=${rConfusion} context=${rContext} (expected 2/0/0/0)`,
+            rExposure === '2' && rSeparated === '0' && rConfusion === '1' && rContext === '0',
+          detail: `exposed=${rExposure} separated=${rSeparated} confusion=${rConfusion} context=${rContext} (expected 2/0/1/0)`,
         });
 
         const badgeText = ((await page
