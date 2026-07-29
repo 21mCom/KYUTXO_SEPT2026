@@ -50,6 +50,20 @@ export interface BlockchainProvider {
    */
   getAddressCoreStats?(address: string, signal?: AbortSignal): Promise<AddressInfo>;
   /**
+   * Optional batch fast-path: fetch confirmed tx counts for many addresses in
+   * one request (Electrum batch history). Returns a map keyed by address —
+   * a number on success, `{ error }` for per-address failures. Callers fall
+   * back to per-address getAddressCoreStats for addresses missing from the
+   * map or when the whole batch throws.
+   */
+  getAddressTxCountsBatch?(addresses: string[]): Promise<Map<string, number | { error: string }>>;
+  /**
+   * Optional companion to getAddressTxCountsBatch: the cheap single-call
+   * balance lookup (sum of unspent outputs) used to complete core stats when
+   * the tx count already came from a batch.
+   */
+  getAddressBalanceSats?(address: string): Promise<number>;
+  /**
    * On-demand history walk: return first/last seen times (and, on Electrum,
    * also receivedSats / sentSats which cannot be computed cheaply).
    *

@@ -280,6 +280,58 @@ export class ElectrumProvider implements BlockchainProvider {
     return { txCount, balanceSats };
   }
 
+  // Batch fast-path used by the Address Checker: one IPC round-trip fetches
+  // the history (→ tx count) for a whole chunk of addresses over the pooled
+  // Electrum connection. Per-address failures are reported in the map so the
+  // caller can fall back to per-address calls for just those rows.
+  async getAddressTxCountsBatch(
+    addresses: string[],
+  ): Promise<Map<string, number | { error: string }>> {
+    this.ensureElectron();
+    const api = getElectronAPI();
+    const result = await api.electrumBatchGetHistory({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      addresses,
+      timeout: this.timeout,
+    });
+    if (!result.success) {
+      throw new Error(result.error || 'Batch history lookup failed');
+    }
+    const out = new Map<string, number | { error: string }>();
+    for (const entry of result.results || []) {
+      if (entry.success) {
+        out.set(entry.address, (entry.history || []).length);
+      } else {
+        out.set(entry.address, { error: entry.error || 'History lookup failed' });
+      }
+    }
+    return out;
+  }
+
+  // Cheap single-call balance (sum of unspent outputs), used to complete core
+  // stats when the tx count already came from getAddressTxCountsBatch.
+  async getAddressBalanceSats(address: string): Promise<number> {
+    this.ensureElectron();
+    const api = getElectronAPI();
+    const utxoResult = await api.electrumGetUtxos({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      address,
+      timeout: this.timeout,
+    });
+    if (!utxoResult.success) {
+      throw new Error(utxoResult.error || 'Failed to get address UTXOs via Electrum');
+    }
+    let balanceSats = 0;
+    for (const utxo of utxoResult.utxos || []) {
+      balanceSats += utxo.value || 0;
+    }
+    return balanceSats;
+  }
+
   // On-demand tier: walk every transaction to compute Received, Sent and the
   // first/last-seen block times. Electrum verbose txs do NOT carry prevout
   // addresses, so spends can't be detected by matching input addresses (that

@@ -14,6 +14,17 @@ import { createProviderFromSettings, type BlockchainProvider } from "@/lib/block
 import { validateAddress, formatBTC } from "@/lib/bitcoin";
 import type { AddressInfo, ApiTransaction } from "@/lib/providers/types";
 import { computeHistoryFromTxs } from "@/lib/providers/address-history";
+import { runWithConcurrency, chunk, createPatchBuffer } from "@/lib/address-checker-run";
+
+// Provider-aware concurrency: an Electrum node over the pooled multiplexed
+// socket tolerates many parallel lookups; public HTTP APIs (mempool.space,
+// Blockstream…) get a conservative bound so we don't trip rate limits.
+const ELECTRUM_CONCURRENCY = 8;
+const HTTP_CONCURRENCY = 3;
+// Electrum batch-history chunk size (addresses per IPC round-trip).
+const ELECTRUM_BATCH_SIZE = 40;
+// How often accumulated row patches are flushed into React state.
+const ROW_FLUSH_INTERVAL_MS = 250;
 
 type RowStatus = "pending" | "loading" | "done" | "error";
 // History (First/Last Seen) is loaded on demand, separately from core stats.
@@ -209,6 +220,12 @@ export default function AddressChecker() {
   // When on, hides completed rows with 0 confirmed transactions from the table.
   const [hideZeroTx, setHideZeroTx] = useState(false);
   const cancelledRef = useRef(false);
+  // Monotonic run token: each runCheck invocation bumps it and captures its
+  // own value. Workers from a superseded run (user cancels then immediately
+  // starts a new run while old lookups are still in flight) see a stale token
+  // and stop; their buffered patches are dropped so they can never corrupt
+  // the new run's rows.
+  const runIdRef = useRef(0);
   const historyCancelledRef = useRef(false);
   // The provider used for the most recent check, reused for on-demand history.
   const providerRef = useRef<BlockchainProvider | null>(null);
@@ -229,6 +246,11 @@ export default function AddressChecker() {
     setIsRunning(true);
     cancelledRef.current = false;
     historyCancelledRef.current = false;
+    const runToken = ++runIdRef.current;
+    const isStale = () => runIdRef.current !== runToken;
+    // "Cancelled" for this run means either the user hit Cancel/Reset or a
+    // newer run has taken over.
+    const isCancelled = () => cancelledRef.current || isStale();
 
     let provider: BlockchainProvider;
     try {
@@ -245,47 +267,103 @@ export default function AddressChecker() {
       .map((r, i) => ({ r, i }))
       .filter(({ r }) => !r.isInvalid);
 
-    for (const { i } of validIndexes) {
-      if (cancelledRef.current) break;
+    // Row updates are buffered and flushed on a short interval so a huge run
+    // re-renders the table a few times per second, not twice per address.
+    const buffer = createPatchBuffer<AddressRow>(patches => {
+      // A newer run owns the rows now — drop patches from this stale run.
+      if (isStale()) return;
+      setRows(prev => prev.map((r, idx) => {
+        const patch = patches.get(idx);
+        return patch ? { ...r, ...patch } : r;
+      }));
+    }, ROW_FLUSH_INTERVAL_MS);
 
-      setRows(prev => prev.map((r, idx) => idx === i ? { ...r, status: "loading" } : r));
-
-      const address = parsed[i].raw;
-
-      try {
-        let info: AddressInfo;
-        // historyPhase = "idle" means First/Last Seen are loaded on demand.
-        // "done" means the fallback already filled them in this pass.
-        let historyPhase: HistoryPhase;
-
-        if (provider.getAddressCoreStats) {
-          // Fast tier: cheap core fields only, no history pagination.
-          info = await provider.getAddressCoreStats(address);
-          historyPhase = "idle";
-        } else if (provider.getAddressInfo) {
-          // Fallback: combined call already walks history for the dates.
-          info = await provider.getAddressInfo(address);
-          historyPhase = "done";
-        } else {
-          const txs = await provider.getAddressTransactions(address);
-          info = deriveAddressInfoFromTxs(address, txs);
-          historyPhase = "done";
+    try {
+      // Electrum batch fast-path: fetch tx counts for whole chunks of
+      // addresses in one IPC round-trip each. Failures (whole batch or
+      // per-address) simply leave the address out of the map — the worker
+      // pool below falls back to per-address core-stats calls for those.
+      const canBatch = !!provider.getAddressTxCountsBatch && !!provider.getAddressBalanceSats;
+      const batchTxCounts = new Map<string, number>();
+      if (canBatch) {
+        const batches = chunk(validIndexes.map(({ i }) => parsed[i].raw), ELECTRUM_BATCH_SIZE);
+        for (const batch of batches) {
+          if (isCancelled()) break;
+          try {
+            const counts = await provider.getAddressTxCountsBatch!(batch);
+            for (const [addr, value] of counts) {
+              if (typeof value === "number") batchTxCounts.set(addr, value);
+            }
+          } catch (err) {
+            // Whole-batch failure: fall back to per-address lookups below.
+            console.warn("[AddressChecker] Batch history failed, falling back per-address:", err);
+          }
         }
+      }
 
-        setRows(prev => prev.map((r, idx) =>
-          idx === i ? { ...r, status: "done", info, historyPhase, historyError: undefined } : r
-        ));
-      } catch (err) {
-        if (cancelledRef.current) break;
-        setRows(prev => prev.map((r, idx) =>
-          idx === i
-            ? { ...r, status: "error", error: err instanceof Error ? err.message : "Lookup failed" }
-            : r
-        ));
+      const concurrency = canBatch ? ELECTRUM_CONCURRENCY : HTTP_CONCURRENCY;
+
+      await runWithConcurrency(
+        validIndexes,
+        async ({ i }) => {
+          buffer.add(i, { status: "loading" });
+          const address = parsed[i].raw;
+
+          try {
+            let info: AddressInfo;
+            // historyPhase = "idle" means First/Last Seen are loaded on demand.
+            // "done" means the fallback already filled them in this pass.
+            let historyPhase: HistoryPhase;
+
+            const batchedCount = canBatch ? batchTxCounts.get(address) : undefined;
+            if (batchedCount !== undefined) {
+              // Tx count came from the batch; only the balance call remains.
+              const balanceSats = await provider.getAddressBalanceSats!(address);
+              info = { txCount: batchedCount, balanceSats };
+              historyPhase = "idle";
+            } else if (provider.getAddressCoreStats) {
+              // Fast tier: cheap core fields only, no history pagination.
+              info = await provider.getAddressCoreStats(address);
+              historyPhase = "idle";
+            } else if (provider.getAddressInfo) {
+              // Fallback: combined call already walks history for the dates.
+              info = await provider.getAddressInfo(address);
+              historyPhase = "done";
+            } else {
+              const txs = await provider.getAddressTransactions(address);
+              info = deriveAddressInfoFromTxs(address, txs);
+              historyPhase = "done";
+            }
+
+            if (isCancelled()) {
+              buffer.add(i, { status: "pending" });
+              return;
+            }
+            buffer.add(i, { status: "done", info, historyPhase, historyError: undefined });
+          } catch (err) {
+            if (isCancelled()) {
+              buffer.add(i, { status: "pending" });
+              return;
+            }
+            buffer.add(i, {
+              status: "error",
+              error: err instanceof Error ? err.message : "Lookup failed",
+            });
+          }
+        },
+        { concurrency, isCancelled },
+      );
+    } finally {
+      buffer.stop();
+      // A superseded run must not touch the new run's state at all.
+      if (!isStale()) {
+        // Cancellation safety net: nothing may stay stuck on "loading".
+        if (cancelledRef.current) {
+          setRows(prev => prev.map(r => r.status === "loading" ? { ...r, status: "pending" } : r));
+        }
+        setIsRunning(false);
       }
     }
-
-    setIsRunning(false);
   };
 
   // Run the on-demand history walk for the given row indexes, filling First/Last
