@@ -8,3 +8,5 @@ vite.config.ts.*
 # User data and attachments (should not be in repo)
 data/attachments/
 attached_assets/
+# Demo vault builder HTTP cache (real blockchain data, resumable)
+scripts/demo-vault/cache/
