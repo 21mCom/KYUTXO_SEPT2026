@@ -201,6 +201,10 @@ args = "utxo-balance-browser-check"
 task = "workflow.run"
 args = "utxo-resync-affected-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-import-scroll-browser-check"
+
 [[workflows.workflow]]
 name = "saved-template-derive-browser-check"
 author = "agent"
@@ -684,6 +688,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/pages/UTXOs.resyncAffected.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "descriptor-import-scroll-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-descriptor-import-scroll.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
