@@ -221,6 +221,42 @@ function safeConvert(xpub: string): string | undefined {
   }
 }
 
+/** A wallet involved in the current UTXO selection that could receive change. */
+export interface ChangeWalletOption {
+  /** Trimmed single-sig xpub the wallet's change chain derives from. */
+  xpub: string;
+  /** Display label — the records' wallet name when known, else a shortened xpub. */
+  label: string;
+}
+
+/**
+ * List the distinct single-sig wallets (by xpub) involved in the selection,
+ * for letting the user pick which wallet should receive change when the
+ * selection spans multiple xpubs. Vault (multisig) records are excluded —
+ * change suggestion can't derive their addresses.
+ */
+export function listChangeWalletOptions(
+  records: Array<DbRecord | undefined>,
+): ChangeWalletOption[] {
+  const byXpub = new Map<string, ChangeWalletOption>();
+  for (const r of records) {
+    if (!r?.xpub || r.vault?.isVaultXpub) continue;
+    const xpub = r.xpub.trim();
+    const existing = byXpub.get(xpub);
+    const name = r.walletName?.trim();
+    if (!existing) {
+      byXpub.set(xpub, {
+        xpub,
+        label: name || `${xpub.slice(0, 8)}…${xpub.slice(-6)}`,
+      });
+    } else if (name && existing.label === `${xpub.slice(0, 8)}…${xpub.slice(-6)}`) {
+      // Prefer a real wallet name over the xpub fallback when a later record has one.
+      existing.label = name;
+    }
+  }
+  return Array.from(byXpub.values());
+}
+
 /**
  * Suggest a fresh change address for the current selection: when every
  * selected UTXO traces back to the same single-sig xpub, derive its change
@@ -228,16 +264,29 @@ function safeConvert(xpub: string): string | undefined {
  * activity (a never-used address). Returns undefined when the selection spans
  * multiple xpubs, the xpub isn't usable, or no unused address is found within
  * the scan window.
+ *
+ * When `forXpub` is provided (the user explicitly chose which involved wallet
+ * should receive change), the multi-xpub guard is bypassed and the suggestion
+ * runs against that wallet's change chain instead.
  */
 export async function suggestFreshChangeAddress(
   records: Array<DbRecord | undefined>,
+  forXpub?: string,
 ): Promise<string | undefined> {
-  const usable = records.filter(
+  let usable = records.filter(
     (r): r is DbRecord => !!r?.xpub && !r.vault?.isVaultXpub,
   );
-  const xpubs = new Set(usable.map((r) => r.xpub!.trim()));
-  if (xpubs.size !== 1) return undefined;
-  const xpub = usable[0].xpub!.trim();
+  let xpub: string;
+  if (forXpub !== undefined) {
+    const target = forXpub.trim();
+    usable = usable.filter((r) => r.xpub!.trim() === target);
+    if (usable.length === 0) return undefined;
+    xpub = target;
+  } else {
+    const xpubs = new Set(usable.map((r) => r.xpub!.trim()));
+    if (xpubs.size !== 1) return undefined;
+    xpub = usable[0].xpub!.trim();
+  }
 
   const isTaproot = usable.some((r) => {
     const a = r.inputString.toLowerCase();

@@ -7,6 +7,7 @@ import {
   detectInputScriptType,
   resolveInputDerivation,
   suggestFreshChangeAddress,
+  listChangeWalletOptions,
 } from './psbt-metadata';
 
 // BIP-84 test-vector account (mnemonic "abandon … about").
@@ -163,5 +164,43 @@ describe('suggestFreshChangeAddress', () => {
       await suggestFreshChangeAddress([record({ xpub: ZPUB, vault: { isVaultXpub: true } })]),
     ).toBeUndefined();
     expect(await suggestFreshChangeAddress([undefined])).toBeUndefined();
+  });
+
+  it('suggests from the chosen wallet when forXpub is passed on a multi-xpub selection', async () => {
+    const OTHER =
+      'zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYt';
+    const records = [
+      record({ xpub: ZPUB, derivationPath: "m/84'/0'/0'/0/0" }),
+      record({ xpub: OTHER }),
+    ];
+    expect(await suggestFreshChangeAddress(records, ZPUB)).toBe(ADDR_CHANGE0);
+    // Unknown xpub → no matching records → undefined.
+    expect(await suggestFreshChangeAddress(records, 'zpubUnknown')).toBeUndefined();
+  });
+});
+
+describe('listChangeWalletOptions', () => {
+  it('lists distinct single-sig xpubs with wallet-name labels, excluding vaults', () => {
+    const OTHER =
+      'zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYt';
+    const options = listChangeWalletOptions([
+      record({ xpub: ZPUB, walletName: 'Cold storage' }),
+      record({ xpub: ZPUB }),
+      record({ xpub: OTHER }),
+      record({ xpub: 'vaultxpub', vault: { isVaultXpub: true, m: 2, n: 3 } }),
+      undefined,
+    ]);
+    expect(options).toHaveLength(2);
+    expect(options[0]).toEqual({ xpub: ZPUB, label: 'Cold storage' });
+    expect(options[1].xpub).toBe(OTHER);
+    expect(options[1].label).toContain('…'); // xpub fallback label
+  });
+
+  it('backfills a wallet name discovered on a later record for the same xpub', () => {
+    const options = listChangeWalletOptions([
+      record({ xpub: ZPUB }),
+      record({ xpub: ZPUB, walletName: 'Named later' }),
+    ]);
+    expect(options).toEqual([{ xpub: ZPUB.trim(), label: 'Named later' }]);
   });
 });

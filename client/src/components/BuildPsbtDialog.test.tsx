@@ -5,6 +5,15 @@ import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/re
 import { clearSavedPsbts, getAllSavedPsbts } from '@/lib/data/saved-psbts-crud';
 import { BuildPsbtDialog } from './BuildPsbtDialog';
 import type { UTXO } from '@/pages/UTXOs';
+import type { Record as DbRecord } from '@/lib/database';
+
+// jsdom lacks the pointer-capture / scroll APIs Radix Select relies on.
+beforeEach(() => {
+  Element.prototype.hasPointerCapture = Element.prototype.hasPointerCapture ?? (() => false);
+  Element.prototype.setPointerCapture = Element.prototype.setPointerCapture ?? (() => {});
+  Element.prototype.releasePointerCapture = Element.prototype.releasePointerCapture ?? (() => {});
+  Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {});
+});
 
 // BIP-84 test-vector addresses (valid mainnet P2WPKH).
 const ADDR_W0 = 'bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu';
@@ -156,6 +165,40 @@ describe('BuildPsbtDialog', () => {
     });
     expect(onSaved).toHaveBeenCalled();
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('shows a Change wallet selector for multi-wallet selections and fills the suggestion on pick', async () => {
+    // Real BIP-84 xpub (test vector) for wallet A; wallet B has a bogus xpub so
+    // only A can yield a derivable change suggestion.
+    const ZPUB_A =
+      'zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs';
+    const ZPUB_B =
+      'zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYt';
+    const recs: { [addr: string]: DbRecord } = {
+      [ADDR_W0]: {
+        type: 'address', inputString: ADDR_W0, label: '', tags: [], categories: [],
+        createdAt: 1, updatedAt: 1, xpub: ZPUB_A, walletName: 'Wallet A',
+      } as DbRecord,
+      [ADDR_W1]: {
+        type: 'address', inputString: ADDR_W1, label: '', tags: [], categories: [],
+        createdAt: 1, updatedAt: 1, xpub: ZPUB_B, walletName: 'Wallet B',
+      } as DbRecord,
+    };
+    const utxos = makeUtxos();
+    utxos[1].address = ADDR_W1;
+    renderDialog({ utxos, recordForAddress: (a) => recs[a] });
+
+    const trigger = await screen.findByTestId('select-change-wallet');
+    // No auto-suggestion for a multi-wallet selection.
+    expect((screen.getByTestId('input-change-address') as HTMLInputElement).value).toBe('');
+
+    fireEvent.click(trigger);
+    const optionA = await screen.findByText('Wallet A');
+    fireEvent.click(optionA);
+
+    await waitFor(() => {
+      expect((screen.getByTestId('input-change-address') as HTMLInputElement).value).toBe(ADDR_CHANGE0);
+    });
   });
 
   it('rejects a fee rate below the relay minimum', async () => {

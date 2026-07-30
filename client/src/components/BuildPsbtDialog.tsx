@@ -27,7 +27,16 @@ import {
   detectInputScriptType,
   resolveInputDerivation,
   suggestFreshChangeAddress,
+  listChangeWalletOptions,
+  type ChangeWalletOption,
 } from "@/lib/psbt-metadata";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { getAllDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { savePsbt } from "@/lib/data/saved-psbts-crud";
 import { downloadBlob } from "@/lib/backup/sink";
@@ -68,6 +77,10 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
   const [amountSats, setAmountSats] = useState("");
   const [changeAddress, setChangeAddress] = useState("");
   const [suggestedChange, setSuggestedChange] = useState<string | undefined>(undefined);
+  const [selectedRecords, setSelectedRecords] = useState<Array<DbRecord | undefined>>([]);
+  const [changeWalletOptions, setChangeWalletOptions] = useState<ChangeWalletOption[]>([]);
+  const [changeWalletXpub, setChangeWalletXpub] = useState<string>("");
+  const [suggestingChange, setSuggestingChange] = useState(false);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -85,6 +98,9 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
     setAmountSats("");
     setChangeAddress("");
     setSuggestedChange(undefined);
+    setSelectedRecords([]);
+    setChangeWalletOptions([]);
+    setChangeWalletXpub("");
     setName(`PSBT ${format(new Date(), "yyyy-MM-dd HH:mm")}`);
     setInputSpecs([]);
     setPreparing(true);
@@ -111,6 +127,8 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
         const suggestion = await suggestFreshChangeAddress(records);
         if (cancelled) return;
         setInputSpecs(specs);
+        setSelectedRecords(records);
+        setChangeWalletOptions(suggestion ? [] : listChangeWalletOptions(records));
         setSuggestedChange(suggestion);
         if (suggestion) setChangeAddress(suggestion);
       } catch (error) {
@@ -188,6 +206,29 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
     }
     return warnings;
   }, [result]);
+
+  // Multi-wallet selection: the user picked which wallet should receive
+  // change — suggest a fresh change address from that wallet's change chain.
+  const handleChangeWalletSelect = async (xpub: string) => {
+    setChangeWalletXpub(xpub);
+    setSuggestingChange(true);
+    try {
+      const suggestion = await suggestFreshChangeAddress(selectedRecords, xpub);
+      setSuggestedChange(suggestion);
+      if (suggestion) {
+        setChangeAddress(suggestion);
+      } else {
+        toast({
+          title: "No fresh change address found",
+          description:
+            "Couldn't derive an unused change address for that wallet — enter one manually.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setSuggestingChange(false);
+    }
+  };
 
   const handleCopy = () => {
     if (!result) return;
@@ -330,6 +371,34 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
               </div>
             )}
 
+            {changeWalletOptions.length > 1 && (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="psbt-change-wallet">
+                  Change wallet <span className="text-muted-foreground">(selection spans multiple wallets)</span>
+                </Label>
+                <Select
+                  value={changeWalletXpub}
+                  onValueChange={handleChangeWalletSelect}
+                  disabled={suggestingChange}
+                >
+                  <SelectTrigger id="psbt-change-wallet" data-testid="select-change-wallet">
+                    <SelectValue placeholder="Pick which wallet should receive change" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {changeWalletOptions.map((opt) => (
+                      <SelectItem
+                        key={opt.xpub}
+                        value={opt.xpub}
+                        data-testid={`option-change-wallet-${opt.xpub.slice(0, 8)}`}
+                      >
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="psbt-change">
                 Change address {sendMax && <span className="text-muted-foreground">(not used when sending max)</span>}
@@ -345,7 +414,9 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
               />
               {suggestedChange && changeAddress === suggestedChange && !sendMax && (
                 <p className="text-xs text-muted-foreground" data-testid="text-change-suggestion">
-                  Fresh unused change address from the same wallet.
+                  {changeWalletXpub
+                    ? "Fresh unused change address from the chosen wallet."
+                    : "Fresh unused change address from the same wallet."}
                 </p>
               )}
             </div>
