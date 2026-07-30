@@ -1,5 +1,5 @@
 import type { IndexableType } from 'dexie';
-import { db, notifyDbChange, type BlockchainTransaction, type TransactionParticipant } from '../database';
+import { db, notifyDbChange, USER_CURATED_TIERS, type BlockchainTransaction, type TransactionParticipant } from '../database';
 
 export type CreateTransactionData = Omit<BlockchainTransaction, 'id'>;
 
@@ -226,6 +226,131 @@ export async function getOpReturnTransactionPrimaryKeys(): Promise<string[]> {
     .where('hasOpReturn')
     .equals(true as unknown as IndexableType)
     .primaryKeys()) as unknown as string[];
+}
+
+// =============================================================================
+// Entity-filtered transaction lookups (Dexie fallback for the engine's
+// TransactionEntityFilter). Semantics mirror the engine SQL exactly: each active
+// dimension is an independent "some participant satisfies this" predicate and
+// dimensions compose with AND — the matching participants may differ per
+// dimension. Slower than the engine (per-dimension participant walks) but
+// correct; used when the engine mirror is stale or unavailable.
+// =============================================================================
+
+export interface TxEntityFilter {
+  /** A participant with exactly this address (linked or not). */
+  address?: string;
+  /** A participant linked (via recordId) to a record with this walletName. */
+  wallet?: string;
+  /** A participant linked to a record with this seedName. */
+  seed?: string;
+  /** A participant linked to a record with this owner. */
+  owner?: string;
+  /** A participant linked to a record whose tags array contains this value. */
+  tag?: string;
+  /** A participant linked to a record whose categories array contains this value. */
+  category?: string;
+  /**
+   * A participant linked to a user-curated address record (type='address',
+   * addressImportance in USER_CURATED_TIERS). Matches the engine's curatedOnly.
+   */
+  curatedOnly?: boolean;
+}
+
+/** True when any per-value entity dimension (not curatedOnly) is set. */
+export function hasTxEntityDimensions(f: TxEntityFilter): boolean {
+  return !!(f.address || f.wallet || f.seed || f.owner || f.tag || f.category);
+}
+
+const ENTITY_BATCH = 500;
+
+/** Called between batches so long walks can yield to the UI / abort. */
+type BatchPause = () => void | Promise<void>;
+
+async function txidsForRecordIds(
+  recordIds: number[],
+  pause?: BatchPause,
+): Promise<Set<string>> {
+  const txids = new Set<string>();
+  for (let i = 0; i < recordIds.length; i += ENTITY_BATCH) {
+    const batch = recordIds.slice(i, i + ENTITY_BATCH);
+    const parts = await db.transactionParticipants.where('recordId').anyOf(batch).toArray();
+    for (const p of parts) txids.add(p.txid);
+    if (pause && i + ENTITY_BATCH < recordIds.length) await pause();
+  }
+  return txids;
+}
+
+function intersect(a: Set<string> | null, b: Set<string>): Set<string> {
+  if (a === null) return b;
+  const out = new Set<string>();
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  for (const t of small) if (large.has(t)) out.add(t);
+  return out;
+}
+
+/**
+ * Resolve the set of txids matching an entity filter on the Dexie path. Each
+ * dimension resolves independently (indexed record lookup → participants by
+ * recordId; address goes straight to the participants address index) and the
+ * per-dimension txid sets are intersected, mirroring the engine's AND-of-EXISTS.
+ */
+export async function getTxidsForTxEntityFilter(
+  filter: TxEntityFilter,
+  pause?: BatchPause,
+): Promise<Set<string>> {
+  let result: Set<string> | null = null;
+
+  if (filter.address) {
+    const txids = new Set<string>();
+    await db.transactionParticipants
+      .where('address')
+      .equals(filter.address)
+      .each(p => { txids.add(p.txid); });
+    result = intersect(result, txids);
+    if (result.size === 0) return result;
+    if (pause) await pause();
+  }
+
+  const recordDims: Array<() => Promise<number[]>> = [];
+  if (filter.wallet) {
+    const w = filter.wallet;
+    recordDims.push(async () => (await db.records.where('walletName').equals(w).primaryKeys()) as number[]);
+  }
+  if (filter.seed) {
+    const s = filter.seed;
+    recordDims.push(async () => (await db.records.where('seedName').equals(s).primaryKeys()) as number[]);
+  }
+  if (filter.owner) {
+    const o = filter.owner;
+    recordDims.push(async () => (await db.records.where('owner').equals(o).primaryKeys()) as number[]);
+  }
+  if (filter.tag) {
+    const t = filter.tag;
+    recordDims.push(async () => (await db.records.where('tags').equals(t).primaryKeys()) as number[]);
+  }
+  if (filter.category) {
+    const c = filter.category;
+    recordDims.push(async () => (await db.records.where('categories').equals(c).primaryKeys()) as number[]);
+  }
+  if (filter.curatedOnly) {
+    recordDims.push(async () =>
+      (await db.records
+        .where('[type+addressImportance]')
+        .anyOf(USER_CURATED_TIERS.map(t => ['address', t]))
+        .primaryKeys()) as number[],
+    );
+  }
+
+  for (const getIds of recordDims) {
+    const ids = await getIds();
+    const txids = await txidsForRecordIds(ids, pause);
+    result = intersect(result, txids);
+    if (result.size === 0) return result;
+    if (pause) await pause();
+  }
+
+  return result ?? new Set<string>();
 }
 
 // =============================================================================

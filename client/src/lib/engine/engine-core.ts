@@ -1019,9 +1019,39 @@ export function getAddressAggregates(db: EngineDb, addresses: string[]): Map<str
 // Query: transactions page / count (Transactions screen)
 // ---------------------------------------------------------------------------
 
-export interface TransactionQueryOptions {
+/**
+ * One-value-per-dimension entity filters for the Transactions page. Each active
+ * dimension becomes an independent EXISTS subquery from transactionParticipants
+ * (optionally joined to records via recordId), so filters compose with AND
+ * semantics: a transaction matches when SOME participant satisfies each active
+ * dimension (not necessarily the same participant).
+ */
+export interface TransactionEntityFilter {
+  /** A participant with exactly this address (linked or not). */
+  address?: string;
+  /** A participant linked (via recordId) to a record with this walletName. */
+  wallet?: string;
+  /** A participant linked to a record with this seedName. */
+  seed?: string;
+  /** A participant linked to a record with this owner. */
+  owner?: string;
+  /** A participant linked to a record whose tags JSON array contains this value. */
+  tag?: string;
+  /** A participant linked to a record whose categories JSON array contains this value. */
+  category?: string;
+}
+
+export interface TransactionQueryOptions extends TransactionEntityFilter {
   /** Restrict to transactions carrying an OP_RETURN output. */
   opReturnOnly?: boolean;
+  /**
+   * Restrict to transactions with at least one participant linked to a
+   * user-curated address record. Matches the Dexie default view's
+   * Dexie curated-tier lookup (USER_CURATED_TIERS) + recordId walk:
+   * type='address' AND addressImportance IN the curated tiers (NULL importance
+   * is NOT included, mirroring the IndexedDB compound-index semantics).
+   */
+  curatedOnly?: boolean;
 }
 
 /** Keyset cursor for the Transactions page; `blockTime` is the COALESCE(.,0) key. */
@@ -1049,6 +1079,81 @@ export interface TransactionAggregate {
   outputCount: number;
 }
 
+// SQL predicate matching the Dexie curated default view's record set:
+// Dexie curated-tier lookup (USER_CURATED_TIERS) walks the
+// [type+addressImportance] compound index, so NULL importance is excluded here
+// too (unlike CURATED_ADDRESS_SQL, which is the balances allowlist).
+const CURATED_RECORD_SQL = `r.type = 'address' AND r.addressImportance IN (${OWNED_TIERS.map((t) => `'${t}'`).join(', ')})`;
+
+/**
+ * One SELECT of matching txids per record-dimension predicate, driven from the
+ * SELECTIVE side: the records table (indexed on walletName/owner, small enough
+ * to scan for tag/category json_each matching) joined to participants via the
+ * idx_tp_recordId index. This is deliberately NOT a per-transaction correlated
+ * EXISTS — that shape forces a probe for EVERY row of blockchainTransactions,
+ * turning a selective filter into an O(all transactions) walk on huge vaults.
+ */
+function participantRecordTxidSelect(predicate: string): string {
+  return (
+    'SELECT DISTINCT tp.txid FROM records r JOIN transactionParticipants tp ON tp.recordId = r.id' +
+    ` WHERE ${predicate}`
+  );
+}
+
+/**
+ * Build the txid-derivation subquery for the active entity dimensions: one
+ * indexed SELECT per dimension, composed with INTERSECT (AND semantics — each
+ * dimension may be satisfied by a DIFFERENT participant of the same tx).
+ * Returns null when no entity dimension is active.
+ */
+function buildTransactionMatchSubquery(
+  opts: TransactionQueryOptions,
+): { sql: string; bind: unknown[] } | null {
+  const selects: string[] = [];
+  const bind: unknown[] = [];
+  if (opts.address) {
+    // Direct participant address match (idx_tp_address) — deliberately does NOT
+    // require a linked record, so unlabeled counterparty addresses match too.
+    selects.push('SELECT DISTINCT tp.txid FROM transactionParticipants tp WHERE tp.address = ?');
+    bind.push(opts.address);
+  }
+  if (opts.wallet) {
+    selects.push(participantRecordTxidSelect('r.walletName = ?'));
+    bind.push(opts.wallet);
+  }
+  if (opts.seed) {
+    selects.push(participantRecordTxidSelect('r.seedName = ?'));
+    bind.push(opts.seed);
+  }
+  if (opts.owner) {
+    selects.push(participantRecordTxidSelect('r.owner = ?'));
+    bind.push(opts.owner);
+  }
+  if (opts.tag) {
+    // tags is JSON array text; match per-element via json_each (exact value),
+    // mirroring Dexie's multi-entry tags index equality.
+    selects.push(
+      participantRecordTxidSelect(
+        "r.tags IS NOT NULL AND json_valid(r.tags) AND EXISTS (SELECT 1 FROM json_each(r.tags) je WHERE je.value = ?)",
+      ),
+    );
+    bind.push(opts.tag);
+  }
+  if (opts.category) {
+    selects.push(
+      participantRecordTxidSelect(
+        "r.categories IS NOT NULL AND json_valid(r.categories) AND EXISTS (SELECT 1 FROM json_each(r.categories) je WHERE je.value = ?)",
+      ),
+    );
+    bind.push(opts.category);
+  }
+  if (opts.curatedOnly) {
+    selects.push(participantRecordTxidSelect(CURATED_RECORD_SQL));
+  }
+  if (selects.length === 0) return null;
+  return { sql: selects.join(' INTERSECT '), bind };
+}
+
 function buildTransactionWhere(opts: TransactionQueryOptions): { sql: string; bind: unknown[] } {
   const clauses: string[] = [];
   const bind: unknown[] = [];
@@ -1059,6 +1164,22 @@ function buildTransactionWhere(opts: TransactionQueryOptions): { sql: string; bi
 
 export function countTransactions(db: EngineDb, opts: TransactionQueryOptions = {}): number {
   const where = buildTransactionWhere(opts);
+  const match = buildTransactionMatchSubquery(opts);
+  if (match) {
+    // Count the derived (already DISTINCT) txid set, joining back to the tx
+    // table only through its unique txid index — O(|matches|), never a walk of
+    // all of blockchainTransactions.
+    const extra = where.sql ? `WHERE ${where.sql.replace(/hasOpReturn/g, 'bt.hasOpReturn')}` : '';
+    // CROSS JOIN pins the join order: the derived match set is the outer loop
+    // and blockchainTransactions is probed via its unique txid index. A plain
+    // JOIN lets the planner flip the order for hard-to-estimate subqueries
+    // (e.g. json_each tag matching), scanning the whole tx table instead.
+    return selectScalar(
+      db,
+      `SELECT COUNT(*) AS v FROM (${match.sql}) m CROSS JOIN blockchainTransactions bt ON bt.txid = m.txid ${extra}`,
+      [...match.bind, ...where.bind],
+    );
+  }
   const whereSql = where.sql ? `WHERE ${where.sql}` : '';
   return selectScalar(db, `SELECT COUNT(*) AS v FROM blockchainTransactions ${whereSql}`, where.bind);
 }
@@ -1113,26 +1234,48 @@ export function getTransactionAggregates(
 export function getTransactionPage(db: EngineDb, opts: TransactionPageOptions): TransactionPageRow[] {
   const clauses: string[] = [];
   const bind: unknown[] = [];
+  const match = buildTransactionMatchSubquery(opts);
   const where = buildTransactionWhere(opts);
   if (where.sql) {
-    clauses.push(where.sql);
+    clauses.push(match ? where.sql.replace(/hasOpReturn/g, 'bt.hasOpReturn') : where.sql);
     bind.push(...where.bind);
   }
-  if (opts.cursor) {
-    clauses.push('(COALESCE(blockTime, 0) < ? OR (COALESCE(blockTime, 0) = ? AND id < ?))');
-    bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
+  let txRows: TransactionRow[];
+  if (match) {
+    // Entity-filtered page: derive the matching txid set from the selective
+    // participant/record indexes, join back through the unique txid index and
+    // sort ONLY the matched rows — cost is O(|matches| log |matches|), never a
+    // walk of the whole transaction table skipping non-matching rows.
+    if (opts.cursor) {
+      clauses.push('(COALESCE(bt.blockTime, 0) < ? OR (COALESCE(bt.blockTime, 0) = ? AND bt.id < ?))');
+      bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
+    }
+    const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    txRows = selectRows<TransactionRow>(
+      db,
+      `SELECT bt.id, bt.txid, bt.blockHeight, bt.blockTime, bt.fee, bt.feeRate, bt.vsize, bt.hasOpReturn
+         FROM (${match.sql}) m CROSS JOIN blockchainTransactions bt ON bt.txid = m.txid
+         ${whereSql}
+         ORDER BY COALESCE(bt.blockTime, 0) DESC, bt.id DESC
+         LIMIT ?`,
+      [...match.bind, ...bind, opts.limit],
+    );
+  } else {
+    if (opts.cursor) {
+      clauses.push('(COALESCE(blockTime, 0) < ? OR (COALESCE(blockTime, 0) = ? AND id < ?))');
+      bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
+    }
+    const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    txRows = selectRows<TransactionRow>(
+      db,
+      `SELECT id, txid, blockHeight, blockTime, fee, feeRate, vsize, hasOpReturn
+         FROM blockchainTransactions
+         ${whereSql}
+         ORDER BY COALESCE(blockTime, 0) DESC, id DESC
+         LIMIT ?`,
+      [...bind, opts.limit],
+    );
   }
-  const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  bind.push(opts.limit);
-  const txRows = selectRows<TransactionRow>(
-    db,
-    `SELECT id, txid, blockHeight, blockTime, fee, feeRate, vsize, hasOpReturn
-       FROM blockchainTransactions
-       ${whereSql}
-       ORDER BY COALESCE(blockTime, 0) DESC, id DESC
-       LIMIT ?`,
-    bind,
-  );
   if (txRows.length === 0) return [];
   const aggs = getTransactionAggregates(db, txRows.map((r) => r.txid));
   return txRows.map((r) => {

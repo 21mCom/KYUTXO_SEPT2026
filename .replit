@@ -43,6 +43,14 @@ args = "psbt-builder-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "transactions-entity-filter-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "transactions-entity-filter-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "crud-guards"
 
 [[workflows.workflow.tasks]]
@@ -925,6 +933,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-psbt-builder-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "transactions-entity-filter-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/engine/__tests__/engine-core.test.ts client/src/lib/engine/__tests__/transactions-entity-filter-equivalence.test.ts client/src/lib/engine/__tests__/engine-core.entityFilterScale.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "transactions-entity-filter-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-transactions-entity-filter-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

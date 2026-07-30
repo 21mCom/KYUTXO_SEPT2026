@@ -18,8 +18,16 @@ import {
   getOpReturnTransactionsPageByBlockTime,
   getOrderedTransactionPrimaryKeysByBlockTime,
   getOpReturnTransactionPrimaryKeys,
-  getParticipantsByRecordIds,
+  getTxidsForTxEntityFilter,
+  type TxEntityFilter,
 } from "@/lib/data/transaction-crud";
+import {
+  getWalletNames,
+  getSeedNames,
+  getOwners,
+  getTags,
+  getCategories,
+} from "@/lib/data/vocabulary-crud";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,7 +39,9 @@ import {
   SearchFilters, 
   defaultFilters, 
   hasActiveSearchFilters,
-  filterByDateAndAmount 
+  hasActiveEntityFilters,
+  filterByDateAndAmount,
+  type EntityFilterOptions,
 } from "@/components/TransactionSearchFilters";
 import { 
   ChevronLeft, 
@@ -64,6 +74,7 @@ import {
   engineGetTransactionPage,
   subscribeEngineReadiness,
   type TransactionPageCursor,
+  type TransactionPageRow,
 } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 
@@ -598,6 +609,41 @@ export default function Transactions() {
     }
   }, [needsClientSideFiltering]);
 
+  // --- Entity filters (Task #1680) ------------------------------------------
+  const hasEntityFilter = hasActiveEntityFilters(searchFilters);
+  const entityFilter = useMemo<TxEntityFilter>(() => ({
+    address: searchFilters.entityAddress?.trim() || undefined,
+    wallet: searchFilters.entityWallet,
+    seed: searchFilters.entitySeed,
+    owner: searchFilters.entityOwner,
+    tag: searchFilters.entityTag,
+    category: searchFilters.entityCategory,
+  }), [searchFilters.entityAddress, searchFilters.entityWallet, searchFilters.entitySeed,
+       searchFilters.entityOwner, searchFilters.entityTag, searchFilters.entityCategory]);
+  const entitySignature = JSON.stringify(entityFilter);
+
+  // Engine query options shared by the count/page/scan loads: entity dimensions
+  // plus the curated-only default view flag.
+  const engineFilterOpts = useMemo(() => ({
+    ...entityFilter,
+    curatedOnly: !includeBlockchainDiscovered || undefined,
+  }), [entityFilter, includeBlockchainDiscovered]);
+
+  // Dropdown value pools for the entity selects, from the vocabulary tables.
+  const entityOptions = useLiveQuery(async (): Promise<EntityFilterOptions> => {
+    const [wallets, seeds, owners, tags, categories] = await Promise.all([
+      getWalletNames(), getSeedNames(), getOwners(), getTags(), getCategories(),
+    ]);
+    return {
+      wallets: wallets.map(w => w.name),
+      seeds: seeds.map(s => s.name),
+      owners: owners.map(o => o.name),
+      tags: tags.map(t => t.name),
+      categories: categories.map(c => c.name),
+    };
+  }, []);
+  // ---------------------------------------------------------------------------
+
   const curatedRecords = useLiveQuery(
     async () => {
       if (includeBlockchainDiscovered) return null;
@@ -606,32 +652,28 @@ export default function Transactions() {
     [includeBlockchainDiscovered]
   );
 
-  const { value: userCuratedTxidSet, isComputing: userCuratedTxidSetComputing } = useAsyncMemo(async (signal) => {
-    if (includeBlockchainDiscovered) return new Set<string>();
-    if (!curatedRecords || curatedRecords.length === 0) return new Set<string>();
-
-    const recordIds = curatedRecords
-      .filter(r => r.id !== undefined)
-      .map(r => r.id as number);
-
-    if (recordIds.length === 0) return new Set<string>();
-
-    const txids = new Set<string>();
-    const batchSize = 500;
-    for (let i = 0; i < recordIds.length; i += batchSize) {
-      checkAbort(signal);
-      const batch = recordIds.slice(i, i + batchSize);
-      const matchingParticipants = await getParticipantsByRecordIds(batch);
-      matchingParticipants.forEach(p => txids.add(p.txid));
-      if (i + batchSize < recordIds.length) await yieldToUI();
-    }
-    return txids;
-  }, [curatedRecords, includeBlockchainDiscovered], new Set<string>());
+  // Dexie-fallback txid set for the curated default view and/or entity filters.
+  // ONLY computed when the engine mirror can't serve the read (browser preview,
+  // stale mirror) — the engine path filters in SQL and never materializes this
+  // set. `set: null` + engine:false means "still resolving / not needed".
+  const { value: fallbackTxidState } = useAsyncMemo(async (signal) => {
+    const needsSet = !includeBlockchainDiscovered || hasEntityFilter;
+    if (!needsSet) return { set: null as Set<string> | null, engine: false };
+    const decision = await evaluateEngineFreshness('transactions');
+    checkAbort(signal);
+    if (decision.useEngine) return { set: null as Set<string> | null, engine: true };
+    const set = await getTxidsForTxEntityFilter(
+      { ...entityFilter, curatedOnly: !includeBlockchainDiscovered || undefined },
+      async () => { checkAbort(signal); await yieldToUI(); },
+    );
+    return { set, engine: false };
+  }, [includeBlockchainDiscovered, entitySignature, txDbSignal, engineReadySignal],
+     { set: null as Set<string> | null, engine: false });
 
   const { value: txCounts } = useAsyncMemo(async (signal) => {
-    // Native engine fast path for the all-transactions counts (Task #301): when
-    // the mirror is proven CURRENT for the tx/participants scope, SQLite counts
-    // the whole table far faster than Dexie at scale. Any mismatch — or the
+    // Native engine fast path for the transaction counts: when the mirror is
+    // proven CURRENT for the tx/participants scope, SQLite counts (including the
+    // curated default view and entity filters) run in SQL. Any mismatch — or the
     // browser preview — falls back to the Dexie counts below.
     const countDecision = await evaluateEngineFreshness('transactions');
     checkAbort(signal);
@@ -642,34 +684,55 @@ export default function Transactions() {
       : await countTransactions();
     checkAbort(signal);
 
+    const filterActive = !includeBlockchainDiscovered || hasEntityFilter || opReturnOnly;
     let filteredCount: number;
-    if (includeBlockchainDiscovered && !opReturnOnly) {
-      filteredCount = totalDbCount;
-    } else if (includeBlockchainDiscovered && opReturnOnly) {
-      filteredCount = useEngineCounts
-        ? await engineCountTransactions({ opReturnOnly: true })
-        : await countTransactionsWithOpReturn();
+    let blockchainOnlyCount = 0;
+
+    if (useEngineCounts) {
+      filteredCount = filterActive
+        ? await engineCountTransactions({ ...engineFilterOpts, opReturnOnly: opReturnOnly || undefined })
+        : totalDbCount;
       checkAbort(signal);
-    } else if (!includeBlockchainDiscovered && opReturnOnly) {
-      let count = 0;
-      const txidArray = Array.from(userCuratedTxidSet);
-      const batchSize = 500;
-      for (let i = 0; i < txidArray.length; i += batchSize) {
-        const batch = txidArray.slice(i, i + batchSize);
-        const txs = await getTransactionsByTxids(batch);
-        count += txs.filter(tx => tx.hasOpReturn).length;
+      if (!includeBlockchainDiscovered) {
+        const curatedCount = (hasEntityFilter || opReturnOnly)
+          ? await engineCountTransactions({ curatedOnly: true })
+          : filteredCount;
         checkAbort(signal);
+        blockchainOnlyCount = Math.max(0, totalDbCount - curatedCount);
       }
-      filteredCount = count;
+    } else if (includeBlockchainDiscovered && !hasEntityFilter) {
+      filteredCount = opReturnOnly ? await countTransactionsWithOpReturn() : totalDbCount;
+      checkAbort(signal);
     } else {
-      filteredCount = userCuratedTxidSet.size;
+      const set = fallbackTxidState.set;
+      if (set == null) {
+        // Set still resolving (or the gate flapped between memos) — report 0 for
+        // now; this memo re-runs when fallbackTxidState settles.
+        filteredCount = 0;
+      } else if (opReturnOnly) {
+        let count = 0;
+        const txidArray = Array.from(set);
+        const batchSize = 500;
+        for (let i = 0; i < txidArray.length; i += batchSize) {
+          const batch = txidArray.slice(i, i + batchSize);
+          const txs = await getTransactionsByTxids(batch);
+          count += txs.filter(tx => tx.hasOpReturn).length;
+          checkAbort(signal);
+        }
+        filteredCount = count;
+      } else {
+        filteredCount = set.size;
+      }
+      // The hidden-count badge is only well-defined for the plain curated view;
+      // with entity filters active the set is entity∩curated, so skip it.
+      if (!includeBlockchainDiscovered && !hasEntityFilter && set) {
+        blockchainOnlyCount = Math.max(0, totalDbCount - set.size);
+      }
     }
 
-    const blockchainOnlyCount = includeBlockchainDiscovered ? 0
-      : Math.max(0, totalDbCount - userCuratedTxidSet.size);
-
     return { totalDbCount, filteredCount, blockchainOnlyCount };
-  }, [includeBlockchainDiscovered, opReturnOnly, userCuratedTxidSet, txDbSignal],
+  }, [includeBlockchainDiscovered, opReturnOnly, hasEntityFilter, entitySignature,
+      fallbackTxidState, txDbSignal, engineReadySignal],
      { totalDbCount: 0, filteredCount: 0, blockchainOnlyCount: 0 });
 
   const blockchainOnlyTxCount = txCounts.blockchainOnlyCount;
@@ -688,70 +751,85 @@ export default function Transactions() {
     // stay on Dexie below. We page by a {blockTime,id} cursor anchor (O(page) not
     // O(offset)) and hydrate the page's FULL transactions back from Dexie by txid
     // so TransactionCard keeps opReturnData and exact field fidelity.
-    if (includeBlockchainDiscovered) {
+    const decision = await evaluateEngineFreshness('transactions');
+    checkAbort(signal);
+    if (decision.useEngine) {
+      // The engine now serves EVERY browse view in SQL — the curated default,
+      // entity filters, OP_RETURN and their combinations — via keyset paging.
       const anchorState = txPageAnchorsRef.current;
-      const querySignature = JSON.stringify({ op: opReturnOnly, db: txDbSignal });
+      const querySignature = JSON.stringify({
+        op: opReturnOnly, inc: includeBlockchainDiscovered, ent: entitySignature, db: txDbSignal,
+      });
       if (anchorState.signature !== querySignature) {
         anchorState.signature = querySignature;
         anchorState.anchors = new Map<number, TransactionPageCursor | undefined>([[1, undefined]]);
       }
-      const decision = await evaluateEngineFreshness('transactions');
-      checkAbort(signal);
-      if (decision.useEngine && anchorState.anchors.has(safePageForOffset)) {
-        const cursor = anchorState.anchors.get(safePageForOffset);
-        const rows = await engineGetTransactionPage({
+      // Walk forward from the nearest cached anchor at or below the target page
+      // (page 1 always has one), caching boundaries as we go, so a clamp/jump
+      // never needs a Dexie fallback.
+      let fromPage = safePageForOffset;
+      while (fromPage > 1 && !anchorState.anchors.has(fromPage)) fromPage--;
+      let rows: TransactionPageRow[] = [];
+      for (let p = fromPage; p <= safePageForOffset; p++) {
+        const cursor = anchorState.anchors.get(p);
+        rows = await engineGetTransactionPage({
           limit: ITEMS_PER_PAGE,
           cursor,
-          opReturnOnly,
+          opReturnOnly: opReturnOnly || undefined,
+          ...engineFilterOpts,
         });
         checkAbort(signal);
         // Record the boundary for the next page once a full page is loaded; a
         // short page means there is no next page, so we leave it unset.
         if (rows.length === ITEMS_PER_PAGE) {
           const last = rows[rows.length - 1];
-          anchorState.anchors.set(safePageForOffset + 1, {
+          anchorState.anchors.set(p + 1, {
             blockTime: last.blockTime ?? 0,
             id: last.id,
           });
+        } else if (p < safePageForOffset) {
+          rows = [];
+          break;
         }
-        const orderedTxids = rows.map((r) => r.txid);
-        const fullTxs = await getTransactionsByTxids(orderedTxids);
-        checkAbort(signal);
-        const byTxid = new Map(fullTxs.map((t) => [t.txid, t]));
-        return orderedTxids
-          .map((txid) => byTxid.get(txid))
-          .filter((t): t is BlockchainTransaction => t !== undefined);
       }
-      // Not fresh / unavailable / no cached anchor (clamp jump): fall through to
-      // the Dexie offset path below for this one load.
+      const orderedTxids = rows.map((r) => r.txid);
+      const fullTxs = await getTransactionsByTxids(orderedTxids);
+      checkAbort(signal);
+      const byTxid = new Map(fullTxs.map((t) => [t.txid, t]));
+      return orderedTxids
+        .map((txid) => byTxid.get(txid))
+        .filter((t): t is BlockchainTransaction => t !== undefined);
     }
 
-    const needsFilter = !includeBlockchainDiscovered || opReturnOnly;
+    const needsFilter = !includeBlockchainDiscovered || hasEntityFilter || opReturnOnly;
 
     if (!needsFilter) {
       return getTransactionsPageByBlockTime(dbOffset, ITEMS_PER_PAGE);
     }
 
-    if (includeBlockchainDiscovered && opReturnOnly) {
+    if (includeBlockchainDiscovered && !hasEntityFilter && opReturnOnly) {
       return getOpReturnTransactionsPageByBlockTime(dbOffset, ITEMS_PER_PAGE);
     }
 
-    const txidArray = Array.from(userCuratedTxidSet);
-    const allCurated: BlockchainTransaction[] = [];
+    const txidSet = fallbackTxidState.set;
+    if (txidSet == null) return []; // still resolving; memo re-runs when it settles
+
+    const txidArray = Array.from(txidSet);
+    const allMatching: BlockchainTransaction[] = [];
     const batchSize = 500;
     for (let i = 0; i < txidArray.length; i += batchSize) {
       checkAbort(signal);
       const batch = txidArray.slice(i, i + batchSize);
       const batchTxs = await getTransactionsByTxids(batch);
-      allCurated.push(...batchTxs);
+      allMatching.push(...batchTxs);
       if (i + batchSize < txidArray.length) await yieldToUI();
     }
 
-    const filtered = opReturnOnly ? allCurated.filter(tx => tx.hasOpReturn) : allCurated;
+    const filtered = opReturnOnly ? allMatching.filter(tx => tx.hasOpReturn) : allMatching;
     filtered.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     return filtered.slice(dbOffset, dbOffset + ITEMS_PER_PAGE);
-  }, [needsClientSideFiltering, includeBlockchainDiscovered, userCuratedTxidSet, opReturnOnly,
-      dbOffset, safePageForOffset, txDbSignal, engineReadySignal],
+  }, [needsClientSideFiltering, includeBlockchainDiscovered, hasEntityFilter, entitySignature,
+      fallbackTxidState, opReturnOnly, dbOffset, safePageForOffset, txDbSignal, engineReadySignal],
      [] as BlockchainTransaction[]);
 
   const { value: scanResult, isComputing: scanLoading } = useAsyncMemo(async (signal) => {
@@ -877,7 +955,44 @@ export default function Transactions() {
       return filtered;
     }
 
-    if (includeBlockchainDiscovered) {
+    const scanDecision = await evaluateEngineFreshness('transactions');
+    checkAbort(signal);
+
+    if (scanDecision.useEngine) {
+      // Engine candidate enumeration: the curated/entity/OP_RETURN filters run
+      // in SQL and the client-side text/amount/date filters compose on top of
+      // the (usually far smaller) candidate stream — no 50k pk materialization.
+      const opts = { ...engineFilterOpts, opReturnOnly: opReturnOnly || undefined };
+      scanTotal = await engineCountTransactions(opts);
+      checkAbort(signal);
+      setSearchProgress({ scanned: 0, total: scanTotal, matches: 0 });
+
+      const ENGINE_SCAN_BATCH = 1000;
+      let cursor: TransactionPageCursor | undefined = undefined;
+      while (true) {
+        checkAbort(signal);
+        const rows = await engineGetTransactionPage({ limit: ENGINE_SCAN_BATCH, cursor, ...opts });
+        if (rows.length === 0) break;
+        const last = rows[rows.length - 1];
+        cursor = { blockTime: last.blockTime ?? 0, id: last.id };
+        const fullTxs = await getTransactionsByTxids(rows.map(r => r.txid));
+        checkAbort(signal);
+        const byTxid = new Map(fullTxs.map(t => [t.txid, t]));
+        const batch = rows
+          .map(r => byTxid.get(r.txid))
+          .filter((t): t is BlockchainTransaction => t !== undefined);
+        const matches = await filterBatch(batch);
+        totalMatchCount += matches.length;
+        if (allMatches.length < MAX_COLLECTED_MATCHES) {
+          const room = MAX_COLLECTED_MATCHES - allMatches.length;
+          allMatches.push(...matches.slice(0, room));
+        }
+        scanned += rows.length;
+        setSearchProgress({ scanned, total: scanTotal, matches: totalMatchCount });
+        if (rows.length < ENGINE_SCAN_BATCH) break;
+        await yieldToUI();
+      }
+    } else if (includeBlockchainDiscovered && !hasEntityFilter) {
       if (opReturnOnly) {
         const allKeys = await getOpReturnTransactionPrimaryKeys();
         checkAbort(signal);
@@ -922,7 +1037,7 @@ export default function Transactions() {
         }
       }
     } else {
-      const txidArray = Array.from(userCuratedTxidSet);
+      const txidArray = Array.from(fallbackTxidState.set ?? new Set<string>());
       scanTotal = txidArray.length;
       setSearchProgress({ scanned: 0, total: scanTotal, matches: 0 });
 
@@ -948,8 +1063,9 @@ export default function Transactions() {
     allMatches.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     setSearchProgress(null);
     return { matches: allMatches, totalMatchCount, limitReached: totalMatchCount > allMatches.length, totalLinkedAddressCount: totalLinkedAddresses.size };
-  }, [needsClientSideFiltering, includeBlockchainDiscovered, opReturnOnly,
-      userCuratedTxidSet, debouncedSearch, searchFilters, curatedRecords, txDbSignal],
+  }, [needsClientSideFiltering, includeBlockchainDiscovered, opReturnOnly, hasEntityFilter,
+      entitySignature, fallbackTxidState, debouncedSearch, searchFilters, curatedRecords,
+      txDbSignal, engineReadySignal],
      { matches: [] as BlockchainTransaction[], totalMatchCount: 0, limitReached: false, totalLinkedAddressCount: 0 });
 
   const needsBroadParticipants = debouncedSearch.trim() !== '' || searchFilters.amountMode !== 'any';
@@ -1449,6 +1565,7 @@ export default function Transactions() {
           />
         </div>
         <TransactionSearchFilters
+          entityOptions={entityOptions}
           filters={searchFilters}
           onChange={(filters) => {
             setSearchFilters(filters);

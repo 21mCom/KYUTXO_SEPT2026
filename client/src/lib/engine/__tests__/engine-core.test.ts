@@ -1150,6 +1150,83 @@ describe("engine-core: transactions page / count / aggregates", () => {
   });
 });
 
+describe("engine-core: transaction entity filters (Task #1680)", () => {
+  let db: BetterSqlite3EngineDb;
+
+  beforeEach(() => {
+    db = createInMemoryEngineDb();
+    createSchema(db);
+    // Records: 1 curated (wallet W1/seed S1/owner O1/tag red/cat exchange),
+    // 2 curated (wallet W2, owner O1, tag blue), 3 blockchain-discovered
+    // (inherits W1), 4 legacy NULL importance.
+    insertRecords(db, [
+      { ...rec({ id: 1, inputString: "addr1", walletName: "W1", owner: "O1", tags: '["red"]', categories: '["exchange"]' }), seedName: "S1" },
+      rec({ id: 2, inputString: "addr2", walletName: "W2", owner: "O1", tags: '["blue"]' }),
+      rec({ id: 3, inputString: "addr3", walletName: "W1", addressImportance: "blockchain-discovered" }),
+      { ...rec({ id: 4, inputString: "addr4", walletName: "W1" }), addressImportance: null },
+    ]);
+    insertTransactions(db, [
+      { id: 1, txid: "t1", blockHeight: 1, blockTime: 400, fee: 1, feeRate: 1, vsize: 1, hasOpReturn: 0 },
+      { id: 2, txid: "t2", blockHeight: 2, blockTime: 300, fee: 1, feeRate: 1, vsize: 1, hasOpReturn: 1 },
+      { id: 3, txid: "t3", blockHeight: 3, blockTime: 200, fee: 1, feeRate: 1, vsize: 1, hasOpReturn: 0 },
+      { id: 4, txid: "t4", blockHeight: 4, blockTime: 100, fee: 1, feeRate: 1, vsize: 1, hasOpReturn: 0 },
+    ]);
+    // t1: rec1 output + unlinked counterparty. t2: rec2 output. t3: rec3
+    // (discovered) only. t4: rec4 (NULL importance) only.
+    insertParticipants(db, [
+      { ...out("t1", "addr1", 0, 100), recordId: 1 },
+      out("t1", "stranger", 1, 50),
+      { ...out("t2", "addr2", 0, 200), recordId: 2 },
+      { ...out("t3", "addr3", 0, 10), recordId: 3 },
+      { ...out("t4", "addr4", 0, 10), recordId: 4 },
+    ]);
+  });
+
+  it("filters by participant address without requiring a link", () => {
+    expect(countTransactions(db, { address: "stranger" })).toBe(1);
+    expect(getTransactionPage(db, { limit: 10, address: "addr1" }).map(r => r.txid)).toEqual(["t1"]);
+    expect(countTransactions(db, { address: "nope" })).toBe(0);
+  });
+
+  it("filters by wallet / seed / owner via linked records", () => {
+    // W1: rec1 (t1), rec3 (t3, discovered), rec4 (t4, legacy) all carry W1.
+    expect(getTransactionPage(db, { limit: 10, wallet: "W1" }).map(r => r.txid)).toEqual(["t1", "t3", "t4"]);
+    expect(countTransactions(db, { wallet: "W2" })).toBe(1);
+    expect(getTransactionPage(db, { limit: 10, seed: "S1" }).map(r => r.txid)).toEqual(["t1"]);
+    expect(getTransactionPage(db, { limit: 10, owner: "O1" }).map(r => r.txid)).toEqual(["t1", "t2"]);
+  });
+
+  it("filters by tag and category via json_each", () => {
+    expect(getTransactionPage(db, { limit: 10, tag: "red" }).map(r => r.txid)).toEqual(["t1"]);
+    expect(getTransactionPage(db, { limit: 10, tag: "blue" }).map(r => r.txid)).toEqual(["t2"]);
+    expect(countTransactions(db, { tag: "missing" })).toBe(0);
+    expect(getTransactionPage(db, { limit: 10, category: "exchange" }).map(r => r.txid)).toEqual(["t1"]);
+  });
+
+  it("curatedOnly matches the Dexie tier set (excludes discovered AND NULL importance)", () => {
+    expect(getTransactionPage(db, { limit: 10, curatedOnly: true }).map(r => r.txid)).toEqual(["t1", "t2"]);
+    expect(countTransactions(db, { curatedOnly: true })).toBe(2);
+  });
+
+  it("dimensions compose with AND across possibly different participants", () => {
+    // owner O1 AND wallet W2 -> only t2 (both satisfied by rec2).
+    expect(getTransactionPage(db, { limit: 10, owner: "O1", wallet: "W2" }).map(r => r.txid)).toEqual(["t2"]);
+    // address 'stranger' AND wallet W1 -> t1 (different participants).
+    expect(getTransactionPage(db, { limit: 10, address: "stranger", wallet: "W1" }).map(r => r.txid)).toEqual(["t1"]);
+    // Composes with opReturnOnly and curatedOnly.
+    expect(countTransactions(db, { owner: "O1", opReturnOnly: true })).toBe(1);
+    expect(countTransactions(db, { wallet: "W1", curatedOnly: true })).toBe(1);
+  });
+
+  it("entity filters respect keyset cursor pagination", () => {
+    const first = getTransactionPage(db, { limit: 2, wallet: "W1" });
+    expect(first.map(r => r.txid)).toEqual(["t1", "t3"]);
+    const last = first[first.length - 1];
+    const second = getTransactionPage(db, { limit: 2, wallet: "W1", cursor: { blockTime: last.blockTime ?? 0, id: last.id } });
+    expect(second.map(r => r.txid)).toEqual(["t4"]);
+  });
+});
+
 describe("engine-core: balance group summaries", () => {
   let db: BetterSqlite3EngineDb;
 

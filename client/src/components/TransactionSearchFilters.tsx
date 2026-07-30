@@ -7,13 +7,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { 
   CalendarIcon, 
   Search, 
   X, 
   Filter,
   CalendarDays,
-  Coins
+  Coins,
+  Link as LinkIcon
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { cn } from "@/lib/utils";
@@ -27,12 +29,30 @@ export interface SearchFilters {
   amountMinBtc?: number;
   amountMaxBtc?: number;
   amountExactBtc?: number;
+  // Entity filters — one value per dimension; each restricts to transactions
+  // with a participant matching that dimension (see TxEntityFilter).
+  entityAddress?: string;
+  entityWallet?: string;
+  entitySeed?: string;
+  entityOwner?: string;
+  entityTag?: string;
+  entityCategory?: string;
+}
+
+/** Dropdown value pools for the entity selects, sourced from vocabulary. */
+export interface EntityFilterOptions {
+  wallets: string[];
+  seeds: string[];
+  owners: string[];
+  tags: string[];
+  categories: string[];
 }
 
 interface TransactionSearchFiltersProps {
   filters: SearchFilters;
   onChange: (filters: SearchFilters) => void;
   onClear: () => void;
+  entityOptions?: EntityFilterOptions;
   className?: string;
 }
 
@@ -49,15 +69,37 @@ export function hasActiveSearchFilters(filters: SearchFilters): boolean {
   return false;
 }
 
+/** True when any entity dimension carries a value. */
+export function hasActiveEntityFilters(filters: SearchFilters): boolean {
+  return !!(
+    filters.entityAddress?.trim() ||
+    filters.entityWallet ||
+    filters.entitySeed ||
+    filters.entityOwner ||
+    filters.entityTag ||
+    filters.entityCategory
+  );
+}
+
+const ENTITY_DIMENSIONS = [
+  { key: "entityWallet", label: "Wallet", optionsKey: "wallets" },
+  { key: "entitySeed", label: "Seed", optionsKey: "seeds" },
+  { key: "entityOwner", label: "Owner", optionsKey: "owners" },
+  { key: "entityTag", label: "Tag", optionsKey: "tags" },
+  { key: "entityCategory", label: "Category", optionsKey: "categories" },
+] as const;
+
 export function TransactionSearchFilters({ 
   filters, 
   onChange, 
   onClear,
+  entityOptions,
   className 
 }: TransactionSearchFiltersProps) {
   const [isOpen, setIsOpen] = useState(false);
   
-  const hasFilters = hasActiveSearchFilters(filters);
+  const hasEntity = hasActiveEntityFilters(filters);
+  const hasFilters = hasActiveSearchFilters(filters) || hasEntity;
 
   const updateFilter = <K extends keyof SearchFilters>(key: K, value: SearchFilters[K]) => {
     onChange({ ...filters, [key]: value });
@@ -93,6 +135,9 @@ export function TransactionSearchFilters({
 
   const dateDisplay = formatDateRange();
   const amountDisplay = formatAmountRange();
+  const activeEntityCount =
+    (filters.entityAddress?.trim() ? 1 : 0) +
+    ENTITY_DIMENSIONS.reduce((n, d) => n + (filters[d.key] ? 1 : 0), 0);
 
   return (
     <div className={cn("flex items-center gap-2 flex-wrap", className)}>
@@ -108,7 +153,7 @@ export function TransactionSearchFilters({
             Advanced Filters
             {hasFilters && (
               <span className="ml-1 rounded-full bg-primary-foreground text-primary h-5 w-5 text-xs flex items-center justify-center">
-                {(dateDisplay ? 1 : 0) + (amountDisplay ? 1 : 0)}
+                {(dateDisplay ? 1 : 0) + (amountDisplay ? 1 : 0) + activeEntityCount}
               </span>
             )}
           </Button>
@@ -310,6 +355,53 @@ export function TransactionSearchFilters({
               </Tabs>
             </div>
 
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <LinkIcon className="h-4 w-4 text-muted-foreground" />
+                <Label className="font-medium">Linked Entity</Label>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">Address</Label>
+                <Input
+                  placeholder="Exact address"
+                  value={filters.entityAddress ?? ""}
+                  onChange={(e) => updateFilter("entityAddress", e.target.value === "" ? undefined : e.target.value)}
+                  className="h-8 font-mono text-xs"
+                  data-testid="input-entity-address"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {ENTITY_DIMENSIONS.map((dim) => {
+                  const options = entityOptions?.[dim.optionsKey] ?? [];
+                  const value = filters[dim.key];
+                  return (
+                    <div key={dim.key}>
+                      <Label className="text-xs text-muted-foreground">{dim.label}</Label>
+                      <Select
+                        value={value ?? "__any__"}
+                        onValueChange={(v) => updateFilter(dim.key, v === "__any__" ? undefined : v)}
+                      >
+                        <SelectTrigger className="h-8" data-testid={`select-entity-${dim.label.toLowerCase()}`}>
+                          <SelectValue placeholder="Any" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__any__">Any</SelectItem>
+                          {options.map((opt) => (
+                            <SelectItem key={opt} value={opt} data-testid={`option-entity-${dim.label.toLowerCase()}-${opt}`}>
+                              {opt}
+                            </SelectItem>
+                          ))}
+                          {value && !options.includes(value) && (
+                            <SelectItem value={value}>{value}</SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="pt-2 flex justify-end">
               <Button 
                 size="sm" 
@@ -369,6 +461,43 @@ export function TransactionSearchFilters({
             <X className="h-3 w-3" />
           </Button>
         </div>
+      )}
+
+      {filters.entityAddress?.trim() && (
+        <div className="flex items-center gap-1 text-sm bg-muted px-2 py-1 rounded-md" data-testid="chip-entity-address">
+          <LinkIcon className="h-3 w-3 text-muted-foreground" />
+          <span className="font-mono text-xs max-w-[160px] truncate">{filters.entityAddress}</span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-4 w-4 p-0 hover:bg-transparent"
+            onClick={() => onChange({ ...filters, entityAddress: undefined })}
+            data-testid="button-clear-entity-address"
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+      {ENTITY_DIMENSIONS.map((dim) =>
+        filters[dim.key] ? (
+          <div
+            key={dim.key}
+            className="flex items-center gap-1 text-sm bg-muted px-2 py-1 rounded-md"
+            data-testid={`chip-entity-${dim.label.toLowerCase()}`}
+          >
+            <LinkIcon className="h-3 w-3 text-muted-foreground" />
+            <span>{dim.label}: {filters[dim.key]}</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-4 w-4 p-0 hover:bg-transparent"
+              onClick={() => onChange({ ...filters, [dim.key]: undefined })}
+              data-testid={`button-clear-entity-${dim.label.toLowerCase()}`}
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        ) : null,
       )}
     </div>
   );

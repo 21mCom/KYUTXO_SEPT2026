@@ -1,4 +1,3 @@
-// hint: Logic changed on both sides. Requires understanding intent of each change.
 - [Large-vault startup migrations](large-vault-startup-migrations.md) — batched once-only startup repairs run in background; fresh-vault skip only when empty; file-decrypt resume freezes-not-breaks.
 - [Records deferred counts](records-load-defer-counts.md) — never start count queries before the first page renders; superseded loads must spawn no counts; guard every count setter by load version.
 - [Backup streaming guards](backup-streaming-guards.md) — fflate onEntry is sync (manifest-order via a flag); memory-export OOM guard must aggregate all streamed-table counts.
@@ -72,3 +71,4 @@
 - [vi.mock vs circular imports](vi-mock-circular-import.md) — importOriginal partial mocks silently bind importers to the REAL exports when the module is in an import cycle; use a full factory mock with passthrough providers.
 - [Trusted Types enforcement](trusted-types-enforcement.md) — CSP enforces TT in packaged app; policies must install eagerly at startup (Radix sinks fire on first commit); default policy = exact-string allowlist, fails closed.
 - [fake-indexeddb scale-test lag](fake-indexeddb-scale-test-lag.md) — event-loop-lag assertions are harness noise (sync structured-clone); guard responsiveness via yield-spy counts + bounded output chunks instead.
+- [Tx entity-filter parity](tx-entity-filter-parity.md) — filters are AND-of-independent-EXISTS (Dexie must intersect per-dimension txid sets); curatedOnly excludes NULL importance; vocab dropdowns need explicit vocab rows.
