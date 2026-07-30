@@ -66,3 +66,4 @@
 - [Address Checker 5k scaling](address-checker-5k-scaling.md) — huge tables need memoized rows + page-scroll virtualization; per-row Radix Tooltips freeze the mount; live-Electrum bench runs in PHASE/SLICE chunks.
 - [Demo vault builder](demo-vault-builder.md) — v3 backup zips from Node (fflate); Esplora rotate+cache; deep custody chains need chain adoption + addTx-size-aware spend walk; unlock per page load.
 - [Pooled-run cancel tokens](pooled-run-cancel-tokens.md) — a shared cancel flag isn't enough for concurrent runs; bump a run token on cancel/reset/new-run so stale workers can never mutate newer state.
+- [Trusted Types enforcement](trusted-types-enforcement.md) — CSP enforces TT in packaged app; policies must install eagerly at startup (Radix sinks fire on first commit); default policy = exact-string allowlist, fails closed.

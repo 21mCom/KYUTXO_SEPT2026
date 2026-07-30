@@ -17,12 +17,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { 
-  ChartContainer, 
-  ChartTooltip, 
+import {
+  ChartContainer,
+  ChartTooltip,
   ChartTooltipContent,
   ChartLegend,
-  ChartLegendContent 
+  ChartLegendContent,
+  type ChartConfig,
 } from "@/components/ui/chart";
 import { 
   LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
@@ -48,6 +49,14 @@ const pieData = [
   { name: "Lightning", value: 300 },
   { name: "Other", value: 200 },
 ];
+
+// ChartContainer config: keys map to CSS vars (--color-<key>) injected by the
+// ChartStyle <style> tag, so series reference var(--color-value) instead of
+// hardcoded colors and theme switching works.
+const themedChartConfig = {
+  value: { label: "Value", color: "hsl(var(--primary))" },
+  secondary: { label: "Secondary", color: "hsl(var(--secondary))" },
+} satisfies ChartConfig;
 
 const COLORS = ["hsl(var(--primary))", "hsl(var(--secondary))", "hsl(var(--muted))"];
 
@@ -705,6 +714,25 @@ export default function UIAssets() {
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">CHT-7: Themed (ChartContainer + config)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ChartContainer config={themedChartConfig} className="h-48 w-full" data-testid="chart-themed">
+                  <BarChart data={sampleChartData}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                    <XAxis dataKey="name" className="text-xs" />
+                    <YAxis className="text-xs" />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <ChartLegend content={<ChartLegendContent />} />
+                    <Bar dataKey="value" fill="var(--color-value)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="secondary" fill="var(--color-secondary)" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ChartContainer>
               </CardContent>
             </Card>
           </div>

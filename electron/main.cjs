@@ -330,9 +330,10 @@ app.whenReady().then(() => {
             "font-src 'self' data:",
             "img-src 'self' data: blob:",
             "connect-src 'self' https://mempool.space https://blockstream.info",
-            // NOTE: require-trusted-types-for 'script' was considered but NOT
-            // enabled: the UI uses dangerouslySetInnerHTML (e.g. chart styles),
-            // which Trusted Types enforcement would block without a policy.
+            // HTML-parsing sinks must go through the app's named Trusted Types
+            // policy (client/src/lib/trusted-types.ts), so injected strings
+            // can't reach innerHTML/document.write and hijack the window.
+            "require-trusted-types-for 'script'",
           ].join('; ')
         }
       });

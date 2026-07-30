@@ -4,6 +4,7 @@ import * as React from "react"
 import * as RechartsPrimitive from "recharts"
 
 import { cn } from "@/lib/utils"
+import { trustedHtml } from "@/lib/trusted-types"
 
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const
@@ -76,12 +77,17 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
     return null
   }
 
+  // The CSS below is built exclusively from this component's own config (a
+  // chart id plus configured color strings), but it is still routed through the
+  // app's Trusted Types policy so it keeps working — and stays auditable —
+  // under the packaged app's `require-trusted-types-for 'script'` CSP.
   return (
     <style
       dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
+        __html: trustedHtml(
+          Object.entries(THEMES)
+            .map(
+              ([theme, prefix]) => `
 ${prefix} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
@@ -93,8 +99,9 @@ ${colorConfig
   .join("\n")}
 }
 `
-          )
-          .join("\n"),
+            )
+            .join("\n")
+        ),
       }}
     />
   )

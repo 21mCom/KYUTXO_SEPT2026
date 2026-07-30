@@ -20,6 +20,7 @@ import {
   type EntityCitation,
 } from "@/lib/privacy-audit";
 import { renderSourceNote } from "@/lib/renderSourceNote";
+import { trustedHtml } from "@/lib/trusted-types";
 import { buildPrivacyReport, buildPrivacyTextReport, computeExportScopeLabel, copyPrivacyReportText, downloadPrivacyTextReport, formatScoreDelta, extractCitations, type ExportScope } from "@/lib/privacy-report-export";
 import { buildPrintableReport, severityLabel, wireReportCopyButton } from "@/lib/privacy-report-html";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
@@ -214,7 +215,12 @@ export function PrivacyAuditReportPanel() {
       return;
     }
     win.document.open();
-    win.document.write(html);
+    // The opened window inherits this page's CSP, which (in the packaged app)
+    // enforces Trusted Types — route the app-built report markup through the
+    // policy so document.write accepts it.
+    // (lib.dom types document.write as string-only; at runtime Chromium
+    // accepts the TrustedHTML the policy returns.)
+    win.document.write(trustedHtml(html) as string);
     win.document.close();
 
     // Wire the in-window "Copy" control from here (the app context) rather than
