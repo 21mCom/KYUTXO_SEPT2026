@@ -20,9 +20,11 @@ import {
   detectAndBackfill,
   resolveAllBlankInputAddresses,
   formatSkippedReasons,
+  formatDetailOutcome,
   hasOnlyUnresolvableLeftovers,
   type BackfillResult,
 } from "@/lib/txid-backfill";
+import { TxidLink } from "@/components/TxidLink";
 import { describeResolveError } from "@/lib/resolve-error";
 
 // Maintenance tooling for the Data Management card: recompute cached address
@@ -43,6 +45,9 @@ export function MaintenanceToolsSection() {
   const [backfillProgress, setBackfillProgress] = useState(0);
   const [backfillMessage, setBackfillMessage] = useState("");
   const [backfillResult, setBackfillResult] = useState<BackfillResult | null>(null);
+  // Expand affordance for the per-transaction detail list in the "Last rebuild
+  // result" panel; reset whenever a new rebuild starts.
+  const [showAllRebuildDetails, setShowAllRebuildDetails] = useState(false);
   const backfillAbortRef = useRef<AbortController | null>(null);
   const rebuildSectionRef = useRef<HTMLDivElement | null>(null);
   // Mirrors isBackfilling so the autoBackfill consumer (an event listener added
@@ -121,6 +126,7 @@ export function MaintenanceToolsSection() {
     setBackfillProgress(0);
     setBackfillMessage("Scanning for orphaned transaction records...");
     setBackfillResult(null);
+    setShowAllRebuildDetails(false);
 
     try {
       const result = await detectAndBackfill({
@@ -188,9 +194,16 @@ export function MaintenanceToolsSection() {
         // loop forever: the startup reminder re-flags the same orphans every
         // session. Say so, and point at the toggle that ends the loop.
         const unresolvable = hasOnlyUnresolvableLeftovers(result);
+        // With a single affected transaction, name it right in the toast so
+        // the user can identify the record without opening the details panel.
+        const singleDetail = result.orphansFound === 1 && result.details.length === 1
+          ? result.details[0]
+          : null;
         toast({
           title: "Transaction Rebuild Complete",
-          description: `Found ${result.orphansFound} orphaned transaction${result.orphansFound !== 1 ? "s" : ""}. ${parts.join("; ")}.${
+          description: `Found ${result.orphansFound} orphaned transaction${result.orphansFound !== 1 ? "s" : ""}${
+            singleDetail ? ` (${singleDetail.txid.slice(0, 8)}…${singleDetail.txid.slice(-6)})` : ""
+          }. ${parts.join("; ")}.${
             unresolvable
               ? " Running the rebuild again can't fix these, so the startup missing-data reminder will keep flagging them. To stop it, turn off the Startup Missing-Data Reminder toggle in this section."
               : ""
@@ -470,6 +483,45 @@ export function MaintenanceToolsSection() {
                                 </p>
                               )}
                             </>
+                          );
+                        })()}
+                        {backfillResult.details.length > 0 && (() => {
+                          const DETAIL_CAP = 10;
+                          const details = backfillResult.details;
+                          const visible = showAllRebuildDetails ? details : details.slice(0, DETAIL_CAP);
+                          return (
+                            <div className="pt-2 space-y-1" data-testid="rebuild-result-details">
+                              <p className="text-xs font-medium text-foreground">Affected transactions</p>
+                              <ul className="space-y-0.5">
+                                {visible.map((d) => (
+                                  <li
+                                    key={d.txid}
+                                    className="flex items-center gap-2 flex-wrap"
+                                    data-testid={`rebuild-detail-${d.txid.slice(0, 8)}`}
+                                  >
+                                    <TxidLink
+                                      txid={d.txid}
+                                      recordId={d.recordId ?? null}
+                                      showMetadataIndicator={false}
+                                    />
+                                    <span className="text-xs text-muted-foreground" data-testid={`rebuild-detail-outcome-${d.txid.slice(0, 8)}`}>
+                                      {formatDetailOutcome(d)}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                              {details.length > DETAIL_CAP && !showAllRebuildDetails && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() => setShowAllRebuildDetails(true)}
+                                  data-testid="button-show-all-rebuild-details"
+                                >
+                                  Show all {details.length.toLocaleString()} transactions
+                                </Button>
+                              )}
+                            </div>
                           );
                         })()}
                       </>

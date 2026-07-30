@@ -754,7 +754,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/pages/settings/maintenance-tools-section.viewDetailsAction.test.tsx client/src/pages/settings/maintenance-tools-section.noProgress.test.tsx"
+args = "npx vitest run client/src/pages/settings/maintenance-tools-section.viewDetailsAction.test.tsx client/src/pages/settings/maintenance-tools-section.noProgress.test.tsx client/src/pages/settings/maintenance-tools-section.rebuildDetails.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

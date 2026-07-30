@@ -565,6 +565,51 @@ describe("runTxidBackfill", () => {
     expect(reasonTotal).toBe(result.skipped);
   });
 
+  it("reports a per-transaction detail for every processed txid", async () => {
+    const txs = new Map<string, ApiTransaction | null>([
+      [TXID_A, makeApiTx(TXID_A)], // rebuilt
+      [TXID_B, null], // skipped (not found)
+      [TXID_C, makeApiTx(TXID_C, { confirmed: false })], // skipped (unconfirmed)
+    ]);
+    const provider = makeProvider({ txs, errorTxids: new Set([TXID_D]) });
+    const recordIds = new Map<string, number>([
+      [TXID_A, 11],
+      [TXID_B, 22],
+      [TXID_C, 33],
+      [TXID_D, 44],
+    ]);
+
+    const result = await runTxidBackfill(provider, [TXID_A, TXID_B, TXID_C, TXID_D], {
+      concurrency: 2,
+      recordIds,
+    });
+
+    expect(result.details).toHaveLength(4);
+    const byTxid = new Map(result.details.map((d) => [d.txid, d]));
+    expect(byTxid.get(TXID_A)).toEqual({ txid: TXID_A, outcome: "rebuilt", recordId: 11 });
+    expect(byTxid.get(TXID_B)).toEqual({ txid: TXID_B, outcome: "skipped", reason: "not-found", recordId: 22 });
+    expect(byTxid.get(TXID_C)).toEqual({ txid: TXID_C, outcome: "skipped", reason: "unconfirmed", recordId: 33 });
+    const failed = byTxid.get(TXID_D)!;
+    expect(failed.outcome).toBe("failed");
+    expect(failed.recordId).toBe(44);
+    expect(failed.reason).toContain("fetch failed");
+  });
+
+  it("omits recordId from details when no recordIds map is supplied", async () => {
+    const provider = makeProvider({ txs: new Map([[TXID_A, null]]) });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+
+    expect(result.details).toEqual([
+      { txid: TXID_A, outcome: "skipped", reason: "not-found", recordId: undefined },
+    ]);
+  });
+
+  it("returns an empty details list when no txids are given", async () => {
+    const result = await runTxidBackfill(makeProvider(), []);
+    expect(result.details).toEqual([]);
+  });
+
   it("stops fetching once the AbortSignal fires", async () => {
     const controller = new AbortController();
     const seen: string[] = [];
@@ -2328,6 +2373,8 @@ describe("detectAndBackfill", () => {
     expect(result.orphansFound).toBe(1);
     expect(result.rebuilt).toBe(0);
     expect(result.deferReason).toMatch(/node settings/i);
+    // Deferred path returns a well-formed (empty) detail list.
+    expect(result.details).toEqual([]);
   });
 
   it("returns deferred=true when the provider cannot connect", async () => {
@@ -2340,6 +2387,7 @@ describe("detectAndBackfill", () => {
     expect(result.deferred).toBe(true);
     expect(result.orphansFound).toBe(1);
     expect(result.deferReason).toMatch(/could not connect/i);
+    expect(result.details).toEqual([]);
   });
 
   it("returns a non-deferred empty result when there are no orphans", async () => {
@@ -2347,6 +2395,7 @@ describe("detectAndBackfill", () => {
 
     expect(result.deferred).toBe(false);
     expect(result.orphansFound).toBe(0);
+    expect(result.details).toEqual([]);
   });
 
   it("runs the backfill end-to-end when a provider is reachable", async () => {
@@ -2359,6 +2408,18 @@ describe("detectAndBackfill", () => {
     expect(result.deferred).toBe(false);
     expect(result.rebuilt).toBe(1);
     expect(await testDb.blockchainTransactions.where("txid").equals(TXID_A).count()).toBe(1);
+  });
+
+  it("stamps details with the record id of each orphaned transaction record", async () => {
+    const recordId = await testDb.records.add(makeTxRecord(TXID_A));
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    nextProvider = makeProvider({ txs: new Map([[TXID_A, makeApiTx(TXID_A)]]) });
+
+    const result = await detectAndBackfill();
+
+    expect(result.details).toEqual([
+      { txid: TXID_A, outcome: "rebuilt", recordId },
+    ]);
   });
 });
 
@@ -2529,6 +2590,7 @@ describe("hasOnlyUnresolvableLeftovers", () => {
       prevoutsResolved: 0,
       deferred: false,
       errors: [],
+      details: [],
       ...over,
     };
   }

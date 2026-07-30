@@ -66,6 +66,7 @@ function makeResult(over: Partial<BackfillResult> = {}): BackfillResult {
     prevoutsResolved: 0,
     deferred: false,
     errors: [],
+    details: [],
     ...over,
   };
 }

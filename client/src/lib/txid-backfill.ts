@@ -67,6 +67,19 @@ export interface BackfillProgress {
 
 export type BackfillProgressCallback = (progress: BackfillProgress) => void;
 
+/**
+ * Per-transaction outcome of a backfill run, so the UI can list exactly which
+ * txids were rebuilt / skipped / failed instead of only aggregate counts.
+ */
+export interface BackfillTxDetail {
+  txid: string;
+  outcome: 'rebuilt' | 'skipped' | 'failed';
+  /** Skip reason key (see skippedReasons) or, for failures, the error message. */
+  reason?: string;
+  /** The id of the transaction record this txid belongs to, when known. */
+  recordId?: number;
+}
+
 export interface BackfillResult {
   orphansFound: number;
   rebuilt: number;
@@ -82,6 +95,12 @@ export interface BackfillResult {
   deferred: boolean;
   deferReason?: string;
   errors: string[];
+  /**
+   * Per-transaction outcomes for every txid that was actually processed.
+   * Empty on the no-orphans and deferred paths, and omits txids a cancelled
+   * run never reached.
+   */
+  details: BackfillTxDetail[];
 }
 
 // ─── Skip reason labels and summary helper ──────────────────────────────────
@@ -124,6 +143,20 @@ export function formatSkippedReasons(
   }
 
   return text;
+}
+
+/**
+ * Human-readable label for a single per-transaction detail's outcome, e.g.
+ * "Rebuilt", "Skipped — not found on your connected provider", or
+ * "Failed — fetch failed".
+ */
+export function formatDetailOutcome(detail: BackfillTxDetail): string {
+  if (detail.outcome === 'rebuilt') return 'Rebuilt';
+  if (detail.outcome === 'failed') {
+    return detail.reason ? `Failed — ${detail.reason}` : 'Failed';
+  }
+  const label = detail.reason ? (SKIP_REASON_LABELS[detail.reason] ?? detail.reason) : undefined;
+  return label ? `Skipped — ${label}` : 'Skipped';
 }
 
 // Skip reasons that a re-run cannot fix. "not-found": the connected provider
@@ -172,6 +205,12 @@ export interface BackfillOptions {
   signal?: AbortSignal;
   onProgress?: BackfillProgressCallback;
   concurrency?: number;
+  /**
+   * txid → transaction record id map (from detectOrphanedTxRecords), used to
+   * stamp each per-transaction detail with the record it belongs to so the UI
+   * can link straight to it.
+   */
+  recordIds?: Map<string, number>;
 }
 
 // ─── Validation ─────────────────────────────────────────────────────────────
@@ -356,7 +395,7 @@ export async function runTxidBackfill(
   txids: string[],
   options: BackfillOptions = {},
 ): Promise<BackfillResult> {
-  const { signal, onProgress, concurrency = 4 } = options;
+  const { signal, onProgress, concurrency = 4, recordIds } = options;
 
   const result: BackfillResult = {
     orphansFound: txids.length,
@@ -367,6 +406,7 @@ export async function runTxidBackfill(
     prevoutsResolved: 0,
     deferred: false,
     errors: [],
+    details: [],
   };
 
   if (txids.length === 0) return result;
@@ -451,15 +491,18 @@ export async function runTxidBackfill(
     for (let j = 0; j < chunkResults.length; j++) {
       const r = chunkResults[j];
       const txid = chunk[j];
+      const recordId = recordIds?.get(txid);
       if (r.status === 'fulfilled') {
         if (r.value.status === 'rebuilt') {
           result.rebuilt++;
           rebuiltTxids.push(txid);
+          result.details.push({ txid, outcome: 'rebuilt', recordId });
         } else {
           result.skipped++;
           // Record the skip reason in the breakdown.
           const skipReason = ('reason' in r.value && r.value.reason) ? r.value.reason : 'unknown';
           result.skippedReasons[skipReason] = (result.skippedReasons[skipReason] ?? 0) + 1;
+          result.details.push({ txid, outcome: 'skipped', reason: skipReason, recordId });
           // A txid skipped because it already had a blockchain row may still
           // carry blank inputs from a previously-cancelled resolution pass; flag
           // it so the resolution step below can resume that leftover work.
@@ -471,6 +514,7 @@ export async function runTxidBackfill(
         result.failed++;
         const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
         result.errors.push(`${txid.slice(0, 8)}…: ${msg}`);
+        result.details.push({ txid, outcome: 'failed', reason: msg, recordId });
       }
       processed++;
       reportProgress(txid);
@@ -1053,7 +1097,7 @@ export async function detectAndBackfill(
     message: 'Scanning for orphaned transaction records…',
   });
 
-  const { txids, recordIds: _recordIds } = await detectOrphanedTxRecords();
+  const { txids, recordIds } = await detectOrphanedTxRecords();
 
   if (txids.length === 0) {
     onProgress?.({
@@ -1073,6 +1117,7 @@ export async function detectAndBackfill(
       prevoutsResolved: 0,
       deferred: false,
       errors: [],
+      details: [],
     };
   }
 
@@ -1091,6 +1136,7 @@ export async function detectAndBackfill(
         deferred: true,
         deferReason: 'No node settings configured. Configure a blockchain provider in Settings to rebuild missing transaction data.',
         errors: [],
+        details: [],
       };
     }
     provider = createProviderFromSettings(nodeSettings);
@@ -1109,6 +1155,7 @@ export async function detectAndBackfill(
       deferred: true,
       deferReason: `Could not connect to blockchain provider: ${msg}. You can rebuild missing transaction data later from Settings > Data Management.`,
       errors: [],
+      details: [],
     };
   }
 
@@ -1122,8 +1169,9 @@ export async function detectAndBackfill(
       prevoutsResolved: 0,
       deferred: false,
       errors: [],
+      details: [],
     };
   }
 
-  return runTxidBackfill(provider, txids, options);
+  return runTxidBackfill(provider, txids, { ...options, recordIds });
 }
