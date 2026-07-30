@@ -30,6 +30,9 @@ const TXID = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0aabb';
 const TX_LABEL = 'BIP-329 export check tx';
 const OUTPOINT = `${'b'.repeat(63)}c`.slice(0, 64) + ':1';
 const OUTPUT_LABEL = 'BIP-329 export check output';
+const WALLET = 'Bip329CheckWallet';
+const OTHER_WALLET = 'Bip329OtherWallet';
+const TAG = 'bip329checktag';
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -117,6 +120,25 @@ async function launchWithRetry(exe, attempts = 3) {
   throw lastErr;
 }
 
+// Wait until the live match-count line reads "<n> labels will be exported."
+async function waitForMatchCount(page, n, timeoutMs = 20_000) {
+  const expected = `${n} label${n === 1 ? '' : 's'} will be exported.`;
+  await page.waitForFunction(
+    ({ testid, text }) => {
+      const el = document.querySelector(`[data-testid="${testid}"]`);
+      return el && el.textContent && el.textContent.trim() === text;
+    },
+    { testid: 'text-bip329-match-count', text: expected },
+    { timeout: timeoutMs }
+  );
+}
+
+// Radix Select: open the trigger, pick the option by its visible name.
+async function pickSelectOption(page, triggerTestId, optionName) {
+  await page.getByTestId(triggerTestId).click();
+  await page.getByRole('option', { name: optionName, exact: true }).click();
+}
+
 async function main() {
   const exe = resolveChromium();
   console.log(`[bip329-export-browser] chromium: ${exe}`);
@@ -157,29 +179,46 @@ async function main() {
     steps.push({ name: 'vault created and app unlocked', passed: true });
 
     // ── Seed labeled records (address, tx, output) via the app's own CRUD ───
+    // The address/output records carry a wallet + tag so the filter controls
+    // have something to select; vocabulary rows are created explicitly (and
+    // awaited) so the dropdown options exist before the page reload below.
     await page.evaluate(
-      async ({ addr, addrLabel, txid, txLabel, outpoint, outputLabel }) => {
+      async ({ addr, addrLabel, txid, txLabel, outpoint, outputLabel, wallet, otherWallet, tag }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const vocab = await import('/src/lib/data/vocabulary-crud.ts');
+        await vocab.createWalletName(wallet);
+        await vocab.createWalletName(otherWallet);
+        await vocab.createTag(tag);
         await recordCrud.createRecord({
           type: 'address',
           inputString: addr,
           label: addrLabel,
+          walletName: wallet,
+          tags: [tag],
         });
         await recordCrud.createRecord({
           type: 'transaction',
           inputString: txid,
           label: txLabel,
+          walletName: otherWallet,
         });
         await recordCrud.createRecord({
           type: 'transaction',
           inputString: outpoint,
           label: outputLabel,
           notes: 'BIP-329 output at index 1. Spendable: false',
+          walletName: wallet,
+          tags: [tag],
         });
       },
-      { addr: ADDR, addrLabel: ADDR_LABEL, txid: TXID, txLabel: TX_LABEL, outpoint: OUTPOINT, outputLabel: OUTPUT_LABEL }
+      { addr: ADDR, addrLabel: ADDR_LABEL, txid: TXID, txLabel: TX_LABEL, outpoint: OUTPOINT, outputLabel: OUTPUT_LABEL, wallet: WALLET, otherWallet: OTHER_WALLET, tag: TAG }
     );
-    steps.push({ name: 'seeded labeled address/tx/output records', passed: true });
+    steps.push({ name: 'seeded labeled address/tx/output records (with wallet/tag vocabulary)', passed: true });
+
+    // Reload once so the page's live queries pick up the dynamically-imported
+    // writes (records, tag/wallet vocabulary) before asserting on the UI.
+    await page.reload({ waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
 
     // ── Click the BIP-329 export button and capture the download ────────────
     const exportButton = page.getByTestId('button-export-bip329');
@@ -216,6 +255,55 @@ async function main() {
       throw new Error(`output line wrong or missing: ${JSON.stringify(outLine)}`);
     }
     steps.push({ name: 'exported JSONL contains addr/tx/output labels (spendable round-trips)', passed: true });
+
+    // ── Filter controls: live match count tracks every dimension ────────────
+    await waitForMatchCount(page, 3);
+    steps.push({ name: 'live match count starts at 3 (unfiltered)', passed: true });
+
+    await pickSelectOption(page, 'select-bip329-type', 'Addresses');
+    await waitForMatchCount(page, 1);
+    await pickSelectOption(page, 'select-bip329-type', 'UTXOs (inputs / outputs)');
+    await waitForMatchCount(page, 1);
+    await pickSelectOption(page, 'select-bip329-type', 'Transactions');
+    await waitForMatchCount(page, 1);
+    await pickSelectOption(page, 'select-bip329-type', 'All Types');
+    await waitForMatchCount(page, 3);
+    steps.push({ name: 'type filter narrows the count (address / utxo / transaction)', passed: true });
+
+    await pickSelectOption(page, 'select-bip329-tag', TAG);
+    await waitForMatchCount(page, 2);
+    await pickSelectOption(page, 'select-bip329-tag', 'All Tags');
+    await waitForMatchCount(page, 3);
+    steps.push({ name: 'tag filter narrows the count', passed: true });
+
+    await pickSelectOption(page, 'select-bip329-wallet', WALLET);
+    await waitForMatchCount(page, 2);
+    await pickSelectOption(page, 'select-bip329-wallet', 'All Wallets');
+    await waitForMatchCount(page, 3);
+    steps.push({ name: 'wallet filter narrows the count', passed: true });
+
+    await page.getByTestId('input-bip329-search').fill('export check output');
+    await waitForMatchCount(page, 1);
+    steps.push({ name: 'search filter narrows the count (debounced)', passed: true });
+
+    // ── Filtered export downloads only the matching lines ───────────────────
+    const filteredDownloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await exportButton.click();
+    const filteredDownload = await filteredDownloadPromise;
+    const filteredContent = await readFile(await filteredDownload.path(), 'utf8');
+    const filteredLines = filteredContent
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+    if (filteredLines.length !== 1 || filteredLines[0].ref !== OUTPOINT || filteredLines[0].label !== OUTPUT_LABEL) {
+      throw new Error(`filtered export wrong: ${JSON.stringify(filteredLines)}`);
+    }
+    steps.push({ name: 'filtered export downloads only the matching label', passed: true });
+
+    // ── Clear filters restores the full set ─────────────────────────────────
+    await page.getByTestId('button-bip329-clear-filters').click();
+    await waitForMatchCount(page, 3);
+    steps.push({ name: 'clear filters restores the unfiltered count', passed: true });
 
     console.log('\n[bip329-export-browser] all steps passed:');
     for (const s of steps) console.log(`  ✓ ${s.name}`);

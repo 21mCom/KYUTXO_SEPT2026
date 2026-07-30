@@ -183,3 +183,70 @@ export function buildBip329Jsonl(records: Bip329ExportableRecord[]): string {
   if (lines.length === 0) return '';
   return lines.map(line => JSON.stringify(line)).join('\n') + '\n';
 }
+
+// ---------------------------------------------------------------------------
+// Export filters: free-text search / record kind / tag / wallet
+// ---------------------------------------------------------------------------
+
+// The record fields the export filter can match on, beyond what a BIP-329 line
+// itself needs. `tags`/`walletName` are optional so tests can still use
+// minimal rows; full records-table rows satisfy this interface directly.
+export interface Bip329FilterableRecord extends Bip329ExportableRecord {
+  tags?: string[];
+  walletName?: string;
+}
+
+// User-facing grouping of the BIP-329 line types: 'utxo' covers the
+// input/output lines (txid:vout refs), matching how the app talks about UTXOs
+// everywhere else.
+export type Bip329ExportKind = 'address' | 'transaction' | 'utxo';
+
+export interface Bip329ExportFilter {
+  // Case-insensitive substring matched against the label, ref, and notes.
+  search?: string;
+  // 'all' (or undefined) keeps every exportable line.
+  kind?: Bip329ExportKind | 'all';
+  // Single tag name; records match when they carry this tag.
+  tag?: string;
+  // Exact wallet name match.
+  walletName?: string;
+}
+
+export function bip329LineKind(line: Bip329Line): Bip329ExportKind {
+  if (line.type === 'addr') return 'address';
+  if (line.type === 'tx') return 'transaction';
+  return 'utxo'; // 'input' | 'output'
+}
+
+// Decide whether one record (and the BIP-329 line it produced) survives the
+// filter. Call recordToBip329Line first and skip the record entirely when it
+// returns null — a record with no exportable line can never match.
+export function matchesBip329ExportFilter(
+  record: Bip329FilterableRecord,
+  line: Bip329Line,
+  filter?: Bip329ExportFilter
+): boolean {
+  if (!filter) return true;
+
+  if (filter.kind && filter.kind !== 'all' && bip329LineKind(line) !== filter.kind) {
+    return false;
+  }
+
+  if (filter.walletName && record.walletName !== filter.walletName) {
+    return false;
+  }
+
+  if (filter.tag && !(record.tags ?? []).includes(filter.tag)) {
+    return false;
+  }
+
+  const search = (filter.search ?? '').trim().toLowerCase();
+  if (search) {
+    const haystacks = [line.label, line.ref, record.notes ?? ''];
+    if (!haystacks.some(h => h.toLowerCase().includes(search))) {
+      return false;
+    }
+  }
+
+  return true;
+}

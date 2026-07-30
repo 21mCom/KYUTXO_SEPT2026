@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { getActivityBus } from "@/lib/activity-bus";
-import { Download, Lock, FileJson, AlertCircle, AlertTriangle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip, Tag } from "lucide-react";
+import { Download, Lock, FileJson, AlertCircle, AlertTriangle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip, Tag, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +35,11 @@ import { countAddressSyncState } from "@/lib/data/address-sync-crud";
 import { countUtxoLineage, countCustodySegments, countLineageSnapshots } from "@/lib/data/lineage-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { exportBackup, estimateExportBytes } from "@/lib/backup/export";
-import { recordToBip329Line, type Bip329Line } from "@/lib/bip329";
+import { recordToBip329Line, matchesBip329ExportFilter, type Bip329Line, type Bip329ExportFilter, type Bip329ExportKind } from "@/lib/bip329";
+import { useTags } from "@/hooks/use-tags";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { evaluateDiskSpace } from "@/lib/backup/restore";
 import {
   MemorySink,
@@ -122,6 +133,58 @@ export default function ExportPage() {
   // export is paused and the user is asked to free space or continue anyway.
   const [diskWarning, setDiskWarning] = useState<{ requiredBytes: number; freeBytes: number } | null>(null);
   const [exportingLabels, setExportingLabels] = useState(false);
+
+  // BIP-329 label export filters. Same vocabulary as the UTXOs page filters:
+  // single-select type/tag/wallet dropdowns plus a free-text search.
+  const [labelSearch, setLabelSearch] = useState("");
+  const [debouncedLabelSearch] = useDebouncedValue(labelSearch, 300);
+  const [labelKindFilter, setLabelKindFilter] = useState<"all" | Bip329ExportKind>("all");
+  const [labelTagFilter, setLabelTagFilter] = useState("all");
+  const [labelWalletFilter, setLabelWalletFilter] = useState("all");
+  const [labelMatchCount, setLabelMatchCount] = useState<number | null>(null);
+  // Monotonic run token so a superseded count pass can never overwrite the
+  // count of a newer filter (cursor iteration is not abortable mid-pass).
+  const labelCountRunRef = useRef(0);
+  const { tags } = useTags();
+  const { walletNames } = useWalletNames();
+  // Re-count when records change (debounced so a bulk import doesn't trigger a
+  // full-table count pass per batch).
+  const recordsChangeSignal = useDbChangeSignal(['records'], 500);
+
+  const labelFilter = useMemo<Bip329ExportFilter>(() => ({
+    search: debouncedLabelSearch,
+    kind: labelKindFilter,
+    tag: labelTagFilter === "all" ? undefined : labelTagFilter,
+    walletName: labelWalletFilter === "all" ? undefined : labelWalletFilter,
+  }), [debouncedLabelSearch, labelKindFilter, labelTagFilter, labelWalletFilter]);
+  const labelFiltersActive =
+    debouncedLabelSearch.trim() !== "" ||
+    labelKindFilter !== "all" ||
+    labelTagFilter !== "all" ||
+    labelWalletFilter !== "all";
+
+  // Live match count: stream the records table with the same cursor iteration
+  // the export itself uses, counting lines that survive the current filter.
+  // Cursor iteration yields between rows, so even a large vault stays
+  // responsive; the run token guards the setter against superseded passes.
+  useEffect(() => {
+    const runId = ++labelCountRunRef.current;
+    setLabelMatchCount(null);
+    let cancelled = false;
+    (async () => {
+      let matched = 0;
+      await eachRecord((record) => {
+        const line = recordToBip329Line(record);
+        if (line && matchesBip329ExportFilter(record, line, labelFilter)) matched++;
+      });
+      if (!cancelled && labelCountRunRef.current === runId) {
+        setLabelMatchCount(matched);
+      }
+    })().catch((error) => {
+      console.error("Failed to count matching BIP-329 labels:", error);
+    });
+    return () => { cancelled = true; };
+  }, [labelFilter, recordsChangeSignal]);
   // When the user chooses "Export Anyway", this ref skips the disk check on the
   // re-triggered export so we don't loop back into the same warning.
   const bypassDiskCheckRef = useRef(false);
@@ -407,22 +470,43 @@ export default function ExportPage() {
   };
 
   // BIP-329 label export: stream every address/transaction record through the
-  // record -> BIP-329 line converter and download the result as a .jsonl file.
-  // Iterates the table with a Dexie cursor (instead of loading all records into
-  // an array) so only the label lines themselves are held in memory.
+  // record -> BIP-329 line converter, keep only the lines that survive the
+  // current filter, and download the result as a .jsonl file. Iterates the
+  // table with a Dexie cursor (instead of loading all records into an array)
+  // so only the label lines themselves are held in memory.
   const handleExportBip329 = async () => {
     setExportingLabels(true);
     try {
+      // Build the predicate from the IMMEDIATE control values, not labelFilter:
+      // labelFilter's search is debounced (300ms) for the live count, so a user
+      // who types — or clears — a search and clicks Export inside that window
+      // would otherwise get a file filtered by the stale previous query.
+      const exportFilter: Bip329ExportFilter = {
+        search: labelSearch,
+        kind: labelKindFilter,
+        tag: labelTagFilter === "all" ? undefined : labelTagFilter,
+        walletName: labelWalletFilter === "all" ? undefined : labelWalletFilter,
+      };
+      const exportFiltersActive =
+        labelSearch.trim() !== "" ||
+        labelKindFilter !== "all" ||
+        labelTagFilter !== "all" ||
+        labelWalletFilter !== "all";
+
       const lines: string[] = [];
       await eachRecord((record) => {
         const line: Bip329Line | null = recordToBip329Line(record);
-        if (line) lines.push(JSON.stringify(line));
+        if (line && matchesBip329ExportFilter(record, line, exportFilter)) {
+          lines.push(JSON.stringify(line));
+        }
       });
 
       if (lines.length === 0) {
         toast({
           title: "No Labels To Export",
-          description: "No labeled addresses, transactions, or outputs were found to export.",
+          description: exportFiltersActive
+            ? "No labeled addresses, transactions, or outputs match the current filters. Adjust or clear the filters and try again."
+            : "No labeled addresses, transactions, or outputs were found to export.",
         });
         return;
       }
@@ -606,6 +690,94 @@ export default function ExportPage() {
                 The exported file contains unencrypted addresses, transaction IDs, and labels. Store it securely.
               </AlertDescription>
             </Alert>
+
+            <div className="space-y-3 p-4 border rounded-lg bg-muted/50">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Filter className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">Filter Labels (optional)</span>
+                </div>
+                {labelFiltersActive && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => {
+                      setLabelSearch("");
+                      setLabelKindFilter("all");
+                      setLabelTagFilter("all");
+                      setLabelWalletFilter("all");
+                    }}
+                    data-testid="button-bip329-clear-filters"
+                  >
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="bip329-search">Search</Label>
+                  <Input
+                    id="bip329-search"
+                    value={labelSearch}
+                    onChange={(e) => setLabelSearch(e.target.value)}
+                    placeholder="Label, address, txid, or notes…"
+                    data-testid="input-bip329-search"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Type</Label>
+                  <Select
+                    value={labelKindFilter}
+                    onValueChange={(v) => setLabelKindFilter(v as "all" | Bip329ExportKind)}
+                  >
+                    <SelectTrigger data-testid="select-bip329-type">
+                      <SelectValue placeholder="All Types" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Types</SelectItem>
+                      <SelectItem value="address">Addresses</SelectItem>
+                      <SelectItem value="transaction">Transactions</SelectItem>
+                      <SelectItem value="utxo">UTXOs (inputs / outputs)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Tag</Label>
+                  <Select value={labelTagFilter} onValueChange={setLabelTagFilter}>
+                    <SelectTrigger data-testid="select-bip329-tag">
+                      <SelectValue placeholder="All Tags" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Tags</SelectItem>
+                      {tags.map((tag) => (
+                        <SelectItem key={tag.name} value={tag.name}>{tag.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Wallet</Label>
+                  <Select value={labelWalletFilter} onValueChange={setLabelWalletFilter}>
+                    <SelectTrigger data-testid="select-bip329-wallet">
+                      <SelectValue placeholder="All Wallets" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Wallets</SelectItem>
+                      {walletNames.map((wallet) => (
+                        <SelectItem key={wallet.name} value={wallet.name}>{wallet.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground" data-testid="text-bip329-match-count">
+                {labelMatchCount === null
+                  ? "Counting matching labels…"
+                  : `${labelMatchCount} label${labelMatchCount === 1 ? "" : "s"} will be exported.`}
+              </p>
+            </div>
+
             <Button
               className="w-full"
               variant="outline"
