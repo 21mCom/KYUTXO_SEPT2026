@@ -37,23 +37,30 @@ import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import {
   bulkCreateRecords,
   clearAllRecords,
+  getRecordsByInputStrings,
   type CreateRecordData,
 } from "@/lib/data/record-crud";
 import {
   bulkAddAttachments,
   clearAttachments,
+  getAllAttachments,
   type CreateAttachmentData,
 } from "@/lib/data/attachments-crud";
 import {
   bulkAddParticipants,
+  bulkPutParticipants,
   bulkAddTransactions,
   clearParticipants,
   clearTransactions,
+  getTransactionsByTxids,
+  getParticipantsByTxids,
+  updateTransaction,
   type CreateTransactionData,
 } from "@/lib/data/transaction-crud";
 import {
   bulkAddAddressSyncState,
   clearAddressSyncState,
+  getAllAddressSyncState,
   type CreateAddressSyncStateData,
 } from "@/lib/data/address-sync-crud";
 import {
@@ -63,6 +70,9 @@ import {
   clearUtxoLineage,
   clearCustodySegments,
   clearLineageSnapshots,
+  getAllUtxoLineage,
+  getExistingSegmentIds,
+  getExistingSnapshotIds,
 } from "@/lib/data/lineage-crud";
 import type {
   TransactionParticipant,
@@ -71,7 +81,15 @@ import type {
   LineageSnapshot,
 } from "@/lib/database";
 import { clearInlineTables, restoreInlineTables } from "./inline-tables";
-import { mergeDuplicateTransactionsByTxid } from "./legacy-restore";
+import {
+  mergeDuplicateTransactionsByTxid,
+  computeTransactionEnrichment,
+  computeParticipantEnrichment,
+  participantKey,
+  participantMatchKey,
+  type RestoreMode,
+} from "./legacy-restore";
+import { lineageIdentity } from "./legacy-restore-misc";
 
 // Thrown when a restore is cancelled AFTER the destructive clear but the vault
 // could NOT be reset to a clean state. The vault is then in an unknown partial
@@ -184,8 +202,19 @@ export interface RestoreOptions {
   source: AsyncIterable<Uint8Array>;
   password?: string;
   attachmentWriter: AttachmentFileWriter;
+  // "replace" (default): clear the whole vault first, then restore everything.
+  // "merge": NEVER clears — backup rows are added alongside existing data, with
+  // per-table de-duplication by each table's natural key (records by
+  // inputString, transactions by txid, addressSyncState by address, lineage
+  // tables by their natural keys, attachments by objectStoragePath, inline
+  // tables via restoreInlineTables(data, "merge")). Colliding transactions and
+  // participants ENRICH the live row's missing fields instead of duplicating it.
+  restoreMode?: RestoreMode;
   clearInline?: () => Promise<void>;
-  restoreInline?: (data: Record<string, unknown>) => Promise<void>;
+  restoreInline?: (
+    data: Record<string, unknown>,
+    restoreMode: RestoreMode,
+  ) => Promise<void>;
   onProgress?: (p: RestoreProgress) => void;
   signal?: AbortSignal;
 }
@@ -241,8 +270,28 @@ const remap = (idMap: Map<number, number>, oldId: unknown): number | undefined =
 };
 
 export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResult> {
+  const restoreMode: RestoreMode = opts.restoreMode ?? "replace";
+  const isMerge = restoreMode === "merge";
   const clearInlineFn = opts.clearInline ?? clearInlineTables;
   const restoreInlineFn = opts.restoreInline ?? restoreInlineTables;
+
+  // Merge-mode de-dup state, loaded lazily on the first batch of each table so
+  // a replace restore (or a merge without that table) pays no cost. Keys added
+  // during the restore are tracked too so the incoming stream never duplicates
+  // itself across batches.
+  let existingAttachmentKeys: Set<string> | null = null;
+  let existingSyncAddresses: Set<string> | null = null;
+  let existingLineageKeys: Set<string> | null = null;
+  let existingSegmentIds: Set<string> | null = null;
+  let existingSnapshotIds: Set<string> | null = null;
+  // Participants added during this merge (exact keys), so the incoming set
+  // never duplicates itself across batches.
+  const addedParticipantKeys = new Set<string>();
+  // Restore-wide inputString → live record id map: seeded per batch from the
+  // DB and extended after every successful create, so a record identity that
+  // repeats in a LATER streamed batch maps to the already-inserted row instead
+  // of creating a duplicate with a diverging id for dependent rows.
+  const mergedRecordIdByInputString = new Map<string, number>();
 
   let manifest: BackupManifest | null = null;
   // Set synchronously when the manifest entry's header is reached. onEntry is
@@ -390,8 +439,57 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   async function handleBatch(table: StreamedTable, rows: any[]): Promise<void> {
     throwIfAborted();
     if (table === "records") {
-      const oldIds = rows.map((r) => r.id);
-      const payload: CreateRecordData[] = rows.map(({ id, ...rest }) => rest as CreateRecordData);
+      // Merge mode: skip records whose `inputString` already exists, mapping
+      // the backup id to the EXISTING live id so dependent rows (attachments,
+      // participants, addressSyncState) still link correctly. Mirrors the
+      // legacy merge path's de-dup key.
+      let toCreate = rows;
+      // Same-batch duplicates: backup ids whose row was skipped because an
+      // EARLIER row in this batch carries the same inputString; they map to
+      // that first row's eventual new id once the batch insert completes.
+      const deferredIdLinks: Array<{ oldId: number; index: number }> = [];
+      if (isMerge) {
+        // Only hit the DB for identities not already known from earlier
+        // batches (live rows queried before, or rows this merge created).
+        const unknown = rows
+          .map((r) => r.inputString)
+          .filter(
+            (s): s is string =>
+              typeof s === "string" && s !== "" && !mergedRecordIdByInputString.has(s),
+          );
+        if (unknown.length) {
+          const found = await getRecordsByInputStrings(unknown);
+          for (const r of found) {
+            if (typeof r.id === "number") {
+              mergedRecordIdByInputString.set(r.inputString, r.id);
+            }
+          }
+        }
+        toCreate = [];
+        // inputString → index in toCreate, so a duplicate identity WITHIN this
+        // batch collapses onto the first occurrence instead of inserting twice
+        // (records.inputString is indexed but NOT unique — nothing else stops it).
+        const pendingIndexByInput = new Map<string, number>();
+        for (const r of rows) {
+          const s = typeof r.inputString === "string" ? r.inputString : "";
+          const existingId = s ? mergedRecordIdByInputString.get(s) : undefined;
+          if (existingId !== undefined) {
+            if (typeof r.id === "number") idMap.set(r.id, existingId);
+            continue;
+          }
+          const pendingIndex = s ? pendingIndexByInput.get(s) : undefined;
+          if (pendingIndex !== undefined) {
+            if (typeof r.id === "number") {
+              deferredIdLinks.push({ oldId: r.id, index: pendingIndex });
+            }
+            continue;
+          }
+          if (s) pendingIndexByInput.set(s, toCreate.length);
+          toCreate.push(r);
+        }
+      }
+      const oldIds = toCreate.map((r) => r.id);
+      const payload: CreateRecordData[] = toCreate.map(({ id, ...rest }) => rest as CreateRecordData);
       const newIds = await bulkCreateRecords(payload, {
         skipNotification: true,
         skipVocabularySync: true,
@@ -399,9 +497,31 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       for (let i = 0; i < newIds.length; i++) {
         const o = oldIds[i];
         if (typeof o === "number") idMap.set(o, newIds[i]);
+        if (isMerge) {
+          const s = toCreate[i]?.inputString;
+          if (typeof s === "string" && s !== "" && !mergedRecordIdByInputString.has(s)) {
+            mergedRecordIdByInputString.set(s, newIds[i]);
+          }
+        }
+      }
+      // Same-batch duplicates now resolve to the first occurrence's new id.
+      for (const link of deferredIdLinks) {
+        idMap.set(link.oldId, newIds[link.index]);
       }
       counts.records += newIds.length;
     } else if (table === "attachments") {
+      // Merge mode: de-dup by `objectStoragePath` (sha256-derived, unique per
+      // stored file), falling back to `recordId:filename` — same identity key
+      // as the legacy merge path. Loaded once, then extended as rows are added
+      // so the incoming stream never duplicates itself across batches.
+      if (isMerge && existingAttachmentKeys === null) {
+        existingAttachmentKeys = new Set<string>();
+        for (const att of await getAllAttachments()) {
+          existingAttachmentKeys.add(
+            att.objectStoragePath || `${att.recordId}:${att.filename}`,
+          );
+        }
+      }
       const out: CreateAttachmentData[] = [];
       for (const a of rows) {
         const { id, ...d } = a;
@@ -417,21 +537,98 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
           }
           continue;
         }
+        if (isMerge) {
+          const attKey = d.objectStoragePath || `${recordId}:${d.filename}`;
+          if (existingAttachmentKeys!.has(attKey)) continue;
+          existingAttachmentKeys!.add(attKey);
+        }
         out.push({ ...d, recordId } as CreateAttachmentData);
       }
       if (out.length) await bulkAddAttachments(out, { skipNotification: true });
       counts.attachments += out.length;
     } else if (table === "transactionParticipants") {
-      const out = rows.map(({ id, ...d }) => ({
+      let incoming = rows;
+      const toEnrichById = new Map<number, TransactionParticipant>();
+      if (isMerge) {
+        // Merge mode: a participant's transaction may already exist live (the
+        // participants stream BEFORE blockchainTransactions, so any live
+        // participant for a batch txid predates this restore). Match each
+        // backup participant to its live counterpart (outpoint for inputs /
+        // vout for outputs, falling back to the exact key): a match ENRICHES
+        // the live row's missing fields instead of duplicating it; unmatched
+        // rows are added, de-duped against the incoming stream itself.
+        const batchTxids = Array.from(
+          new Set(
+            rows.map((p) => p.txid).filter((t): t is string => typeof t === "string" && t !== ""),
+          ),
+        );
+        const liveByMatchKey = new Map<string, TransactionParticipant>();
+        const liveByExactKey = new Map<string, TransactionParticipant>();
+        if (batchTxids.length) {
+          for (const lp of await getParticipantsByTxids(batchTxids)) {
+            if (!liveByExactKey.has(participantKey(lp))) {
+              liveByExactKey.set(participantKey(lp), lp);
+            }
+            const mk = participantMatchKey(lp);
+            if (mk && !liveByMatchKey.has(mk)) liveByMatchKey.set(mk, lp);
+          }
+        }
+        incoming = [];
+        for (const p of rows) {
+          const remappedRecordId = remap(idMap, p.recordId);
+          const mk = participantMatchKey(p);
+          const liveMatch =
+            (mk ? liveByMatchKey.get(mk) : undefined) ??
+            liveByExactKey.get(participantKey(p));
+          if (liveMatch && typeof liveMatch.id === "number") {
+            const existing = toEnrichById.get(liveMatch.id) ?? liveMatch;
+            const changes = computeParticipantEnrichment(existing, {
+              ...p,
+              recordId: remappedRecordId,
+            });
+            if (Object.keys(changes).length > 0) {
+              toEnrichById.set(liveMatch.id, { ...existing, ...changes });
+            }
+            continue;
+          }
+          const key = participantKey(p);
+          if (addedParticipantKeys.has(key)) continue;
+          addedParticipantKeys.add(key);
+          incoming.push(p);
+        }
+      }
+      const out = incoming.map(({ id, ...d }) => ({
         ...d,
         recordId: remap(idMap, d.recordId),
       }));
       if (out.length) {
         await bulkAddParticipants(out as TransactionParticipant[], { skipNotification: true });
       }
+      if (toEnrichById.size > 0) {
+        await bulkPutParticipants(Array.from(toEnrichById.values()), {
+          skipNotification: true,
+        });
+      }
       counts.transactionParticipants += out.length;
     } else if (table === "addressSyncState") {
-      const out = rows.map(({ id, ...d }) => ({
+      // The `address` index is unique, so in merge mode rows whose address is
+      // already present (or repeated within the stream) must be skipped or the
+      // bulk insert would abort the whole restore.
+      if (isMerge && existingSyncAddresses === null) {
+        existingSyncAddresses = new Set<string>();
+        for (const s of await getAllAddressSyncState()) {
+          existingSyncAddresses.add(s.address);
+        }
+      }
+      let incoming = rows;
+      if (isMerge) {
+        incoming = rows.filter((s) => {
+          if (!s.address || existingSyncAddresses!.has(s.address)) return false;
+          existingSyncAddresses!.add(s.address);
+          return true;
+        });
+      }
+      const out = incoming.map(({ id, ...d }) => ({
         ...d,
         recordId: remap(idMap, d.recordId),
       }));
@@ -442,33 +639,103 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       }
       counts.addressSyncState += out.length;
     } else if (table === "blockchainTransactions") {
-      // The v3 restore always clears the vault first (see the manifest handler),
-      // so a same-txid collision with an EXISTING row can never happen here — the
-      // data-loss class fixed for the merge path cannot recur. A backup exported
-      // from KYUTXO's unique-`txid` table also never repeats a txid. Even so,
-      // defensively collapse any duplicate txids in this batch via enrichment so
-      // a malformed/hand-edited backup neither drops the richer row nor crashes
-      // on the unique-`txid` constraint when bulk-inserted.
-      const out = mergeDuplicateTransactionsByTxid(rows).map(
-        ({ id, ...d }) => d as CreateTransactionData,
-      );
+      // In replace mode the vault was cleared first, so a same-txid collision
+      // with an EXISTING row can never happen — but a malformed/hand-edited
+      // backup could still repeat a txid within the stream, so duplicates in
+      // the batch are always collapsed via enrichment (neither dropping the
+      // richer row nor crashing on the unique-`txid` constraint).
+      //
+      // In merge mode a batch txid may also collide with a LIVE row: the live
+      // transaction is kept, and fields that are missing/empty/placeholder on
+      // it are filled in from the backup row (never overwriting populated
+      // fields) — mirroring the legacy merge path's enrichment semantics.
+      const deduped = mergeDuplicateTransactionsByTxid(rows);
+      let toInsert = deduped;
+      if (isMerge) {
+        const batchTxids = deduped
+          .map((t) => t.txid)
+          .filter((t): t is string => typeof t === "string" && t !== "");
+        const liveByTxid = new Map<string, any>();
+        if (batchTxids.length) {
+          for (const tx of await getTransactionsByTxids(batchTxids)) {
+            liveByTxid.set(tx.txid, tx);
+          }
+        }
+        toInsert = [];
+        for (const tx of deduped) {
+          const live = typeof tx.txid === "string" ? liveByTxid.get(tx.txid) : undefined;
+          if (live && typeof live.id === "number") {
+            const changes = computeTransactionEnrichment(live, tx);
+            if (Object.keys(changes).length > 0) {
+              await updateTransaction(live.id, changes, { skipNotification: true });
+            }
+            continue;
+          }
+          toInsert.push(tx);
+        }
+      }
+      const out = toInsert.map(({ id, ...d }) => d as CreateTransactionData);
       if (out.length) await bulkAddTransactions(out, { skipNotification: true });
       counts.blockchainTransactions += out.length;
     } else if (table === "utxoLineage") {
       // No recordId: rows relink by txid/vout, so insert as-is (drop old id).
-      const out = rows.map(({ id, ...d }) => d as UtxoLineage);
+      // utxoLineage has no unique index, so in merge mode rows whose
+      // `lineageIdentity` already exists are skipped to avoid duplicate edges.
+      if (isMerge && existingLineageKeys === null) {
+        existingLineageKeys = new Set<string>();
+        for (const l of await getAllUtxoLineage()) {
+          existingLineageKeys.add(lineageIdentity(l));
+        }
+      }
+      let incoming = rows;
+      if (isMerge) {
+        incoming = rows.filter((d) => {
+          const key = lineageIdentity(d);
+          if (existingLineageKeys!.has(key)) return false;
+          existingLineageKeys!.add(key);
+          return true;
+        });
+      }
+      const out = incoming.map(({ id, ...d }) => d as UtxoLineage);
       if (out.length) await bulkAddUtxoLineage(out, { skipNotification: true });
       counts.utxoLineage += out.length;
     } else if (table === "custodySegments") {
-      // No recordId: rows relink by segmentId/txid, so insert as-is (drop old id).
-      const out = rows.map(({ id, ...d }) => d as CustodySegment);
+      // No recordId: rows relink by segmentId/txid, so insert as-is (drop old
+      // id). `segmentId` is a UNIQUE index, so in merge mode already-present
+      // segments are skipped or the insert would abort the restore mid-way.
+      if (isMerge && existingSegmentIds === null) {
+        existingSegmentIds = await getExistingSegmentIds();
+      }
+      let incoming = rows;
+      if (isMerge) {
+        incoming = rows.filter((d) => {
+          const segmentId = d.segmentId;
+          if (typeof segmentId === "string" && existingSegmentIds!.has(segmentId)) return false;
+          if (typeof segmentId === "string") existingSegmentIds!.add(segmentId);
+          return true;
+        });
+      }
+      const out = incoming.map(({ id, ...d }) => d as CustodySegment);
       if (out.length) await bulkAddCustodySegments(out, { skipNotification: true });
       counts.custodySegments += out.length;
     } else if (table === "lineageSnapshots") {
       // No recordId: selective-disclosure proof artifacts keyed by their own
-      // unique `snapshotId`, so insert as-is (drop old id). The v3 streaming
-      // restore always cleared the vault first, so these are appended cleanly.
-      const out = rows.map(({ id, ...d }) => d as LineageSnapshot);
+      // unique `snapshotId`, so insert as-is (drop old id). In merge mode
+      // already-present snapshotIds are skipped (unique index), mirroring
+      // custodySegments.
+      if (isMerge && existingSnapshotIds === null) {
+        existingSnapshotIds = await getExistingSnapshotIds();
+      }
+      let incoming = rows;
+      if (isMerge) {
+        incoming = rows.filter((d) => {
+          const snapshotId = d.snapshotId;
+          if (typeof snapshotId === "string" && existingSnapshotIds!.has(snapshotId)) return false;
+          if (typeof snapshotId === "string") existingSnapshotIds!.add(snapshotId);
+          return true;
+        });
+      }
+      const out = incoming.map(({ id, ...d }) => d as LineageSnapshot);
       if (out.length) await bulkAddLineageSnapshots(out, { skipNotification: true });
       counts.lineageSnapshots += out.length;
     }
@@ -507,29 +774,44 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
             // intact; check one last time on the point-of-no-return boundary.
             throwIfAborted();
 
-            // Snapshot the OLD vault's on-disk attachment files BEFORE writing
-            // anything, so a successful restore can later delete any prior-vault
-            // file the new vault does not reference. clearVault never touches
-            // files, so doing this just before it is equivalent and keeps the
-            // listing close to the point of no return. Best-effort: a listing
-            // failure simply disables the post-restore sweep.
-            const listFn = opts.attachmentWriter.list;
-            if (listFn) {
+            if (!isMerge) {
+              // Snapshot the OLD vault's on-disk attachment files BEFORE writing
+              // anything, so a successful restore can later delete any prior-vault
+              // file the new vault does not reference. clearVault never touches
+              // files, so doing this just before it is equivalent and keeps the
+              // listing close to the point of no return. Best-effort: a listing
+              // failure simply disables the post-restore sweep.
+              // (Merge mode never lists or sweeps: existing files stay referenced
+              // by the kept vault rows, so deleting "unwritten" old files would
+              // destroy live attachments.)
+              const listFn = opts.attachmentWriter.list;
+              if (listFn) {
+                try {
+                  const existing = await listFn.call(opts.attachmentWriter);
+                  preExistingFiles = new Set(existing.map(normalizeRelPath));
+                } catch {
+                  preExistingFiles = null;
+                }
+              }
+
+              opts.onProgress?.({ percent: 8, phase: "Clearing existing data..." });
+              await clearVault();
+              cleared = true;
+            } else {
+              // Merge mode: the vault is NEVER cleared. But any persisted
+              // Privacy Audit / Adversary View session was computed from the
+              // pre-merge vault, so it would show stale results about a vault
+              // that now contains more data. Best-effort, mirroring clearVault.
               try {
-                const existing = await listFn.call(opts.attachmentWriter);
-                preExistingFiles = new Set(existing.map(normalizeRelPath));
-              } catch {
-                preExistingFiles = null;
+                await clearAuditSession();
+              } catch (err) {
+                console.warn("Failed to clear saved privacy audit session:", err);
               }
             }
 
-            opts.onProgress?.({ percent: 8, phase: "Clearing existing data..." });
-            await clearVault();
-            cleared = true;
-
             opts.onProgress?.({ percent: 9, phase: "Restoring metadata..." });
             const inline = await parseInline(manifest, key);
-            await restoreInlineFn(inline);
+            await restoreInlineFn(inline, restoreMode);
           });
         }
 
@@ -652,6 +934,16 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     if (!cleared) {
       // Failed BEFORE the destructive clear: the existing vault was never
       // touched, so just propagate the raw error.
+      //
+      // MERGE-MODE FAILURE CONTRACT: `cleared` is always false in merge mode
+      // (merge never clears), so every merge failure lands here. Existing data
+      // is guaranteed intact, but rows already merged from the backup BEFORE
+      // the failure remain — merge is additive-idempotent, not atomic. Callers
+      // must surface that partial backup data may remain and invalidate
+      // dependent state (orphan check, audit results — the audit session was
+      // already cleared up-front). Re-running the same merge after fixing the
+      // cause is safe: every table de-dupes by its natural key, so already-
+      // merged rows are skipped, not duplicated.
       throw err;
     }
 

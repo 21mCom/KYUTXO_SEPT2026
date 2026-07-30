@@ -233,7 +233,7 @@ export async function restoreLegacyAttachments(
  * address+role disambiguate). The id is deliberately excluded — backup and live
  * rows for the same participant carry different autoincrement ids.
  */
-function participantKey(p: {
+export function participantKey(p: {
   txid?: string;
   role?: string;
   address?: string;
@@ -255,7 +255,7 @@ function participantKey(p: {
  * or an input without a resolved prevout) — those fall back to
  * {@link participantKey} matching instead.
  */
-function participantMatchKey(p: {
+export function participantMatchKey(p: {
   txid?: string;
   role?: string;
   vout?: number | null;

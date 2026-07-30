@@ -1018,7 +1018,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/pages/settings/restore-backup-flow.v3MergeDisabled.test.tsx"
+args = "npx vitest run client/src/pages/settings/restore-backup-flow.v3MergeEnabled.test.tsx client/src/lib/backup/v3-merge-restore.runtime.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

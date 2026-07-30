@@ -73,12 +73,6 @@ export function RestoreBackupFlow() {
   const [restoreProgress, setRestoreProgress] = useState(0);
   const [restoreMessage, setRestoreMessage] = useState("");
   const [backupInfo, setBackupInfo] = useState<{ encrypted: boolean; date: string; recordCount: number } | null>(null);
-  // True when the selected file is a v3 streaming backup. The v3 restore
-  // pipeline ALWAYS clears the vault and restores in replace mode — it has no
-  // merge implementation — so the "Merge with existing" choice must be disabled
-  // (and the mode forced to "replace") to keep the UI honest. Without this, a
-  // user picking "Merge" on a v3 backup would silently get their data wiped.
-  const [isV3Backup, setIsV3Backup] = useState(false);
   // Cancel support for the v3 streaming restore. `restoreCancellable` gates the
   // cancel button (the legacy whole-file path has no abort point). `clearedRef`
   // tracks the point of no return — once the destructive clear runs, cancelling
@@ -114,7 +108,6 @@ export function RestoreBackupFlow() {
     setRestoreStage("configure");
     setPrefPreview(null);
     setDiskSpacePreview(null);
-    setIsV3Backup(false);
 
     try {
       // v3 streaming backups: read ONLY the manifest (first ZIP entry) via the
@@ -122,10 +115,6 @@ export function RestoreBackupFlow() {
       // preview it. The v3 manifest carries counts/encrypted/date in plaintext.
       const manifestPeek = await peekManifest(blobChunks(file));
       if (isV3Manifest(manifestPeek)) {
-        // v3 backups only support replace mode (see isV3Backup above). Force
-        // the mode so a previously-selected "Merge" can't silently carry over.
-        setIsV3Backup(true);
-        setRestoreMode("replace");
         setBackupInfo({
           encrypted: manifestPeek.encrypted || false,
           date: manifestPeek.exportDate || "Unknown",
@@ -353,6 +342,9 @@ export function RestoreBackupFlow() {
 
     // Portable-prefs snapshot — declared here (outer scope) so the `undoInlinePrefs`
     // helper below is accessible from both the try block and the catch block.
+    // Whether the v3 streaming pipeline was entered — merge-failure messaging
+    // in the catch block only applies to the v3 path.
+    let wasV3Restore = false;
     // The actual value is populated inside the try, just before `restoreV3Backup`.
     type PortablePrefsSnapshot = {
       disableOrphanCheck?: boolean;
@@ -389,22 +381,7 @@ export function RestoreBackupFlow() {
       // JSON path below, which is left untouched for backward compatibility.
       const manifestPeek = await peekManifest(blobChunks(restoreFile));
       if (isV3Manifest(manifestPeek)) {
-        // Defence in depth: the v3 pipeline is replace-only (it always clears
-        // the vault). The UI disables the Merge option for v3 backups, but if a
-        // stale "merge" selection ever reaches this point, refuse loudly rather
-        // than silently wiping data the user asked to keep.
-        if (restoreMode === "merge") {
-          setIsRestoring(false);
-          setRestoreMessage("");
-          setRestoreProgress(0);
-          toast({
-            variant: "destructive",
-            title: "Merge not supported for this backup",
-            description:
-              "New-format backups can only replace all existing data. Select \"Replace all data\" to continue — no changes were made.",
-          });
-          return;
-        }
+        wasV3Restore = true;
         // Pre-flight disk-space check (Electron only). Attachment files are
         // stored UNCOMPRESSED in the v3 ZIP and are what a restore writes to
         // disk. v3 manifests record the exact total attachment bytes
@@ -475,11 +452,13 @@ export function RestoreBackupFlow() {
           source: blobChunks(restoreFile),
           password: restorePassword || undefined,
           attachmentWriter,
+          restoreMode,
           signal: controller.signal,
           onProgress: (p) => {
             // Once clearing begins, the existing vault is being destroyed; mark
-            // the point of no return so cancel prompts for confirmation.
-            if (p.percent >= 8) restoreClearedRef.current = true;
+            // the point of no return so cancel prompts for confirmation. A
+            // merge never clears, so there is no point of no return to mark.
+            if (restoreMode === "replace" && p.percent >= 8) restoreClearedRef.current = true;
             setRestoreProgress(p.percent);
             setRestoreMessage(p.phase);
           },
@@ -505,7 +484,11 @@ export function RestoreBackupFlow() {
         const v3LostMsg = result.counts.orphanedAttachmentFilesLost > 0
           ? ` Warning: ${result.counts.orphanedAttachmentFilesLost} of those file${result.counts.orphanedAttachmentFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${result.counts.orphanedAttachmentFilesLost !== 1 ? "their" : "its"} contents were lost.`
           : "";
-        const v3ReplacedMsg = backfill.orphansFound ? "" : " Existing data was replaced.";
+        const v3ReplacedMsg = backfill.orphansFound
+          ? ""
+          : restoreMode === "merge"
+            ? " Merged with existing data (duplicates skipped)."
+            : " Existing data was replaced.";
         toast({
           title: "Restore Successful",
           description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}.${v3ReplacedMsg}${backfill.suffix}${v3OrphanMsg}${v3LostMsg}`,
@@ -646,11 +629,22 @@ export function RestoreBackupFlow() {
             window.location.reload();
           }, 2000);
         } else {
-          // Cancelled before the clear: nothing was touched.
+          // Cancelled before the clear (or during a merge, which never clears).
+          // A merge may already have added some backup rows — none of the
+          // existing data was touched, but be honest that partial additions can
+          // remain.
           toast({
             title: "Restore Cancelled",
-            description: "No changes were made — your existing data is intact.",
+            description:
+              restoreMode === "merge"
+                ? "Merge cancelled. Your existing data is intact; any backup data already merged before the cancel remains."
+                : "No changes were made — your existing data is intact.",
           });
+          if (restoreMode === "merge") {
+            // Merged rows may include transaction records missing on-chain
+            // data; let the startup orphan check re-evaluate.
+            resetOrphanCheckGate();
+          }
         }
         return;
       }
@@ -697,7 +691,9 @@ export function RestoreBackupFlow() {
         const vaultWasCleared = error instanceof RestoreInterruptedError;
         const vaultStateMsg = vaultWasCleared
           ? "The vault was reset to empty, so no partial data was left behind."
-          : "Your existing data was left untouched.";
+          : restoreMode === "merge"
+            ? "Your existing data is intact, but some backup data may already have been merged before the failure. Running the merge again after fixing the issue will safely skip anything already merged."
+            : "Your existing data was left untouched.";
         toast({
           variant: "destructive",
           title: "Restore Failed — Couldn't Write Attachment",
@@ -722,7 +718,10 @@ export function RestoreBackupFlow() {
           }, 3000);
         } else {
           // Nothing was cleared — the existing vault is intact, so just reset the
-          // dialog. No reload (the data is unchanged) and no orphan-gate reset.
+          // dialog. No reload for replace (the data is unchanged). A failed MERGE
+          // may already have added backup rows (possibly transaction records
+          // missing on-chain data), so re-arm the startup orphan check.
+          if (restoreMode === "merge") resetOrphanCheckGate();
           setRestoreDialogOpen(false);
           setRestoreFile(null);
           setRestorePassword("");
@@ -762,14 +761,27 @@ export function RestoreBackupFlow() {
         return;
       }
       console.error("Restore failed:", error);
+      // A failed merge never clears existing data, but it is additive — rows
+      // already merged before the error remain. Be honest about that partial
+      // state instead of implying nothing happened; re-running the merge is
+      // safe (every table de-dupes by natural key).
+      const mergeFailureSuffix =
+        restoreMode === "merge" && wasV3Restore
+          ? " Your existing data is intact, but some backup data may already have been merged before the error. Running the merge again will safely skip anything already merged."
+          : "";
       toast({
         variant: "destructive",
         title: "Restore Failed",
         description: (error instanceof Error ? error.message : "Failed to restore backup") +
           (restoreClearedRef.current
             ? " Your existing vault data was already cleared before this error occurred — the vault may be empty or partially restored."
-            : ""),
+            : mergeFailureSuffix),
       });
+      if (restoreMode === "merge" && wasV3Restore) {
+        // Partially-merged rows can include transaction records missing
+        // on-chain data; let the startup orphan check re-evaluate.
+        resetOrphanCheckGate();
+      }
       setRestoreProgress(0);
       setRestoreMessage("");
     } finally {
@@ -826,7 +838,6 @@ export function RestoreBackupFlow() {
           setRestoreProgress(0);
           setRestoreMessage("");
           setBackupInfo(null);
-          setIsV3Backup(false);
           setRestoreStage("configure");
           setPrefPreview(null);
           setDiskSpacePreview(null);
@@ -868,7 +879,6 @@ export function RestoreBackupFlow() {
                     onClick={() => {
                       setRestoreFile(null);
                       setBackupInfo(null);
-                      setIsV3Backup(false);
                       if (fileInputRef.current) {
                         fileInputRef.current.value = "";
                       }
@@ -937,32 +947,19 @@ export function RestoreBackupFlow() {
                     </p>
                   </div>
                 </div>
-                <div className={`flex items-start space-x-3 p-3 rounded-lg border bg-background ${isV3Backup ? "opacity-60" : "hover-elevate"}`}>
+                <div className="flex items-start space-x-3 p-3 rounded-lg border bg-background hover-elevate">
                   <RadioGroupItem
                     value="merge"
                     id="mode-merge"
                     data-testid="radio-merge"
-                    disabled={isV3Backup}
                   />
                   <div className="space-y-1">
-                    <Label
-                      htmlFor="mode-merge"
-                      className={`font-medium ${isV3Backup ? "cursor-not-allowed" : "cursor-pointer"}`}
-                    >
+                    <Label htmlFor="mode-merge" className="font-medium cursor-pointer">
                       Merge with existing
                     </Label>
                     <p className="text-xs text-muted-foreground">
                       Add backup data to existing records, skipping duplicates
                     </p>
-                    {isV3Backup && (
-                      <p
-                        className="text-xs text-muted-foreground"
-                        data-testid="text-merge-unavailable-v3"
-                      >
-                        Merge isn't available for this backup — new-format backups
-                        always replace all existing data.
-                      </p>
-                    )}
                   </div>
                 </div>
               </RadioGroup>
@@ -1079,7 +1076,6 @@ export function RestoreBackupFlow() {
                   setRestoreProgress(0);
                   setRestoreMessage("");
                   setBackupInfo(null);
-                  setIsV3Backup(false);
                   setRestoreStage("configure");
                   setPrefPreview(null);
                   setDiskSpacePreview(null);

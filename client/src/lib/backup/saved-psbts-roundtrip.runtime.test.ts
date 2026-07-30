@@ -13,8 +13,8 @@
 //      psbtBase64 — nothing doubles and the local-only PSBT survives.
 //
 // The merge scenario drives the REAL zip bytes through `restoreV3Backup` with
-// the inline hooks the production merge path would use: a no-op `clearInline`
-// (merge never clears) and `restoreInlineTables(data, "merge")`, so the parsed
+// the real `restoreMode: "merge"` option (merge never clears; inline tables
+// restore via `restoreInlineTables(data, "merge")`), so the parsed
 // inline payload is exactly what the exporter wrote into the archive.
 //
 // The backup is UNENCRYPTED so no WebCrypto subtle support is required.
@@ -26,7 +26,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { db, type SavedPsbt } from "@/lib/database";
 import { exportBackup, type AttachmentFileIO } from "./export";
 import { restoreV3Backup, type AttachmentFileWriter } from "./restore";
-import { restoreInlineTables } from "./inline-tables";
 import { MemorySink, type BackupSink } from "./sink";
 import { blobChunks } from "./zip-stream";
 
@@ -242,11 +241,8 @@ describe("saved PSBTs backup round-trip", () => {
     await restoreV3Backup({
       source: blobChunks(blob),
       attachmentWriter,
-      // Merge semantics: never clear the inline tables, restore them in merge
-      // mode. This mirrors what a merge orchestration would pass while still
-      // feeding restoreInlineTables the REAL parsed zip payload.
-      clearInline: async () => {},
-      restoreInline: (data) => restoreInlineTables(data, "merge"),
+      // Real merge mode: never clears, restores inline tables in merge mode.
+      restoreMode: "merge",
     });
 
     const afterMerge = sortByBase64(stripId(await getAllSavedPsbts()));
@@ -261,8 +257,7 @@ describe("saved PSBTs backup round-trip", () => {
     await restoreV3Backup({
       source: blobChunks(blob),
       attachmentWriter,
-      clearInline: async () => {},
-      restoreInline: (data) => restoreInlineTables(data, "merge"),
+      restoreMode: "merge",
     });
     expect(sortByBase64(stripId(await getAllSavedPsbts()))).toEqual(beforeMerge);
   });

@@ -16,6 +16,12 @@
 
 import { db } from "@/lib/database";
 import {
+  getTags,
+  getCategories,
+  getOwners,
+  getWalletNames,
+  getSeedNames,
+  getWalletSoftware,
   restoreTag,
   restoreCategory,
   restoreOwner,
@@ -366,36 +372,113 @@ export async function restoreInlineTables(
   const arr = (k: string): any[] => (Array.isArray(data[k]) ? (data[k] as any[]) : []);
   const now = Date.now();
 
+  // Vocabulary tables de-dupe by `name` in merge mode (the raw restore*
+  // helpers are blind Dexie adds with no uniqueness constraint, so without
+  // this every re-merge would visibly duplicate tags/owners/etc). The seen-set
+  // also collapses duplicates within the incoming backup itself. Replace mode
+  // is unchanged: the orchestrator cleared these tables first, so every backup
+  // row is added verbatim.
+  const isMergeMode = restoreMode === "merge";
+  const vocabSeen = async (
+    existing: () => Promise<Array<{ name: string }>>,
+  ): Promise<Set<string>> => {
+    const seen = new Set<string>();
+    if (isMergeMode) for (const v of await existing()) seen.add(v.name);
+    return seen;
+  };
+  const vocabSkip = (seen: Set<string>, name: string): boolean => {
+    if (!isMergeMode) return false;
+    if (!name || seen.has(name)) return true;
+    seen.add(name);
+    return false;
+  };
+
+  const seenTags = await vocabSeen(getTags);
   for (const tag of arr("tags")) {
+    const name = tag.name || "";
+    if (vocabSkip(seenTags, name)) continue;
     await restoreTag({
-      name: tag.name || "",
+      name,
       color: tag.color || "#888888",
       createdAt: tag.createdAt || now,
     });
   }
+  const seenCategories = await vocabSeen(getCategories);
   for (const cat of arr("categories")) {
-    await restoreCategory({ name: cat.name || "", createdAt: cat.createdAt || now });
+    const name = cat.name || "";
+    if (vocabSkip(seenCategories, name)) continue;
+    await restoreCategory({ name, createdAt: cat.createdAt || now });
   }
+  const seenOwners = await vocabSeen(getOwners);
   for (const owner of arr("owners")) {
-    await restoreOwner({ name: owner.name || "", createdAt: owner.createdAt || now });
+    const name = owner.name || "";
+    if (vocabSkip(seenOwners, name)) continue;
+    await restoreOwner({ name, createdAt: owner.createdAt || now });
   }
+  const seenWalletNames = await vocabSeen(getWalletNames);
   for (const wn of arr("walletNames")) {
-    await restoreWalletName({ name: wn.name || "", createdAt: wn.createdAt || now });
+    const name = wn.name || "";
+    if (vocabSkip(seenWalletNames, name)) continue;
+    await restoreWalletName({ name, createdAt: wn.createdAt || now });
   }
+  const seenSeedNames = await vocabSeen(getSeedNames);
   for (const sn of arr("seedNames")) {
-    await restoreSeedName({ name: sn.name || "", createdAt: sn.createdAt || now });
+    const name = sn.name || "";
+    if (vocabSkip(seenSeedNames, name)) continue;
+    await restoreSeedName({ name, createdAt: sn.createdAt || now });
   }
+  const seenWalletSoftware = await vocabSeen(getWalletSoftware);
   for (const ws of arr("walletSoftware")) {
-    await restoreWalletSoftware({ name: ws.name || "", createdAt: ws.createdAt || now });
+    const name = ws.name || "";
+    if (vocabSkip(seenWalletSoftware, name)) continue;
+    await restoreWalletSoftware({ name, createdAt: ws.createdAt || now });
   }
 
+  // Merge mode: custom fields de-dupe by their unique `slug` (auto-derived
+  // from name), so re-merging the same backup never duplicates a field
+  // definition. Incoming duplicates within the backup itself are skipped too.
+  const existingFieldSlugs = new Set<string>();
+  if (restoreMode === "merge") {
+    for (const f of await getAllCustomFields()) existingFieldSlugs.add(f.slug);
+  }
   for (const field of arr("customFields")) {
     const { id, ...d } = field;
+    if (restoreMode === "merge") {
+      const slug = typeof d.slug === "string" ? d.slug : "";
+      if (slug && existingFieldSlugs.has(slug)) continue;
+      if (slug) existingFieldSlugs.add(slug);
+    }
     await addCustomField({ ...d, createdAt: d.createdAt || now }, { skipNotification: true });
   }
 
+  // Merge mode: derivation templates have no unique index, so de-dupe by their
+  // natural identity — fingerprint + scriptType + derivationPath + network —
+  // covering both existing rows and duplicates within the incoming backup.
+  const templateIdentity = (t: {
+    fingerprint?: string;
+    scriptType?: string;
+    derivationPath?: string;
+    network?: string;
+  }): string =>
+    [
+      t.fingerprint || "unknown",
+      t.scriptType || "P2WPKH",
+      t.derivationPath || "m/84'/0'/0'",
+      t.network || "mainnet",
+    ].join("|");
+  const existingTemplateKeys = new Set<string>();
+  if (restoreMode === "merge") {
+    for (const t of await getAllDerivationTemplates()) {
+      existingTemplateKeys.add(templateIdentity(t));
+    }
+  }
   for (const t of arr("derivationTemplates")) {
     const { id, ...d } = t;
+    if (restoreMode === "merge") {
+      const key = templateIdentity(d);
+      if (existingTemplateKeys.has(key)) continue;
+      existingTemplateKeys.add(key);
+    }
     await addDerivationTemplate(
       {
         fingerprint: d.fingerprint || "unknown",
@@ -425,11 +508,11 @@ export async function restoreInlineTables(
   // restoreEvidenceRows helper so the v3 and legacy paths can never diverge.
   await restoreEvidenceRows(arr("evidence"), arr("evidenceAttachments"), restoreMode);
 
-  // The v3 restore orchestrator always clears the vault first, so this runs in
-  // effective "replace" mode (every row added). Routed through the shared
-  // restorePriceDataRows helper so the v3 and legacy paths can never diverge in
-  // how price rows are de-duplicated.
-  await restorePriceDataRows(arr("priceData"), "replace");
+  // Routed through the shared restorePriceDataRows helper so the v3 and legacy
+  // paths can never diverge in how price rows are de-duplicated. In replace
+  // mode the orchestrator cleared the vault first, so every row is added; in
+  // merge mode the helper skips rows whose natural key already exists.
+  await restorePriceDataRows(arr("priceData"), restoreMode);
 
   await restoreNodeSettingsRows(arr("nodeSettings"));
   await restoreSettingsPreferences(arr("settings"));
