@@ -538,6 +538,21 @@ const FULL_SCAN_ROW_LIMIT = 2_000_000;
 const FULL_SCAN_BATCH = 5_000;
 
 /**
+ * A FILTERED recompute (recordIds/addresses) also reuses the streaming
+ * whole-vault scan when the requested set is large enough that per-batch
+ * anyOf lookups would cost more than one full pass — e.g. Database Doctor
+ * "recompute selected" over many thousands of rows, or a bulk re-sync's stats
+ * refresh. Both gates must hold:
+ *   - the request covers at least this fraction of the vault's addresses, and
+ *   - the request is at least `FILTERED_SCAN_MIN_REQUESTED` rows (so small
+ *     selections keep the cheap targeted path even in small vaults).
+ * Writes are still restricted to exactly the requested subset — only the
+ * stats *computation* is shared with the full-vault path.
+ */
+const FILTERED_SCAN_VAULT_FRACTION = 0.5;
+const FILTERED_SCAN_MIN_REQUESTED = 1_000;
+
+/**
  * Set-oriented full-vault stats computation: ONE streaming pass over the
  * transactionParticipants table plus ONE over blockchainTransactions, instead
  * of per-batch `anyOf(addresses)` index round-trips. On large vaults (tens of
@@ -760,9 +775,22 @@ export async function recomputeAddressStats(
   // below only does lookups + writes. Falls back to the batched per-address
   // computation when the vault is too large for the in-memory aggregation or
   // the scan was aborted (the loop's own abort check then returns cancelled).
+  // Large FILTERED recomputes reuse the same scan: when the requested set
+  // covers most of the vault, one streaming pass is cheaper than thousands of
+  // per-batch anyOf round-trips. Writes below remain scoped to the requested
+  // records (the batch iterator only yields those), so this changes only how
+  // the stats are computed, never which rows are written.
+  let useScan = fullRecompute;
+  if (!fullRecompute && total >= FILTERED_SCAN_MIN_REQUESTED) {
+    const vaultAddressCount = await db.records.where('type').equals('address').count();
+    if (vaultAddressCount > 0 && total >= vaultAddressCount * FILTERED_SCAN_VAULT_FRACTION) {
+      useScan = true;
+    }
+  }
+
   let precomputedStats: Awaited<ReturnType<typeof computeStatsForAllAddressesByScan>> = null;
   let precomputedSynced: Set<string> | null = null;
-  if (fullRecompute && !isAborted(options.signal)) {
+  if (useScan && !isAborted(options.signal)) {
     precomputedStats = await computeStatsForAllAddressesByScan(options.signal);
     if (precomputedStats && !isAborted(options.signal)) {
       const synced = new Set<string>();

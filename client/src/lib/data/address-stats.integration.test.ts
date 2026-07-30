@@ -1497,7 +1497,10 @@ describe("recomputeAddressStats full-vault scan fast path", () => {
     expect(unsynced.synced).toBe(false);
 
     // Scramble the cache, then run the BATCHED path (addresses filter) as the
-    // oracle and require an identical end state.
+    // oracle and require an identical end state. A single filtered call over
+    // ALL 1200 addresses would itself now take the scan fast path (it covers
+    // the whole vault and exceeds the requested-size floor), so run it in
+    // chunks below the floor to guarantee the per-batch anyOf path.
     await testDb.records.toCollection().modify((r) => {
       if (r.type === "address") {
         r.cachedBalanceSats = 123456;
@@ -1507,8 +1510,13 @@ describe("recomputeAddressStats full-vault scan fast path", () => {
         r.statsComputedAt = 1;
       }
     });
-    const batched = await recomputeAddressStats({ addresses: addrs, skipNotification: true });
-    expect(batched.cancelled).toBe(false);
+    for (let i = 0; i < addrs.length; i += 600) {
+      const batched = await recomputeAddressStats({
+        addresses: addrs.slice(i, i + 600),
+        skipNotification: true,
+      });
+      expect(batched.cancelled).toBe(false);
+    }
     const batchedSnap = cacheSnapshot(await testDb.records.orderBy("id").toArray());
 
     expect(fullSnap.length).toBe(batchedSnap.length);
@@ -1546,4 +1554,111 @@ describe("recomputeAddressStats full-vault scan fast path", () => {
     const rec = await testDb.records.where("inputString").equals("scan-addr-0").first();
     expect(rec?.cachedBalanceSats).toBe(1);
   });
+
+  // ── Filtered recomputes above the size threshold reuse the scan ────────────
+  //
+  // Database Doctor "recompute selected" and bulk re-sync refreshes pass
+  // recordIds/addresses. When the requested set covers most of the vault
+  // (≥50% and ≥1000 rows), the recompute must reuse the streaming scan for
+  // COMPUTATION while still WRITING only the requested subset.
+
+  /** Spy on participant-table where() calls to detect which read path ran. */
+  function spyParticipantIndexes() {
+    const indexes: unknown[] = [];
+    const orig = testDb.transactionParticipants.where.bind(testDb.transactionParticipants);
+    const spy = vi
+      .spyOn(testDb.transactionParticipants, "where")
+      .mockImplementation(((arg: any) => {
+        indexes.push(arg);
+        return orig(arg);
+      }) as any);
+    return { indexes, spy };
+  }
+
+  it("a large filtered recompute (≥50% of vault, ≥1000 rows) uses the scan path and writes only the requested subset", async () => {
+    const N = 1200;
+    await seedMixedVault(N);
+
+    // Full-recompute reference end-state.
+    await recomputeAddressStats({ skipNotification: true });
+    const fullSnap = cacheSnapshot(await testDb.records.orderBy("id").toArray());
+
+    // Scramble everything again.
+    await testDb.records.toCollection().modify((r) => {
+      if (r.type === "address") {
+        r.cachedBalanceSats = 123456;
+        r.cachedUtxoCount = 99;
+        r.cachedTxCount = 99;
+        r.cachedLastActivityTime = 1;
+        r.statsComputedAt = 1;
+      }
+    });
+
+    // Request all but the last 100 records → 1100/1200 ≈ 92% of the vault.
+    const requestedIds = Array.from({ length: N - 100 }, (_, i) => i + 1);
+    const { indexes, spy } = spyParticipantIndexes();
+    const res = await recomputeAddressStats({
+      recordIds: requestedIds,
+      skipNotification: true,
+    });
+    spy.mockRestore();
+    expect(res.cancelled).toBe(false);
+    expect(res.updated).toBe(requestedIds.length);
+
+    // The scan path streams the primary key (':id'); the per-batch path would
+    // have issued where('address').anyOf(...) lookups.
+    expect(indexes).toContain(":id");
+    expect(indexes).not.toContain("address");
+
+    // Requested rows match the full-recompute reference exactly...
+    const after = await testDb.records.orderBy("id").toArray();
+    const afterSnap = cacheSnapshot(after);
+    for (let i = 0; i < requestedIds.length; i++) {
+      expect(afterSnap[i]).toEqual(fullSnap[i]);
+    }
+    // ...and unrequested rows keep their scrambled cache (writes stayed scoped).
+    for (let i = requestedIds.length; i < N; i++) {
+      expect(after[i].cachedBalanceSats).toBe(123456);
+      expect(after[i].cachedUtxoCount).toBe(99);
+    }
+  }, 120_000);
+
+  it("a small filtered recompute keeps the targeted per-batch path", async () => {
+    await seedMixedVault(1200);
+    const { indexes, spy } = spyParticipantIndexes();
+    const res = await recomputeAddressStats({
+      recordIds: [1, 2, 5],
+      skipNotification: true,
+    });
+    spy.mockRestore();
+    expect(res.cancelled).toBe(false);
+    // Targeted anyOf lookups, no full-table primary-key stream.
+    expect(indexes).toContain("address");
+    expect(indexes).not.toContain(":id");
+  }, 60_000);
+
+  it("a large filtered recompute cancels cleanly, persisting only pre-abort batches", async () => {
+    const N = 1200;
+    await seedMixedVault(N);
+    const requestedIds = Array.from({ length: N }, (_, i) => i + 1);
+    const abort = new AbortController();
+    const progress: number[] = [];
+    const res = await recomputeAddressStats({
+      recordIds: requestedIds,
+      skipNotification: true,
+      batchSize: 100,
+      signal: abort.signal,
+      onProgress: (p) => {
+        progress.push(p.processed);
+        if (p.processed >= 100) abort.abort();
+      },
+    });
+    expect(res.cancelled).toBe(true);
+    expect(res.updated).toBeGreaterThan(0);
+    expect(res.updated).toBeLessThan(N);
+    // Progress reporting still worked and rows past the abort keep old values.
+    expect(progress[0]).toBe(0);
+    const untouched = await testDb.records.where("inputString").equals("scan-addr-1199").first();
+    expect(untouched?.cachedBalanceSats).toBe(1);
+  }, 60_000);
 });
