@@ -526,6 +526,161 @@ export async function computeStatsForAddresses(
 }
 
 /**
+ * Above this many combined participant + transaction rows the full-vault
+ * single-scan recompute falls back to the batched per-address path, so the
+ * in-memory aggregation can never balloon on an extreme vault. Well above the
+ * largest vaults seen in practice (30k addresses / 60k participants), while a
+ * vault past this point still completes correctly via the batched path.
+ */
+const FULL_SCAN_ROW_LIMIT = 2_000_000;
+
+/** Page size for the full-table streaming scans. */
+const FULL_SCAN_BATCH = 5_000;
+
+/**
+ * Set-oriented full-vault stats computation: ONE streaming pass over the
+ * transactionParticipants table plus ONE over blockchainTransactions, instead
+ * of per-batch `anyOf(addresses)` index round-trips. On large vaults (tens of
+ * thousands of addresses) this turns the one-time Balance-page backfill from
+ * minutes into seconds — the batched path issues 4+ Dexie queries per 100
+ * addresses (participants by address, spend inputs by outpoint, block times,
+ * sync states), while this pass reads each row exactly once.
+ *
+ * Semantically equivalent to running `computeStatsForAddresses` over every
+ * address: blank-address spend inputs (Electrum-synced rows carrying only
+ * prevTxid/prevVout) are attributed to the address that owns the spent output,
+ * so exact-mode spent detection sees them. Because the owned-outpoint map here
+ * is vault-wide (not per-batch), attribution is if anything more complete than
+ * the batched path.
+ *
+ * Returns null when the vault is too large for the in-memory aggregation
+ * (caller falls back to the batched path) or when the signal aborts mid-scan.
+ * Pure local read; never touches the network.
+ */
+async function computeStatsForAllAddressesByScan(
+  signal?: AbortSignal,
+): Promise<Map<string, { balanceSats: number; lastActivityTime: number; txCount: number; utxoCount: number }> | null> {
+  const [participantCount, txCount] = await Promise.all([
+    db.transactionParticipants.count(),
+    db.blockchainTransactions.count(),
+  ]);
+  if (participantCount + txCount > FULL_SCAN_ROW_LIMIT) return null;
+  if (isAborted(signal)) return null;
+
+  // Pass 1: stream every participant row once. Aggregate rows under their own
+  // address, remember who owns each outpoint, and buffer prevout-carrying
+  // inputs for post-scan attribution (their owning output may appear later in
+  // the scan than the input row does).
+  const addrAgg = new Map<string, AddressAgg>();
+  const ownerByOutpoint = new Map<string, string>();
+  const prevoutInputs: TransactionParticipant[] = [];
+  let lastPid = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (isAborted(signal)) return null;
+    const batch = await db.transactionParticipants
+      .where(':id')
+      .above(lastPid)
+      .limit(FULL_SCAN_BATCH)
+      .toArray();
+    if (batch.length === 0) break;
+    lastPid = batch[batch.length - 1].id!;
+
+    for (const p of batch) {
+      if (p.role === 'output' && p.vout !== undefined && p.vout !== null && p.address) {
+        ownerByOutpoint.set(`${p.txid}:${p.vout}`, p.address);
+      }
+      if (p.role === 'input' && p.prevTxid !== undefined && p.prevVout !== undefined) {
+        prevoutInputs.push(p);
+      }
+      if (!p.address) continue; // blank-address rows are attributed post-scan
+      let agg = addrAgg.get(p.address);
+      if (!agg) {
+        agg = { outputSats: 0, inputSats: 0, lastTxTime: 0, txids: new Set<string>(), outputs: [], inputs: [] };
+        addrAgg.set(p.address, agg);
+      }
+      if (p.role === 'output') {
+        agg.outputSats += p.amount;
+        agg.outputs.push(p);
+      } else {
+        agg.inputSats += p.amount;
+        agg.inputs.push(p);
+      }
+      agg.txids.add(p.txid);
+    }
+
+    await yieldToEventLoop();
+    if (batch.length < FULL_SCAN_BATCH) break;
+  }
+
+  // Attribute prevout spend inputs to the address that owns the spent output
+  // (unless the row already carries that address and was aggregated above).
+  // This is what makes blank-address Electrum spends reduce the owner's
+  // balance, mirroring computeStatsForAddresses' outpoint follow-up load.
+  let rowsSinceYield = 0;
+  for (const p of prevoutInputs) {
+    const owner = ownerByOutpoint.get(`${p.prevTxid}:${p.prevVout}`);
+    if (owner && owner !== p.address) {
+      const agg = addrAgg.get(owner);
+      if (agg) {
+        agg.inputs.push(p);
+        agg.inputSats += p.amount;
+        agg.txids.add(p.txid);
+      }
+    }
+    if (++rowsSinceYield >= FULL_SCAN_BATCH) {
+      rowsSinceYield = 0;
+      await yieldToEventLoop();
+      if (isAborted(signal)) return null;
+    }
+  }
+
+  // Pass 2: stream every transaction once for txid -> blockTime.
+  const txMap = new Map<string, number>();
+  let lastTid = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (isAborted(signal)) return null;
+    const batch = await db.blockchainTransactions
+      .where(':id')
+      .above(lastTid)
+      .limit(FULL_SCAN_BATCH)
+      .toArray();
+    if (batch.length === 0) break;
+    lastTid = batch[batch.length - 1].id!;
+    for (const tx of batch) txMap.set(tx.txid, tx.blockTime);
+    await yieldToEventLoop();
+    if (batch.length < FULL_SCAN_BATCH) break;
+  }
+
+  // Final fold: per-address UTXO stats + last activity, yielding periodically.
+  const out = new Map<string, { balanceSats: number; lastActivityTime: number; txCount: number; utxoCount: number }>();
+  const blockTimeOf = (txid: string) => txMap.get(txid) || 0;
+  let addrsSinceYield = 0;
+  for (const [address, agg] of Array.from(addrAgg.entries())) {
+    let lastTxTime = 0;
+    agg.txids.forEach((txid) => {
+      const t = blockTimeOf(txid);
+      if (t > lastTxTime) lastTxTime = t;
+    });
+    const utxoStats = computeUtxoStatsForAddress(agg.outputs, agg.inputs, blockTimeOf);
+    out.set(address, {
+      balanceSats: utxoStats.balanceSats,
+      lastActivityTime: lastTxTime,
+      txCount: agg.txids.size,
+      utxoCount: utxoStats.count,
+    });
+    if (++addrsSinceYield >= 500) {
+      addrsSinceYield = 0;
+      await yieldToEventLoop();
+      if (isAborted(signal)) return null;
+    }
+  }
+
+  return out;
+}
+
+/**
  * Load address records to recompute, paging through the [type+id] index so we
  * never hold the entire address table in memory at once.
  */
@@ -596,6 +751,26 @@ export async function recomputeAddressStats(
   const total = await countAddressRecords(options);
   options.onProgress?.({ processed: 0, total });
 
+  const fullRecompute =
+    !(options.recordIds && options.recordIds.length > 0) &&
+    !(options.addresses && options.addresses.length > 0);
+
+  // Full-vault recompute fast path: build the whole stats map (and the synced
+  // set) in a couple of streaming table scans up front, so the per-batch loop
+  // below only does lookups + writes. Falls back to the batched per-address
+  // computation when the vault is too large for the in-memory aggregation or
+  // the scan was aborted (the loop's own abort check then returns cancelled).
+  let precomputedStats: Awaited<ReturnType<typeof computeStatsForAllAddressesByScan>> = null;
+  let precomputedSynced: Set<string> | null = null;
+  if (fullRecompute && !isAborted(options.signal)) {
+    precomputedStats = await computeStatsForAllAddressesByScan(options.signal);
+    if (precomputedStats && !isAborted(options.signal)) {
+      const synced = new Set<string>();
+      await db.addressSyncState.each(s => { synced.add(s.address); });
+      precomputedSynced = synced;
+    }
+  }
+
   for await (const batch of iterateAddressRecordBatches(options)) {
     if (isAborted(options.signal)) {
       return { updated, cancelled: true };
@@ -603,16 +778,22 @@ export async function recomputeAddressStats(
     if (batch.length === 0) continue;
 
     const addressStrings = batch.map(b => b.inputString);
-    const statsByAddress = await computeStatsForAddresses(addressStrings, options.signal);
+    const statsByAddress =
+      precomputedStats ?? await computeStatsForAddresses(addressStrings, options.signal);
 
     // Determine which addresses have been synced (have transaction data fetched)
     // even when they currently have no participants, so we can distinguish a
     // genuine zero balance from "not synced".
-    const syncedSet = new Set<string>();
-    for (let i = 0; i < addressStrings.length; i += 500) {
-      const slice = addressStrings.slice(i, i + 500);
-      const states = await db.addressSyncState.where('address').anyOf(slice).toArray();
-      for (const s of states) syncedSet.add(s.address);
+    let syncedSet: Set<string>;
+    if (precomputedSynced) {
+      syncedSet = precomputedSynced;
+    } else {
+      syncedSet = new Set<string>();
+      for (let i = 0; i < addressStrings.length; i += 500) {
+        const slice = addressStrings.slice(i, i + 500);
+        const states = await db.addressSyncState.where('address').anyOf(slice).toArray();
+        for (const s of states) syncedSet.add(s.address);
+      }
     }
 
     const updates: Array<{ id: number; stats: AddressStatsCacheValues | null }> = [];
@@ -657,9 +838,6 @@ export async function recomputeAddressStats(
   // vault-wide behavior tally. Partial recomputes (sync, selection) leave the
   // tally to be refreshed lazily by the freshness fingerprint. Best-effort: a
   // tally failure must never fail the stats recompute itself.
-  const fullRecompute =
-    !(options.recordIds && options.recordIds.length > 0) &&
-    !(options.addresses && options.addresses.length > 0);
   if (fullRecompute && !isAborted(options.signal)) {
     try {
       await materializeBehaviorTally({ signal: options.signal });

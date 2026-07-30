@@ -1390,3 +1390,160 @@ describe("recomputeAddressStats UTXO-balance formula: balance is never negative"
     expect(rec?.cachedUtxoCount).toBe(0);
   });
 });
+
+// ── Full-vault scan fast path (set-oriented recompute) ───────────────────────
+//
+// An unfiltered recomputeAddressStats() takes the streaming full-table scan
+// path (computeStatsForAllAddressesByScan) instead of per-batch anyOf lookups.
+// These tests pin its equivalence with the batched per-address path — the
+// oracle every filtered recompute still uses — including blank-address prevout
+// spends and multi-write-batch progress/cancellation.
+
+describe("recomputeAddressStats full-vault scan fast path", () => {
+  function mkBlankSpendInput(spendTxid: string, prevTxid: string): TransactionParticipant {
+    // Electrum-shaped spend: blank address, outpoint only.
+    return {
+      txid: spendTxid,
+      role: "input",
+      address: "",
+      amount: 0,
+      recordId: 0,
+      prevTxid,
+      prevVout: 0,
+    } as unknown as TransactionParticipant;
+  }
+
+  async function seedMixedVault(n: number) {
+    // n addresses spanning multiple 500-record write batches:
+    //  - i % 4 === 0: two outputs, one blank-address spend of the first → 1 UTXO
+    //  - i % 4 === 1: one output, unspent → 1 UTXO
+    //  - i % 4 === 2: synced but no participants → genuine zero balance
+    //  - i % 4 === 3: unsynced, no participants → "not synced" reset
+    const addrs: string[] = [];
+    const recs: DbRecord[] = [];
+    const parts: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    const syncStates: AddressSyncState[] = [];
+    for (let i = 0; i < n; i++) {
+      const addr = `scan-addr-${i}`;
+      addrs.push(addr);
+      recs.push(mkAddr({ id: i + 1, inputString: addr, statsComputedAt: 1000, cachedBalanceSats: 1 }));
+      if (i % 4 === 0) {
+        // NOTE: the spend INPUT is inserted BEFORE the owner's outputs, so its
+        // primary key is LOWER — the scan must attribute it after the pass.
+        parts.push(mkBlankSpendInput(`scan-spend-${i}`, `scan-recv-${i}`));
+        parts.push(mkOutput(addr, `scan-recv-${i}`, 5000 + i));
+        parts.push({ ...mkOutput(addr, `scan-recv2-${i}`, 7000 + i), vout: 0 } as TransactionParticipant);
+        txs.push(mkTx(`scan-recv-${i}`, 100 + i), mkTx(`scan-recv2-${i}`, 200 + i), mkTx(`scan-spend-${i}`, 300 + i));
+        syncStates.push({ address: addr, recordId: i + 1, lastSyncedAt: 1 } as unknown as AddressSyncState);
+      } else if (i % 4 === 1) {
+        parts.push(mkOutput(addr, `scan-only-${i}`, 9000 + i));
+        txs.push(mkTx(`scan-only-${i}`, 150 + i));
+        syncStates.push({ address: addr, recordId: i + 1, lastSyncedAt: 1 } as unknown as AddressSyncState);
+      } else if (i % 4 === 2) {
+        syncStates.push({ address: addr, recordId: i + 1, lastSyncedAt: 1 } as unknown as AddressSyncState);
+      }
+      // i % 4 === 3: nothing — must be reset to "not synced".
+    }
+    for (let i = 0; i < recs.length; i += 500) await testDb.records.bulkAdd(recs.slice(i, i + 500));
+    for (let i = 0; i < parts.length; i += 500) await testDb.transactionParticipants.bulkAdd(parts.slice(i, i + 500));
+    for (let i = 0; i < txs.length; i += 500) await testDb.blockchainTransactions.bulkAdd(txs.slice(i, i + 500));
+    await testDb.addressSyncState.bulkAdd(syncStates);
+    return addrs;
+  }
+
+  function cacheSnapshot(recs: DbRecord[]) {
+    return recs.map((r) => ({
+      inputString: r.inputString,
+      cachedBalanceSats: r.cachedBalanceSats,
+      cachedUtxoCount: r.cachedUtxoCount,
+      cachedTxCount: r.cachedTxCount,
+      cachedLastActivityTime: r.cachedLastActivityTime,
+      synced: r.statsComputedAt != null,
+    }));
+  }
+
+  it("produces the same cached stats as the batched per-address path, including blank-address spends whose owner output has a higher primary key", async () => {
+    const N = 1200; // spans multiple 500-record write batches
+    const addrs = await seedMixedVault(N);
+
+    // Full recompute → scan fast path.
+    const progress: Array<{ processed: number; total: number }> = [];
+    const full = await recomputeAddressStats({
+      skipNotification: true,
+      onProgress: (p) => progress.push({ ...p }),
+    });
+    expect(full.cancelled).toBe(false);
+    expect(full.updated).toBe(N);
+    const fullSnap = cacheSnapshot(await testDb.records.orderBy("id").toArray());
+
+    // Progress must be monotonic and finish at the full address total.
+    expect(progress[0]).toEqual({ processed: 0, total: N });
+    for (let i = 1; i < progress.length; i++) {
+      expect(progress[i].processed).toBeGreaterThanOrEqual(progress[i - 1].processed);
+    }
+    expect(progress[progress.length - 1].processed).toBe(N);
+
+    // Spot-check the semantics directly: spender addresses lost their first
+    // output to the blank-address spend (1 UTXO left), unsynced rows reset.
+    const spender = fullSnap.find((r) => r.inputString === "scan-addr-0")!;
+    expect(spender.cachedUtxoCount).toBe(1);
+    expect(spender.cachedBalanceSats).toBe(7000);
+    expect(spender.cachedTxCount).toBe(3); // recv, recv2, spend tx
+    const zero = fullSnap.find((r) => r.inputString === "scan-addr-2")!;
+    expect(zero.synced).toBe(true);
+    expect(zero.cachedBalanceSats).toBe(0);
+    const unsynced = fullSnap.find((r) => r.inputString === "scan-addr-3")!;
+    expect(unsynced.synced).toBe(false);
+
+    // Scramble the cache, then run the BATCHED path (addresses filter) as the
+    // oracle and require an identical end state.
+    await testDb.records.toCollection().modify((r) => {
+      if (r.type === "address") {
+        r.cachedBalanceSats = 123456;
+        r.cachedUtxoCount = 99;
+        r.cachedTxCount = 99;
+        r.cachedLastActivityTime = 1;
+        r.statsComputedAt = 1;
+      }
+    });
+    const batched = await recomputeAddressStats({ addresses: addrs, skipNotification: true });
+    expect(batched.cancelled).toBe(false);
+    const batchedSnap = cacheSnapshot(await testDb.records.orderBy("id").toArray());
+
+    expect(fullSnap.length).toBe(batchedSnap.length);
+    for (let i = 0; i < fullSnap.length; i++) {
+      expect(batchedSnap[i]).toEqual(fullSnap[i]);
+    }
+  }, 120_000);
+
+  it("cancels cleanly mid full recompute, persisting only pre-abort batches", async () => {
+    await seedMixedVault(1200);
+    const abort = new AbortController();
+    const res = await recomputeAddressStats({
+      skipNotification: true,
+      batchSize: 100,
+      signal: abort.signal,
+      onProgress: (p) => {
+        if (p.processed >= 100) abort.abort();
+      },
+    });
+    expect(res.cancelled).toBe(true);
+    expect(res.updated).toBeGreaterThan(0);
+    expect(res.updated).toBeLessThan(1200);
+    // Rows past the abort point keep their (stale) pre-run cache values.
+    const untouched = await testDb.records.where("inputString").equals("scan-addr-1199").first();
+    expect(untouched?.cachedBalanceSats).toBe(1);
+  }, 60_000);
+
+  it("returns cancelled with no writes when the signal is aborted before the scan starts", async () => {
+    await seedMixedVault(40);
+    const abort = new AbortController();
+    abort.abort();
+    const res = await recomputeAddressStats({ skipNotification: true, signal: abort.signal });
+    expect(res.cancelled).toBe(true);
+    expect(res.updated).toBe(0);
+    const rec = await testDb.records.where("inputString").equals("scan-addr-0").first();
+    expect(rec?.cachedBalanceSats).toBe(1);
+  });
+});
