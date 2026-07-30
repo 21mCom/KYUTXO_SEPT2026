@@ -291,7 +291,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/data/record-queries.outpointSpendDiscovery.test.ts client/src/lib/electrum-spend-surfaces.outpointSpendDiscovery.test.ts"
+args = "npx vitest run client/src/lib/data/record-queries.outpointSpendDiscovery.test.ts client/src/lib/electrum-spend-surfaces.outpointSpendDiscovery.test.ts client/src/pages/Nudgie.outpointSpendDiscovery.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

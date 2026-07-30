@@ -105,7 +105,7 @@ function truncate(str: string, start = 8, end = 8): string {
   return `${str.slice(0, start)}...${str.slice(-end)}`;
 }
 
-interface TransactionWithContext extends BlockchainTransaction {
+export interface TransactionWithContext extends BlockchainTransaction {
   inputs: TransactionParticipant[];
   outputs: TransactionParticipant[];
   totalInputValue: number;
@@ -118,8 +118,169 @@ interface TransactionWithContext extends BlockchainTransaction {
   netFlow: number;
 }
 
-type SourceFilter = 'all' | 'manual' | 'xpub-import' | 'wallet-import' | 'blockchain-sync';
+export type SourceFilter = 'all' | 'manual' | 'xpub-import' | 'wallet-import' | 'blockchain-sync';
 type ViewMode = 'dashboard' | 'focus';
+
+/**
+ * Participant load for the nudge list. Exported for unit tests (Electrum
+ * blank-address spend discovery).
+ *
+ * Outpoint-aware load: Electrum-synced spend inputs carry a blank address,
+ * so a pure address-keyed load would miss spend txs whose only link to an
+ * owned address is such an input. The helper merges those rows in, and we
+ * then attribute each blank input back to the owned address whose output it
+ * spends (what a fully-resolved sync would have produced), so those spend
+ * transactions pass the "involves one of your addresses" nudge filter too.
+ */
+export async function loadNudgeParticipants(
+  addresses: string[],
+  signal?: AbortSignal,
+): Promise<TransactionParticipant[]> {
+  const participants = await getParticipantsByAddressesWithOutpointSpends(addresses, signal);
+  const addrByOutpoint = new Map<string, string>();
+  for (const p of participants) {
+    if (p.role === 'output' && p.vout !== undefined && p.vout !== null && p.address) {
+      addrByOutpoint.set(`${p.txid}:${p.vout}`, p.address);
+    }
+  }
+  return participants.map(p => {
+    if (p.role === 'input' && !p.address && p.prevTxid && p.prevVout !== undefined && p.prevVout !== null) {
+      const owner = addrByOutpoint.get(`${p.prevTxid}:${p.prevVout}`);
+      if (owner) return { ...p, address: owner };
+    }
+    return p;
+  });
+}
+
+export interface NudgeCandidateSources {
+  transactions: BlockchainTransaction[];
+  participants: TransactionParticipant[];
+  addressToRecord: Map<string, Record>;
+  txidToRecord: Map<string, Record>;
+  sourceFilter: SourceFilter;
+}
+
+/**
+ * Builds the unlabeled-transaction nudge candidates. Exported for unit tests
+ * (a spend tx whose only owned link is an attributed blank-address input must
+ * still be offered as a nudge candidate).
+ */
+export async function buildNudgeCandidates(
+  { transactions, participants, addressToRecord, txidToRecord, sourceFilter }: NudgeCandidateSources,
+  signal: AbortSignal,
+): Promise<TransactionWithContext[]> {
+  const participantsByTxid = new Map<string, TransactionParticipant[]>();
+  for (let i = 0; i < participants.length; i++) {
+    const p = participants[i];
+    const existing = participantsByTxid.get(p.txid) || [];
+    existing.push(p);
+    participantsByTxid.set(p.txid, existing);
+    if (i % 1000 === 999) {
+      checkAbort(signal);
+      await yieldToUI();
+    }
+  }
+
+  const results: TransactionWithContext[] = [];
+
+  for (let ti = 0; ti < transactions.length; ti++) {
+    const tx = transactions[ti];
+    const txParticipants = participantsByTxid.get(tx.txid) || [];
+    const inputs = txParticipants.filter(p => p.role === 'input');
+    const outputs = txParticipants.filter(p => p.role === 'output');
+
+    const existingRecord = txidToRecord.get(tx.txid);
+
+    if (existingRecord && existingRecord.label && existingRecord.label.trim() !== '') {
+      continue;
+    }
+
+    const yourAddresses: TransactionWithContext['yourAddresses'] = [];
+    const counterpartyAddresses: TransactionWithContext['counterpartyAddresses'] = [];
+
+    let hasUserAddress = false;
+
+    for (const input of inputs) {
+      const record = addressToRecord.get(input.address);
+      if (record) {
+        hasUserAddress = true;
+        yourAddresses.push({ address: input.address, record, role: 'input', amount: input.amount });
+      } else {
+        counterpartyAddresses.push({ address: input.address, record: undefined, role: 'input', amount: input.amount });
+      }
+    }
+
+    for (const output of outputs) {
+      const record = addressToRecord.get(output.address);
+      if (record) {
+        hasUserAddress = true;
+        yourAddresses.push({ address: output.address, record, role: 'output', amount: output.amount });
+      } else {
+        counterpartyAddresses.push({ address: output.address, record: undefined, role: 'output', amount: output.amount });
+      }
+    }
+
+    if (!hasUserAddress) continue;
+
+    if (sourceFilter !== 'all') {
+      const hasMatchingSource = yourAddresses.some(a => {
+        if (!a.record) return false;
+        const source = a.record.source || '';
+        switch (sourceFilter) {
+          case 'manual': return source === 'manual' || source === '';
+          case 'xpub-import': return source === 'xpub-import';
+          case 'wallet-import': return source.startsWith('walletImport-');
+          case 'blockchain-sync': return source === 'blockchain-sync' && (a.record.syncDepth === 0 || a.record.syncDepth === undefined);
+          default: return true;
+        }
+      });
+      if (!hasMatchingSource) continue;
+    }
+
+    const yourInputs = yourAddresses.filter(a => a.role === 'input');
+    const yourOutputs = yourAddresses.filter(a => a.role === 'output');
+    const yourInputValue = yourInputs.reduce((sum, a) => sum + a.amount, 0);
+    const yourOutputValue = yourOutputs.reduce((sum, a) => sum + a.amount, 0);
+    const netFlow = yourOutputValue - yourInputValue;
+
+    let groupType: TransactionWithContext['groupType'] = 'unknown';
+
+    const yourOwners = new Set(yourAddresses.map(a => a.record?.owner).filter(Boolean));
+    const counterpartyHasKnown = counterpartyAddresses.some(a => {
+      const record = addressToRecord.get(a.address);
+      return record && record.owner;
+    });
+
+    if (yourOwners.size === 1 && counterpartyAddresses.length === 0) {
+      groupType = 'self-transfer';
+    } else if (counterpartyHasKnown) {
+      groupType = 'known-counterparty';
+    } else {
+      groupType = 'unknown';
+    }
+
+    results.push({
+      ...tx,
+      inputs,
+      outputs,
+      totalInputValue: inputs.reduce((sum, p) => sum + p.amount, 0),
+      totalOutputValue: outputs.reduce((sum, p) => sum + p.amount, 0),
+      existingLabel: existingRecord?.label,
+      existingRecordId: existingRecord?.id,
+      groupType,
+      yourAddresses,
+      counterpartyAddresses,
+      netFlow
+    });
+
+    if (ti % 1000 === 999) {
+      checkAbort(signal);
+      await yieldToUI();
+    }
+  }
+
+  return results;
+}
 
 export default function Nudgie() {
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
@@ -202,11 +363,7 @@ export default function Nudgie() {
       }
       checkAbort(signal);
       try {
-        // Outpoint-aware load: Electrum-synced spend inputs carry a blank
-        // address, so a pure address-keyed load would miss spend txs whose
-        // only link to an owned address is such an input. The helper merges
-        // those rows in, so those spend transactions get nudges too.
-        return await getParticipantsByAddressesWithOutpointSpends(addresses, signal);
+        return await loadNudgeParticipants(addresses, signal);
       } catch (e) {
         if (signal.aborted) throw e;
         return [] as TransactionParticipant[];
@@ -273,118 +430,10 @@ export default function Nudgie() {
 
   const { value: transactionsWithContext, isComputing: transactionsWithContextComputing } = useAsyncMemo(async (signal) => {
     if (!transactions || !participants) return [];
-    
-    const participantsByTxid = new Map<string, TransactionParticipant[]>();
-    for (let i = 0; i < participants.length; i++) {
-      const p = participants[i];
-      const existing = participantsByTxid.get(p.txid) || [];
-      existing.push(p);
-      participantsByTxid.set(p.txid, existing);
-      if (i % 1000 === 999) {
-        checkAbort(signal);
-        await yieldToUI();
-      }
-    }
-
-    const results: TransactionWithContext[] = [];
-
-    for (let ti = 0; ti < transactions.length; ti++) {
-      const tx = transactions[ti];
-      const txParticipants = participantsByTxid.get(tx.txid) || [];
-      const inputs = txParticipants.filter(p => p.role === 'input');
-      const outputs = txParticipants.filter(p => p.role === 'output');
-      
-      const existingRecord = txidToRecord.get(tx.txid);
-      
-      if (existingRecord && existingRecord.label && existingRecord.label.trim() !== '') {
-        continue;
-      }
-
-      const yourAddresses: TransactionWithContext['yourAddresses'] = [];
-      const counterpartyAddresses: TransactionWithContext['counterpartyAddresses'] = [];
-
-      let hasUserAddress = false;
-
-      for (const input of inputs) {
-        const record = addressToRecord.get(input.address);
-        if (record) {
-          hasUserAddress = true;
-          yourAddresses.push({ address: input.address, record, role: 'input', amount: input.amount });
-        } else {
-          counterpartyAddresses.push({ address: input.address, record: undefined, role: 'input', amount: input.amount });
-        }
-      }
-
-      for (const output of outputs) {
-        const record = addressToRecord.get(output.address);
-        if (record) {
-          hasUserAddress = true;
-          yourAddresses.push({ address: output.address, record, role: 'output', amount: output.amount });
-        } else {
-          counterpartyAddresses.push({ address: output.address, record: undefined, role: 'output', amount: output.amount });
-        }
-      }
-
-      if (!hasUserAddress) continue;
-
-      if (sourceFilter !== 'all') {
-        const hasMatchingSource = yourAddresses.some(a => {
-          if (!a.record) return false;
-          const source = a.record.source || '';
-          switch (sourceFilter) {
-            case 'manual': return source === 'manual' || source === '';
-            case 'xpub-import': return source === 'xpub-import';
-            case 'wallet-import': return source.startsWith('walletImport-');
-            case 'blockchain-sync': return source === 'blockchain-sync' && (a.record.syncDepth === 0 || a.record.syncDepth === undefined);
-            default: return true;
-          }
-        });
-        if (!hasMatchingSource) continue;
-      }
-
-      const yourInputs = yourAddresses.filter(a => a.role === 'input');
-      const yourOutputs = yourAddresses.filter(a => a.role === 'output');
-      const yourInputValue = yourInputs.reduce((sum, a) => sum + a.amount, 0);
-      const yourOutputValue = yourOutputs.reduce((sum, a) => sum + a.amount, 0);
-      const netFlow = yourOutputValue - yourInputValue;
-
-      let groupType: TransactionWithContext['groupType'] = 'unknown';
-      
-      const yourOwners = new Set(yourAddresses.map(a => a.record?.owner).filter(Boolean));
-      const counterpartyHasKnown = counterpartyAddresses.some(a => {
-        const record = addressToRecord.get(a.address);
-        return record && record.owner;
-      });
-
-      if (yourOwners.size === 1 && counterpartyAddresses.length === 0) {
-        groupType = 'self-transfer';
-      } else if (counterpartyHasKnown) {
-        groupType = 'known-counterparty';
-      } else {
-        groupType = 'unknown';
-      }
-
-      results.push({
-        ...tx,
-        inputs,
-        outputs,
-        totalInputValue: inputs.reduce((sum, p) => sum + p.amount, 0),
-        totalOutputValue: outputs.reduce((sum, p) => sum + p.amount, 0),
-        existingLabel: existingRecord?.label,
-        existingRecordId: existingRecord?.id,
-        groupType,
-        yourAddresses,
-        counterpartyAddresses,
-        netFlow
-      });
-
-      if (ti % 1000 === 999) {
-        checkAbort(signal);
-        await yieldToUI();
-      }
-    }
-
-    return results;
+    return buildNudgeCandidates(
+      { transactions, participants, addressToRecord, txidToRecord, sourceFilter },
+      signal,
+    );
   }, [transactions, participants, addressToRecord, txidToRecord, sourceFilter], [] as TransactionWithContext[]);
 
   const groupedTransactions = useMemo(() => {
