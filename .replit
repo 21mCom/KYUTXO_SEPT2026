@@ -151,6 +151,10 @@ args = "restore-mode-guard-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "edit-attachments-toast-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "privacy-audit-interrupted-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1003,3 +1007,14 @@ args = "npx vitest run client/src/pages/settings/restore-backup-flow.v3MergeDisa
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "edit-attachments-toast-node-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/contexts/RecordPreviewContext.editAttachmentsToast.test.tsx"
