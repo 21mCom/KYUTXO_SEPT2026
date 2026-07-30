@@ -191,6 +191,10 @@ args = "trusted-types-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "trusted-types-allowlist"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "add-metadata-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -888,6 +892,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-trusted-types-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "trusted-types-allowlist"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-trusted-types-allowlist.js"
 
 [workflows.workflow.metadata]
 isValidation = true
