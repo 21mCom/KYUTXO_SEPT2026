@@ -120,6 +120,11 @@ const GUARDED_TABLES = [
     crudFile: path.resolve(ROOT, 'client/src/lib/data/partial-export-crud.ts'),
     label: 'partial-export-crud.ts',
   },
+  {
+    table: 'savedPsbts',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/saved-psbts-crud.ts'),
+    label: 'saved-psbts-crud.ts',
+  },
 ];
 
 // Files that legitimately need direct table access — e.g. database initialization,

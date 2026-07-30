@@ -946,6 +946,50 @@ export interface DustFlag {
   markedAt: number;
 }
 
+// === Saved unsigned PSBTs (watch-only PSBT builder) ===
+// A PSBT built from user-selected UTXOs, stored with its decoded components so
+// it can be revisited, renamed, re-downloaded, or deleted without re-decoding.
+// Watch-only by design: the app never holds keys, signs, or broadcasts.
+export interface SavedPsbtInput {
+  txid: string;
+  vout: number;
+  address: string;
+  amountSats: number;
+  /** Detected script kind of the spent output (e.g. 'P2WPKH', 'P2SH-P2WSH'). */
+  scriptType: string;
+  /** Full BIP-32 path when known (e.g. "m/84'/0'/0'/0/5"). */
+  derivationPath?: string;
+  /** True when BIP-32 derivation info was embedded in the PSBT input. */
+  hasDerivationInfo?: boolean;
+  /** True when a witnessScript/redeemScript was embedded (multisig vaults). */
+  hasScript?: boolean;
+}
+
+export interface SavedPsbtOutput {
+  address: string;
+  amountSats: number;
+  isChange: boolean;
+}
+
+export interface SavedPsbt {
+  id?: number;
+  name: string;
+  /** Base64-encoded unsigned PSBT (BIP-174). */
+  psbtBase64: string;
+  destinationAddress: string;
+  changeAddress?: string;
+  feeRateSatsPerVb: number;
+  feeSats: number;
+  estimatedVbytes: number;
+  totalInputSats: number;
+  sendAmountSats: number;
+  changeSats: number;
+  inputs: SavedPsbtInput[];
+  outputs: SavedPsbtOutput[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 // Address blacklist - permanently skip these addresses during sync
 export interface AddressBlacklist {
   id?: number;

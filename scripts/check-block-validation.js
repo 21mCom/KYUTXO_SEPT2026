@@ -36,6 +36,8 @@ const ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/lib/txid-backfill.ts'),
   // BIP-329 export: legitimate txid / txid:vout outpoint regexes, not block hashes.
   path.resolve(ROOT, 'client/src/lib/bip329.ts'),
+  // PSBT builder: legitimate input-txid regex, not a block hash.
+  path.resolve(ROOT, 'client/src/lib/psbt.ts'),
 ]);
 
 // Inline 64-hex regexes in any case/charset variant, e.g.

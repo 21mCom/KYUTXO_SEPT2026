@@ -53,6 +53,11 @@ import {
   restoreDustFlagRows,
 } from "@/lib/data/dust-flags-crud";
 import {
+  getAllSavedPsbts,
+  clearSavedPsbts,
+  restoreSavedPsbtRows,
+} from "@/lib/data/saved-psbts-crud";
+import {
   getAllNodeSettings,
   putNodeSettings,
   clearNodeSettings,
@@ -299,6 +304,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     settings,
     nodeSettings,
     dustFlags,
+    savedPsbts,
   ] = await Promise.all([
     getAllRecordOrigins(),
     getAllCustomFields(),
@@ -309,6 +315,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     getAllSettings(),
     getAllNodeSettings(),
     getAllDustFlags(),
+    getAllSavedPsbts(),
   ]);
 
   return {
@@ -327,6 +334,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     settings,
     nodeSettings,
     dustFlags,
+    savedPsbts,
   };
 }
 
@@ -345,6 +353,7 @@ export async function clearInlineTables(): Promise<void> {
   await clearPriceData({ skipNotification: true });
   await clearNodeSettings({ skipNotification: true });
   await clearDustFlags({ skipNotification: true });
+  await clearSavedPsbts({ skipNotification: true });
   // NOTE: settings is intentionally not cleared (matches legacy restore).
   // utxoLineage, custodySegments and lineageSnapshots are streamed tables now;
   // the restore orchestrator clears them, not this inline path.
@@ -431,6 +440,13 @@ export async function restoreInlineTables(
   // merge mode rows whose unique `outpoint` already exists are skipped so the
   // unique index can't abort the restore mid-way.
   await restoreDustFlagRows(arr("dustFlags"), restoreMode, { skipNotification: true });
+
+  // savedPsbts (unsigned PSBTs from the watch-only builder, Dexie v37) ride
+  // inline like dustFlags. Older backups have no `savedPsbts` key and restore
+  // cleanly. Rows carry no foreign keys into other tables (inputs reference
+  // txids, which are stable), so no id remap is needed; in merge mode rows
+  // whose PSBT bytes already exist are skipped.
+  await restoreSavedPsbtRows(arr("savedPsbts"), restoreMode, { skipNotification: true });
 
   // utxoLineage and custodySegments are streamed tables now, so NEW backups
   // carry them as NDJSON (handled by the restore orchestrator) and won't have

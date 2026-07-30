@@ -13,7 +13,7 @@ import type {
   TransactionParticipant, AddressSyncState, NodeSettings, DerivationTemplate,
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
   PausedSyncState, SkippedAddress, AddressBlacklist, PartialExportBundle,
-  TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag,
+  TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag, SavedPsbt,
 } from './db-types';
 
 export class KYUTXODatabase extends Dexie {
@@ -68,9 +68,23 @@ export class KYUTXODatabase extends Dexie {
   // User-flagged dust outputs (keyed by outpoint "txid:vout") so dusted
   // outputs can be indicated in the UTXOs page and annotated in reports.
   dustFlags!: Table<DustFlag>;
+  // Unsigned PSBTs built from selected UTXOs (watch-only: no keys, no signing,
+  // no broadcasting), stored with their decoded components.
+  // IMPORTANT: Do not call write methods (add, put, update, delete, bulkAdd,
+  // bulkPut, bulkDelete, modify, clear) on db.savedPsbts outside of
+  // saved-psbts-crud.ts.
+  savedPsbts!: Table<SavedPsbt>;
 
   constructor() {
     super('KYUTXODatabase');
+
+    // v37: add the savedPsbts table — unsigned PSBTs built from selected
+    // UTXOs, stored with their decoded components so they can be revisited,
+    // renamed, re-downloaded, or deleted. Delta declaration — all other
+    // tables inherit unchanged from v36.
+    this.version(37).stores({
+      savedPsbts: '++id, createdAt, name',
+    });
 
     // v36: index `identifier` on attachments. The detail panel loads
     // attachments by recordId OR identifier, and Dexie's .or() requires an

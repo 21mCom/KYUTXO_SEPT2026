@@ -62,11 +62,15 @@ import {
   TrendingUp,
   TrendingDown,
   HelpCircle,
-  Loader2
+  Loader2,
+  FileSignature
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { getOwners, getWalletNames, getTags, getCategories, getParticipantsByAddresses, getSpendInputsByOutpoints } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
+import { Checkbox } from "@/components/ui/checkbox";
+import { BuildPsbtDialog } from "@/components/BuildPsbtDialog";
+import { SavedPsbtsDialog } from "@/components/SavedPsbtsDialog";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
@@ -221,6 +225,9 @@ export function UtxoTableRow({
   measureRef,
   dataIndex,
   dustFlaggedOutpoints,
+  selectedOutpoints,
+  onToggleUtxoSelected,
+  onToggleGroupSelected,
 }: {
   row: FlatUtxoRow;
   isExpanded?: boolean;
@@ -231,12 +238,18 @@ export function UtxoTableRow({
   dataIndex?: number;
   /** Set of "txid:vout" outpoints the user flagged as dust. */
   dustFlaggedOutpoints?: Set<string>;
+  /** Set of "txid:vout" outpoints currently selected for the PSBT builder. */
+  selectedOutpoints?: Set<string>;
+  onToggleUtxoSelected?: (utxo: UTXO) => void;
+  onToggleGroupSelected?: (group: AddressGroup) => void;
 }) {
+  const selectionEnabled = !!selectedOutpoints && !!onToggleUtxoSelected && !!onToggleGroupSelected;
   if (row.kind === 'group') {
     const group = row.group;
     const dustCount = dustFlaggedOutpoints
       ? group.utxos.filter(u => dustFlaggedOutpoints.has(`${u.txid}:${u.vout}`)).length
       : 0;
+    const allSelected = group.utxos.length > 0 && group.utxos.every(u => selectedOutpoints?.has(`${u.txid}:${u.vout}`));
     return (
       <TableRow
         ref={measureRef}
@@ -245,6 +258,16 @@ export function UtxoTableRow({
         onClick={() => onToggleGroup(group.address)}
         data-testid={`row-address-${group.address.slice(0, 8)}`}
       >
+        {selectionEnabled && (
+          <TableCell className="w-8" onClick={(e) => e.stopPropagation()}>
+            <Checkbox
+              checked={allSelected}
+              onCheckedChange={() => onToggleGroupSelected(group)}
+              aria-label={`Select all UTXOs for ${group.address}`}
+              data-testid={`checkbox-group-${group.address.slice(0, 8)}`}
+            />
+          </TableCell>
+        )}
         <TableCell className="w-8">
           {isExpanded ? (
             <ChevronDown className="h-4 w-4" />
@@ -323,6 +346,7 @@ export function UtxoTableRow({
   }
 
   const { utxo, index: idx } = row;
+  const isSelected = selectedOutpoints?.has(`${utxo.txid}:${utxo.vout}`) ?? false;
   return (
     <TableRow
       ref={measureRef}
@@ -331,6 +355,16 @@ export function UtxoTableRow({
       onClick={() => onOpenUtxo(utxo)}
       data-testid={`row-utxo-${utxo.id}`}
     >
+      {selectionEnabled && (
+        <TableCell className="w-8" onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={() => onToggleUtxoSelected(utxo)}
+            aria-label={`Select UTXO ${utxo.txid}:${utxo.vout}`}
+            data-testid={`checkbox-utxo-${utxo.id}`}
+          />
+        </TableCell>
+      )}
       <TableCell></TableCell>
       <TableCell colSpan={2} className="font-mono text-sm" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 pl-4">
@@ -390,6 +424,9 @@ export function VirtualizedUtxoList({
   scrollRef,
   header,
   dustFlaggedOutpoints,
+  selectedOutpoints,
+  onToggleUtxoSelected,
+  onToggleGroupSelected,
 }: {
   flattenedRows: FlatUtxoRow[];
   expandedAddresses: Set<string>;
@@ -399,7 +436,13 @@ export function VirtualizedUtxoList({
   scrollRef: React.RefObject<HTMLDivElement>;
   header: React.ReactNode;
   dustFlaggedOutpoints?: Set<string>;
+  /** Set of "txid:vout" outpoints currently selected for the PSBT builder. */
+  selectedOutpoints?: Set<string>;
+  onToggleUtxoSelected?: (utxo: UTXO) => void;
+  onToggleGroupSelected?: (group: AddressGroup) => void;
 }) {
+  // Extra selection column shifts the spacer colSpans from 7 to 8.
+  const colSpan = selectedOutpoints ? 8 : 7;
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
@@ -467,7 +510,7 @@ export function VirtualizedUtxoList({
         <TableBody>
           {utxoVirtualizer.getVirtualItems().length > 0 && utxoVirtualizer.getVirtualItems()[0].start > scrollMargin && (
             <TableRow>
-              <TableCell colSpan={7} className="p-0 border-0" style={{ height: utxoVirtualizer.getVirtualItems()[0].start - scrollMargin }} />
+              <TableCell colSpan={colSpan} className="p-0 border-0" style={{ height: utxoVirtualizer.getVirtualItems()[0].start - scrollMargin }} />
             </TableRow>
           )}
           {utxoVirtualizer.getVirtualItems().map(virtualRow => {
@@ -486,6 +529,9 @@ export function VirtualizedUtxoList({
                 measureRef={utxoVirtualizer.measureElement}
                 dataIndex={virtualRow.index}
                 dustFlaggedOutpoints={dustFlaggedOutpoints}
+                selectedOutpoints={selectedOutpoints}
+                onToggleUtxoSelected={onToggleUtxoSelected}
+                onToggleGroupSelected={onToggleGroupSelected}
               />
             );
           })}
@@ -495,7 +541,7 @@ export function VirtualizedUtxoList({
             const remaining = utxoVirtualizer.getTotalSize() - (lastItem.end - scrollMargin);
             return remaining > 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="p-0 border-0" style={{ height: remaining }} />
+                <TableCell colSpan={colSpan} className="p-0 border-0" style={{ height: remaining }} />
               </TableRow>
             ) : null;
           })()}
@@ -531,6 +577,11 @@ export default function UTXOs() {
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const [selectedUtxo, setSelectedUtxo] = useState<UTXO | null>(null);
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
+  // PSBT builder selection: outpoint ("txid:vout") -> UTXO snapshot, so the
+  // build dialog works off stable data even if the list re-renders.
+  const [selectedUtxosForPsbt, setSelectedUtxosForPsbt] = useState<Map<string, UTXO>>(new Map());
+  const [buildPsbtOpen, setBuildPsbtOpen] = useState(false);
+  const [savedPsbtsOpen, setSavedPsbtsOpen] = useState(false);
   
   // Smart filtering: exclude blockchain-discovered addresses by default
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
@@ -1653,6 +1704,42 @@ export default function UTXOs() {
     setDetailPanelOpen(true);
   };
 
+  const selectedOutpointSet = useMemo(
+    () => new Set(selectedUtxosForPsbt.keys()),
+    [selectedUtxosForPsbt]
+  );
+  const selectedPsbtTotalSats = useMemo(() => {
+    let sum = 0;
+    selectedUtxosForPsbt.forEach(u => { sum += u.amountSats; });
+    return sum;
+  }, [selectedUtxosForPsbt]);
+
+  const toggleUtxoSelected = useCallback((utxo: UTXO) => {
+    setSelectedUtxosForPsbt(prev => {
+      const next = new Map(prev);
+      const key = `${utxo.txid}:${utxo.vout}`;
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.set(key, utxo);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleGroupSelected = useCallback((group: AddressGroup) => {
+    setSelectedUtxosForPsbt(prev => {
+      const next = new Map(prev);
+      const allSelected = group.utxos.length > 0 && group.utxos.every(u => next.has(`${u.txid}:${u.vout}`));
+      if (allSelected) {
+        for (const u of group.utxos) next.delete(`${u.txid}:${u.vout}`);
+      } else {
+        for (const u of group.utxos) next.set(`${u.txid}:${u.vout}`, u);
+      }
+      return next;
+    });
+  }, []);
+
   const SortableHeader = ({ column, label }: { column: SortColumn; label: string }) => (
     <TableHead>
       <Button
@@ -1686,11 +1773,22 @@ export default function UTXOs() {
             View unspent transaction outputs grouped by address
           </p>
         </div>
-        <BlockchainToggle
-          checked={includeBlockchainDiscovered}
-          onCheckedChange={setIncludeBlockchainDiscovered}
-          hiddenCount={blockchainDiscoveredCount ?? 0}
-        />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setSavedPsbtsOpen(true)}
+            data-testid="button-saved-psbts"
+          >
+            <FileSignature className="h-4 w-4 mr-1" />
+            Saved PSBTs
+          </Button>
+          <BlockchainToggle
+            checked={includeBlockchainDiscovered}
+            onCheckedChange={setIncludeBlockchainDiscovered}
+            hiddenCount={blockchainDiscoveredCount ?? 0}
+          />
+        </div>
       </div>
 
       {(participantsLoading || isComputing) && (
@@ -2112,6 +2210,38 @@ export default function UTXOs() {
       </Card>
 
       <div className={searchPendingClass(isSearchPending, 'UTXOs')}>
+        {selectedUtxosForPsbt.size > 0 && (
+          <div
+            className="flex items-center justify-between gap-2 mb-2 rounded-md border bg-card px-3 py-2 flex-none flex-wrap"
+            data-testid="bar-utxo-selection"
+          >
+            <span className="text-sm" data-testid="text-selection-summary">
+              <span className="font-medium">{selectedUtxosForPsbt.size} UTXO{selectedUtxosForPsbt.size !== 1 ? "s" : ""} selected</span>
+              <span className="ml-2 text-muted-foreground">
+                {selectedPsbtTotalSats.toLocaleString()} sats ({satsToBtc(selectedPsbtTotalSats)} BTC)
+              </span>
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => setBuildPsbtOpen(true)}
+                data-testid="button-build-psbt"
+              >
+                <FileSignature className="h-4 w-4 mr-1" />
+                Build PSBT
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedUtxosForPsbt(new Map())}
+                data-testid="button-clear-selection"
+              >
+                <X className="h-4 w-4 mr-1" />
+                Clear
+              </Button>
+            </div>
+          </div>
+        )}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">
@@ -2147,8 +2277,12 @@ export default function UTXOs() {
                 onOpenUtxo={openUtxoDetail}
                 scrollRef={utxoScrollRef}
                 dustFlaggedOutpoints={dustFlaggedOutpoints}
+                selectedOutpoints={selectedOutpointSet}
+                onToggleUtxoSelected={toggleUtxoSelected}
+                onToggleGroupSelected={toggleGroupSelected}
                 header={
                   <TableRow>
+                    <TableHead className="w-8"></TableHead>
                     <TableHead className="w-8"></TableHead>
                     <SortableHeader column="address" label="Address" />
                     <SortableHeader column="amount" label="UTXO Value" />
@@ -2169,6 +2303,17 @@ export default function UTXOs() {
         onClose={() => setDetailPanelOpen(false)}
         utxo={selectedUtxo}
         latestPrice={latestPrice}
+      />
+
+      <BuildPsbtDialog
+        open={buildPsbtOpen}
+        onOpenChange={setBuildPsbtOpen}
+        utxos={Array.from(selectedUtxosForPsbt.values())}
+        recordForAddress={(address) => addressToRecord.get(address)}
+      />
+      <SavedPsbtsDialog
+        open={savedPsbtsOpen}
+        onOpenChange={setSavedPsbtsOpen}
       />
     </div>
   );

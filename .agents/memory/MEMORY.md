@@ -23,7 +23,6 @@
 - [Sync backfill of new tx fields](sync-backfill-new-fields.md) — backfilling new blockchainTransactions columns onto old rows must run in syncAddress's height-skip branch (it preempts the existing-tx lookup), or re-sync backfills nothing.
 - [UTXO spent detection outpoint-first](utxo-spent-detection.md) — outpoint spends are authoritative, FIFO only for outpoint-less inputs; address-keyed loads miss blank-address Electrum inputs; algorithm changes need an engine schema bump.
 - [Electrum sent via outpoint matching](electrum-sent-outpoint-matching.md) — Electrum txs lack input prevout addresses; compute Sent by matching input outpoints (txid:vout) to owned outputs, never by input address; use computeHistoryFromTxs.
-- [Electrum batch pipelining](electrum-batch-pipelining.md) — batch-history handler pipelines on the multiplexed socket at window 8 (= renderer budget); public-server throttling risk above that; one slow request's timeout kills all in-flight.
 - [Inline restore FK remap](inline-restore-fk-remap.md) — id-referencing inline tables (evidence→evidenceAttachments) get fresh ids on restore (clear() ≠ reset key gen); remap or links orphan; addX must honor restored createdAt.
 - [Settings restore allow-list](settings-restore-allowlist.md) — settings table is never wholesale restored (device-local survives); portable prefs round-trip only via restoreSettingsPreferences allow-list, type-checked so older backups keep defaults.
 - [Stale-report scratch store](stale-report-scratch-store.md) — stream unbounded scan results to a SEPARATE Dexie DB (++seq), read windows on demand; awaitable batch cb for backpressure; dodges CRUD-guards + memory cap.
@@ -67,4 +66,6 @@
 - [Address Checker 5k scaling](address-checker-5k-scaling.md) — huge tables need memoized rows + page-scroll virtualization; per-row Radix Tooltips freeze the mount; live-Electrum bench runs in PHASE/SLICE chunks.
 - [Demo vault builder](demo-vault-builder.md) — v3 backup zips from Node (fflate); Esplora rotate+cache; deep custody chains need chain adoption + addTx-size-aware spend walk; unlock per page load.
 - [Pooled-run cancel tokens](pooled-run-cancel-tokens.md) — a shared cancel flag isn't enough for concurrent runs; bump a run token on cancel/reset/new-run so stale workers can never mutate newer state.
+- [CRUD guard lint covers tests](crud-guard-lint-tests.md) — check-crud-guards scans .test files too; seed/clear via CRUD helpers (clearAllRecords, clearParticipants, createRecord, table's own clear) or validation fails.
+- [page.evaluate Vite imports](browser-eval-vite-imports.md) — dynamic import in page.evaluate resolves only '/src/...ts' app modules, never bare package specifiers; export a lib helper for library primitives.
 - [Trusted Types enforcement](trusted-types-enforcement.md) — CSP enforces TT in packaged app; policies must install eagerly at startup (Radix sinks fire on first commit); default policy = exact-string allowlist, fails closed.

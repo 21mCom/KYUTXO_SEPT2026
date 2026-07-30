@@ -35,6 +35,14 @@ args = "Start application"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "psbt-builder-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "psbt-builder-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "crud-guards"
 
 [[workflows.workflow.tasks]]
@@ -880,6 +888,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-trusted-types-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "psbt-builder-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/psbt.test.ts client/src/lib/psbt-metadata.test.ts client/src/lib/data/saved-psbts-crud.test.ts client/src/components/BuildPsbtDialog.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "psbt-builder-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-psbt-builder-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
