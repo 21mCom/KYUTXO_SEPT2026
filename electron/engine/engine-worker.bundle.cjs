@@ -406,7 +406,7 @@ function setEngineMeta(db2, key, value) {
     [key, value]
   );
 }
-var ENGINE_SCHEMA_VERSION = 4;
+var ENGINE_SCHEMA_VERSION = 5;
 var SCHEMA_VERSION_KEY = "schemaVersion";
 function getEngineSchemaVersion(db2) {
   const v = getEngineMeta(db2, SCHEMA_VERSION_KEY);
@@ -1148,6 +1148,11 @@ function getOwnedUtxos(db2, opts) {
 function buildHeuristicCte(tiers, asOfBlockTime) {
   const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
   const params = [];
+  let spTimeSql = "AND COALESCE(t.blockTime, 0) > 0";
+  if (asOfBlockTime != null) {
+    spTimeSql += " AND t.blockTime <= ?";
+    params.push(asOfBlockTime);
+  }
   let outTimeSql = "AND COALESCE(t.blockTime, 0) > 0";
   if (asOfBlockTime != null) {
     outTimeSql += " AND t.blockTime <= ?";
@@ -1161,7 +1166,16 @@ function buildHeuristicCte(tiers, asOfBlockTime) {
   }
   params.push(...tierBind);
   const cteSql = `
-    WITH oo AS (
+    WITH sp AS (
+      SELECT i.prevTxid AS ptxid, i.prevVout AS pvout
+      FROM transactionParticipants i
+      JOIN blockchainTransactions t ON t.txid = i.txid
+      WHERE i.role = 'input'
+        AND i.prevTxid IS NOT NULL
+        AND i.prevVout IS NOT NULL
+        ${spTimeSql}
+    ),
+    oo AS (
       SELECT o.id AS id, o.txid AS txid, o.vout AS vout, o.address AS address,
              o.amount AS amount, o.recordId AS recordId, t.blockTime AS bt
       FROM transactionParticipants o
@@ -1169,6 +1183,9 @@ function buildHeuristicCte(tiers, asOfBlockTime) {
       WHERE o.role = 'output'
         AND o.vout IS NOT NULL
         ${outTimeSql}
+        AND NOT EXISTS (
+          SELECT 1 FROM sp WHERE sp.ptxid = o.txid AND sp.pvout = o.vout
+        )
         AND EXISTS (
           SELECT 1 FROM records r
           WHERE r.inputString = o.address AND r.type = 'address'
@@ -1180,6 +1197,7 @@ function buildHeuristicCte(tiers, asOfBlockTime) {
       FROM transactionParticipants i
       JOIN blockchainTransactions t ON t.txid = i.txid
       WHERE i.role = 'input'
+        AND (i.prevTxid IS NULL OR i.prevVout IS NULL)
         ${inTimeSql}
         AND EXISTS (
           SELECT 1 FROM records r

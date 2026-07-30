@@ -424,6 +424,38 @@ describe('countUnrecoveredLegacyRows', () => {
     expect(records.unrecovered).toBe(2);
   });
 
+  it('reports per-chunk scan progress including rowsScanned', async () => {
+    // Regression: the verification scan re-walks EVERY row of every table
+    // after decryption. Without per-chunk progress the UI freezes on the last
+    // decrypt state for the whole scan — on a large vault that reads as a
+    // hang. Every scanned batch must emit tableName/tableIndex/rowsScanned.
+    mockTables.records = createMockTable([
+      { id: 1, inputString: 'a' },
+      { id: 2, inputString: 'b' },
+      { id: 3, inputString: 'c' },
+    ]);
+    mockTables.tags = createMockTable([
+      { id: 1, name: 'x' },
+      { id: 2, name: 'y' },
+    ]);
+
+    const events: Array<{ tableName: string; tableIndex: number; tableCount: number; rowsScanned?: number }> = [];
+    await countUnrecoveredLegacyRows((p) => events.push({ ...p }));
+
+    // One event per non-empty scanned chunk (BATCH_SIZE 500 → one per table).
+    const recordEvents = events.filter(e => e.tableName === 'Records');
+    const tagEvents = events.filter(e => e.tableName === 'Tags');
+    expect(recordEvents.length).toBeGreaterThanOrEqual(1);
+    expect(recordEvents[recordEvents.length - 1].rowsScanned).toBe(3);
+    expect(tagEvents.length).toBeGreaterThanOrEqual(1);
+    expect(tagEvents[tagEvents.length - 1].rowsScanned).toBe(2);
+    // Table position metadata survives for the overlay's "Table x of y" line.
+    for (const e of events) {
+      expect(e.tableCount).toBeGreaterThan(0);
+      expect(e.tableIndex).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   it('aggregates unrecovered counts across tables', async () => {
     mockTables.records = createMockTable([
       { id: 1, _legacyEncryptedPayload: 'a', inputString: '' },

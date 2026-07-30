@@ -32,6 +32,7 @@ type LegacyMigrationProgress = {
   current: number;
   total: number;
   failed: number;
+  phase?: "decrypt" | "verify";
 } | null;
 
 type FileDecryptProgress = {
@@ -278,6 +279,32 @@ describe("LegacyMigrationOverlay migration-progress screen", () => {
     expect(screen.getByText(/50 \/ 200 records \(25%\)/i)).toBeTruthy();
     // tableIndex + 1 of tableCount
     expect(screen.getByText(/Table 3 of 5/i)).toBeTruthy();
+  });
+
+  it("renders the distinct verify-phase heading and rows-checked copy", () => {
+    // Regression: the post-decrypt verification re-scan used to show NO
+    // progress — the overlay froze on the last decrypt state (e.g. a table at
+    // 100%), which on a big vault looks like a hang. The verify phase must be
+    // visually distinct and show moving row counts.
+    renderWithProgress({
+      tableName: "Transaction Participants",
+      tableIndex: 9,
+      tableCount: 13,
+      current: 12345,
+      total: 0,
+      failed: 0,
+      phase: "verify",
+    });
+
+    expect(screen.getByText(/Verifying Migrated Data/i)).toBeTruthy();
+    expect(screen.queryByText(/Migrating Encrypted Data/i)).toBeNull();
+    expect(
+      screen.getByText(/Confirming every row was restored: Transaction Participants/i),
+    ).toBeTruthy();
+    expect(screen.getByText(/12,345 rows checked/i)).toBeTruthy();
+    expect(screen.getByText(/Table 10 of 13/i)).toBeTruthy();
+    // Verify phase must never show the decrypt "resuming" banner.
+    expect(screen.queryByText(/Resuming from previous session/i)).toBeNull();
   });
 
   it("shows the resume-from-previous-session wording when resuming", () => {

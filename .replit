@@ -273,6 +273,14 @@ args = "dependency-audit"
 task = "workflow.run"
 args = "dependency-audit-tests"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "legacy-upgrade-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "legacy-upgrade-scale-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -955,6 +963,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-transactions-entity-filter-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "legacy-upgrade-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/legacy-migration.test.ts client/src/lib/__tests__/legacy-decrypt.test.ts client/src/components/LegacyMigrationOverlay.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "legacy-upgrade-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-legacy-upgrade-scale-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

@@ -250,9 +250,43 @@ function AppContent() {
     isInitialized,
     isLoading,
     isMigrating,
+    dbUpgrade,
+    migrationPhase,
     legacyMigrationProgress,
     fileDecryptProgress,
   } = useAuth();
+
+  // One-time schema upgrade of an older on-disk vault. This runs BEFORE login
+  // and can take minutes on a large vault (index rebuilds + table walks), so
+  // it must never hide behind the generic "Loading vault..." spinner — that
+  // reads as a hang and a force-quit aborts the upgrade transaction.
+  if (dbUpgrade) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center bg-background"
+        data-testid="db-upgrade-overlay"
+      >
+        <div className="text-center max-w-md space-y-4 p-6">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
+          <div className="text-2xl font-semibold text-foreground">Upgrading Your Vault</div>
+          <p className="text-muted-foreground">
+            One-time database upgrade after updating the app. On large vaults this can take
+            several minutes.
+          </p>
+          <div className="w-full bg-muted rounded-full h-2">
+            <div className="bg-primary h-2 rounded-full w-full animate-pulse" />
+          </div>
+          <p className="text-sm text-muted-foreground" data-testid="text-db-upgrade-step">
+            {dbUpgrade.step}
+            {dbUpgrade.rowsProcessed > 0 && ` — ${dbUpgrade.rowsProcessed.toLocaleString()} rows`}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Please do not close the application — closing now restarts the upgrade.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (isInitialized === null || isLoading) {
     return (
@@ -284,7 +318,9 @@ function AppContent() {
         <div className="min-h-screen flex items-center justify-center bg-background">
           <div className="text-center">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
-            <p className="mt-4 text-muted-foreground">Preparing your vault...</p>
+            <p className="mt-4 text-muted-foreground" data-testid="text-migration-phase">
+              {migrationPhase ?? 'Preparing your vault...'}
+            </p>
           </div>
         </div>
       ) : (

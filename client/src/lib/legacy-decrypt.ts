@@ -26,6 +26,14 @@ export interface LegacyDecryptProgress {
   current: number;
   total: number;
   failed: number;
+  /**
+   * Which stage of the one-time migration this progress belongs to. Absent /
+   * 'decrypt' = restoring plaintext; 'verify' = the independent post-decrypt
+   * re-scan that confirms no row is still locked. The overlay renders a
+   * distinct heading for the verify stage so a long re-scan on a big vault
+   * doesn't look like a stalled decrypt at 100%.
+   */
+  phase?: 'decrypt' | 'verify';
 }
 
 export interface LegacyDecryptResult {
@@ -272,6 +280,12 @@ export interface UnrecoveredScanProgress {
   tableName: string;
   tableIndex: number;
   tableCount: number;
+  /**
+   * Rows walked so far in the current table. Emitted per scanned batch so a
+   * large-vault verification scan shows moving numbers instead of appearing
+   * stuck on the last decrypt state.
+   */
+  rowsScanned?: number;
 }
 
 /**
@@ -348,6 +362,7 @@ export async function countUnrecoveredLegacyRows(
     let unrecovered = 0;
     let unrecoverable = 0;
     let lastProcessedId = 0;
+    let rowsScanned = 0;
     let hasMore = true;
 
     while (hasMore) {
@@ -364,6 +379,13 @@ export async function countUnrecoveredLegacyRows(
 
       if (chunk.length === 0) break;
       lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
+      rowsScanned += chunk.length;
+      onProgress?.({
+        tableName: config.name,
+        tableIndex: i,
+        tableCount: configs.length,
+        rowsScanned,
+      });
 
       for (const item of chunk) {
         const row = item as unknown as globalThis.Record<string, unknown>;

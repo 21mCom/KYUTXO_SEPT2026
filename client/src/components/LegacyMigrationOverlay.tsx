@@ -270,19 +270,24 @@ export function LegacyMigrationOverlay() {
 
   const progress = legacyMigrationProgress!;
   const pct = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+  const isVerifyPhase = progress.phase === 'verify';
 
   return (
     <div className="fixed inset-0 z-[9999] bg-background/95 flex items-center justify-center" data-testid="legacy-migration-overlay">
       <div className="text-center max-w-md space-y-4 p-6">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
-        <div className="text-2xl font-semibold text-foreground">Migrating Encrypted Data</div>
-        {progress.tableIndex > 0 && progress.tableName === 'Preparing' && (
+        <div className="text-2xl font-semibold text-foreground">
+          {isVerifyPhase ? 'Verifying Migrated Data' : 'Migrating Encrypted Data'}
+        </div>
+        {!isVerifyPhase && progress.tableIndex > 0 && progress.tableName === 'Preparing' && (
           <p className="text-sm text-muted-foreground">
             Resuming from previous session ({progress.tableIndex} of {progress.tableCount} tables already done)
           </p>
         )}
-        <p className="text-muted-foreground">
-          Restoring plaintext for: {progress.tableName}
+        <p className="text-muted-foreground" data-testid="text-migration-table">
+          {isVerifyPhase
+            ? `Confirming every row was restored: ${progress.tableName}`
+            : `Restoring plaintext for: ${progress.tableName}`}
         </p>
         <div className="w-full bg-muted rounded-full h-2">
           <div
@@ -293,7 +298,7 @@ export function LegacyMigrationOverlay() {
         <p className="text-sm text-muted-foreground">
           {progress.total > 0
             ? `${progress.current} / ${progress.total} records (${pct}%)`
-            : `${progress.current} records processed`}
+            : `${progress.current.toLocaleString()} ${isVerifyPhase ? 'rows checked' : 'records processed'}`}
           {progress.failed > 0 && ` — ${progress.failed} failed`}
         </p>
         <p className="text-xs text-muted-foreground">

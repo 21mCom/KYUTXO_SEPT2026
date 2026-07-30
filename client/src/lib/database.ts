@@ -5,6 +5,19 @@ export * from './db-types';
 
 // Value import: used at runtime to seed the default settings row.
 import { createDefaultSettings } from './db-types';
+import { reportDbUpgradeProgress } from './db-upgrade-progress';
+
+/**
+ * Highest Dexie schema version declared below. Used before opening the
+ * database to detect that an on-disk vault from an older release is about to
+ * run the (potentially long) one-time upgrade chain, so the UI can show a
+ * visible "upgrading" overlay instead of a bare spinner. Dexie stores its
+ * schema version multiplied by 10 as the raw IndexedDB version.
+ *
+ * KEEP IN SYNC when adding a new `this.version(N)` declaration — the
+ * legacy-migration test asserts this matches the opened database.
+ */
+export const CURRENT_SCHEMA_VERSION = 37;
 
 // Import types needed for the class definition
 import type {
@@ -216,7 +229,13 @@ export class KYUTXODatabase extends Dexie {
     }).upgrade(async tx => {
       console.log('[v30 migration] Populating inputStringLower for indexed case-insensitive lookups...');
       let count = 0;
+      let searchWalked = 0;
+      reportDbUpgradeProgress({ version: 30, step: 'Indexing search field', rowsProcessed: 0 });
       await tx.table('records').toCollection().modify((record: globalThis.Record<string, unknown>) => {
+        searchWalked++;
+        if (searchWalked % 512 === 0) {
+          reportDbUpgradeProgress({ version: 30, step: 'Indexing search field', rowsProcessed: searchWalked });
+        }
         if (typeof record.inputString === 'string' && record.inputString) {
           record.inputStringLower = (record.inputString as string).toLowerCase();
           count++;
@@ -256,6 +275,7 @@ export class KYUTXODatabase extends Dexie {
       const placeholder = '[encrypted]';
 
       const vocabTables = ['tags', 'categories', 'owners', 'walletNames', 'seedNames', 'walletSoftware'];
+      reportDbUpgradeProgress({ version: 29, step: 'Cleaning up vocabulary', rowsProcessed: 0 });
       for (const tableName of vocabTables) {
         const idsToDelete: number[] = [];
         await tx.table(tableName).each((item: { id?: number; name: string }) => {
@@ -271,7 +291,13 @@ export class KYUTXODatabase extends Dexie {
 
       const fieldsToClean = ['label', 'notes', 'owner', 'walletName', 'seedName', 'walletSoftware', 'source', 'privateKeyStatus'];
       let cleanedRecords = 0;
+      let cleanWalked = 0;
+      reportDbUpgradeProgress({ version: 29, step: 'Cleaning record fields', rowsProcessed: 0 });
       await tx.table('records').toCollection().modify((record: globalThis.Record<string, unknown>) => {
+        cleanWalked++;
+        if (cleanWalked % 512 === 0) {
+          reportDbUpgradeProgress({ version: 29, step: 'Cleaning record fields', rowsProcessed: cleanWalked });
+        }
         let modified = false;
         for (const field of fieldsToClean) {
           if (typeof record[field] === 'string' && (record[field] as string).includes(placeholder)) {
@@ -304,7 +330,13 @@ export class KYUTXODatabase extends Dexie {
         'blockchain-discovered', 'pending-review'
       ]);
       let normalizedCount = 0;
+      let tierWalked = 0;
+      reportDbUpgradeProgress({ version: 29, step: 'Normalizing address tiers', rowsProcessed: 0 });
       await tx.table('records').toCollection().modify((record: globalThis.Record<string, unknown>) => {
+        tierWalked++;
+        if (tierWalked % 512 === 0) {
+          reportDbUpgradeProgress({ version: 29, step: 'Normalizing address tiers', rowsProcessed: tierWalked });
+        }
         if (!record.addressImportance || !validTiers.has(record.addressImportance as string)) {
           record.addressImportance = 'manual';
           normalizedCount++;
@@ -386,7 +418,13 @@ export class KYUTXODatabase extends Dexie {
         let tableEncrypted = 0;
         console.log(`[v27 migration] Scanning ${tableName}...`);
         let tableFlaggedNoPayload = 0;
+        let walked = 0;
+        reportDbUpgradeProgress({ version: 27, step: `Updating ${tableName}`, rowsProcessed: 0 });
         await tx.table(tableName).toCollection().modify((item: globalThis.Record<string, unknown>) => {
+          walked++;
+          if (walked % 512 === 0) {
+            reportDbUpgradeProgress({ version: 27, step: `Updating ${tableName}`, rowsProcessed: walked });
+          }
           if (item.isEncrypted !== true) return;
           if (item.encryptedPayload) {
             tableEncrypted++;

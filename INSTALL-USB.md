@@ -39,6 +39,22 @@
 2. Create your master password (this encrypts all your data)
 3. A `KYUTXO_Data` folder will be automatically created on the USB drive
 
+## Upgrading from an Older Version
+
+1. **Back up first**: copy your whole KYUTXO folder (or export a backup from
+   Settings) before upgrading.
+2. Download the new `KYUTXO-<version>-Portable.exe` and place it in the same
+   folder as your `portable` marker file and `KYUTXO_Data` folder.
+3. Run the new exe. **The first launch over an existing vault performs a
+   one-time migration** — on large vaults this takes several minutes:
+   - "Upgrading Your Vault" appears before the unlock screen (schema update,
+     with a moving step/row counter).
+   - After you unlock, "Restoring Your Data" and then "Verifying Migrated
+     Data" run with live progress.
+   - **Do not force-quit while this is running.** If it is interrupted
+     anyway, your data is safe — the migration resumes at the next unlock.
+4. When the migration summary reports success, delete the old exe.
+
 ## Important Notes
 
 - **Keep your password safe!** There is no recovery option - your data is encrypted with your password

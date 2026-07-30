@@ -678,6 +678,10 @@ export default function BalanceOverview() {
           signal,
           skipNotification: true,
           origin: "user",
+          // Small batches so the progress counter visibly ticks every ~1s on
+          // large vaults; with the default 500 the first update can take 5s+
+          // and the screen looks stalled (the "frozen app" report).
+          batchSize: 100,
           onProgress: (p) => {
             if (thisId === computationId.current) {
               setBackfillProgress({ processed: p.processed, total: p.total });
@@ -747,6 +751,9 @@ export default function BalanceOverview() {
           signal,
           skipNotification: true,
           origin: "user",
+          // Small batches for a visibly moving counter (see formula-upgrade
+          // backfill above).
+          batchSize: 100,
           onProgress: (p) => {
             if (thisId === computationId.current) {
               setBackfillProgress({ processed: p.processed, total: p.total });

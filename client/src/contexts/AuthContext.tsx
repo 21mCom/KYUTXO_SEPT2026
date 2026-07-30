@@ -32,6 +32,12 @@ import { migrateAttachmentPaths } from '@/lib/attachments';
 import { decryptLegacyRecords, getTotalTableCount, countUnrecoveredLegacyRows, type LegacyDecryptProgress, type LockedRecordRef } from '@/lib/legacy-decrypt';
 import { decryptLegacyAttachmentFiles, type FileDecryptProgress } from '@/lib/legacy-decrypt-files';
 import { getActivityBus } from '@/lib/activity-bus';
+import { db, CURRENT_SCHEMA_VERSION } from '@/lib/database';
+import {
+  subscribeDbUpgradeProgress,
+  clearDbUpgradeProgress,
+  type DbUpgradeProgress,
+} from '@/lib/db-upgrade-progress';
 
 interface AuthContextType {
   isInitialized: boolean | null;
@@ -41,6 +47,19 @@ interface AuthContextType {
   logout: () => void;
   isLoading: boolean;
   isMigrating: boolean;
+  /**
+   * Non-null while a one-time Dexie schema upgrade of an older on-disk vault
+   * is running (detected before the first open). The UI must show a visible
+   * "upgrading" overlay for it — on large vaults this phase can take minutes
+   * and previously hid behind the bare "Loading vault..." spinner.
+   */
+  dbUpgrade: DbUpgradeProgress | null;
+  /**
+   * Short human label for post-decrypt startup repair phases (attachment path
+   * normalization, search-index repair). Shown under the migration spinner so
+   * long tail work never looks like a silent hang.
+   */
+  migrationPhase: string | null;
   legacyMigrationProgress: LegacyDecryptProgress | null;
   legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean; stillLocked?: number; verificationFailed?: boolean; lockedRecords?: LockedRecordRef[]; lockedRecordsTruncated?: boolean } | null;
   fileDecryptProgress: FileDecryptProgress | null;
@@ -60,10 +79,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [legacyMigrationProgress, setLegacyMigrationProgress] = useState<LegacyDecryptProgress | null>(null);
   const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number; unexpectedError?: boolean; stillLocked?: number; verificationFailed?: boolean; lockedRecords?: LockedRecordRef[]; lockedRecordsTruncated?: boolean } | null>(null);
   const [fileDecryptProgress, setFileDecryptProgress] = useState<FileDecryptProgress | null>(null);
+  const [dbUpgrade, setDbUpgrade] = useState<DbUpgradeProgress | null>(null);
+  const [migrationPhase, setMigrationPhase] = useState<string | null>(null);
 
   useEffect(() => {
     const checkVault = async () => {
       try {
+        // Detect a pending one-time schema upgrade BEFORE anything opens the
+        // main database. Opening a vault written by an older release runs the
+        // whole Dexie upgrade chain (index rebuilds + data walks) before the
+        // first query resolves — minutes on a large vault. Run it eagerly here
+        // behind a visible overlay instead of letting it fire lazily under a
+        // spinner that looks hung. Feature-detected: indexedDB.databases() is
+        // available in Chromium/Electron; elsewhere we silently keep the old
+        // lazy-open behavior.
+        try {
+          if (typeof indexedDB !== 'undefined' && typeof indexedDB.databases === 'function') {
+            const dbs = await indexedDB.databases();
+            const main = dbs.find((d) => d.name === 'KYUTXODatabase');
+            // Dexie stores schemaVersion * 10 as the raw IndexedDB version.
+            if (main?.version && main.version < CURRENT_SCHEMA_VERSION * 10) {
+              setDbUpgrade({ version: 0, step: 'Preparing upgrade', rowsProcessed: 0 });
+              const unsubscribe = subscribeDbUpgradeProgress((p) => {
+                if (p) setDbUpgrade(p);
+              });
+              try {
+                await db.open();
+                console.log(`[DbUpgrade] Schema upgrade to v${CURRENT_SCHEMA_VERSION} complete`);
+              } finally {
+                unsubscribe();
+                clearDbUpgradeProgress();
+                setDbUpgrade(null);
+              }
+            }
+          }
+        } catch (upgradeError) {
+          // A failed eager open must not block the login screen: the next
+          // query surfaces the same error through the normal paths.
+          console.error('[DbUpgrade] Eager schema upgrade failed:', upgradeError);
+          setDbUpgrade(null);
+        }
+
         const initialized = await isVaultInitialized();
         setIsInitialized(initialized);
       } catch (error) {
@@ -82,12 +138,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (alreadyMigrated) return;
 
     try {
-      const result = await migrateAttachmentPaths();
+      const result = await migrateAttachmentPaths((current, total) => {
+        setMigrationPhase(`Checking attachment files… ${current} / ${total}`);
+      });
       if (result.failed === 0 && result.migrated >= 0) {
         await setAttachmentPathsMigrated(true);
       }
     } catch (error) {
       console.error('Attachment path migration failed:', error);
+    } finally {
+      setMigrationPhase(null);
     }
   }, []);
 
@@ -211,7 +271,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       let lockedRecordsTruncated = false;
       if (decryptSucceeded) {
         try {
-          const scan = await countUnrecoveredLegacyRows();
+          // Surface the verification re-scan in the overlay. Without this the
+          // last decrypt progress (e.g. "Evidence Attachments — 100%") stays on
+          // screen while the scan re-walks every table, which on a big vault
+          // reads as a hang and invites a force-quit.
+          const verifyTableCount = getTotalTableCount();
+          setLegacyMigrationProgress({
+            tableName: 'Preparing',
+            tableIndex: 0,
+            tableCount: verifyTableCount,
+            current: 0,
+            total: 0,
+            failed: 0,
+            phase: 'verify',
+          });
+          const scan = await countUnrecoveredLegacyRows((p) => {
+            setLegacyMigrationProgress({
+              tableName: p.tableName,
+              tableIndex: p.tableIndex,
+              tableCount: p.tableCount,
+              current: p.rowsScanned ?? 0,
+              total: 0,
+              failed: 0,
+              phase: 'verify',
+            });
+            try {
+              getActivityBus().publishTask({
+                id: 'legacy-decrypt',
+                label: 'Verifying Migrated Data',
+                phase: `${p.tableName} (table ${p.tableIndex + 1}/${p.tableCount})`,
+                current: p.rowsScanned ?? 0,
+                total: 0,
+              });
+            } catch {}
+          });
           if (scan.totalUnrecovered > 0) {
             metadataFullyComplete = false;
             stillLocked = scan.totalUnrecovered;
@@ -262,7 +355,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const runInputStringLowerRepair = useCallback(async () => {
     try {
       if (await isInputStringLowerRepaired()) return;
-      const result = await repairInputStringLower();
+      setMigrationPhase('Repairing search index…');
+      const result = await repairInputStringLower((scanned) => {
+        setMigrationPhase(`Repairing search index… ${scanned.toLocaleString()} records checked`);
+      });
       if (result.ok) {
         await setInputStringLowerRepaired(true);
         if (result.fixed > 0) {
@@ -273,6 +369,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       console.error('[InputStringLowerRepair] Failed:', err);
+    } finally {
+      setMigrationPhase(null);
     }
   }, []);
 
@@ -294,6 +392,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       migrationInFlightRef.current = false;
       setIsMigrating(false);
+      setMigrationPhase(null);
     }
   }, [runAttachmentPathMigration, runLegacyDecryptMigration, runInputStringLowerRepair]);
 
@@ -383,6 +482,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         isLoading,
         isMigrating,
+        dbUpgrade,
+        migrationPhase,
         legacyMigrationProgress,
         legacyMigrationResult,
         fileDecryptProgress,
