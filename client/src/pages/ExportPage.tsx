@@ -478,6 +478,15 @@ export default function ExportPage() {
   const handleExportBip329 = async () => {
     setExportingLabels(true);
     try {
+      getActivityBus().publishTask({
+        id: 'bip329-label-export',
+        label: 'Exporting Labels',
+        phase: 'Starting',
+        current: 0,
+        total: Math.max(recordCount, 1),
+      });
+    } catch {}
+    try {
       // Build the predicate from the IMMEDIATE control values, not labelFilter:
       // labelFilter's search is debounced (300ms) for the live count, so a user
       // who types — or clears — a search and clicks Export inside that window
@@ -494,7 +503,20 @@ export default function ExportPage() {
         labelTagFilter !== "all" ||
         labelWalletFilter !== "all";
 
-      const { parts, lineCount } = await exportBip329LabelParts({ filter: exportFilter });
+      const { parts, lineCount } = await exportBip329LabelParts({
+        filter: exportFilter,
+        onProgress: (scanned, exported) => {
+          try {
+            getActivityBus().publishTask({
+              id: 'bip329-label-export',
+              label: 'Exporting Labels',
+              phase: `${scanned} records scanned, ${exported} labels written`,
+              current: scanned,
+              total: Math.max(recordCount, scanned, 1),
+            });
+          } catch {}
+        },
+      });
 
       if (lineCount === 0) {
         toast({
@@ -522,6 +544,7 @@ export default function ExportPage() {
         description: error instanceof Error ? error.message : "Failed to export labels",
       });
     } finally {
+      try { getActivityBus().completeTask('bip329-label-export'); } catch {}
       setExportingLabels(false);
     }
   };
