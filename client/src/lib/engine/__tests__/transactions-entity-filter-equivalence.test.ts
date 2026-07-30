@@ -291,7 +291,48 @@ describe("transactions entity filter: engine vs Dexie equivalence", () => {
 
   it("bounded prefix walk short-circuits on an empty record dimension", async () => {
     const prefix = await getOrderedTxidsForTxEntityFilterPrefix({ owner: "nobody" }, 25);
-    expect(prefix).toEqual({ orderedTxids: [], exhausted: true });
+    expect(prefix).toEqual({ orderedTxids: [], exhausted: true, cursor: null });
+  });
+
+  it("resumed prefix walk extends without re-scanning already-walked rows", async () => {
+    // First walk collects 1 match; resuming for more must (a) reproduce the
+    // exact full ordering and (b) never re-read rows the first walk scanned.
+    const engineTxids = getTransactionPage(engineDb, { limit: 100, curatedOnly: true }).map((r) => r.txid);
+    expect(engineTxids.length).toBeGreaterThan(2);
+
+    const first = await getOrderedTxidsForTxEntityFilterPrefix({ curatedOnly: true }, 1, undefined, 1);
+    expect(first.exhausted).toBe(false);
+    expect(first.orderedTxids).toEqual(engineTxids.slice(0, 1));
+    expect(first.cursor).not.toBeNull();
+
+    const totalRows = await testDb.blockchainTransactions.count();
+    let txRowsRead = 0;
+    const countingHook = (obj: unknown) => { txRowsRead++; return obj as BlockchainTransaction; };
+    testDb.blockchainTransactions.hook("reading", countingHook);
+    let resumed;
+    try {
+      resumed = await getOrderedTxidsForTxEntityFilterPrefix({ curatedOnly: true }, 100, undefined, 1, first);
+    } finally {
+      testDb.blockchainTransactions.hook("reading").unsubscribe(countingHook);
+    }
+    expect(resumed.exhausted).toBe(true);
+    expect(resumed.orderedTxids).toEqual(engineTxids);
+    // The resumed walk must scan strictly fewer rows than a from-scratch walk.
+    // With batchSize=1 the boundary row at the cursor blockTime is refetched
+    // once per round for dedupe, so allow that slack but not a full restart.
+    expect(txRowsRead).toBeLessThan(totalRows * 2);
+
+    // A resume that is already satisfied returns as-is with zero scanning.
+    let extraReads = 0;
+    const countingHook2 = (obj: unknown) => { extraReads++; return obj as BlockchainTransaction; };
+    testDb.blockchainTransactions.hook("reading", countingHook2);
+    try {
+      const noop = await getOrderedTxidsForTxEntityFilterPrefix({ curatedOnly: true }, 1, undefined, 1, first);
+      expect(noop).toBe(first);
+    } finally {
+      testDb.blockchainTransactions.hook("reading").unsubscribe(countingHook2);
+    }
+    expect(extraReads).toBe(0);
   });
 
   it("keyset pagination over a filtered set is gap- and overlap-free", () => {

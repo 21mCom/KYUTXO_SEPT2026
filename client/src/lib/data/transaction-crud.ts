@@ -363,6 +363,17 @@ export async function getTxidsForTxEntityFilter(
   return result ?? new Set<string>();
 }
 
+/**
+ * Opaque resume position for getOrderedTxidsForTxEntityFilterPrefix: the
+ * blockTime keyset cursor plus the ids already processed AT that blockTime
+ * (blockTime is not unique). Feed a prior result back via `resumeFrom` to
+ * extend its prefix without re-scanning rows already walked.
+ */
+export interface TxEntityFilterPrefixCursor {
+  cursorBlockTime: number;
+  seenAtCursorIds: number[];
+}
+
 export interface TxEntityFilterPrefix {
   /** Matching txids in blockTime-descending (newest-first) order. */
   orderedTxids: string[];
@@ -373,6 +384,12 @@ export interface TxEntityFilterPrefix {
    * so orderedTxids is only a prefix and its length a lower bound.
    */
   exhausted: boolean;
+  /**
+   * Walk position after the last scanned row; pass the whole result back as
+   * `resumeFrom` to continue the walk. null when nothing was scanned yet or
+   * the table was exhausted (no further scanning possible).
+   */
+  cursor: TxEntityFilterPrefixCursor | null;
 }
 
 /**
@@ -387,24 +404,36 @@ export interface TxEntityFilterPrefix {
  * active dimension is an independent "some participant satisfies this"
  * predicate and dimensions compose with AND (the matching participants may
  * differ per dimension).
+ *
+ * Pass a prior result as `resumeFrom` to extend its prefix incrementally: the
+ * walk restarts from the saved cursor and only scans rows not already scanned,
+ * so paging forward is O(new rows) instead of restarting from the newest
+ * transaction. `resumeFrom` must come from the same filter over unchanged data.
  */
 export async function getOrderedTxidsForTxEntityFilterPrefix(
   filter: TxEntityFilter,
   neededCount: number,
   pause?: BatchPause,
   batchSize: number = ENTITY_BATCH,
+  resumeFrom?: TxEntityFilterPrefix,
 ): Promise<TxEntityFilterPrefix> {
+  // A resumable prior result that already covers the request (or finished the
+  // table) is returned as-is — no scanning at all.
+  if (resumeFrom && (resumeFrom.exhausted || resumeFrom.orderedTxids.length >= neededCount)) {
+    return resumeFrom;
+  }
+
   // Resolve every record-backed dimension to its record-id set up front (fast
   // indexed key scans). An empty dimension means nothing can match.
   const recordIdSets: Set<number>[] = [];
   for (const getIds of entityFilterRecordIdLoaders(filter)) {
     const ids = new Set(await getIds());
-    if (ids.size === 0) return { orderedTxids: [], exhausted: true };
+    if (ids.size === 0) return { orderedTxids: [], exhausted: true, cursor: null };
     recordIdSets.push(ids);
     if (pause) await pause();
   }
   const address = filter.address;
-  const orderedTxids: string[] = [];
+  const orderedTxids: string[] = resumeFrom ? [...resumeFrom.orderedTxids] : [];
 
   // Keyset paging down the blockTime index (newest-first). blockTime is not
   // unique, so the cursor is (blockTime, ids already processed AT that
@@ -414,8 +443,8 @@ export async function getOrderedTxidsForTxEntityFilterPrefix(
   // engine's blockTime DESC, id DESC order. Crucially, no round ever touches
   // more than ~batchSize unseen rows, so work stops as soon as neededCount
   // matches are found — never proportional to the whole table.
-  let cursorBlockTime: number | null = null;
-  let seenAtCursor = new Set<number>();
+  let cursorBlockTime: number | null = resumeFrom?.cursor ? resumeFrom.cursor.cursorBlockTime : null;
+  let seenAtCursor = new Set<number>(resumeFrom?.cursor ? resumeFrom.cursor.seenAtCursorIds : []);
 
   while (true) {
     let batch: BlockchainTransaction[];
@@ -443,16 +472,6 @@ export async function getOrderedTxidsForTxEntityFilterPrefix(
     );
 
     if (fresh.length > 0) {
-      // Advance the cursor past the processed rows.
-      const lastBlockTime = fresh[fresh.length - 1].blockTime;
-      if (lastBlockTime !== cursorBlockTime) {
-        cursorBlockTime = lastBlockTime;
-        seenAtCursor = new Set<number>();
-      }
-      for (const t of fresh) {
-        if (t.blockTime === cursorBlockTime && t.id != null) seenAtCursor.add(t.id as number);
-      }
-
       const txids = fresh.map(t => t.txid);
       const parts = await db.transactionParticipants.where('txid').anyOf(txids).toArray();
       const byTxid = new Map<string, TransactionParticipant[]>();
@@ -462,8 +481,17 @@ export async function getOrderedTxidsForTxEntityFilterPrefix(
         else byTxid.set(p.txid, [p]);
       }
 
-      for (const txid of txids) {
-        const txParts = byTxid.get(txid) ?? [];
+      for (const t of fresh) {
+        // Advance the cursor past THIS row before deciding it, so an early
+        // return's cursor never claims unprocessed rows as seen (resume would
+        // otherwise skip them).
+        if (t.blockTime !== cursorBlockTime) {
+          cursorBlockTime = t.blockTime;
+          seenAtCursor = new Set<number>();
+        }
+        if (t.id != null) seenAtCursor.add(t.id as number);
+
+        const txParts = byTxid.get(t.txid) ?? [];
         let matches = !address || txParts.some(p => p.address === address);
         if (matches) {
           for (const idSet of recordIdSets) {
@@ -474,15 +502,21 @@ export async function getOrderedTxidsForTxEntityFilterPrefix(
           }
         }
         if (matches) {
-          orderedTxids.push(txid);
+          orderedTxids.push(t.txid);
           if (orderedTxids.length >= neededCount) {
-            return { orderedTxids, exhausted: false };
+            return {
+              orderedTxids,
+              exhausted: false,
+              cursor: cursorBlockTime === null
+                ? null
+                : { cursorBlockTime, seenAtCursorIds: Array.from(seenAtCursor) },
+            };
           }
         }
       }
     }
 
-    if (exhaustedTable) return { orderedTxids, exhausted: true };
+    if (exhaustedTable) return { orderedTxids, exhausted: true, cursor: null };
     if (pause) await pause();
   }
 }

@@ -694,6 +694,15 @@ export default function Transactions() {
   // this walk stops as soon as it has enough matches to cover the current page,
   // so the first page renders in bounded time. It only runs while the full set
   // is unresolved on the Dexie path, and returns null everywhere else.
+  //
+  // Walk-position cache (Task #1705): the prefix walk carries a resume cursor,
+  // so paging forward extends the previous walk instead of re-scanning from the
+  // newest transaction (Next-page is O(page), not O(pages²)). `signature`
+  // captures the query identity and resets the cache when it changes.
+  const prefixWalkCacheRef = useRef<{
+    signature: string;
+    result: TxEntityFilterPrefix | null;
+  }>({ signature: '', result: null });
   const { value: fallbackTxidPrefix } = useAsyncMemo(async (signal) => {
     const needsSet = !includeBlockchainDiscovered || hasEntityFilter;
     if (!needsSet || fallbackTxidState.set !== null || fallbackTxidState.engine) {
@@ -702,11 +711,26 @@ export default function Transactions() {
     const decision = await evaluateEngineFreshness('transactions');
     checkAbort(signal);
     if (decision.useEngine) return null as TxEntityFilterPrefix | null;
-    return getOrderedTxidsForTxEntityFilterPrefix(
+
+    const cache = prefixWalkCacheRef.current;
+    const signature = JSON.stringify({
+      inc: includeBlockchainDiscovered, ent: entitySignature, db: txDbSignal,
+    });
+    if (cache.signature !== signature) {
+      cache.signature = signature;
+      cache.result = null;
+    }
+    const result = await getOrderedTxidsForTxEntityFilterPrefix(
       { ...entityFilter, curatedOnly: !includeBlockchainDiscovered || undefined },
       currentPage * ITEMS_PER_PAGE,
       async () => { checkAbort(signal); await yieldToUI(); },
+      undefined,
+      cache.result ?? undefined,
     );
+    // Only cache walks that completed for the current signature (an aborted
+    // walk never reaches here; a signature change mid-walk must not be cached).
+    if (cache.signature === signature) cache.result = result;
+    return result;
   }, [includeBlockchainDiscovered, hasEntityFilter, entitySignature, currentPage,
       fallbackTxidState, txDbSignal, engineReadySignal],
      null as TxEntityFilterPrefix | null);
