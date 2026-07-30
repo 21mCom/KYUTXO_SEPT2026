@@ -75,4 +75,5 @@
 - [Tx entity-filter parity](tx-entity-filter-parity.md) — filters are AND-of-independent-EXISTS (Dexie must intersect per-dimension txid sets); curatedOnly excludes NULL importance; vocab dropdowns need explicit vocab rows.
 - [Full-vault stats recompute](full-vault-stats-recompute.md) — whole-vault recompute = single streaming table scans, not per-batch anyOf; attribute prevout spends post-scan; never benchmark right after bulk seeding.
 - [Legacy-vault upgrade journey](legacy-vault-upgrade-journey.md) — v25 encrypted-at-rest vaults: pre-unlock schema walk + post-unlock decrypt+verify all need visible progress; seed browser tests via a static asset URL so the app never opens the DB first.
+- [Merge-cancel undo log](merge-cancel-undo-log.md) — every merge insert path (incl. inline lineage + writeReview files) must join the session undo log or cancel leaves residue.
 - [v3 merge de-dup contract](v3-merge-dedup-contract.md) — merge restore must de-dupe EVERY table (streamed + inline) by natural key, incl. same-batch/cross-batch dups; partial coverage fails review.

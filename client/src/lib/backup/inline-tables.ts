@@ -365,10 +365,21 @@ export async function clearInlineTables(): Promise<void> {
   // the restore orchestrator clears them, not this inline path.
 }
 
+// Ids of DATA rows an inline restore inserted into the lineage compatibility
+// tables (older v3 backups carried utxoLineage / custodySegments /
+// lineageSnapshots inline instead of streamed). Returned so the merge-cancel
+// undo pass in restore.ts can remove them along with the streamed-table rows —
+// otherwise cancelling a merge of an OLD backup would leave these behind.
+export interface InlineRestoreResult {
+  insertedUtxoLineageIds: number[];
+  insertedCustodySegmentIds: number[];
+  insertedLineageSnapshotIds: number[];
+}
+
 export async function restoreInlineTables(
   data: Record<string, unknown>,
   restoreMode: RestoreMode = "replace",
-): Promise<void> {
+): Promise<InlineRestoreResult> {
   const arr = (k: string): any[] => (Array.isArray(data[k]) ? (data[k] as any[]) : []);
   const now = Date.now();
 
@@ -572,11 +583,21 @@ export async function restoreInlineTables(
     }
   }
 
+  const result: InlineRestoreResult = {
+    insertedUtxoLineageIds: [],
+    insertedCustodySegmentIds: [],
+    insertedLineageSnapshotIds: [],
+  };
+
   if (lineageRows.length) {
-    await bulkAddUtxoLineage(lineageRows as any[], { skipNotification: true });
+    result.insertedUtxoLineageIds = await bulkAddUtxoLineage(lineageRows as any[], {
+      skipNotification: true,
+    });
   }
   if (segmentRows.length) {
-    await bulkAddCustodySegments(segmentRows as any[], { skipNotification: true });
+    result.insertedCustodySegmentIds = await bulkAddCustodySegments(segmentRows as any[], {
+      skipNotification: true,
+    });
   }
 
   // lineageSnapshots (selective-disclosure proof artifacts) are a streamed table
@@ -603,11 +624,14 @@ export async function restoreInlineTables(
   }
 
   if (snapshotRows.length) {
-    await bulkAddLineageSnapshots(snapshotRows as any[], { skipNotification: true });
+    result.insertedLineageSnapshotIds = await bulkAddLineageSnapshots(snapshotRows as any[], {
+      skipNotification: true,
+    });
   }
 
   // NOTE: recordOrigins is intentionally NOT restored (matches legacy restore
   // behaviour). The `settings` table is not wholesale restored either, but a
   // small allow-list of portable preferences is merged via
   // restoreSettingsPreferences above.
+  return result;
 }

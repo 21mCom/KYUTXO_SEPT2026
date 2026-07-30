@@ -630,20 +630,37 @@ export function RestoreBackupFlow() {
           }, 2000);
         } else {
           // Cancelled before the clear (or during a merge, which never clears).
-          // A merge may already have added some backup rows — none of the
-          // existing data was touched, but be honest that partial additions can
-          // remain.
+          // A cancelled merge runs an automatic undo pass that removes exactly
+          // the rows it had already added (error.mergeUndone reports whether it
+          // completed) — so the common case is a truly clean cancel. Only when
+          // the undo itself failed do partial additions remain.
+          let mergeMsg = "No changes were made — your existing data is intact.";
+          if (restoreMode === "merge") {
+            if (error.mergeUndone) {
+              const n = error.mergeUndoRowsRemoved ?? 0;
+              mergeMsg =
+                n > 0
+                  ? `Merge cancelled. The ${n} data row${n !== 1 ? "s" : ""} added before the cancel ${n !== 1 ? "were" : "was"} removed, so your records, transactions, and history are exactly as they were. Small metadata merged from the backup (tags, owners, field definitions) may remain.`
+                  : "Merge cancelled before any data was added — your records, transactions, and history are exactly as they were.";
+            } else {
+              mergeMsg =
+                "Merge cancelled. Your existing data is intact, but the automatic undo of already-merged rows did not complete, so some backup rows may remain. Re-running the merge is safe — duplicates are skipped.";
+            }
+          }
           toast({
             title: "Restore Cancelled",
-            description:
-              restoreMode === "merge"
-                ? "Merge cancelled. Your existing data is intact; any backup data already merged before the cancel remains."
-                : "No changes were made — your existing data is intact.",
+            description: mergeMsg,
           });
           if (restoreMode === "merge") {
-            // Merged rows may include transaction records missing on-chain
-            // data; let the startup orphan check re-evaluate.
-            resetOrphanCheckGate();
+            // Undo the portable preferences the backup's inline-restore phase
+            // merged into settings before the cancel, so a cancelled merge
+            // doesn't silently carry the backup's preferences either.
+            await undoInlinePrefs();
+            if (!error.mergeUndone) {
+              // Remaining merged rows may include transaction records missing
+              // on-chain data; let the startup orphan check re-evaluate.
+              resetOrphanCheckGate();
+            }
           }
         }
         return;

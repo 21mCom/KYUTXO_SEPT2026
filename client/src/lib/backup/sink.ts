@@ -29,6 +29,18 @@ export interface BackupSink {
 // vault was reset to a known-empty state) or the existing vault is still intact.
 export class BackupCancelledError extends Error {
   clearedBeforeCancel?: boolean;
+  // Merge-mode cancel outcome (v3 restore only). When a merge is cancelled
+  // mid-stream, the restore runs an undo pass that removes exactly the rows
+  // that merge had already inserted (see the merge undo log in restore.ts):
+  //   - mergeUndone: the undo pass ran and completed — the streamed tables are
+  //     back to their pre-merge state.
+  //   - mergeUndoRowsRemoved: how many inserted rows the undo pass removed.
+  //   - mergeUndoFailed: the undo pass itself threw partway — some rows added
+  //     by the cancelled merge may remain (re-running the merge is still safe;
+  //     every table de-dupes by natural key).
+  mergeUndone?: boolean;
+  mergeUndoRowsRemoved?: number;
+  mergeUndoFailed?: boolean;
 
   constructor(message = "Backup cancelled") {
     super(message);

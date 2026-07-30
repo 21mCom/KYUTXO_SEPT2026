@@ -501,6 +501,31 @@ export async function bulkUpdateAddressStats(
   return toSave.length;
 }
 
+// Bulk delete by primary key, WITHOUT the attachment-archiving cascade that
+// deleteRecord performs. Used ONLY by the merge-cancel undo pass in the v3
+// restore: the rows (and their attachment rows) were inserted by the merge
+// itself moments earlier and are removed together, so archiving their
+// attachments as "recoverable" would be noise, not safety.
+export async function bulkDeleteRecords(
+  ids: number[],
+  options?: DeleteRecordOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+
+  const existing = await db.records.bulkGet(ids);
+  await db.records.bulkDelete(ids);
+
+  // Drop hover-metadata cache entries so any visible AddressLink/TxidLink for
+  // a removed record clears immediately instead of lingering for the TTL.
+  for (const r of existing) {
+    if (r?.inputString) invalidateHoverCache(r.inputString);
+  }
+
+  if (!options?.skipNotification) {
+    notifyDbChange('records');
+  }
+}
+
 export interface DeleteRecordOptions {
   skipNotification?: boolean;
 }

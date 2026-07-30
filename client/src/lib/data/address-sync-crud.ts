@@ -22,10 +22,29 @@ export async function addAddressSyncState(
 export async function bulkAddAddressSyncState(
   data: CreateAddressSyncStateData[],
   options?: AddressSyncStateWriteOptions
-): Promise<void> {
-  if (data.length === 0) return;
+): Promise<number[]> {
+  if (data.length === 0) return [];
 
-  await db.addressSyncState.bulkAdd(data as AddressSyncState[]);
+  const ids = await db.addressSyncState.bulkAdd(data as AddressSyncState[], {
+    allKeys: true,
+  });
+
+  if (!options?.skipNotification) {
+    notifyDbChange('addressSyncState');
+  }
+
+  return ids as number[];
+}
+
+// Bulk delete by primary key. Used by the merge-cancel undo pass in the v3
+// restore to remove exactly the rows that merge inserted.
+export async function bulkDeleteAddressSyncState(
+  ids: number[],
+  options?: AddressSyncStateWriteOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+
+  await db.addressSyncState.bulkDelete(ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('addressSyncState');

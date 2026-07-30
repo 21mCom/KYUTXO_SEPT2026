@@ -23,10 +23,27 @@ export async function addUtxoLineage(
 export async function bulkAddUtxoLineage(
   records: UtxoLineage[],
   options?: LineageWriteOptions
-): Promise<void> {
-  if (records.length === 0) return;
+): Promise<number[]> {
+  if (records.length === 0) return [];
 
-  await db.utxoLineage.bulkAdd(records);
+  const ids = await db.utxoLineage.bulkAdd(records, { allKeys: true });
+
+  if (!options?.skipNotification) {
+    notifyDbChange('utxoLineage');
+  }
+
+  return ids as number[];
+}
+
+// Bulk delete by primary key. Used by the merge-cancel undo pass in the v3
+// restore to remove exactly the rows that merge inserted.
+export async function bulkDeleteUtxoLineage(
+  ids: number[],
+  options?: LineageWriteOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+
+  await db.utxoLineage.bulkDelete(ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('utxoLineage');
@@ -71,10 +88,27 @@ export async function addCustodySegment(
 export async function bulkAddCustodySegments(
   records: CustodySegment[],
   options?: LineageWriteOptions
-): Promise<void> {
-  if (records.length === 0) return;
+): Promise<number[]> {
+  if (records.length === 0) return [];
 
-  await db.custodySegments.bulkAdd(records);
+  const ids = await db.custodySegments.bulkAdd(records, { allKeys: true });
+
+  if (!options?.skipNotification) {
+    notifyDbChange('custodySegments');
+  }
+
+  return ids as number[];
+}
+
+// Bulk delete by primary key. Used by the merge-cancel undo pass in the v3
+// restore to remove exactly the rows that merge inserted.
+export async function bulkDeleteCustodySegments(
+  ids: number[],
+  options?: LineageWriteOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+
+  await db.custodySegments.bulkDelete(ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('custodySegments');
@@ -120,10 +154,27 @@ export async function addLineageSnapshot(
 export async function bulkAddLineageSnapshots(
   records: LineageSnapshot[],
   options?: LineageWriteOptions
-): Promise<void> {
-  if (records.length === 0) return;
+): Promise<number[]> {
+  if (records.length === 0) return [];
 
-  await db.lineageSnapshots.bulkAdd(records);
+  const ids = await db.lineageSnapshots.bulkAdd(records, { allKeys: true });
+
+  if (!options?.skipNotification) {
+    notifyDbChange('lineageSnapshots');
+  }
+
+  return ids as number[];
+}
+
+// Bulk delete by primary key. Used by the merge-cancel undo pass in the v3
+// restore to remove exactly the rows that merge inserted.
+export async function bulkDeleteLineageSnapshots(
+  ids: number[],
+  options?: LineageWriteOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+
+  await db.lineageSnapshots.bulkDelete(ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('lineageSnapshots');

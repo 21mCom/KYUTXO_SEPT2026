@@ -36,12 +36,14 @@ import { deriveKey, decrypt, base64ToBuffer } from "@/lib/crypto";
 import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import {
   bulkCreateRecords,
+  bulkDeleteRecords,
   clearAllRecords,
   getRecordsByInputStrings,
   type CreateRecordData,
 } from "@/lib/data/record-crud";
 import {
   bulkAddAttachments,
+  bulkDeleteAttachments,
   clearAttachments,
   getAllAttachments,
   type CreateAttachmentData,
@@ -50,6 +52,8 @@ import {
   bulkAddParticipants,
   bulkPutParticipants,
   bulkAddTransactions,
+  bulkDeleteParticipants,
+  bulkDeleteTransactions,
   clearParticipants,
   clearTransactions,
   getTransactionsByTxids,
@@ -59,6 +63,7 @@ import {
 } from "@/lib/data/transaction-crud";
 import {
   bulkAddAddressSyncState,
+  bulkDeleteAddressSyncState,
   clearAddressSyncState,
   getAllAddressSyncState,
   type CreateAddressSyncStateData,
@@ -67,6 +72,9 @@ import {
   bulkAddUtxoLineage,
   bulkAddCustodySegments,
   bulkAddLineageSnapshots,
+  bulkDeleteUtxoLineage,
+  bulkDeleteCustodySegments,
+  bulkDeleteLineageSnapshots,
   clearUtxoLineage,
   clearCustodySegments,
   clearLineageSnapshots,
@@ -80,7 +88,11 @@ import type {
   CustodySegment,
   LineageSnapshot,
 } from "@/lib/database";
-import { clearInlineTables, restoreInlineTables } from "./inline-tables";
+import {
+  clearInlineTables,
+  restoreInlineTables,
+  type InlineRestoreResult,
+} from "./inline-tables";
 import {
   mergeDuplicateTransactionsByTxid,
   computeTransactionEnrichment,
@@ -190,7 +202,14 @@ export interface AttachmentFileWriter {
   // Called in place of write() for orphaned files. Best-effort: failures are
   // swallowed rather than aborting the restore (the orphan is counted but the
   // bytes are lost, which is still better than silently vanishing).
-  writeReview?(originalFilename: string, data: ArrayBuffer): Promise<void>;
+  // Should return the FINAL filename actually written (the folder de-dupes
+  // colliding names), so a cancelled merge can undo exactly that file via
+  // deleteReview(); `void` is tolerated (no undo possible, e.g. web no-op).
+  writeReview?(originalFilename: string, data: ArrayBuffer): Promise<string | void>;
+  // Optional: delete a file previously written by writeReview(), identified by
+  // the exact filename writeReview() returned. Used only by the merge-cancel
+  // undo pass; best-effort.
+  deleteReview?(name: string): Promise<void>;
 }
 
 export interface RestoreProgress {
@@ -211,10 +230,13 @@ export interface RestoreOptions {
   // participants ENRICH the live row's missing fields instead of duplicating it.
   restoreMode?: RestoreMode;
   clearInline?: () => Promise<void>;
+  // Should return the InlineRestoreResult from restoreInlineTables (ids of any
+  // lineage rows inserted from inline compatibility data, so a merge cancel
+  // can undo them); `void` is tolerated for older test doubles.
   restoreInline?: (
     data: Record<string, unknown>,
     restoreMode: RestoreMode,
-  ) => Promise<void>;
+  ) => Promise<InlineRestoreResult | void>;
   onProgress?: (p: RestoreProgress) => void;
   signal?: AbortSignal;
 }
@@ -292,6 +314,129 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   // repeats in a LATER streamed batch maps to the already-inserted row instead
   // of creating a duplicate with a diverging id for dependent rows.
   const mergedRecordIdByInputString = new Map<string, number>();
+
+  // ---------------------------------------------------------------------------
+  // MERGE-CANCEL UNDO — approach decision (task: cleanly recover after
+  // cancelling a merge halfway through).
+  //
+  // Chosen approach: an IN-MEMORY restore-session undo log. While a merge
+  // streams, every row it INSERTS is recorded by primary key (the bulkAdd*
+  // helpers return the new ids), and every live row it ENRICHES records the
+  // prior values of exactly the fields it changed. If the user cancels, the
+  // undo pass deletes precisely those rows and reverts precisely those fields,
+  // returning the streamed tables to their pre-merge state.
+  //
+  // Alternatives considered and rejected:
+  //   - Tagging merged rows with a restore session id in the DB: requires a
+  //     Dexie schema bump across all eight streamed tables (plus an engine
+  //     schema bump — see the engine-mirror rules), leaks restore bookkeeping
+  //     into every row forever, and still needs a separate mechanism for
+  //     enrichment (which modifies EXISTING rows and so can't be found by tag).
+  //   - Snapshot-diff (snapshot the vault before the merge, diff after cancel):
+  //     unaffordable at scale — vaults can hold millions of rows and the whole
+  //     point of the streaming restore is never materialising them.
+  //
+  // The log lives only for the duration of this restore call, which is exactly
+  // the window in which a cancel can happen; it costs one id per inserted row.
+  // Scope: the undo covers every DATA table a merge can insert into — the
+  // STREAMED tables (records, attachments, transactions, participants,
+  // addressSyncState, lineage tables), the attachment FILES this merge wrote,
+  // AND lineage/segments/snapshots restored from INLINE compatibility data in
+  // older v3 backups (restoreInlineTables returns their inserted ids, which
+  // join this log). Inline METADATA merged from the manifest (vocabulary
+  // names, custom fields, templates, evidence, prices) is NOT rolled back
+  // here — those merges are tiny, de-duped by natural key, and complete
+  // before the first streamed row, while portable preferences are separately
+  // restored by the UI's pre-restore snapshot (undoInlinePrefs).
+  // If the undo pass itself fails partway, the cancel error reports
+  // mergeUndoFailed and the old contract holds: re-running the merge is safe
+  // because every table de-dupes by natural key.
+  // ---------------------------------------------------------------------------
+  const mergeUndoLog = isMerge
+    ? {
+        recordIds: [] as number[],
+        attachmentIds: [] as number[],
+        participantIds: [] as number[],
+        transactionIds: [] as number[],
+        syncStateIds: [] as number[],
+        lineageIds: [] as number[],
+        segmentIds: [] as number[],
+        snapshotIds: [] as number[],
+        // Prior values of the exact fields updateTransaction() enriched, so a
+        // cancel restores the live transaction to its pre-merge shape.
+        txEnrichPriors: [] as Array<{ id: number; prior: Partial<CreateTransactionData> }>,
+        // Original live participant rows captured BEFORE their first
+        // enrichment this merge (full-row put restores them verbatim).
+        participantPriorById: new Map<number, TransactionParticipant>(),
+        // objectStoragePaths of attachment ROWS this merge inserted. Only the
+        // files backing these rows are deleted on undo — a written file whose
+        // row was de-duped collided with pre-existing content (sha-derived
+        // path) and must be kept, since a live row still references it.
+        insertedAttachmentPaths: new Set<string>(),
+        // Exact filenames writeReview() reported writing to the Needs Review
+        // folder during THIS merge, so a cancel removes those bytes too.
+        reviewFilesWritten: [] as string[],
+      }
+    : null;
+
+  // Removes everything the (cancelled) merge added: inserted rows by id,
+  // enrichment reverts, and attachment files whose rows this merge created.
+  // Returns the number of inserted rows removed.
+  async function undoMergeAdditions(): Promise<number> {
+    const log = mergeUndoLog!;
+    // Dependent rows first, records last, enrich-reverts anywhere after their
+    // tables' deletes (they touch rows that pre-existed the merge).
+    await bulkDeleteAttachments(log.attachmentIds, { skipNotification: true });
+    await bulkDeleteParticipants(log.participantIds, { skipNotification: true });
+    await bulkDeleteAddressSyncState(log.syncStateIds, { skipNotification: true });
+    await bulkDeleteUtxoLineage(log.lineageIds, { skipNotification: true });
+    await bulkDeleteCustodySegments(log.segmentIds, { skipNotification: true });
+    await bulkDeleteLineageSnapshots(log.snapshotIds, { skipNotification: true });
+    await bulkDeleteTransactions(log.transactionIds, { skipNotification: true });
+    for (const { id, prior } of log.txEnrichPriors) {
+      await updateTransaction(id, prior, { skipNotification: true });
+    }
+    if (log.participantPriorById.size > 0) {
+      await bulkPutParticipants(Array.from(log.participantPriorById.values()), {
+        skipNotification: true,
+      });
+    }
+    await bulkDeleteRecords(log.recordIds, { skipNotification: true });
+    // Attachment files: sweep only files backing rows THIS merge inserted.
+    const del = opts.attachmentWriter.delete;
+    if (del) {
+      for (const relPath of writtenFiles) {
+        if (!log.insertedAttachmentPaths.has(relPath)) continue;
+        try {
+          await del.call(opts.attachmentWriter, relPath);
+        } catch {
+          // best-effort — an undeleted file stays discoverable by the audit
+        }
+      }
+    }
+    // Needs Review files this merge created for orphaned attachments: remove
+    // them too, using the exact filenames writeReview() reported.
+    const delReview = opts.attachmentWriter.deleteReview;
+    if (delReview) {
+      for (const name of log.reviewFilesWritten) {
+        try {
+          await delReview.call(opts.attachmentWriter, name);
+        } catch {
+          // best-effort — the file stays visible in the Needs Review folder
+        }
+      }
+    }
+    return (
+      log.recordIds.length +
+      log.attachmentIds.length +
+      log.participantIds.length +
+      log.transactionIds.length +
+      log.syncStateIds.length +
+      log.lineageIds.length +
+      log.segmentIds.length +
+      log.snapshotIds.length
+    );
+  }
 
   let manifest: BackupManifest | null = null;
   // Set synchronously when the manifest entry's header is reached. onEntry is
@@ -494,6 +639,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         skipNotification: true,
         skipVocabularySync: true,
       });
+      if (mergeUndoLog) mergeUndoLog.recordIds.push(...newIds);
       for (let i = 0; i < newIds.length; i++) {
         const o = oldIds[i];
         if (typeof o === "number") idMap.set(o, newIds[i]);
@@ -544,7 +690,17 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         }
         out.push({ ...d, recordId } as CreateAttachmentData);
       }
-      if (out.length) await bulkAddAttachments(out, { skipNotification: true });
+      if (out.length) {
+        const newIds = await bulkAddAttachments(out, { skipNotification: true });
+        if (mergeUndoLog) {
+          mergeUndoLog.attachmentIds.push(...newIds);
+          for (const a of out) {
+            if (a.objectStoragePath) {
+              mergeUndoLog.insertedAttachmentPaths.add(String(a.objectStoragePath));
+            }
+          }
+        }
+      }
       counts.attachments += out.length;
     } else if (table === "transactionParticipants") {
       let incoming = rows;
@@ -587,6 +743,11 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               recordId: remappedRecordId,
             });
             if (Object.keys(changes).length > 0) {
+              // Capture the ORIGINAL live row before its first enrichment this
+              // merge, so a cancel can put it back verbatim.
+              if (mergeUndoLog && !mergeUndoLog.participantPriorById.has(liveMatch.id)) {
+                mergeUndoLog.participantPriorById.set(liveMatch.id, { ...liveMatch });
+              }
               toEnrichById.set(liveMatch.id, { ...existing, ...changes });
             }
             continue;
@@ -602,7 +763,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         recordId: remap(idMap, d.recordId),
       }));
       if (out.length) {
-        await bulkAddParticipants(out as TransactionParticipant[], { skipNotification: true });
+        const newIds = await bulkAddParticipants(out as TransactionParticipant[], {
+          skipNotification: true,
+        });
+        if (mergeUndoLog) mergeUndoLog.participantIds.push(...newIds);
       }
       if (toEnrichById.size > 0) {
         await bulkPutParticipants(Array.from(toEnrichById.values()), {
@@ -633,9 +797,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         recordId: remap(idMap, d.recordId),
       }));
       if (out.length) {
-        await bulkAddAddressSyncState(out as CreateAddressSyncStateData[], {
+        const newIds = await bulkAddAddressSyncState(out as CreateAddressSyncStateData[], {
           skipNotification: true,
         });
+        if (mergeUndoLog) mergeUndoLog.syncStateIds.push(...newIds);
       }
       counts.addressSyncState += out.length;
     } else if (table === "blockchainTransactions") {
@@ -667,6 +832,18 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
           if (live && typeof live.id === "number") {
             const changes = computeTransactionEnrichment(live, tx);
             if (Object.keys(changes).length > 0) {
+              if (mergeUndoLog) {
+                // Record the live row's prior values for exactly the fields
+                // this enrichment writes, so a cancel can revert them.
+                const prior: Record<string, unknown> = {};
+                for (const k of Object.keys(changes)) {
+                  prior[k] = (live as Record<string, unknown>)[k];
+                }
+                mergeUndoLog.txEnrichPriors.push({
+                  id: live.id,
+                  prior: prior as Partial<CreateTransactionData>,
+                });
+              }
               await updateTransaction(live.id, changes, { skipNotification: true });
             }
             continue;
@@ -675,7 +852,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         }
       }
       const out = toInsert.map(({ id, ...d }) => d as CreateTransactionData);
-      if (out.length) await bulkAddTransactions(out, { skipNotification: true });
+      if (out.length) {
+        const newIds = await bulkAddTransactions(out, { skipNotification: true });
+        if (mergeUndoLog) mergeUndoLog.transactionIds.push(...newIds);
+      }
       counts.blockchainTransactions += out.length;
     } else if (table === "utxoLineage") {
       // No recordId: rows relink by txid/vout, so insert as-is (drop old id).
@@ -697,7 +877,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         });
       }
       const out = incoming.map(({ id, ...d }) => d as UtxoLineage);
-      if (out.length) await bulkAddUtxoLineage(out, { skipNotification: true });
+      if (out.length) {
+        const newIds = await bulkAddUtxoLineage(out, { skipNotification: true });
+        if (mergeUndoLog) mergeUndoLog.lineageIds.push(...newIds);
+      }
       counts.utxoLineage += out.length;
     } else if (table === "custodySegments") {
       // No recordId: rows relink by segmentId/txid, so insert as-is (drop old
@@ -716,7 +899,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         });
       }
       const out = incoming.map(({ id, ...d }) => d as CustodySegment);
-      if (out.length) await bulkAddCustodySegments(out, { skipNotification: true });
+      if (out.length) {
+        const newIds = await bulkAddCustodySegments(out, { skipNotification: true });
+        if (mergeUndoLog) mergeUndoLog.segmentIds.push(...newIds);
+      }
       counts.custodySegments += out.length;
     } else if (table === "lineageSnapshots") {
       // No recordId: selective-disclosure proof artifacts keyed by their own
@@ -736,7 +922,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         });
       }
       const out = incoming.map(({ id, ...d }) => d as LineageSnapshot);
-      if (out.length) await bulkAddLineageSnapshots(out, { skipNotification: true });
+      if (out.length) {
+        const newIds = await bulkAddLineageSnapshots(out, { skipNotification: true });
+        if (mergeUndoLog) mergeUndoLog.snapshotIds.push(...newIds);
+      }
       counts.lineageSnapshots += out.length;
     }
     processed += rows.length;
@@ -811,7 +1000,16 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
 
             opts.onProgress?.({ percent: 9, phase: "Restoring metadata..." });
             const inline = await parseInline(manifest, key);
-            await restoreInlineFn(inline, restoreMode);
+            const inlineResult = await restoreInlineFn(inline, restoreMode);
+            // Older v3 backups carry lineage/segments/snapshots INLINE instead
+            // of streamed; those inserts are data rows too and must be part of
+            // the merge-cancel undo log or cancelling a merge of an old backup
+            // would leave them behind.
+            if (mergeUndoLog && inlineResult) {
+              mergeUndoLog.lineageIds.push(...inlineResult.insertedUtxoLineageIds);
+              mergeUndoLog.segmentIds.push(...inlineResult.insertedCustodySegmentIds);
+              mergeUndoLog.snapshotIds.push(...inlineResult.insertedLineageSnapshotIds);
+            }
           });
         }
 
@@ -856,7 +1054,15 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               // failure is tallied separately so the user can be warned that
               // those bytes could not be saved anywhere.
               try {
-                await opts.attachmentWriter.writeReview?.(orphanFilename, ab);
+                const reviewName = await opts.attachmentWriter.writeReview?.(
+                  orphanFilename,
+                  ab,
+                );
+                // A cancelled merge must sweep Needs Review files it created;
+                // the writer reports the de-duped final filename.
+                if (mergeUndoLog && typeof reviewName === "string") {
+                  mergeUndoLog.reviewFilesWritten.push(reviewName);
+                }
               } catch {
                 // intentionally swallowed — best-effort routing
                 counts.orphanedAttachmentFilesLost += 1;
@@ -899,6 +1105,23 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         const cancelErr =
           err instanceof BackupCancelledError ? err : new BackupCancelledError();
         cancelErr.clearedBeforeCancel = false;
+        // Merge mode always lands here (merge never clears). Undo everything
+        // this merge already added so a cancel leaves the vault EXACTLY as it
+        // was — see the merge undo log above for the approach decision. If the
+        // undo itself fails partway, report it honestly on the error: partial
+        // additions may remain, but re-running the merge stays safe (every
+        // table de-dupes by natural key).
+        if (mergeUndoLog) {
+          opts.onProgress?.({ percent: 0, phase: "Cancelling — removing merged rows..." });
+          try {
+            cancelErr.mergeUndoRowsRemoved = await undoMergeAdditions();
+            cancelErr.mergeUndone = true;
+          } catch (undoErr) {
+            console.warn("Merge-cancel undo failed:", undoErr);
+            cancelErr.mergeUndone = false;
+            cancelErr.mergeUndoFailed = true;
+          }
+        }
         throw cancelErr;
       }
 

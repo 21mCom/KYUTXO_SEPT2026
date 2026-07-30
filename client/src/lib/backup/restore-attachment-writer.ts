@@ -57,12 +57,29 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
     },
     // Orphaned files: owning record absent. Route to Needs Review folder
     // under the original filename. Best-effort in Electron; no-op in web.
+    // Returns the FINAL filename written (the folder de-dupes collisions) so
+    // a cancelled merge can undo exactly that file via deleteReview().
     async writeReview(originalFilename, fileData) {
       if (isElectron()) {
         const api = getElectronAPI();
         const result = await api.writeNeedsReview(originalFilename, fileData);
         if (!result.success) {
           throw new Error(result.error ?? `Failed to write ${originalFilename} to Needs Review folder`);
+        }
+        if (result.path) {
+          const base = result.path.split(/[\\/]/).pop();
+          if (base) return base;
+        }
+      }
+    },
+    // Remove a Needs Review file previously reported by writeReview(); used by
+    // the merge-cancel undo pass. No-op in web (writeReview is too).
+    async deleteReview(name) {
+      if (isElectron()) {
+        const api = getElectronAPI();
+        const result = await api.deleteNeedsReview(name);
+        if (!result.success) {
+          throw new Error(result.error ?? `Failed to delete ${name} from Needs Review folder`);
         }
       }
     },

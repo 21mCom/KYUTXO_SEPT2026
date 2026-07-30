@@ -75,6 +75,21 @@ export async function deleteAttachment(
   }
 }
 
+// Bulk delete by primary key. Used by the merge-cancel undo pass in the v3
+// restore to remove exactly the attachment rows that merge inserted.
+export async function bulkDeleteAttachments(
+  ids: number[],
+  options?: AttachmentWriteOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+
+  await db.attachments.bulkDelete(ids);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('attachments');
+  }
+}
+
 export async function deleteAttachmentsByRecordId(
   recordId: number,
   options?: AttachmentWriteOptions

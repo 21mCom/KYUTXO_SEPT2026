@@ -32,7 +32,7 @@ import {
   RestoreInterruptedError,
   type AttachmentFileWriter,
 } from "./restore";
-import { MemorySink, type BackupSink } from "./sink";
+import { BackupCancelledError, MemorySink, type BackupSink } from "./sink";
 import { blobChunks } from "./zip-stream";
 
 import { db } from "@/lib/database";
@@ -632,6 +632,260 @@ describe("v3 merge restore", () => {
     const sync = await getAllAddressSyncState();
     expect(sync).toHaveLength(1);
     expect(sync[0].recordId).toBe(dups[0].id);
+  });
+
+  it("cancelling a merge mid-stream UNDOES everything the merge added: inserted rows removed, enriched rows reverted, vault byte-identical to before", async () => {
+    // Backup with a real attachment FILE entry so the ZIP stream ends with a
+    // file-bytes entry — aborting there guarantees every NDJSON table (records,
+    // participants, sync state, transactions incl. enrichment, lineage) was
+    // already merged before the cancel, the worst case the undo must handle.
+    const exportedRecordId = await seedExportedVault();
+    // A SECOND attachment row/file so the abort (fired on the progress report
+    // AFTER file 1 is written) is caught by file 2's abort check — aborting on
+    // the last entry's report would let the stream finish successfully.
+    await addAttachment(
+      {
+        recordId: exportedRecordId,
+        filename: "invoice.pdf",
+        mimeType: "application/pdf",
+        size: 99,
+        objectStoragePath: "cd/invoice-hash.bin",
+        createdAt: 1_700_000_000_000,
+      },
+      { skipNotification: true },
+    );
+    // An ORPHAN attachment row (recordId that exists in no exported record) so
+    // the restore routes its file bytes to the Needs Review folder via
+    // writeReview() — a cancelled merge must sweep that file too. Its export
+    // position (2nd of 3, listAll order) also guarantees a later entry exists
+    // whose abort check fires after we cancel inside writeReview.
+    await addAttachment(
+      {
+        recordId: 999_999,
+        filename: "stray-deed.pdf",
+        mimeType: "application/pdf",
+        size: 55,
+        objectStoragePath: "ef/orphan-hash.bin",
+        createdAt: 1_700_000_000_000,
+      },
+      { skipNotification: true },
+    );
+    const fileIO: AttachmentFileIO = {
+      async listAll() {
+        return ["ab/receipt-hash.bin", "ef/orphan-hash.bin", "cd/invoice-hash.bin"];
+      },
+      async read() {
+        return new Uint8Array([1, 2, 3, 4]).buffer;
+      },
+    };
+    const sink = new MemorySink();
+    await exportBackup({
+      sink: sink as BackupSink,
+      encrypted: false,
+      batchSize: 25,
+      attachmentIO: fileIO,
+    });
+    const blob = sink.blob as Blob;
+
+    // Live vault: DIFFERENT from the backup — local-only record/tx/sync rows
+    // plus a placeholder copy of the shared tx the merge will ENRICH. All the
+    // backup-only rows (shared record's lineage etc. were kept; clear them so
+    // the merge really inserts rows to undo).
+    await clearEverything();
+    await seedLocalVaultForMerge();
+    const before = await snapshotVault();
+
+    const deletedFiles: string[] = [];
+    const deletedReviewFiles: string[] = [];
+    const controller = new AbortController();
+    const trackingWriter: AttachmentFileWriter = {
+      async write() {},
+      async delete(relPath: string) {
+        deletedFiles.push(relPath);
+      },
+      // The orphan's bytes land here (2nd file entry). Abort NOW: file 1 was
+      // written normally, every NDJSON table is merged, and file 3's abort
+      // check turns the abort into the cancellation. Return the de-duped
+      // final filename the Needs Review folder would use.
+      async writeReview(originalFilename: string) {
+        controller.abort();
+        return `${originalFilename}`;
+      },
+      async deleteReview(name: string) {
+        deletedReviewFiles.push(name);
+      },
+    };
+
+    let thrown: unknown = null;
+    try {
+      await restoreV3Backup({
+        source: blobChunks(blob),
+        attachmentWriter: trackingWriter,
+        restoreMode: "merge",
+        signal: controller.signal,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(BackupCancelledError);
+    const cancelErr = thrown as BackupCancelledError;
+    expect(cancelErr.clearedBeforeCancel).toBe(false);
+    expect(cancelErr.mergeUndone).toBe(true);
+    expect(cancelErr.mergeUndoFailed).toBeUndefined();
+    // At least: shared record + 2 attachment rows + sync state + lineage +
+    // segment + snapshot were inserted then removed (the shared tx and its
+    // participant were ENRICHED, not inserted).
+    expect(cancelErr.mergeUndoRowsRemoved ?? 0).toBeGreaterThanOrEqual(7);
+
+    // The vault is EXACTLY as it was before the merge: inserted rows gone,
+    // the placeholder tx's enriched fields reverted, the enriched participant
+    // restored verbatim, local-only rows untouched.
+    const after = await snapshotVault();
+    expect(after.records).toEqual(before.records);
+    expect(after.attachments).toEqual(before.attachments);
+    expect(after.syncState).toEqual(before.syncState);
+    expect(after.lineage).toHaveLength(before.lineage.length);
+    expect(after.segments).toHaveLength(before.segments.length);
+    expect(after.snapshots).toHaveLength(before.snapshots.length);
+    expect(after.txs).toHaveLength(2);
+    const shared = after.txs.find((t) => t.txid === TXID_SHARED)!;
+    expect(shared.blockHeight).toBe(0); // enrichment reverted
+    expect(shared.fee).toBe(0);
+    const sharedParts = after.participants.filter((p) => p.txid === TXID_SHARED);
+    expect(sharedParts).toHaveLength(1);
+    expect(sharedParts[0].address).toBe(""); // enrichment reverted
+    expect(sharedParts[0].amount).toBe(0);
+    expect(after.txs.find((t) => t.txid === TXID_LOCAL)!.blockHeight).toBe(810_000);
+
+    // Exactly ONE normal attachment file had been written before the abort
+    // (files stream in listAll order); it backed a row this merge inserted, so
+    // the undo swept it from disk. The orphan's Needs Review file was swept
+    // too, via the exact filename writeReview reported.
+    expect(deletedFiles).toEqual(["ab/receipt-hash.bin"]);
+    expect(deletedReviewFiles).toEqual(["stray-deed.pdf"]);
+
+    // And re-running the merge to completion afterwards works normally.
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter: trackingWriter,
+      restoreMode: "merge",
+    });
+    expect(result.counts.records).toBe(1);
+    const recovered = await snapshotVault();
+    expect(recovered.records).toEqual(
+      [RECORD_LOCAL.inputString, RECORD_SHARED.inputString].sort(),
+    );
+  });
+
+  it("cancelling a merge also undoes lineage/segments/snapshots restored from INLINE compatibility data (older v3 backups)", async () => {
+    // Older v3 backups carried utxoLineage/custodySegments/lineageSnapshots
+    // INLINE in the manifest instead of streamed. Those rows are inserted by
+    // restoreInlineTables BEFORE any streamed row, so the undo log must pick
+    // up their ids from its return value or a cancelled merge of an old
+    // backup leaves them behind. Simulate the old shape by wrapping the REAL
+    // restoreInlineTables and injecting inline lineage rows.
+    await seedExportedVault();
+    const blob = await exportToBlob();
+    await clearEverything();
+    await seedLocalVaultForMerge();
+    // Purge lineage tables so any post-cancel row is provably merge-added.
+    const before = await snapshotVault();
+    expect(before.lineage).toHaveLength(0);
+    expect(before.segments).toHaveLength(0);
+    expect(before.snapshots).toHaveLength(0);
+
+    const { restoreInlineTables } = await import("./inline-tables");
+    const INLINE_EXTRA = {
+      utxoLineage: [
+        {
+          id: 999,
+          spentTxid: "d".repeat(64),
+          spentVout: 1,
+          spentAddress: "bc1qinlineorigin0000000000000000000000000000",
+          spentAmount: 10_000,
+          consumingTxid: "e".repeat(64),
+          createdTxid: "e".repeat(64),
+          createdVout: 0,
+          createdAddress: RECORD_LOCAL.inputString,
+          createdAmount: 9_000,
+          spentOwned: false,
+          createdOwned: true,
+          isChange: false,
+          confidence: "confirmed",
+          blockTime: 1_700_100_000,
+          blockHeight: 800_100,
+          segmentId: "seg-inline-1",
+          createdAt: 1_700_100_000_000,
+        },
+      ],
+      custodySegments: [
+        {
+          id: 998,
+          segmentId: "seg-inline-1",
+          originTxid: "e".repeat(64),
+          originVout: 0,
+          originAddress: RECORD_LOCAL.inputString,
+          originDate: 1_700_100_000,
+          originAmount: 9_000,
+          currentAmount: 9_000,
+          status: "active",
+          hopCount: 1,
+          evidenceTxids: ["e".repeat(64)],
+          createdAt: 1_700_100_000_000,
+          updatedAt: 1_700_100_000_000,
+        },
+      ],
+      lineageSnapshots: [
+        {
+          id: 997,
+          snapshotId: "snap-inline-1",
+          targetType: "address",
+          targetAddress: RECORD_LOCAL.inputString,
+          segments: ["seg-inline-1"],
+          evidenceTxids: ["e".repeat(64)],
+          totalAmount: 9_000,
+          earliestDate: 1_700_100_000,
+          latestDate: 1_700_100_000,
+          hopCount: 1,
+          narrative: "inline snapshot",
+          disclosureLevel: "full",
+          generatedAt: 1_700_100_000_000,
+        },
+      ],
+    };
+
+    const controller = new AbortController();
+    let thrown: unknown = null;
+    try {
+      await restoreV3Backup({
+        source: blobChunks(blob),
+        attachmentWriter,
+        restoreMode: "merge",
+        signal: controller.signal,
+        restoreInline: (data, mode) =>
+          restoreInlineTables({ ...data, ...INLINE_EXTRA }, mode),
+        onProgress: (p) => {
+          // Cancel while the streamed tables are still being merged — the
+          // inline rows above were already inserted by then.
+          if (p.phase.startsWith("Restoring records")) controller.abort();
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(BackupCancelledError);
+    const cancelErr = thrown as BackupCancelledError;
+    expect(cancelErr.mergeUndone).toBe(true);
+
+    // The inline-restored lineage rows were removed along with everything else.
+    const after = await snapshotVault();
+    expect(after.lineage).toHaveLength(0);
+    expect(after.segments).toHaveLength(0);
+    expect(after.snapshots).toHaveLength(0);
+    expect(after.records).toEqual(before.records);
+    expect(after.txs).toHaveLength(before.txs.length);
   });
 
   it("merge into an EMPTY vault restores everything the backup carries (no clear needed)", async () => {

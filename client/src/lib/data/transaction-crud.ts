@@ -35,23 +35,56 @@ export async function updateTransaction(
 export async function bulkAddTransactions(
   transactions: CreateTransactionData[],
   options?: TransactionWriteOptions
-): Promise<void> {
-  if (transactions.length === 0) return;
+): Promise<number[]> {
+  if (transactions.length === 0) return [];
 
-  await db.blockchainTransactions.bulkAdd(transactions);
+  const ids = await db.blockchainTransactions.bulkAdd(transactions, { allKeys: true });
+
+  if (!options?.skipNotification) {
+    notifyDbChange('blockchainTransactions');
+  }
+
+  return ids as number[];
+}
+
+export async function bulkAddParticipants(
+  participants: TransactionParticipant[],
+  options?: TransactionWriteOptions
+): Promise<number[]> {
+  if (participants.length === 0) return [];
+
+  const ids = await db.transactionParticipants.bulkAdd(participants, { allKeys: true });
+
+  if (!options?.skipNotification) {
+    notifyDbChange('transactionParticipants');
+  }
+
+  return ids as number[];
+}
+
+// Bulk delete by primary key. Used by the merge-cancel undo pass in the v3
+// restore to remove exactly the rows that merge inserted — never touches any
+// other row.
+export async function bulkDeleteTransactions(
+  ids: number[],
+  options?: TransactionWriteOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+
+  await db.blockchainTransactions.bulkDelete(ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('blockchainTransactions');
   }
 }
 
-export async function bulkAddParticipants(
-  participants: TransactionParticipant[],
+export async function bulkDeleteParticipants(
+  ids: number[],
   options?: TransactionWriteOptions
 ): Promise<void> {
-  if (participants.length === 0) return;
+  if (ids.length === 0) return;
 
-  await db.transactionParticipants.bulkAdd(participants);
+  await db.transactionParticipants.bulkDelete(ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('transactionParticipants');
