@@ -1071,11 +1071,18 @@ async function main() {
   ).length;
   const vaultRecords = records.filter((r) => r.vault).length;
   const multiHopSegments = segments.filter((s) => s.hopCount >= 2).length;
+  // Deep custody chains: 3+ hop segments originating on persona-owned
+  // addresses. The demo's Fund Trail walkthrough (and the
+  // demo-custody-chain browser check) depend on these existing.
+  const DEEP_SEGMENT_MIN = 5;
+  const deepOwnedSegments = segments.filter(
+    (s) => s.hopCount >= 3 && ownedAddrs.has(s.originAddress),
+  ).length;
   const coSpend = txs.filter((t) => t.vin.length >= 2 && involvesOwned(t)).length;
   const total = records.length + txs.length;
   const matrix = {
     totals: { records: records.length, transactions: txs.length, participants: participants.length, combined: total, inRange: total >= 5000 && total <= 10000 },
-    fundTrail: { lineageRows: lineage.length, custodySegments: segments.length, multiHopSegments, timeSpanDays: Math.round(spanDays), pass: lineage.length > 100 && spanDays > 180 && multiHopSegments >= 3 },
+    fundTrail: { lineageRows: lineage.length, custodySegments: segments.length, multiHopSegments, deepOwnedSegments, deepOwnedSegmentsMin: DEEP_SEGMENT_MIN, timeSpanDays: Math.round(spanDays), pass: lineage.length > 100 && spanDays > 180 && multiHopSegments >= 3 && deepOwnedSegments >= DEEP_SEGMENT_MIN },
     entityScreening: { bundledEntitiesPresent: [...entityAddrsInTxs].filter((a) => entities.has(a)).length, demoEntities: demoEntities.length, directOwnedContact: directEntityContact, pass: directEntityContact },
     addressReuse: { maxReceiptsOnOwned: maxReuse, pass: maxReuse >= 10 },
     dusted: { dustOutputToOwned: dustToOwned, pass: dustToOwned },
@@ -1119,6 +1126,20 @@ async function main() {
   fs.writeFileSync(path.join(OUT_DIR, 'coverage-report.json'), JSON.stringify(matrix, null, 2));
   console.log('Coverage matrix:');
   console.log(JSON.stringify(matrix, null, 2));
+  // Hard-fail: the deep custody chains are a curated demo feature. If they
+  // disappear, fail the build immediately with a loud, specific message
+  // rather than letting a downstream browser check catch it post-commit.
+  if (deepOwnedSegments < DEEP_SEGMENT_MIN) {
+    console.error(
+      deepOwnedSegments === 0
+        ? 'FATAL: no persona-owned address carries a 3+ hop custody segment. ' +
+          'The demo Fund Trail walkthrough requires deep custody chains.'
+        : `FATAL: only ${deepOwnedSegments} persona-owned custody segment(s) with hopCount >= 3 ` +
+          `(minimum ${DEEP_SEGMENT_MIN}). Deep custody chains have degraded; ` +
+          'do not commit this demo vault.',
+    );
+    process.exit(1);
+  }
   const fails = Object.entries(matrix).filter(([, v]) => v && typeof v === 'object' && 'pass' in v && !v.pass);
   if (!matrix.totals.inRange) fails.push(['totals', matrix.totals]);
   if (fails.length) {

@@ -10,6 +10,8 @@
     "lineageRows": 720,
     "custodySegments": 69,
     "multiHopSegments": 15,
+    "deepOwnedSegments": 5,
+    "deepOwnedSegmentsMin": 5,
     "timeSpanDays": 4348,
     "pass": true
   },
@@ -43,7 +45,7 @@
     "ownedCoSpendTxs": 311,
     "pass": true
   },
-  "httpRequests": 34,
+  "httpRequests": 0,
   "highlights": {
     "personas": [
       {
