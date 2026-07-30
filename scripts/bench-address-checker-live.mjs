@@ -3,7 +3,9 @@
 // handlers (pooled multiplexed socket) against a live Electrum server, and
 // compares:
 //   NEW path — batch-history in 40-address chunks (sequential batches, as the
-//              Address Checker does) + balance lookups at concurrency 8;
+//              Address Checker does; each batch is internally pipelined by the
+//              IPC handler with a bounded in-flight window of 8) + balance
+//              lookups at concurrency 8;
 //   OLD path — the previous sequential behavior: per-address history + utxo
 //              lookups one at a time (measured on a sample, extrapolated).
 // Also verifies mid-run cancellation semantics of runWithConcurrency.

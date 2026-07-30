@@ -442,36 +442,57 @@ function registerElectrumHandlers(ipcMain) {
     }
   });
 
-  // Batch get history for multiple addresses - uses connection pool with multiplexing
+  // Batch get history for multiple addresses - uses connection pool with multiplexing.
+  // Requests are PIPELINED over the single multiplexed socket (responses are
+  // matched by request id, so overlap is safe) with a bounded in-flight
+  // window. Awaiting each request one at a time made a 40-address batch cost
+  // ~40 sequential round-trips; the window bounds the burst at the same
+  // concurrency the renderer already uses for per-address balance lookups,
+  // so public servers see no harder load than the existing phases.
+  const BATCH_PIPELINE_WINDOW = 8;
+
   ipcMain.handle('electrum-batch-get-history', async (event, { host, port, useSSL, addresses, timeout }) => {
     const startTime = Date.now();
-    
+
     try {
       const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000);
       await ensureVersionHandshake(key, timeout || 15000);
-      
-      console.log(`[Electrum Pool] Batch fetching ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'})`);
-      
-      const results = [];
-      
-      for (const address of addresses) {
-        try {
-          const scripthash = addressToScripthash(address);
-          const history = await pooledRequest(key, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000);
-          results.push({
-            address,
-            success: true,
-            history: history || [],
-          });
-        } catch (err) {
-          results.push({
-            address,
-            success: false,
-            error: err.message,
-            history: [],
-          });
+
+      console.log(`[Electrum Pool] Batch fetching ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
+
+      // Indexed by input position so result order matches the request order
+      // even though responses arrive out of order. Per-address failures stay
+      // isolated: one bad address only fails its own entry.
+      const results = new Array(addresses.length);
+      let next = 0;
+      const pipelineWorker = async () => {
+        while (true) {
+          const i = next++;
+          if (i >= addresses.length) return;
+          const address = addresses[i];
+          try {
+            const scripthash = addressToScripthash(address);
+            const history = await pooledRequest(key, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000);
+            results[i] = {
+              address,
+              success: true,
+              history: history || [],
+            };
+          } catch (err) {
+            results[i] = {
+              address,
+              success: false,
+              error: err.message,
+              history: [],
+            };
+          }
         }
+      };
+      const workers = [];
+      for (let w = 0; w < Math.min(BATCH_PIPELINE_WINDOW, addresses.length); w++) {
+        workers.push(pipelineWorker());
       }
+      await Promise.all(workers);
       
       const latency = Date.now() - startTime;
       
