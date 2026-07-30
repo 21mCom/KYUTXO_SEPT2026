@@ -147,6 +147,10 @@ args = "demo-vault-loader-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "restore-mode-guard-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "privacy-audit-interrupted-node-check"
 
 [[workflows.workflow.tasks]]
@@ -985,6 +989,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-legacy-upgrade-scale-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "restore-mode-guard-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/settings/restore-backup-flow.v3MergeDisabled.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

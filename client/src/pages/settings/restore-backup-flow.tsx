@@ -73,6 +73,12 @@ export function RestoreBackupFlow() {
   const [restoreProgress, setRestoreProgress] = useState(0);
   const [restoreMessage, setRestoreMessage] = useState("");
   const [backupInfo, setBackupInfo] = useState<{ encrypted: boolean; date: string; recordCount: number } | null>(null);
+  // True when the selected file is a v3 streaming backup. The v3 restore
+  // pipeline ALWAYS clears the vault and restores in replace mode — it has no
+  // merge implementation — so the "Merge with existing" choice must be disabled
+  // (and the mode forced to "replace") to keep the UI honest. Without this, a
+  // user picking "Merge" on a v3 backup would silently get their data wiped.
+  const [isV3Backup, setIsV3Backup] = useState(false);
   // Cancel support for the v3 streaming restore. `restoreCancellable` gates the
   // cancel button (the legacy whole-file path has no abort point). `clearedRef`
   // tracks the point of no return — once the destructive clear runs, cancelling
@@ -108,6 +114,7 @@ export function RestoreBackupFlow() {
     setRestoreStage("configure");
     setPrefPreview(null);
     setDiskSpacePreview(null);
+    setIsV3Backup(false);
 
     try {
       // v3 streaming backups: read ONLY the manifest (first ZIP entry) via the
@@ -115,6 +122,10 @@ export function RestoreBackupFlow() {
       // preview it. The v3 manifest carries counts/encrypted/date in plaintext.
       const manifestPeek = await peekManifest(blobChunks(file));
       if (isV3Manifest(manifestPeek)) {
+        // v3 backups only support replace mode (see isV3Backup above). Force
+        // the mode so a previously-selected "Merge" can't silently carry over.
+        setIsV3Backup(true);
+        setRestoreMode("replace");
         setBackupInfo({
           encrypted: manifestPeek.encrypted || false,
           date: manifestPeek.exportDate || "Unknown",
@@ -378,6 +389,22 @@ export function RestoreBackupFlow() {
       // JSON path below, which is left untouched for backward compatibility.
       const manifestPeek = await peekManifest(blobChunks(restoreFile));
       if (isV3Manifest(manifestPeek)) {
+        // Defence in depth: the v3 pipeline is replace-only (it always clears
+        // the vault). The UI disables the Merge option for v3 backups, but if a
+        // stale "merge" selection ever reaches this point, refuse loudly rather
+        // than silently wiping data the user asked to keep.
+        if (restoreMode === "merge") {
+          setIsRestoring(false);
+          setRestoreMessage("");
+          setRestoreProgress(0);
+          toast({
+            variant: "destructive",
+            title: "Merge not supported for this backup",
+            description:
+              "New-format backups can only replace all existing data. Select \"Replace all data\" to continue — no changes were made.",
+          });
+          return;
+        }
         // Pre-flight disk-space check (Electron only). Attachment files are
         // stored UNCOMPRESSED in the v3 ZIP and are what a restore writes to
         // disk. v3 manifests record the exact total attachment bytes
@@ -799,6 +826,7 @@ export function RestoreBackupFlow() {
           setRestoreProgress(0);
           setRestoreMessage("");
           setBackupInfo(null);
+          setIsV3Backup(false);
           setRestoreStage("configure");
           setPrefPreview(null);
           setDiskSpacePreview(null);
@@ -840,6 +868,7 @@ export function RestoreBackupFlow() {
                     onClick={() => {
                       setRestoreFile(null);
                       setBackupInfo(null);
+                      setIsV3Backup(false);
                       if (fileInputRef.current) {
                         fileInputRef.current.value = "";
                       }
@@ -908,15 +937,32 @@ export function RestoreBackupFlow() {
                     </p>
                   </div>
                 </div>
-                <div className="flex items-start space-x-3 p-3 rounded-lg border bg-background hover-elevate">
-                  <RadioGroupItem value="merge" id="mode-merge" data-testid="radio-merge" />
+                <div className={`flex items-start space-x-3 p-3 rounded-lg border bg-background ${isV3Backup ? "opacity-60" : "hover-elevate"}`}>
+                  <RadioGroupItem
+                    value="merge"
+                    id="mode-merge"
+                    data-testid="radio-merge"
+                    disabled={isV3Backup}
+                  />
                   <div className="space-y-1">
-                    <Label htmlFor="mode-merge" className="font-medium cursor-pointer">
+                    <Label
+                      htmlFor="mode-merge"
+                      className={`font-medium ${isV3Backup ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    >
                       Merge with existing
                     </Label>
                     <p className="text-xs text-muted-foreground">
                       Add backup data to existing records, skipping duplicates
                     </p>
+                    {isV3Backup && (
+                      <p
+                        className="text-xs text-muted-foreground"
+                        data-testid="text-merge-unavailable-v3"
+                      >
+                        Merge isn't available for this backup — new-format backups
+                        always replace all existing data.
+                      </p>
+                    )}
                   </div>
                 </div>
               </RadioGroup>
@@ -1033,6 +1079,7 @@ export function RestoreBackupFlow() {
                   setRestoreProgress(0);
                   setRestoreMessage("");
                   setBackupInfo(null);
+                  setIsV3Backup(false);
                   setRestoreStage("configure");
                   setPrefPreview(null);
                   setDiskSpacePreview(null);
