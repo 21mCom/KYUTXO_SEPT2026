@@ -334,6 +334,10 @@ app.whenReady().then(() => {
             // policy (client/src/lib/trusted-types.ts), so injected strings
             // can't reach innerHTML/document.write and hijack the window.
             "require-trusted-types-for 'script'",
+            // Only the app's own policies (client/src/lib/trusted-types.ts)
+            // may be created; any other createPolicy call throws, so injected
+            // scripts can't mint a permissive policy to bypass the sink guard.
+            "trusted-types kyutxo-app default",
           ].join('; ')
         }
       });

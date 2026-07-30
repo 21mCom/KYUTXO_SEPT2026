@@ -43,6 +43,7 @@ const ENFORCING_CSP = [
   "img-src 'self' data: blob:",
   "connect-src 'self' ws: wss: http://localhost:* https://mempool.space https://blockstream.info",
   "require-trusted-types-for 'script'",
+  "trusted-types kyutxo-app default",
 ].join('; ');
 
 function resolveChromium() {

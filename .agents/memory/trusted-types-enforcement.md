@@ -13,4 +13,6 @@ description: Production CSP enforces require-trusted-types-for; app sinks use th
 - With a default policy installed, a blocked raw sink throws the POLICY's error, not the browser's native TypeError — probes must treat any throw as "blocked".
 - A Radix upgrade that changes the injected strings breaks the packaged app; the exact-match allowlist fails closed and the browser check catches it.
 
+**Directive syntax gotcha:** the `trusted-types` policy-name allowlist directive takes BARE names — `trusted-types kyutxo-app default`. Quoting `'default'` is invalid syntax: Chromium ignores the value, treats the directive as an empty allowlist, and blocks creation of the `default` policy — the Radix style sinks then crash the tree exactly like the eager-install failure.
+
 **How to apply:** New `dangerouslySetInnerHTML`/document.write sinks must route through `trustedHtml()`; new third-party raw sinks need a default-policy allowlist entry. Verify with `node scripts/check-trusted-types-browser.mjs`, which injects the enforcing CSP header into dev-server document responses (dev sends no CSP). Note: after vault creation, a second `page.goto` reloads into the vault-lock screen — assert on the SPA's current route instead.
