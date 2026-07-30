@@ -463,8 +463,11 @@ async function main() {
   //     For each owned funding output, follow its spend; adopt the recipient
   //     (if sane), fetch its history, and repeat up to CHAIN_DEPTH times.
   const CHAIN_DEPTH = 3;
-  const CHAIN_TARGET = 3; // build at least this many deep chains
-  const CHAIN_ADOPT_CAP = 12;
+  // Target enough deep chains that deepOwnedSegments lands comfortably above
+  // DEEP_SEGMENT_MIN (5) — zero margin makes rebuilds brittle when upstream
+  // Esplora data or curated addresses shift.
+  const CHAIN_TARGET = 5; // build at least this many deep chains
+  const CHAIN_ADOPT_CAP = 20;
   {
     // Spend txs must survive the assembly-phase size cap (addTx drops txs
     // with > 400 participants even when they touch owned addresses),
