@@ -43,6 +43,19 @@ function isNavigationAllowed(rawUrl, { isDev = false } = {}) {
   }
 }
 
+// Escape a value for safe interpolation into HTML text content. Used by the
+// packaged-app fallback error page (main.cjs) so file paths and error
+// messages can never inject markup into the app window. Non-string input is
+// coerced with String() so callers can pass anything without throwing.
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const torRequestSchema = z.object({
   url: z.string().min(1),
   method: z.string().optional(),
@@ -59,5 +72,6 @@ module.exports = {
   isExternalOpenAllowed,
   DEV_SERVER_ORIGIN,
   isNavigationAllowed,
+  escapeHtml,
   torRequestSchema,
 };

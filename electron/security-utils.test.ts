@@ -16,12 +16,14 @@ const {
   isExternalOpenAllowed,
   DEV_SERVER_ORIGIN,
   isNavigationAllowed,
+  escapeHtml,
   torRequestSchema,
 } = requireCjs("./security-utils.cjs") as {
   EXTERNAL_OPEN_ALLOWED_HOSTS: string[];
   isExternalOpenAllowed: (url: unknown) => boolean;
   DEV_SERVER_ORIGIN: string;
   isNavigationAllowed: (url: unknown, opts?: { isDev?: boolean }) => boolean;
+  escapeHtml: (value: unknown) => string;
   torRequestSchema: {
     safeParse: (input: unknown) => { success: boolean; data?: unknown };
   };
@@ -151,6 +153,48 @@ describe("will-navigate allowlist", () => {
     expect(isNavigationAllowed(null)).toBe(false);
     expect(isNavigationAllowed(42)).toBe(false);
     expect(isNavigationAllowed({})).toBe(false);
+  });
+});
+
+describe("escapeHtml (fallback error page)", () => {
+  // Guards the packaged app's data: error page in main.cjs — indexPath,
+  // err.message, and app.getAppPath() must be escaped before interpolation
+  // so markup in a path or error message can't render as HTML.
+
+  it("escapes all HTML-significant characters", () => {
+    expect(escapeHtml(`<script>alert("x")</script>`)).toBe(
+      "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;",
+    );
+    expect(escapeHtml(`a & b < c > d " e ' f`)).toBe(
+      "a &amp; b &lt; c &gt; d &quot; e &#39; f",
+    );
+  });
+
+  it("escapes & first so entities are not double-mangled", () => {
+    expect(escapeHtml("&lt;")).toBe("&amp;lt;");
+  });
+
+  it("leaves plain paths and messages untouched", () => {
+    expect(escapeHtml("/home/user/app/dist/public/index.html")).toBe(
+      "/home/user/app/dist/public/index.html",
+    );
+    expect(escapeHtml("ENOENT: no such file or directory")).toBe(
+      "ENOENT: no such file or directory",
+    );
+  });
+
+  it("neutralizes an injection attempt embedded in a file path", () => {
+    const malicious = `/tmp/<img src=x onerror=alert(1)>/index.html`;
+    const escaped = escapeHtml(malicious);
+    expect(escaped).not.toContain("<");
+    expect(escaped).not.toContain(">");
+    expect(escaped).toContain("&lt;img");
+  });
+
+  it("coerces non-string input without throwing", () => {
+    expect(escapeHtml(undefined)).toBe("undefined");
+    expect(escapeHtml(null)).toBe("null");
+    expect(escapeHtml(42)).toBe("42");
   });
 });
 

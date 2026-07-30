@@ -19,6 +19,7 @@ const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.
 const {
   isExternalOpenAllowed,
   isNavigationAllowed,
+  escapeHtml,
   torRequestSchema,
 } = require('./security-utils.cjs');
 
@@ -120,9 +121,9 @@ function createWindow() {
         <html>
           <body style="background:#1a1a2e;color:white;font-family:sans-serif;padding:40px;">
             <h1>Error Loading KYUTXO</h1>
-            <p>Failed to load: ${indexPath}</p>
-            <p>Error: ${err.message}</p>
-            <p>App path: ${app.getAppPath()}</p>
+            <p>Failed to load: ${escapeHtml(indexPath)}</p>
+            <p>Error: ${escapeHtml(err.message)}</p>
+            <p>App path: ${escapeHtml(app.getAppPath())}</p>
           </body>
         </html>
       `);
