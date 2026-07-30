@@ -25,3 +25,11 @@ The GitHub remote (`origin`) builds the packaged Windows app via `.github/workfl
 The user's fine-grained PAT has contents read/write (push works) but NOT Actions/checks read — `/actions/runs` and `/commits/<sha>/check-runs` return 403. Build status must be watched on github.com/<owner>/<repo>/actions, not polled from here.
 
 **How to apply:** any "push to GitHub / trigger a build / make a release" request: push with the credential-helper recipe, verify by ls-remote SHA match, then point the user at the Actions page for build progress.
+
+## Windows runner spawn trap
+
+The build.yml gate scripts (`node scripts/check-*.js`) run on **windows-2022**. Node `child_process` (`execFileSync`/`spawnSync`) cannot launch `npm`/`npx` there without `shell: process.platform === 'win32'` — npm is `npm.cmd`, which spawns ENOENT without a shell, and Node ≥20.12 refuses `.cmd` spawns entirely unless shell is set. A single unguarded spawn fails the whole Windows build.
+
+**Why:** check-audit.js broke the CI build this way; the failure surfaced only on the GitHub runner, never locally (Linux).
+
+**How to apply:** any script added to build.yml that shells out to npm/npx must set `shell: process.platform === 'win32'` (fixed-string args only — never with user input). Scripts that only run in Replit workflows (Linux) don't need it.

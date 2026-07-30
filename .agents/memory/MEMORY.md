@@ -74,4 +74,4 @@
 - [fake-indexeddb scale-test lag](fake-indexeddb-scale-test-lag.md) — event-loop-lag assertions are harness noise (sync structured-clone); guard responsiveness via yield-spy counts + bounded output chunks instead.
 - [Tx entity-filter parity](tx-entity-filter-parity.md) — filters are AND-of-independent-EXISTS (Dexie must intersect per-dimension txid sets); curatedOnly excludes NULL importance; vocab dropdowns need explicit vocab rows.
 - [Legacy-vault upgrade journey](legacy-vault-upgrade-journey.md) — v25 encrypted-at-rest vaults: pre-unlock schema walk + post-unlock decrypt+verify all need visible progress; seed browser tests via a static asset URL so the app never opens the DB first.
-- [GitHub push & build pipeline](github-push-build-pipeline.md) — gitPush callback can silently no-op (nulls); verify via ls-remote + push with credential-helper token recipe; PAT lacks Actions read (403).
+- [GitHub push & build pipeline](github-push-build-pipeline.md) — gitPush callback can silently no-op; verify via ls-remote + credential-helper push; PAT lacks Actions read; win CI npm spawns need shell:true.
