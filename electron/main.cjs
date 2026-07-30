@@ -397,7 +397,7 @@ app.on('web-contents-created', (event, contents) => {
   });
 
   contents.on('will-navigate', (event, navigationUrl) => {
-    if (!isNavigationAllowed(navigationUrl)) {
+    if (!isNavigationAllowed(navigationUrl, { isDev })) {
       event.preventDefault();
     }
   });

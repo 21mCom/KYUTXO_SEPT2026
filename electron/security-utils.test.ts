@@ -21,7 +21,7 @@ const {
   EXTERNAL_OPEN_ALLOWED_HOSTS: string[];
   isExternalOpenAllowed: (url: unknown) => boolean;
   DEV_SERVER_ORIGIN: string;
-  isNavigationAllowed: (url: unknown) => boolean;
+  isNavigationAllowed: (url: unknown, opts?: { isDev?: boolean }) => boolean;
   torRequestSchema: {
     safeParse: (input: unknown) => { success: boolean; data?: unknown };
   };
@@ -80,16 +80,47 @@ describe("will-navigate allowlist", () => {
     expect(DEV_SERVER_ORIGIN).toBe("http://localhost:5000");
   });
 
-  it.each([
-    // dev server origin
+  const FILE_URLS = [
+    "file:///home/user/app/dist/public/index.html",
+    "file:///C:/app/dist/public/index.html",
+  ];
+
+  const DEV_SERVER_URLS = [
     "http://localhost:5000",
     "http://localhost:5000/",
     "http://localhost:5000/some/route?query=1#hash",
-    // file: URLs (packaged app loads from disk)
-    "file:///home/user/app/dist/public/index.html",
-    "file:///C:/app/dist/public/index.html",
-  ])("allows in-window navigation to trusted URL: %s", (url) => {
-    expect(isNavigationAllowed(url)).toBe(true);
+  ];
+
+  it.each(FILE_URLS)(
+    "allows file: navigation in both modes: %s",
+    (url) => {
+      expect(isNavigationAllowed(url, { isDev: true })).toBe(true);
+      expect(isNavigationAllowed(url, { isDev: false })).toBe(true);
+      // default (no options) must behave like production
+      expect(isNavigationAllowed(url)).toBe(true);
+    },
+  );
+
+  it.each(DEV_SERVER_URLS)(
+    "allows dev server origin only in dev mode: %s",
+    (url) => {
+      expect(isNavigationAllowed(url, { isDev: true })).toBe(true);
+    },
+  );
+
+  it.each(DEV_SERVER_URLS)(
+    "denies dev server origin in packaged (production) mode: %s",
+    (url) => {
+      expect(isNavigationAllowed(url, { isDev: false })).toBe(false);
+      // defaults must fail closed: no options / empty options = production
+      expect(isNavigationAllowed(url)).toBe(false);
+      expect(isNavigationAllowed(url, {})).toBe(false);
+    },
+  );
+
+  it("requires isDev to be exactly true, not merely truthy", () => {
+    expect(isNavigationAllowed("http://localhost:5000/", { isDev: 1 as unknown as boolean })).toBe(false);
+    expect(isNavigationAllowed("http://localhost:5000/", { isDev: "development" as unknown as boolean })).toBe(false);
   });
 
   it.each([

@@ -25,17 +25,19 @@ function isExternalOpenAllowed(rawUrl) {
   }
 }
 
-// In-window navigation is allowed only to the dev server origin or file:
-// URLs (the packaged app loads from disk). Anything else — arbitrary https
-// origins, scriptable schemes, malformed input — is denied so a compromised
-// page can't navigate the app window to an attacker site.
+// In-window navigation is allowed only to file: URLs (the packaged app loads
+// from disk), plus the dev server origin when — and only when — the app is
+// running in development mode. Anything else — arbitrary https origins,
+// scriptable schemes, malformed input — is denied so a compromised page can't
+// navigate the app window to an attacker site. In the packaged app the dev
+// origin is NOT trusted: any local process could squat on port 5000.
 const DEV_SERVER_ORIGIN = 'http://localhost:5000';
 
-function isNavigationAllowed(rawUrl) {
+function isNavigationAllowed(rawUrl, { isDev = false } = {}) {
   try {
     const parsed = new URL(rawUrl);
-    return parsed.origin === DEV_SERVER_ORIGIN ||
-      parsed.protocol === 'file:';
+    if (parsed.protocol === 'file:') return true;
+    return isDev === true && parsed.origin === DEV_SERVER_ORIGIN;
   } catch {
     return false;
   }
