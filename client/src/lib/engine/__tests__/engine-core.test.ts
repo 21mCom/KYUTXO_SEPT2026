@@ -31,6 +31,7 @@ import {
   countOwnedUtxos,
   buildOwnedUtxos,
   ownedUtxosReady,
+  getOutpointCoverage,
   getHeuristicOwnedUtxos,
   countHeuristicOwnedUtxos,
   buildHeuristicOwnedUtxos,
@@ -504,6 +505,89 @@ describe("engine-core: owned-UTXO dedup when an address has multiple records", (
     // No duplicate ids in the returned page.
     const ids = utxos.map((u) => u.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("engine-core: outpoint coverage (Standard-mode accuracy warning)", () => {
+  it("reports zeroed coverage on an empty vault", async () => {
+    const db = await freshDb();
+    expect(getOutpointCoverage(db)).toEqual({ total: 0, withData: 0, affectedAddresses: [] });
+  });
+
+  it("counts inputs of owned txs and flags owned addresses on outpoint-less inputs", async () => {
+    const db = await freshDb();
+    insertRecords(db, [
+      rec({ id: 1, inputString: "A", addressImportance: "manual" }),
+      rec({ id: 2, inputString: "B", addressImportance: "verified" }),
+      rec({ id: 3, inputString: "Z", addressImportance: "blockchain-discovered" }),
+    ]);
+    insertTransactions(db, [tx(1, "t1", 1000), tx(2, "t2", 1100), tx(3, "t3", 1200), tx(4, "t4", 1300)]);
+    insertParticipants(db, [
+      out("t1", "A", 0, 100),
+      out("t1", "B", 1, 200),
+      // t2: legacy spend from A with NO outpoint data -> A is affected.
+      inp("t2", "A", 100, null, null),
+      out("t2", "Z", 0, 90),
+      // t3: spend from B WITH outpoint data -> covered, B not affected.
+      inp("t3", "B", 200, "t1", 1),
+      out("t3", "Z", 0, 190),
+      // t4: not owned at all -> its inputs excluded entirely.
+      inp("t4", "Z", 90, null, null),
+      out("t4", "Z", 0, 80),
+    ]);
+    // t4 spends Z's output (not owned), so it stays out of the relevant set.
+    const cov = getOutpointCoverage(db);
+    expect(cov.total).toBe(2);
+    expect(cov.withData).toBe(1);
+    expect(cov.affectedAddresses).toEqual(["A"]);
+  });
+
+  it("falls back to every owned address in the tx when the legacy input has a blank/foreign address", async () => {
+    const db = await freshDb();
+    insertRecords(db, [
+      rec({ id: 1, inputString: "A", addressImportance: "manual" }),
+      rec({ id: 2, inputString: "B", addressImportance: "manual" }),
+    ]);
+    insertTransactions(db, [tx(1, "t1", 1000), tx(2, "t2", 1100)]);
+    insertParticipants(db, [
+      out("t1", "A", 0, 100),
+      // Legacy input with a blank address in a tx where A and B participate.
+      inp("t2", "", 100, null, null),
+      out("t2", "A", 0, 40),
+      out("t2", "B", 1, 50),
+    ]);
+    const cov = getOutpointCoverage(db);
+    expect(cov.total).toBe(1);
+    expect(cov.withData).toBe(0);
+    expect(cov.affectedAddresses).toEqual(["A", "B"]);
+  });
+
+  it("includes blank-address spend inputs matched by outpoint (Electrum seam) as covered", async () => {
+    const db = await freshDb();
+    insertRecords(db, [rec({ id: 1, inputString: "A", addressImportance: "manual" })]);
+    insertTransactions(db, [tx(1, "t1", 1000), tx(2, "t2", 1100)]);
+    insertParticipants(db, [
+      out("t1", "A", 0, 100),
+      // Spending tx has NO owned-address participant; its input reaches the
+      // relevant set only via the outpoint match against A's output.
+      inp("t2", "", 100, "t1", 0),
+      out("t2", "zzz", 0, 90),
+    ]);
+    const cov = getOutpointCoverage(db);
+    expect(cov.total).toBe(1);
+    expect(cov.withData).toBe(1);
+    expect(cov.affectedAddresses).toEqual([]);
+  });
+
+  it("honors a custom tier set", async () => {
+    const db = await freshDb();
+    insertRecords(db, [rec({ id: 1, inputString: "A", addressImportance: "blockchain-discovered" })]);
+    insertTransactions(db, [tx(1, "t1", 1000), tx(2, "t2", 1100)]);
+    insertParticipants(db, [out("t1", "A", 0, 100), inp("t2", "A", 100, null, null)]);
+    expect(getOutpointCoverage(db).total).toBe(0);
+    const cov = getOutpointCoverage(db, { tiers: ["blockchain-discovered"] });
+    expect(cov.total).toBe(1);
+    expect(cov.affectedAddresses).toEqual(["A"]);
   });
 });
 

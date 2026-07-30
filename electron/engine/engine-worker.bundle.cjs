@@ -762,6 +762,51 @@ function getAddressAggregates(db2, addresses) {
   }
   return out2;
 }
+var CURATED_RECORD_SQL = `r.type = 'address' AND r.addressImportance IN (${OWNED_TIERS.map((t) => `'${t}'`).join(", ")})`;
+function participantRecordTxidSelect(predicate) {
+  return `SELECT DISTINCT tp.txid FROM records r JOIN transactionParticipants tp ON tp.recordId = r.id WHERE ${predicate}`;
+}
+function buildTransactionMatchSubquery(opts) {
+  const selects = [];
+  const bind = [];
+  if (opts.address) {
+    selects.push("SELECT DISTINCT tp.txid FROM transactionParticipants tp WHERE tp.address = ?");
+    bind.push(opts.address);
+  }
+  if (opts.wallet) {
+    selects.push(participantRecordTxidSelect("r.walletName = ?"));
+    bind.push(opts.wallet);
+  }
+  if (opts.seed) {
+    selects.push(participantRecordTxidSelect("r.seedName = ?"));
+    bind.push(opts.seed);
+  }
+  if (opts.owner) {
+    selects.push(participantRecordTxidSelect("r.owner = ?"));
+    bind.push(opts.owner);
+  }
+  if (opts.tag) {
+    selects.push(
+      participantRecordTxidSelect(
+        "r.tags IS NOT NULL AND json_valid(r.tags) AND EXISTS (SELECT 1 FROM json_each(r.tags) je WHERE je.value = ?)"
+      )
+    );
+    bind.push(opts.tag);
+  }
+  if (opts.category) {
+    selects.push(
+      participantRecordTxidSelect(
+        "r.categories IS NOT NULL AND json_valid(r.categories) AND EXISTS (SELECT 1 FROM json_each(r.categories) je WHERE je.value = ?)"
+      )
+    );
+    bind.push(opts.category);
+  }
+  if (opts.curatedOnly) {
+    selects.push(participantRecordTxidSelect(CURATED_RECORD_SQL));
+  }
+  if (selects.length === 0) return null;
+  return { sql: selects.join(" INTERSECT "), bind };
+}
 function buildTransactionWhere(opts) {
   const clauses = [];
   const bind = [];
@@ -770,6 +815,15 @@ function buildTransactionWhere(opts) {
 }
 function countTransactions(db2, opts = {}) {
   const where = buildTransactionWhere(opts);
+  const match = buildTransactionMatchSubquery(opts);
+  if (match) {
+    const extra = where.sql ? `WHERE ${where.sql.replace(/hasOpReturn/g, "bt.hasOpReturn")}` : "";
+    return selectScalar(
+      db2,
+      `SELECT COUNT(*) AS v FROM (${match.sql}) m CROSS JOIN blockchainTransactions bt ON bt.txid = m.txid ${extra}`,
+      [...match.bind, ...where.bind]
+    );
+  }
   const whereSql = where.sql ? `WHERE ${where.sql}` : "";
   return selectScalar(db2, `SELECT COUNT(*) AS v FROM blockchainTransactions ${whereSql}`, where.bind);
 }
@@ -802,26 +856,44 @@ function getTransactionAggregates(db2, txids) {
 function getTransactionPage(db2, opts) {
   const clauses = [];
   const bind = [];
+  const match = buildTransactionMatchSubquery(opts);
   const where = buildTransactionWhere(opts);
   if (where.sql) {
-    clauses.push(where.sql);
+    clauses.push(match ? where.sql.replace(/hasOpReturn/g, "bt.hasOpReturn") : where.sql);
     bind.push(...where.bind);
   }
-  if (opts.cursor) {
-    clauses.push("(COALESCE(blockTime, 0) < ? OR (COALESCE(blockTime, 0) = ? AND id < ?))");
-    bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
+  let txRows;
+  if (match) {
+    if (opts.cursor) {
+      clauses.push("(COALESCE(bt.blockTime, 0) < ? OR (COALESCE(bt.blockTime, 0) = ? AND bt.id < ?))");
+      bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
+    }
+    const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    txRows = selectRows(
+      db2,
+      `SELECT bt.id, bt.txid, bt.blockHeight, bt.blockTime, bt.fee, bt.feeRate, bt.vsize, bt.hasOpReturn
+         FROM (${match.sql}) m CROSS JOIN blockchainTransactions bt ON bt.txid = m.txid
+         ${whereSql}
+         ORDER BY COALESCE(bt.blockTime, 0) DESC, bt.id DESC
+         LIMIT ?`,
+      [...match.bind, ...bind, opts.limit]
+    );
+  } else {
+    if (opts.cursor) {
+      clauses.push("(COALESCE(blockTime, 0) < ? OR (COALESCE(blockTime, 0) = ? AND id < ?))");
+      bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
+    }
+    const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    txRows = selectRows(
+      db2,
+      `SELECT id, txid, blockHeight, blockTime, fee, feeRate, vsize, hasOpReturn
+         FROM blockchainTransactions
+         ${whereSql}
+         ORDER BY COALESCE(blockTime, 0) DESC, id DESC
+         LIMIT ?`,
+      [...bind, opts.limit]
+    );
   }
-  const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  bind.push(opts.limit);
-  const txRows = selectRows(
-    db2,
-    `SELECT id, txid, blockHeight, blockTime, fee, feeRate, vsize, hasOpReturn
-       FROM blockchainTransactions
-       ${whereSql}
-       ORDER BY COALESCE(blockTime, 0) DESC, id DESC
-       LIMIT ?`,
-    bind
-  );
   if (txRows.length === 0) return [];
   const aggs = getTransactionAggregates(db2, txRows.map((r) => r.txid));
   return txRows.map((r) => {
@@ -1106,6 +1178,74 @@ function countOwnedUtxos(db2, opts = {}) {
     `,
     params
   );
+}
+function getOutpointCoverage(db2, opts = {}) {
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
+  const cteSql = `
+    WITH ownedAddrs AS (
+      SELECT DISTINCT r.inputString AS address
+      FROM records r
+      WHERE r.type = 'address'
+        AND r.addressImportance IN (${tierSql})
+        AND r.inputString IS NOT NULL AND r.inputString != ''
+    ),
+    relevantTx AS (
+      SELECT DISTINCT p.txid AS txid
+      FROM transactionParticipants p
+      JOIN ownedAddrs a ON a.address = p.address
+      UNION
+      SELECT DISTINCT i.txid AS txid
+      FROM transactionParticipants i
+      WHERE i.role = 'input'
+        AND i.prevTxid IS NOT NULL AND i.prevVout IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM transactionParticipants o
+          JOIN ownedAddrs a ON a.address = o.address
+          WHERE o.role = 'output' AND o.txid = i.prevTxid AND o.vout = i.prevVout
+        )
+    ),
+    ins AS (
+      SELECT p.txid AS txid, p.address AS address, p.prevTxid AS prevTxid
+      FROM transactionParticipants p
+      JOIN relevantTx rt ON rt.txid = p.txid
+      WHERE p.role = 'input'
+    )`;
+  const countsRow = selectRows(
+    db2,
+    `${cteSql}
+    SELECT COUNT(*) AS total,
+           COALESCE(SUM(CASE WHEN prevTxid IS NOT NULL THEN 1 ELSE 0 END), 0) AS withData
+    FROM ins`,
+    tierBind
+  )[0] ?? { total: 0, withData: 0 };
+  if (countsRow.total === countsRow.withData) {
+    return { total: countsRow.total, withData: countsRow.withData, affectedAddresses: [] };
+  }
+  const affectedRows = selectRows(
+    db2,
+    `${cteSql}
+    SELECT DISTINCT a.address AS address
+    FROM ins i
+    JOIN ownedAddrs a ON a.address = i.address
+    WHERE i.prevTxid IS NULL
+    UNION
+    SELECT DISTINCT a.address AS address
+    FROM transactionParticipants p
+    JOIN ownedAddrs a ON a.address = p.address
+    WHERE p.txid IN (
+      SELECT txid FROM ins
+      WHERE prevTxid IS NULL
+        AND (address IS NULL OR address = '' OR address NOT IN (SELECT address FROM ownedAddrs))
+    )
+    ORDER BY address`,
+    tierBind
+  );
+  return {
+    total: countsRow.total,
+    withData: countsRow.withData,
+    affectedAddresses: affectedRows.map((r) => r.address)
+  };
 }
 function getOwnedUtxos(db2, opts) {
   const tiers = opts.tiers ?? OWNED_TIERS;
@@ -1767,6 +1907,8 @@ function handleQuery(name, args) {
       );
     case "countOwnedUtxos":
       return countOwnedUtxos(d, args);
+    case "getOutpointCoverage":
+      return getOutpointCoverage(d, args);
     case "getHeuristicOwnedUtxos":
       return getHeuristicOwnedUtxos(
         d,

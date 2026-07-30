@@ -23,6 +23,7 @@ import {
   engineCountOwnedUtxos,
   engineGetHeuristicOwnedUtxos,
   engineCountHeuristicOwnedUtxos,
+  engineGetOutpointCoverage,
 } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import type { OwnedUtxo } from "@/lib/engine/engine-core";
@@ -1055,7 +1056,34 @@ export default function UTXOs() {
     });
   }, [engineRawUtxos, addressToRecord, getPriceForTimestamp]);
 
-  const { value: outpointDataStatus, isComputing: outpointDataStatusComputing } = useAsyncMemo(async (signal) => {
+  // Outpoint coverage on the engine fast path. The engine path clears
+  // `participants` to [], so the Dexie computation below would report total = 0
+  // and the Standard-mode accuracy warning (plus its one-click "Re-sync affected
+  // addresses" action) would never render even when legacy outpoint-less input
+  // rows exist. Ask the engine for the same coverage stats instead. On failure,
+  // null keeps the default zero status (same as today's behavior) rather than
+  // falsely claiming full coverage.
+  const { value: engineOutpointStatus, isComputing: engineOutpointStatusComputing } = useAsyncMemo(async () => {
+    if (engineDecision !== 'engine') return null;
+    try {
+      const coverage = await engineGetOutpointCoverage({ tiers: engineTiers });
+      if (coverage.total === 0) {
+        return { hasData: true, percentage: 100, total: 0, withData: 0, affectedAddresses: [] as string[] };
+      }
+      const percentage = Math.round((coverage.withData / coverage.total) * 100);
+      return {
+        hasData: percentage > 0,
+        percentage,
+        total: coverage.total,
+        withData: coverage.withData,
+        affectedAddresses: coverage.affectedAddresses,
+      };
+    } catch {
+      return null;
+    }
+  }, [engineDecision, engineTiers, txDbSignal], null);
+
+  const { value: dexieOutpointDataStatus, isComputing: dexieOutpointDataStatusComputing } = useAsyncMemo(async (signal) => {
     if (!participants) return { hasData: false, percentage: 0, total: 0, withData: 0, affectedAddresses: [] as string[] };
     let inputCount = 0;
     let withDataCount = 0;
@@ -1106,6 +1134,15 @@ export default function UTXOs() {
       affectedAddresses
     };
   }, [participants, addressToRecord], { hasData: false, percentage: 0, total: 0, withData: 0, affectedAddresses: [] as string[] });
+
+  // The engine path reports coverage via its own SQL query; the Dexie path via
+  // the participant scan above.
+  const outpointDataStatus =
+    engineDecision === 'engine'
+      ? (engineOutpointStatus ?? { hasData: false, percentage: 0, total: 0, withData: 0, affectedAddresses: [] as string[] })
+      : dexieOutpointDataStatus;
+  const outpointDataStatusComputing =
+    engineDecision === 'engine' ? engineOutpointStatusComputing : dexieOutpointDataStatusComputing;
 
   // For backward compatibility
   const hasOutpointData = outpointDataStatus.hasData && outpointDataStatus.percentage >= 50;

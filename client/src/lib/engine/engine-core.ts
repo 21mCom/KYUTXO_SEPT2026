@@ -1749,6 +1749,113 @@ export function countOwnedUtxos(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Query: outpoint coverage (Standard-mode accuracy warning)
+// ---------------------------------------------------------------------------
+
+export interface OutpointCoverage {
+  /** Total input rows across the owned transaction set. */
+  total: number;
+  /** Inputs that carry prevTxid (authoritative outpoint data). */
+  withData: number;
+  /** Owned addresses whose transactions still contain outpoint-less inputs. */
+  affectedAddresses: string[];
+}
+
+/**
+ * Coverage of prevTxid/prevVout outpoint data across the inputs of the owned
+ * transaction set, mirroring the in-browser `outpointDataStatus` computation in
+ * UTXOs.tsx so the Standard-mode accuracy warning (and its one-click
+ * "Re-sync affected addresses" action) renders identically on the engine fast
+ * path:
+ *
+ * - Relevant txs: any tx with a participant at an owned (curated-tier) address,
+ *   PLUS any tx whose input spends an owned output by outpoint (the Dexie path's
+ *   `getSpendInputsByOutpoints` follow-up — those inputs may carry a blank or
+ *   foreign address).
+ * - total / withData: input rows of those txs, and how many carry prevTxid.
+ * - affectedAddresses: for each outpoint-less input, the input's own address
+ *   when it is owned; otherwise every owned address participating in that tx.
+ */
+export function getOutpointCoverage(
+  db: EngineDb,
+  opts: { tiers?: string[] } = {},
+): OutpointCoverage {
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
+
+  // Shared CTE prefix: owned addresses, the relevant tx set, and its input rows.
+  // Placeholder order: tier list (once, inside ownedAddrs).
+  const cteSql = `
+    WITH ownedAddrs AS (
+      SELECT DISTINCT r.inputString AS address
+      FROM records r
+      WHERE r.type = 'address'
+        AND r.addressImportance IN (${tierSql})
+        AND r.inputString IS NOT NULL AND r.inputString != ''
+    ),
+    relevantTx AS (
+      SELECT DISTINCT p.txid AS txid
+      FROM transactionParticipants p
+      JOIN ownedAddrs a ON a.address = p.address
+      UNION
+      SELECT DISTINCT i.txid AS txid
+      FROM transactionParticipants i
+      WHERE i.role = 'input'
+        AND i.prevTxid IS NOT NULL AND i.prevVout IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM transactionParticipants o
+          JOIN ownedAddrs a ON a.address = o.address
+          WHERE o.role = 'output' AND o.txid = i.prevTxid AND o.vout = i.prevVout
+        )
+    ),
+    ins AS (
+      SELECT p.txid AS txid, p.address AS address, p.prevTxid AS prevTxid
+      FROM transactionParticipants p
+      JOIN relevantTx rt ON rt.txid = p.txid
+      WHERE p.role = 'input'
+    )`;
+
+  const countsRow = selectRows<{ total: number; withData: number }>(
+    db,
+    `${cteSql}
+    SELECT COUNT(*) AS total,
+           COALESCE(SUM(CASE WHEN prevTxid IS NOT NULL THEN 1 ELSE 0 END), 0) AS withData
+    FROM ins`,
+    tierBind,
+  )[0] ?? { total: 0, withData: 0 };
+
+  if (countsRow.total === countsRow.withData) {
+    return { total: countsRow.total, withData: countsRow.withData, affectedAddresses: [] };
+  }
+
+  const affectedRows = selectRows<{ address: string }>(
+    db,
+    `${cteSql}
+    SELECT DISTINCT a.address AS address
+    FROM ins i
+    JOIN ownedAddrs a ON a.address = i.address
+    WHERE i.prevTxid IS NULL
+    UNION
+    SELECT DISTINCT a.address AS address
+    FROM transactionParticipants p
+    JOIN ownedAddrs a ON a.address = p.address
+    WHERE p.txid IN (
+      SELECT txid FROM ins
+      WHERE prevTxid IS NULL
+        AND (address IS NULL OR address = '' OR address NOT IN (SELECT address FROM ownedAddrs))
+    )
+    ORDER BY address`,
+    tierBind,
+  );
+
+  return {
+    total: countsRow.total,
+    withData: countsRow.withData,
+    affectedAddresses: affectedRows.map((r) => r.address),
+  };
+}
+
 export function getOwnedUtxos(
   db: EngineDb,
   opts: { tiers?: string[]; afterId?: number; limit: number; asOfBlockTime?: number },

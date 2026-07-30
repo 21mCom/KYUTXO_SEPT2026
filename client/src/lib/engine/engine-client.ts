@@ -28,6 +28,7 @@ import type {
   ParticipantsFingerprint,
   AddressAggregate,
   OwnedUtxo,
+  OutpointCoverage,
   ParticipantRow,
   TransactionQueryOptions,
   TransactionPageOptions,
@@ -65,6 +66,7 @@ export type {
   ParticipantsFingerprint,
   AddressAggregate,
   OwnedUtxo,
+  OutpointCoverage,
   ParticipantRow,
   TransactionQueryOptions,
   TransactionPageOptions,
@@ -742,6 +744,17 @@ export async function engineCountOwnedUtxos(
 ): Promise<number> {
   await ensureEngineInit();
   return unwrap<number>(getEngine().query('countOwnedUtxos', opts));
+}
+
+/**
+ * Outpoint (prevTxid/prevVout) coverage across the inputs of the owned tx set,
+ * for the UTXOs page's Standard-mode accuracy warning on the engine fast path.
+ */
+export async function engineGetOutpointCoverage(
+  opts: { tiers?: string[] } = {},
+): Promise<OutpointCoverage> {
+  await ensureEngineInit();
+  return unwrap<OutpointCoverage>(getEngine().query('getOutpointCoverage', opts));
 }
 
 export async function engineGetHeuristicOwnedUtxos(opts: {

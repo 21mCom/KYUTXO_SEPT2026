@@ -59,6 +59,7 @@ import {
   getAddressAggregates,
   getOwnedUtxos,
   countOwnedUtxos,
+  getOutpointCoverage,
   getHeuristicOwnedUtxos,
   countHeuristicOwnedUtxos,
   buildHeuristicOwnedUtxos,
@@ -500,6 +501,8 @@ function handleQuery(name: string, args: unknown): unknown {
       );
     case 'countOwnedUtxos':
       return countOwnedUtxos(d, args as { tiers?: string[]; asOfBlockTime?: number } | undefined);
+    case 'getOutpointCoverage':
+      return getOutpointCoverage(d, args as { tiers?: string[] } | undefined);
     case 'getHeuristicOwnedUtxos':
       return getHeuristicOwnedUtxos(
         d,
