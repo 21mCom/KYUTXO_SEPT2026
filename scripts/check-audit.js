@@ -28,11 +28,17 @@ function runAudit() {
   try {
     // npm audit exits non-zero when vulnerabilities exist, so capture stdout
     // from either path rather than treating the exit code as fatal.
+    //
+    // On Windows npm is npm.cmd, which execFileSync can't launch directly
+    // (ENOENT without a shell; Node >=20.12 refuses .cmd spawns entirely
+    // unless shell is set). Command and args are fixed strings, so shell
+    // mode introduces no injection surface.
     return execFileSync('npm', ['audit', '--json'], {
       cwd: ROOT,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 64 * 1024 * 1024,
+      shell: process.platform === 'win32',
     });
   } catch (error) {
     if (error.stdout) {
