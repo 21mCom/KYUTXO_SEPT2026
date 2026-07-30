@@ -428,7 +428,9 @@ export default function AddressChecker() {
       // per-address) simply leave the address out of the map — the worker
       // pool below falls back to per-address core-stats calls for those.
       const canBatch = !!provider.getAddressTxCountsBatch && !!provider.getAddressBalanceSats;
+      const canBatchBalances = canBatch && !!provider.getAddressBalancesBatch;
       const batchTxCounts = new Map<string, number>();
+      const batchBalances = new Map<string, number>();
       if (canBatch) {
         const batches = chunk(validIndexes.map(({ i }) => parsed[i].raw), ELECTRUM_BATCH_SIZE);
         // Surface prefetch progress immediately so a multi-minute batch phase
@@ -449,6 +451,18 @@ export default function AddressChecker() {
             } catch (err) {
               // Whole-batch failure: fall back to per-address lookups below.
               console.warn("[AddressChecker] Batch history failed, falling back per-address:", err);
+            }
+            if (canBatchBalances && !isCancelled()) {
+              try {
+                const balances = await provider.getAddressBalancesBatch!(batch);
+                for (const [addr, value] of balances) {
+                  if (typeof value === "number") batchBalances.set(addr, value);
+                }
+              } catch (err) {
+                // Whole-batch failure: the worker pool below falls back to
+                // per-address balance lookups for this chunk.
+                console.warn("[AddressChecker] Batch balances failed, falling back per-address:", err);
+              }
             }
             // Count attempted addresses (even batch failures) — this tracks
             // phase progress, not success; failures fall back per-address below.
@@ -480,8 +494,14 @@ export default function AddressChecker() {
 
             const batchedCount = canBatch ? batchTxCounts.get(address) : undefined;
             if (batchedCount !== undefined) {
-              // Tx count came from the batch; only the balance call remains.
-              const balanceSats = await provider.getAddressBalanceSats!(address);
+              // Tx count came from the batch. The balance usually did too;
+              // per-address lookup remains only as the failure-isolation
+              // fallback for rows the balance batch missed.
+              const batchedBalance = batchBalances.get(address);
+              const balanceSats =
+                batchedBalance !== undefined
+                  ? batchedBalance
+                  : await provider.getAddressBalanceSats!(address);
               info = { txCount: batchedCount, balanceSats };
               historyPhase = "idle";
             } else if (provider.getAddressCoreStats) {

@@ -64,6 +64,14 @@ export interface BlockchainProvider {
    */
   getAddressBalanceSats?(address: string): Promise<number>;
   /**
+   * Optional batch fast-path for balances: fetch the sum of unspent outputs
+   * for many addresses in one request (Electrum batch listunspent). Returns a
+   * map keyed by address — a number on success, `{ error }` for per-address
+   * failures. Callers fall back to per-address getAddressBalanceSats for
+   * addresses missing from the map or when the whole batch throws.
+   */
+  getAddressBalancesBatch?(addresses: string[]): Promise<Map<string, number | { error: string }>>;
+  /**
    * On-demand history walk: return first/last seen times (and, on Electrum,
    * also receivedSats / sentSats which cannot be computed cheaply).
    *

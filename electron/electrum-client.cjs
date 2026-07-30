@@ -512,6 +512,70 @@ function registerElectrumHandlers(ipcMain) {
       };
     }
   });
+
+  // Batch get UTXOs (balances) for multiple addresses — mirrors
+  // electrum-batch-get-history: requests are pipelined over the single
+  // multiplexed socket with the same bounded in-flight window, results are
+  // indexed by input position, and per-address failures stay isolated so one
+  // bad address only fails its own entry.
+  ipcMain.handle('electrum-batch-get-utxos', async (event, { host, port, useSSL, addresses, timeout }) => {
+    const startTime = Date.now();
+
+    try {
+      const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000);
+      await ensureVersionHandshake(key, timeout || 15000);
+
+      console.log(`[Electrum Pool] Batch fetching UTXOs for ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
+
+      const results = new Array(addresses.length);
+      let next = 0;
+      const pipelineWorker = async () => {
+        while (true) {
+          const i = next++;
+          if (i >= addresses.length) return;
+          const address = addresses[i];
+          try {
+            const scripthash = addressToScripthash(address);
+            const utxos = await pooledRequest(key, 'blockchain.scripthash.listunspent', [scripthash], timeout || 30000);
+            results[i] = {
+              address,
+              success: true,
+              utxos: utxos || [],
+            };
+          } catch (err) {
+            results[i] = {
+              address,
+              success: false,
+              error: err.message,
+              utxos: [],
+            };
+          }
+        }
+      };
+      const workers = [];
+      for (let w = 0; w < Math.min(BATCH_PIPELINE_WINDOW, addresses.length); w++) {
+        workers.push(pipelineWorker());
+      }
+      await Promise.all(workers);
+
+      const latency = Date.now() - startTime;
+
+      return {
+        success: true,
+        results,
+        latency,
+        addressCount: addresses.length,
+        connectionReused: pooled,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        results: [],
+        latency: Date.now() - startTime,
+      };
+    }
+  });
 }
 
 module.exports = { registerElectrumHandlers, stopKeepalive };

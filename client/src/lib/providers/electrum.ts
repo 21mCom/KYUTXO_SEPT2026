@@ -310,6 +310,40 @@ export class ElectrumProvider implements BlockchainProvider {
     return out;
   }
 
+  // Batch companion to getAddressBalanceSats: one IPC round-trip fetches the
+  // unspent outputs for a whole chunk of addresses over the pooled Electrum
+  // connection. Per-address failures are reported in the map so the caller
+  // can fall back to per-address calls for just those rows.
+  async getAddressBalancesBatch(
+    addresses: string[],
+  ): Promise<Map<string, number | { error: string }>> {
+    this.ensureElectron();
+    const api = getElectronAPI();
+    const result = await api.electrumBatchGetUtxos({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      addresses,
+      timeout: this.timeout,
+    });
+    if (!result.success) {
+      throw new Error(result.error || 'Batch UTXO lookup failed');
+    }
+    const out = new Map<string, number | { error: string }>();
+    for (const entry of result.results || []) {
+      if (entry.success) {
+        let balanceSats = 0;
+        for (const utxo of entry.utxos || []) {
+          balanceSats += utxo.value || 0;
+        }
+        out.set(entry.address, balanceSats);
+      } else {
+        out.set(entry.address, { error: entry.error || 'UTXO lookup failed' });
+      }
+    }
+    return out;
+  }
+
   // Cheap single-call balance (sum of unspent outputs), used to complete core
   // stats when the tx count already came from getAddressTxCountsBatch.
   async getAddressBalanceSats(address: string): Promise<number> {

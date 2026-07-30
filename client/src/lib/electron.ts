@@ -119,6 +119,27 @@ export interface ElectrumBatchHistoryResult {
   error?: string;
 }
 
+export interface ElectrumBatchUtxoParams {
+  host: string;
+  port: number;
+  useSSL?: boolean;
+  addresses: string[];
+  timeout?: number;
+}
+
+export interface ElectrumBatchUtxoResult {
+  success: boolean;
+  results: Array<{
+    address: string;
+    success: boolean;
+    utxos: ElectrumUtxo[];
+    error?: string;
+  }>;
+  latency?: number;
+  addressCount?: number;
+  error?: string;
+}
+
 export interface TorRequestParams {
   url: string;
   method?: string;
@@ -256,6 +277,7 @@ interface ElectronAPI {
   electrumGetTransaction: (params: ElectrumTransactionParams) => Promise<ElectrumTransactionResult>;
   electrumGetBlockHash: (params: ElectrumBlockHashParams) => Promise<ElectrumBlockHashResult>;
   electrumBatchGetHistory: (params: ElectrumBatchHistoryParams) => Promise<ElectrumBatchHistoryResult>;
+  electrumBatchGetUtxos: (params: ElectrumBatchUtxoParams) => Promise<ElectrumBatchUtxoResult>;
   platform: string;
   isElectron: boolean;
   // Native read-engine bridge (present only in the desktop build).

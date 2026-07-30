@@ -92,6 +92,41 @@ beforeAll(async () => {
             );
             return;
           }
+          if (req.method === "blockchain.scripthash.listunspent") {
+            const scripthash = req.params[0] as string;
+            const idx = scripthashIndex.get(scripthash);
+            if (idx === SILENT_INDEX) {
+              // Never respond: exercises the per-request timeout path.
+              return;
+            }
+            if (idx === FAIL_INDEX) {
+              socket.write(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: req.id,
+                  error: { message: "index out of range" },
+                }) + "\n",
+              );
+              return;
+            }
+            // One UTXO whose value encodes the address index, so the test can
+            // verify each result landed on the right address.
+            socket.write(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: req.id,
+                result: [
+                  {
+                    tx_hash: `fake-utxo-txid-${idx}`,
+                    tx_pos: 0,
+                    value: ((idx ?? 0) + 1) * 1000,
+                    height: 1000 + (idx ?? 0),
+                  },
+                ],
+              }) + "\n",
+            );
+            return;
+          }
           if (req.method === "blockchain.scripthash.get_history") {
             const scripthash = req.params[0] as string;
             // Recover the address index by matching scripthashes.
@@ -240,6 +275,81 @@ describe("electrum-batch-get-history pipelining", () => {
         timeout: 3000,
       }),
     );
+    expect(result.success).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+});
+
+describe("electrum-batch-get-utxos pipelining", () => {
+  it("overlaps requests, keeps input order, and isolates per-address failures", async () => {
+    // Reuse the scripthash index built by the history test (or build it now
+    // if this test runs first).
+    if (scripthashIndex.size === 0) {
+      const ecc = requireCjs("@bitcoinerlab/secp256k1");
+      bitcoin.initEccLib(ecc);
+      const crypto = requireCjs("node:crypto");
+      ADDRESSES.forEach((addr, idx) => {
+        const script = bitcoin.address.toOutputScript(
+          addr,
+          bitcoin.networks.bitcoin,
+        );
+        const hash = crypto.createHash("sha256").update(script).digest();
+        scripthashIndex.set(Buffer.from(hash).reverse().toString("hex"), idx);
+      });
+    }
+
+    respondDelayMs = 40;
+    maxInFlightSeen = 0;
+
+    const t = Date.now();
+    const result = await Promise.resolve(
+      ipc.invoke("electrum-batch-get-utxos", {
+        host: "127.0.0.1",
+        port: serverPort,
+        useSSL: false,
+        addresses: ADDRESSES,
+        timeout: 5000,
+      }),
+    ) as any;
+    const elapsed = Date.now() - t;
+
+    expect(result.success).toBe(true);
+    expect(result.results).toHaveLength(ADDRESSES.length);
+
+    for (let i = 0; i < ADDRESSES.length; i++) {
+      const entry = result.results[i];
+      expect(entry.address).toBe(ADDRESSES[i]);
+      if (i === FAIL_INDEX) {
+        expect(entry.success).toBe(false);
+        expect(entry.error).toMatch(/index out of range/);
+        expect(entry.utxos).toEqual([]);
+      } else if (i === SILENT_INDEX) {
+        expect(entry.success).toBe(false);
+        expect(entry.error).toMatch(/timeout/i);
+      } else {
+        expect(entry.success).toBe(true);
+        expect(entry.utxos).toHaveLength(1);
+        expect(entry.utxos[0].value).toBe((i + 1) * 1000);
+      }
+    }
+
+    // Pipelining proof: several requests on the wire at once, and the batch
+    // finished well under the sequential floor (24 x 40ms + 5s timeout).
+    expect(maxInFlightSeen).toBeGreaterThan(2);
+    expect(elapsed).toBeLessThan(7000);
+  }, 15000);
+
+  it("fails the whole batch cleanly when no server is listening", async () => {
+    respondDelayMs = 0;
+    const result = await Promise.resolve(
+      ipc.invoke("electrum-batch-get-utxos", {
+        host: "127.0.0.1",
+        port: serverPort + 1000,
+        useSSL: false,
+        addresses: ADDRESSES.slice(0, 4),
+        timeout: 3000,
+      }),
+    ) as any;
     expect(result.success).toBe(false);
     expect(result.error).toBeTruthy();
   });

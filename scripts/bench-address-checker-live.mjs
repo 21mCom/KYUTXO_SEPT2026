@@ -65,8 +65,9 @@ function fmt(ms) { return (ms / 1000).toFixed(1) + 's'; }
 
 // PHASE controls which part runs (so the full 5,000-address measurement can
 // be split into resumable sub-5-minute chunks whose network times are
-// additive): "batch" (with SLICE=start:end), "balances", "old", "cancel",
-// or unset = everything in one process.
+// additive): "batch" (with SLICE=start:end), "balances" (batched — the new
+// path), "balances-per-address" (previous per-address path, for comparison),
+// "old", "cancel", or unset = everything in one process.
 const PHASE = process.env.PHASE || '';
 const SLICE = process.env.SLICE || '';
 
@@ -89,7 +90,24 @@ async function phaseBatch(addrs) {
   console.log(`PHASE batch [${s}:${e}] (${Math.ceil(slice.length / BATCH)} batches): elapsed_ms=${Date.now() - t} counts=${counts} failures=${failures}`);
 }
 
+// NEW balance path (task 1668): batch listunspent in 40-address chunks, one
+// pipelined IPC round-trip per chunk — exactly as AddressChecker.tsx now does.
 async function phaseBalances(addrs) {
+  let [s, e] = SLICE ? SLICE.split(':').map(Number) : [0, addrs.length];
+  const slice = addrs.slice(s, e);
+  const t = Date.now();
+  let done = 0, errs = 0;
+  for (const b of chunk(slice, BATCH)) {
+    const r = await ipc('electrum-batch-get-utxos', { ...conn, addresses: b, timeout: 60000 });
+    if (!r.success) { errs += b.length; continue; }
+    for (const en of r.results) { if (en.success) done++; else errs++; }
+  }
+  console.log(`PHASE balances (batched, ${Math.ceil(slice.length / BATCH)} batches) [${s}:${e}]: elapsed_ms=${Date.now() - t} done=${done} errors=${errs}`);
+}
+
+// Previous balance path: per-address listunspent at renderer concurrency 8.
+// Kept for before/after comparison against PHASE=balances.
+async function phaseBalancesPerAddress(addrs) {
   let [s, e] = SLICE ? SLICE.split(':').map(Number) : [0, addrs.length];
   const slice = addrs.slice(s, e);
   const t = Date.now();
@@ -98,7 +116,7 @@ async function phaseBalances(addrs) {
     const r = await ipc('electrum-get-utxos', { ...conn, address: a });
     if (r.success) done++; else errs++;
   }, { concurrency: ELECTRUM_CONCURRENCY });
-  console.log(`PHASE balances [${s}:${e}] @${ELECTRUM_CONCURRENCY}: elapsed_ms=${Date.now() - t} done=${done} errors=${errs}`);
+  console.log(`PHASE balances-per-address [${s}:${e}] @${ELECTRUM_CONCURRENCY}: elapsed_ms=${Date.now() - t} done=${done} errors=${errs}`);
 }
 
 async function phaseOld(addrs) {
@@ -136,6 +154,7 @@ async function main() {
     const addrs = genAddresses(N);
     if (PHASE === 'batch') await phaseBatch(addrs);
     else if (PHASE === 'balances') await phaseBalances(addrs);
+    else if (PHASE === 'balances-per-address') await phaseBalancesPerAddress(addrs);
     else if (PHASE === 'old') await phaseOld(addrs);
     else if (PHASE === 'cancel') await phaseCancel(addrs);
     else throw new Error('Unknown PHASE: ' + PHASE);
