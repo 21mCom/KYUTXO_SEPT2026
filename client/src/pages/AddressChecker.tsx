@@ -330,6 +330,11 @@ export default function AddressChecker() {
   const [duplicatesSkipped, setDuplicatesSkipped] = useState(0);
   const [providerError, setProviderError] = useState<string | null>(null);
   const [isHistoryRunning, setIsHistoryRunning] = useState(false);
+  // Electrum batch prefetch progress: how many addresses have had their tx
+  // counts fetched so far, out of all valid addresses. Non-null only while the
+  // batch prefetch phase is running, so the UI can show movement before any
+  // row is marked done. Null on HTTP (non-batch) providers.
+  const [prefetchProgress, setPrefetchProgress] = useState<{ fetched: number; total: number } | null>(null);
   // When on, hides completed rows with 0 confirmed transactions from the table.
   const [hideZeroTx, setHideZeroTx] = useState(false);
   const cancelledRef = useRef(false);
@@ -373,6 +378,7 @@ export default function AddressChecker() {
 
     setRows(parsed);
     setDuplicatesSkipped(dupes);
+    setPrefetchProgress(null);
     setHasRun(true);
     setIsRunning(true);
     cancelledRef.current = false;
@@ -425,17 +431,36 @@ export default function AddressChecker() {
       const batchTxCounts = new Map<string, number>();
       if (canBatch) {
         const batches = chunk(validIndexes.map(({ i }) => parsed[i].raw), ELECTRUM_BATCH_SIZE);
-        for (const batch of batches) {
-          if (isCancelled()) break;
-          try {
-            const counts = await provider.getAddressTxCountsBatch!(batch);
-            for (const [addr, value] of counts) {
-              if (typeof value === "number") batchTxCounts.set(addr, value);
+        // Surface prefetch progress immediately so a multi-minute batch phase
+        // never looks hung at "0 / N complete". Updated once per batch — a few
+        // times per second at most, so plain setState (no buffering) is fine.
+        let prefetched = 0;
+        if (!isStale() && batches.length > 0) {
+          setPrefetchProgress({ fetched: 0, total: validIndexes.length });
+        }
+        try {
+          for (const batch of batches) {
+            if (isCancelled()) break;
+            try {
+              const counts = await provider.getAddressTxCountsBatch!(batch);
+              for (const [addr, value] of counts) {
+                if (typeof value === "number") batchTxCounts.set(addr, value);
+              }
+            } catch (err) {
+              // Whole-batch failure: fall back to per-address lookups below.
+              console.warn("[AddressChecker] Batch history failed, falling back per-address:", err);
             }
-          } catch (err) {
-            // Whole-batch failure: fall back to per-address lookups below.
-            console.warn("[AddressChecker] Batch history failed, falling back per-address:", err);
+            // Count attempted addresses (even batch failures) — this tracks
+            // phase progress, not success; failures fall back per-address below.
+            prefetched += batch.length;
+            if (!isStale()) {
+              setPrefetchProgress({ fetched: prefetched, total: validIndexes.length });
+            }
           }
+        } finally {
+          // Prefetch phase over (completed or cancelled): hand the visible
+          // progress back to the main counter / worker pool.
+          if (!isStale()) setPrefetchProgress(null);
         }
       }
 
@@ -499,6 +524,7 @@ export default function AddressChecker() {
         if (cancelledRef.current) {
           setRows(prev => prev.map(r => r.status === "loading" ? { ...r, status: "pending" } : r));
         }
+        setPrefetchProgress(null);
         setIsRunning(false);
       }
     }
@@ -643,6 +669,7 @@ export default function AddressChecker() {
     providerRef.current = null;
     setIsRunning(false);
     setIsHistoryRunning(false);
+    setPrefetchProgress(null);
     setRows([]);
     setHasRun(false);
     setDuplicatesSkipped(0);
@@ -803,6 +830,16 @@ export default function AddressChecker() {
               {isRunning && validCount > 0 && (
                 <span className="text-sm text-muted-foreground" data-testid="text-progress">
                   {doneCount + errorCount} / {validCount} complete
+                </span>
+              )}
+
+              {isRunning && prefetchProgress && (
+                <span
+                  className="text-sm text-muted-foreground inline-flex items-center gap-2 tabular-nums"
+                  data-testid="text-prefetch-progress"
+                >
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Fetched history for {prefetchProgress.fetched.toLocaleString()} / {prefetchProgress.total.toLocaleString()} addresses…
                 </span>
               )}
 

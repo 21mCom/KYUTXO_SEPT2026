@@ -237,4 +237,114 @@ describe("AddressChecker concurrent run", () => {
     expect(screen.getAllByText("Done")).toHaveLength(50);
     expect(screen.queryByText("Error")).toBeNull();
   }, 30000);
+
+  it("shows advancing prefetch progress during a multi-batch Electrum prefetch, then hides it for the worker pool", async () => {
+    // Gate each batch so the test can observe progress between batches.
+    const releaseBatch: Array<() => void> = [];
+    const provider = {
+      name: "Fake Electrum",
+      getAddressTxCountsBatch: vi.fn(async (addresses: string[]) => {
+        await new Promise<void>((r) => releaseBatch.push(r));
+        return new Map<string, number | { error: string }>(addresses.map((a) => [a, 2]));
+      }),
+      getAddressBalanceSats: vi.fn(async () => 10),
+      getAddressCoreStats: vi.fn(async () => ({ txCount: 9, balanceSats: 7 })),
+    };
+    mocks.createProviderFromSettings.mockReturnValue(provider);
+
+    // 100 addresses → 3 batches (40/40/20).
+    await startRun(makeAddresses(100).join("\n"));
+
+    // Prefetch indicator appears at 0 before any batch resolves; main counter is 0.
+    await waitFor(() =>
+      expect(screen.getByTestId("text-prefetch-progress").textContent).toContain("0 / 100"),
+    );
+    expect(screen.getByTestId("text-progress").textContent).toContain("0 / 100");
+
+    // First batch resolves → progress advances to 40.
+    await waitFor(() => expect(releaseBatch.length).toBeGreaterThanOrEqual(1));
+    releaseBatch.shift()!();
+    await waitFor(() =>
+      expect(screen.getByTestId("text-prefetch-progress").textContent).toContain("40 / 100"),
+    );
+
+    // Second batch → 80.
+    await waitFor(() => expect(releaseBatch.length).toBeGreaterThanOrEqual(1));
+    releaseBatch.shift()!();
+    await waitFor(() =>
+      expect(screen.getByTestId("text-prefetch-progress").textContent).toContain("80 / 100"),
+    );
+
+    // Final batch: prefetch indicator disappears, worker pool completes the run.
+    await waitFor(() => expect(releaseBatch.length).toBeGreaterThanOrEqual(1));
+    releaseBatch.shift()!();
+    await waitFor(() => expect(screen.queryByTestId("text-prefetch-progress")).toBeNull());
+
+    await waitFor(
+      () => expect((screen.getByTestId("button-run-check") as HTMLButtonElement).disabled).toBe(false),
+      { timeout: 15000 },
+    );
+    expect(screen.getAllByText("Done")).toHaveLength(100);
+  }, 30000);
+
+  it("cancel during the prefetch phase stops promptly, leaves no stuck rows, and Reset clears the indicator", async () => {
+    const releaseBatch: Array<() => void> = [];
+    const provider = {
+      name: "Fake Electrum",
+      getAddressTxCountsBatch: vi.fn(async (addresses: string[]) => {
+        await new Promise<void>((r) => releaseBatch.push(r));
+        return new Map<string, number | { error: string }>(addresses.map((a) => [a, 2]));
+      }),
+      getAddressBalanceSats: vi.fn(async () => 10),
+      getAddressCoreStats: vi.fn(async () => ({ txCount: 9, balanceSats: 7 })),
+    };
+    mocks.createProviderFromSettings.mockReturnValue(provider);
+
+    await startRun(makeAddresses(100).join("\n"));
+    await waitFor(() =>
+      expect(screen.getByTestId("text-prefetch-progress").textContent).toContain("0 / 100"),
+    );
+
+    // Cancel while the first batch is still parked, then release it.
+    fireEvent.click(screen.getByTestId("button-cancel-check"));
+    await waitFor(() => expect(releaseBatch.length).toBeGreaterThanOrEqual(1));
+    releaseBatch.forEach((r) => r());
+
+    await waitFor(() => {
+      expect((screen.getByTestId("button-run-check") as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.queryByTestId("text-prefetch-progress")).toBeNull();
+    });
+
+    // No further batches were started; no row is stuck loading or done.
+    expect(provider.getAddressTxCountsBatch).toHaveBeenCalledTimes(1);
+    expect(provider.getAddressBalanceSats).not.toHaveBeenCalled();
+    expect(screen.queryByText("Checking")).toBeNull();
+    expect(screen.getAllByText("Pending")).toHaveLength(100);
+
+    // Reset clears everything, indicator included.
+    fireEvent.click(screen.getByTestId("button-reset-check"));
+    expect(screen.queryByTestId("text-prefetch-progress")).toBeNull();
+    expect(screen.queryByText("Pending")).toBeNull();
+  }, 30000);
+
+  it("HTTP (non-batch) providers never show the prefetch indicator", async () => {
+    const provider = {
+      name: "Fake HTTP",
+      getAddressCoreStats: vi.fn(async () => {
+        await sleep(5);
+        return { txCount: 1, balanceSats: 100 };
+      }),
+    };
+    mocks.createProviderFromSettings.mockReturnValue(provider);
+
+    await startRun(makeAddresses(10).join("\n"));
+    expect(screen.queryByTestId("text-prefetch-progress")).toBeNull();
+
+    await waitFor(
+      () => expect((screen.getByTestId("button-run-check") as HTMLButtonElement).disabled).toBe(false),
+      { timeout: 15000 },
+    );
+    expect(screen.queryByTestId("text-prefetch-progress")).toBeNull();
+    expect(screen.getAllByText("Done")).toHaveLength(10);
+  }, 30000);
 });
