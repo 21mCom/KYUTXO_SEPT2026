@@ -800,7 +800,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/pages/UTXOs.resyncAffected.test.tsx"
+args = "npx vitest run client/src/pages/UTXOs.resyncAffected.test.tsx client/src/pages/UTXOs.engineOutpointCoverage.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
