@@ -70,6 +70,13 @@ vi.mock("@/lib/data/record-crud", () => ({
   eachRecord: vi.fn(async (cb: (r: unknown) => void) => {
     for (const r of FIXTURE) cb(r);
   }),
+  // Keyset batch read used by exportBip329LabelParts: fixture rows get
+  // synthetic ids 1..N and the (afterId, limit) window is honored.
+  getRecordsAfterId: vi.fn(async (afterId: number, limit: number) =>
+    FIXTURE.map((r, i) => ({ ...r, id: i + 1 }))
+      .filter((r) => r.id > afterId)
+      .slice(0, limit)
+  ),
 }));
 
 // Keep the real sink module (types + helpers) but capture downloads instead of

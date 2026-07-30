@@ -35,7 +35,8 @@ import { countAddressSyncState } from "@/lib/data/address-sync-crud";
 import { countUtxoLineage, countCustodySegments, countLineageSnapshots } from "@/lib/data/lineage-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { exportBackup, estimateExportBytes } from "@/lib/backup/export";
-import { recordToBip329Line, matchesBip329ExportFilter, type Bip329Line, type Bip329ExportFilter, type Bip329ExportKind } from "@/lib/bip329";
+import { exportBip329LabelParts } from "@/lib/bip329-export";
+import { recordToBip329Line, matchesBip329ExportFilter, type Bip329ExportFilter, type Bip329ExportKind } from "@/lib/bip329";
 import { useTags } from "@/hooks/use-tags";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -469,11 +470,11 @@ export default function ExportPage() {
     }
   };
 
-  // BIP-329 label export: stream every address/transaction record through the
-  // record -> BIP-329 line converter, keep only the lines that survive the
-  // current filter, and download the result as a .jsonl file. Iterates the
-  // table with a Dexie cursor (instead of loading all records into an array)
-  // so only the label lines themselves are held in memory.
+  // BIP-329 label export: walk every record in keyset batches (yielding to
+  // the event loop between batches, so huge vaults never freeze the page),
+  // keep only the lines that survive the current filter, and download the
+  // result as a .jsonl file. The helper returns Blob-ready parts so there is
+  // never one giant string join over the whole line set.
   const handleExportBip329 = async () => {
     setExportingLabels(true);
     try {
@@ -493,15 +494,9 @@ export default function ExportPage() {
         labelTagFilter !== "all" ||
         labelWalletFilter !== "all";
 
-      const lines: string[] = [];
-      await eachRecord((record) => {
-        const line: Bip329Line | null = recordToBip329Line(record);
-        if (line && matchesBip329ExportFilter(record, line, exportFilter)) {
-          lines.push(JSON.stringify(line));
-        }
-      });
+      const { parts, lineCount } = await exportBip329LabelParts({ filter: exportFilter });
 
-      if (lines.length === 0) {
+      if (lineCount === 0) {
         toast({
           title: "No Labels To Export",
           description: exportFiltersActive
@@ -511,14 +506,13 @@ export default function ExportPage() {
         return;
       }
 
-      const jsonl = lines.join("\n") + "\n";
       const dateStr = new Date().toISOString().split("T")[0];
-      const blob = new Blob([jsonl], { type: "application/jsonl" });
+      const blob = new Blob(parts, { type: "application/jsonl" });
       downloadBlob(blob, `kyutxo-labels-bip329-${dateStr}.jsonl`);
 
       toast({
         title: "Labels Exported",
-        description: `Exported ${lines.length} label(s) in BIP-329 format. Import the .jsonl file into Sparrow, Electrum, or any BIP-329 compatible wallet.`,
+        description: `Exported ${lineCount} label(s) in BIP-329 format. Import the .jsonl file into Sparrow, Electrum, or any BIP-329 compatible wallet.`,
       });
     } catch (error) {
       console.error("BIP-329 label export failed:", error);

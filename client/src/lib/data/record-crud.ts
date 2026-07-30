@@ -553,9 +553,9 @@ export async function clearAllRecords(options?: ClearAllRecordsOptions): Promise
   }
 }
 
-// =============================================================================
+// -----------------------------------------------------------------------------
 // READ HELPERS
-// =============================================================================
+// -----------------------------------------------------------------------------
 
 export async function getRecord(id: number): Promise<Record | undefined> {
   return db.records.get(id);
@@ -1214,13 +1214,18 @@ export async function getRecordsByOffsetLimit(
 }
 
 // Iterate every record with a Dexie cursor (no full-table array in memory).
-// Used by streaming exports (e.g. BIP-329 labels) that visit each row once.
+// Cursor iteration yields between rows via IndexedDB events, so a full-table
+// pass that only inspects rows (e.g. the BIP-329 filter match count) stays
+// responsive. For walks that also build large output (the label export
+// itself), prefer keyset batching via getRecordsAfterId — see bip329-export.ts.
 export async function eachRecord(
   callback: (record: Record) => void
 ): Promise<void> {
   return db.records.each(callback);
 }
 
+// Iterate every address record with a Dexie cursor (no full-table array in
+// memory).
 export async function eachAddressRecord(
   callback: (record: Record) => void
 ): Promise<void> {

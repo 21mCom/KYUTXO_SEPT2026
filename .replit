@@ -832,7 +832,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/bip329.test.ts"
+args = "npx vitest run client/src/lib/bip329.test.ts client/src/lib/bip329-export.test.ts client/src/pages/ExportPage.bip329Filter.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

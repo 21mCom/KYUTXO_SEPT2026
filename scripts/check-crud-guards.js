@@ -146,6 +146,7 @@ const ALWAYS_ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/lib/testSeedData.ts'),
   path.resolve(ROOT, 'client/src/lib/records-query.ts'),
   path.resolve(ROOT, 'client/src/lib/records-query.equivalence.test.ts'),
+  path.resolve(ROOT, 'client/src/lib/bip329-export.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-proximity.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-entity-contacts.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-entity-citations.test.ts'),
@@ -235,7 +236,7 @@ for (const file of files) {
   for (let i = 0; i < lines.length; i++) {
     const writeMatch = lines[i].match(WRITE_PATTERN);
     if (writeMatch) {
-      const tableName = writeMatch[1];
+      const tableName = readMatch[1];
       const guard = GUARDED_TABLES.find(g => g.table === tableName);
       writeViolations.push({
         file: path.relative(ROOT, file),

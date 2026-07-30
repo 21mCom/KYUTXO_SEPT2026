@@ -69,3 +69,4 @@
 - [CRUD guard lint covers tests](crud-guard-lint-tests.md) — check-crud-guards scans .test files too; seed/clear via CRUD helpers (clearAllRecords, clearParticipants, createRecord, table's own clear) or validation fails.
 - [page.evaluate Vite imports](browser-eval-vite-imports.md) — dynamic import in page.evaluate resolves only '/src/...ts' app modules, never bare package specifiers; export a lib helper for library primitives.
 - [Trusted Types enforcement](trusted-types-enforcement.md) — CSP enforces TT in packaged app; policies must install eagerly at startup (Radix sinks fire on first commit); default policy = exact-string allowlist, fails closed.
+- [fake-indexeddb scale-test lag](fake-indexeddb-scale-test-lag.md) — event-loop-lag assertions are harness noise (sync structured-clone); guard responsiveness via yield-spy counts + bounded output chunks instead.
