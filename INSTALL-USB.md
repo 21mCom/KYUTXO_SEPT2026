@@ -36,7 +36,7 @@
 ## First Run
 
 1. Double-click the .exe file to launch KYUTXO
-2. Create your master password (this encrypts all your data)
+2. Create your master password (this gates access to the app — it does **not** encrypt the data files on the drive; see Security below)
 3. A `KYUTXO_Data` folder will be automatically created on the USB drive
 
 ## Upgrading from an Older Version
@@ -57,7 +57,8 @@
 
 ## Important Notes
 
-- **Keep your password safe!** There is no recovery option - your data is encrypted with your password
+- **Encrypt the USB drive itself** - vault data is stored on the drive without per-field encryption, so full-drive encryption (BitLocker/VeraCrypt) is your at-rest protection (see Security below)
+- **Keep your password safe!** There is no recovery option - it is required to unlock the app
 - **All data stays on the USB** - nothing is stored on the host computer
 - **Backup your USB drive** regularly to prevent data loss
 - **Works offline** - no internet connection required after first setup
@@ -69,16 +70,39 @@ E:\KYUTXO\
 ├── KYUTXO-1.0.0-Portable.exe
 ├── portable
 └── KYUTXO_Data\
-    ├── IndexedDB\           ← Your encrypted database
+    ├── IndexedDB\           ← Your database (not encrypted on disk)
     ├── Local Storage\       ← App settings
-    ├── attachments\         ← Your encrypted file attachments
+    ├── attachments\         ← Your file attachments (not encrypted on disk)
     └── (other Chromium data)
 ```
 
 **Everything is self-contained** - just copy the entire folder to back up or move to another machine.
 
-## Security Tips
+## Security
+
+### What your master password protects (and what it doesn't)
+
+Since the storage-format upgrade, vault rows and attachment files are stored
+on the drive **without per-field encryption**. Your master password:
+
+- **Does** gate access to the app (unlock screen)
+- **Does not** encrypt the database or attachment files in `KYUTXO_Data`
+- **Does not** protect exported backups — backup exports are unencrypted
+  unless you explicitly enable export encryption and choose a separate
+  export password when exporting from Settings
+
+Anyone with physical access to the USB drive could read your vault data
+directly from disk unless the drive itself is encrypted.
+
+### Encrypt the drive (primary at-rest protection)
+
+**Encrypt your entire USB drive with BitLocker (Windows) or VeraCrypt.**
+This is the recommended — and only — at-rest protection for the data files
+on a portable install.
+
+### Additional tips
 
 - Use a strong, unique master password
-- Consider encrypting your entire USB drive with BitLocker or VeraCrypt
 - Keep a backup of your USB contents in a secure location
+- When exporting a backup from Settings, enable export encryption (and pick
+  a strong export password) — exports are unencrypted by default
