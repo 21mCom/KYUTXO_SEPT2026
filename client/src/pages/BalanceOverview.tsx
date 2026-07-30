@@ -19,7 +19,8 @@ import { recomputeAddressStats, countHeuristicMatchedAddresses, getHeuristicMatc
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
 import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown, getMissingSourceTxids, getMissingSourceTxidDetails, buildMissingSourceJson, buildMissingSourceCsv, type MissingSourceDetail } from "@/lib/data/transaction-crud";
 import { transactionSyncService } from "@/lib/transaction-sync";
-import { runTxidBackfill } from "@/lib/txid-backfill";
+import { runTxidBackfill, detectOrphanedTxRecords, formatDetailOutcome, type BackfillTxDetail } from "@/lib/txid-backfill";
+import { TxidLink } from "@/components/TxidLink";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
 import { getNodeSettings } from "@/lib/data/node-settings-crud";
 import { describeResolveError } from "@/lib/resolve-error";
@@ -488,6 +489,12 @@ export default function BalanceOverview() {
   // reference them) shown in a dialog so fully-offline users can import them by
   // hand. `null` until the dialog is opened and the list has been computed.
   const [missingDialogOpen, setMissingDialogOpen] = useState(false);
+  // Per-transaction outcomes from the last "Import missing history" run, so
+  // the user can see exactly which txids were rebuilt / skipped / failed (with
+  // record links when the txid belongs to a tracked transaction record).
+  // `null` until a run finishes; cleared when dismissed.
+  const [importDetails, setImportDetails] = useState<BackfillTxDetail[] | null>(null);
+  const [showAllImportDetails, setShowAllImportDetails] = useState(false);
   const [missingDetails, setMissingDetails] = useState<MissingSourceDetail[] | null>(null);
   const [missingLoading, setMissingLoading] = useState(false);
   // Unresolved spends that map to no tracked source record (prevout not locally
@@ -1440,9 +1447,20 @@ export default function BalanceOverview() {
         return;
       }
 
+      // Map txid → transaction-record id for any of these txids that belong to
+      // tracked transaction records, so per-transaction details can link
+      // straight to the record (same map the Settings rebuild passes).
+      let orphanRecordIds: Map<string, number> | undefined;
+      try {
+        ({ recordIds: orphanRecordIds } = await detectOrphanedTxRecords());
+      } catch (detectErr) {
+        console.warn("[BalanceOverview] Orphan record detection failed (details will lack record links):", detectErr);
+      }
+
       setImportProgress({ processed: 0, total: txids.length });
       const result = await runTxidBackfill(provider, txids, {
         signal: abort.signal,
+        recordIds: orphanRecordIds,
         onProgress: (p) => {
           if (p.phase === "fetching") {
             setImportProgress({ processed: p.processed, total: p.orphansFound });
@@ -1451,6 +1469,12 @@ export default function BalanceOverview() {
       });
 
       const cancelled = abort.signal.aborted;
+
+      // Surface the per-transaction outcomes (rebuilt / skipped / failed, with
+      // record links) below the banner. A cancelled run still shows whatever
+      // was processed before the stop.
+      setImportDetails(result.details.length > 0 ? result.details : null);
+      setShowAllImportDetails(false);
 
       // Importing the source transactions made their outputs locally known. Now
       // attribute the original spends that referenced them (their inputs are
@@ -1962,6 +1986,58 @@ export default function BalanceOverview() {
               <X className="h-4 w-4" />
             </button>
           </div>
+        </div>
+      )}
+
+      {importDetails && importDetails.length > 0 && (
+        <div
+          className="flex-none flex items-start gap-3 px-4 py-3 border-b bg-muted/40"
+          data-testid="panel-import-details"
+        >
+          <div className="flex-1 min-w-0 space-y-1 text-sm">
+            <p className="text-xs font-medium text-foreground">
+              Last import — affected transactions
+            </p>
+            <ul className="space-y-0.5">
+              {(showAllImportDetails ? importDetails : importDetails.slice(0, 10)).map((d) => (
+                <li
+                  key={d.txid}
+                  className="flex items-center gap-2 flex-wrap"
+                  data-testid={`import-detail-${d.txid.slice(0, 8)}`}
+                >
+                  <TxidLink
+                    txid={d.txid}
+                    recordId={d.recordId ?? null}
+                    showMetadataIndicator={false}
+                  />
+                  <span
+                    className="text-xs text-muted-foreground"
+                    data-testid={`import-detail-outcome-${d.txid.slice(0, 8)}`}
+                  >
+                    {formatDetailOutcome(d)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {importDetails.length > 10 && !showAllImportDetails && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setShowAllImportDetails(true)}
+                data-testid="button-show-all-import-details"
+              >
+                Show all {importDetails.length.toLocaleString()} transactions
+              </Button>
+            )}
+          </div>
+          <button
+            onClick={() => setImportDetails(null)}
+            className="flex-none text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+            data-testid="button-dismiss-import-details"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
 

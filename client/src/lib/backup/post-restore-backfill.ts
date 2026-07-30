@@ -35,7 +35,11 @@ export async function runPostRestoreTxidBackfill(
     cb.onMessage(
       `Rebuilding on-chain data for ${txids.length} transaction${txids.length !== 1 ? "s" : ""}…`,
     );
-    const deferSuffix = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""} ${txids.length !== 1 ? "need" : "needs"} on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
+    // With a single affected transaction, name its txid so the user can
+    // identify the record straight from the restore summary.
+    const singleTxidNote =
+      txids.length === 1 ? ` (${txids[0].slice(0, 8)}…${txids[0].slice(-6)})` : "";
+    const deferSuffix = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""}${singleTxidNote} ${txids.length !== 1 ? "need" : "needs"} on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
 
     const nodeSettings = await getNodeSettings("default");
     if (!nodeSettings) return { suffix: deferSuffix, orphansFound: true };
@@ -65,7 +69,10 @@ export async function runPostRestoreTxidBackfill(
       if (bfResult.prevoutsResolved > 0)
         parts.push(`${bfResult.prevoutsResolved} input addresses resolved`);
       return {
-        suffix: parts.length > 0 ? ` Transaction data: ${parts.join("; ")}.` : "",
+        suffix:
+          parts.length > 0
+            ? ` Transaction data${singleTxidNote}: ${parts.join("; ")}.`
+            : "",
         orphansFound: true,
       };
     } catch {

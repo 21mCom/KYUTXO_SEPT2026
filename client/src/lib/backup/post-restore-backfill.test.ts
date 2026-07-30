@@ -92,7 +92,7 @@ describe("runPostRestoreTxidBackfill", () => {
     const result = await runPostRestoreTxidBackfill(makeCallbacks());
 
     expect(result.suffix).toBe(
-      ' 1 transaction needs on-chain data — run "Rebuild Missing Transactions" in Settings when connected.',
+      ` 1 transaction (${"a".repeat(8)}…${"a".repeat(6)}) needs on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`,
     );
     expect(result.orphansFound).toBe(true);
   });
