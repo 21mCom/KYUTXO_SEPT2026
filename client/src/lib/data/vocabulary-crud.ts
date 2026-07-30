@@ -428,6 +428,35 @@ export async function ensureWalletSoftware(name: string): Promise<void> {
   }
 }
 
+/**
+ * Distinct entity values present on records, whether or not they exist in the
+ * vocabulary tables. Records created by older imports or code paths that skip
+ * vocab sync (createRecord does not auto-create vocab rows) can carry values
+ * with no vocabulary entry; filter dropdowns must still offer them. All five
+ * fields are indexed (walletName, seedName, owner, *tags, *categories), so
+ * uniqueKeys() is cheap even on large vaults.
+ */
+export async function getRecordEntityValues(): Promise<{
+  wallets: string[];
+  seeds: string[];
+  owners: string[];
+  tags: string[];
+  categories: string[];
+}> {
+  const distinct = async (index: string): Promise<string[]> => {
+    const keys = await db.records.orderBy(index).uniqueKeys();
+    return keys.filter((k): k is string => typeof k === 'string' && k.trim() !== '');
+  };
+  const [wallets, seeds, owners, tags, categories] = await Promise.all([
+    distinct('walletName'),
+    distinct('seedName'),
+    distinct('owner'),
+    distinct('tags'),
+    distinct('categories'),
+  ]);
+  return { wallets, seeds, owners, tags, categories };
+}
+
 export async function restoreTag(data: { name: string; color?: string; createdAt: number }): Promise<number> {
   return await db.tags.add(data) as number;
 }

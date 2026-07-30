@@ -27,6 +27,7 @@ import {
   getOwners,
   getTags,
   getCategories,
+  getRecordEntityValues,
 } from "@/lib/data/vocabulary-crud";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -629,17 +630,33 @@ export default function Transactions() {
     curatedOnly: !includeBlockchainDiscovered || undefined,
   }), [entityFilter, includeBlockchainDiscovered]);
 
-  // Dropdown value pools for the entity selects, from the vocabulary tables.
+  // Dropdown value pools for the entity selects: vocabulary tables merged with
+  // distinct values found on records, so values that only exist on records
+  // (older imports / vocab-skipping code paths) are still selectable.
   const entityOptions = useLiveQuery(async (): Promise<EntityFilterOptions> => {
-    const [wallets, seeds, owners, tags, categories] = await Promise.all([
+    const [wallets, seeds, owners, tags, categories, recordValues] = await Promise.all([
       getWalletNames(), getSeedNames(), getOwners(), getTags(), getCategories(),
+      getRecordEntityValues(),
     ]);
+    // Case-insensitive dedupe; vocabulary casing wins when both exist.
+    const merge = (vocab: string[], fromRecords: string[]): string[] => {
+      const seen = new Set(vocab.map(v => v.toLowerCase()));
+      const out = [...vocab];
+      for (const v of fromRecords) {
+        const key = v.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push(v);
+        }
+      }
+      return out;
+    };
     return {
-      wallets: wallets.map(w => w.name),
-      seeds: seeds.map(s => s.name),
-      owners: owners.map(o => o.name),
-      tags: tags.map(t => t.name),
-      categories: categories.map(c => c.name),
+      wallets: merge(wallets.map(w => w.name), recordValues.wallets),
+      seeds: merge(seeds.map(s => s.name), recordValues.seeds),
+      owners: merge(owners.map(o => o.name), recordValues.owners),
+      tags: merge(tags.map(t => t.name), recordValues.tags),
+      categories: merge(categories.map(c => c.name), recordValues.categories),
     };
   }, []);
   // ---------------------------------------------------------------------------
