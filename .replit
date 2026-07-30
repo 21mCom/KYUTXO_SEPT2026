@@ -147,6 +147,10 @@ args = "block-hash-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "external-open-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "block-validation"
 
 [[workflows.workflow.tasks]]
@@ -568,6 +572,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run electron/block-hash.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "external-open-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run electron/security-utils.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

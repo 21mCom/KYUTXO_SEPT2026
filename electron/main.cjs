@@ -16,26 +16,10 @@ const { resolveDataDirs, ensureDirectories: ensureDataDirectories } = require('.
 const { registerElectrumHandlers, stopKeepalive } = require('./electrum-client.cjs');
 const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.cjs');
 
-const { z } = require('zod');
-
-// Hosts the desktop app is allowed to open in the user's external browser.
-// Keep this list tight: trusted Bitcoin explorers plus the project repo/docs.
-const EXTERNAL_OPEN_ALLOWED_HOSTS = [
-  'mempool.space',
-  'blockstream.info',
-  'github.com',
-];
-
-const torRequestSchema = z.object({
-  url: z.string().min(1),
-  method: z.string().optional(),
-  headers: z.record(z.string(), z.string()).optional(),
-  body: z.unknown().optional(),
-  timeout: z.number().int().positive().optional(),
-  torProxyUrl: z.string().optional(),
-  allowedHost: z.string().optional(),
-  trustedLocalHosts: z.array(z.string()).optional(),
-});
+const {
+  isExternalOpenAllowed,
+  torRequestSchema,
+} = require('./security-utils.cjs');
 
 let mainWindow;
 
@@ -400,15 +384,7 @@ app.on('activate', () => {
 
 app.on('web-contents-created', (event, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
-    let allowed = false;
-    try {
-      const parsed = new URL(url);
-      allowed = parsed.protocol === 'https:' &&
-        EXTERNAL_OPEN_ALLOWED_HOSTS.includes(parsed.hostname);
-    } catch {
-      allowed = false;
-    }
-    if (allowed) {
+    if (isExternalOpenAllowed(url)) {
       require('electron').shell.openExternal(url);
     }
     return { action: 'deny' };
