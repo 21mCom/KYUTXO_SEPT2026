@@ -143,11 +143,17 @@ function pooledRequest(key, method, params = [], timeout = 30000) {
     
     const timeoutId = setTimeout(() => {
       conn.pendingMap.delete(id);
-      // Timeout indicates connection problems - mark unhealthy and close
-      console.log(`[Electrum Pool] Request timeout on ${key}, marking connection unhealthy`);
-      conn.healthy = false;
-      try { conn.socket.destroy(); } catch (e) {}
-      electrumPool.connections.delete(key);
+      // Reject ONLY this request — never destroy the shared multiplexed
+      // socket here. Destroying it would cascade-fail every other in-flight
+      // request (e.g. up to 7 healthy pipelined batch requests) and any
+      // still-queued batch addresses just because one address was slow. Even
+      // an "empty pendingMap" heuristic is unsafe: a batch pipeline can have
+      // zero requests currently on the wire while workers still hold queued
+      // addresses that need this connection. A truly dead socket is handled
+      // by the normal error/close handlers and the keepalive/idle lifecycle;
+      // a late response for this id is simply ignored by the data handler
+      // (the pending entry is gone).
+      console.log(`[Electrum Pool] Request timeout on ${key} for ${method}; rejecting only this request (${conn.pendingMap.size} others in flight, connection kept open)`);
       reject(new Error(`Request timeout after ${timeout/1000}s for ${method}`));
     }, timeout);
     

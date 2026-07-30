@@ -192,6 +192,21 @@ afterAll(async () => {
 // scripthash -> address index, computed the same way the handler does.
 const scripthashIndex = new Map<string, number>();
 
+function buildScripthashIndex() {
+  const ecc = requireCjs("@bitcoinerlab/secp256k1");
+  bitcoin.initEccLib(ecc);
+  const crypto = requireCjs("node:crypto");
+  scripthashIndex.clear();
+  ADDRESSES.forEach((addr, idx) => {
+    const script = bitcoin.address.toOutputScript(
+      addr,
+      bitcoin.networks.bitcoin,
+    );
+    const hash = crypto.createHash("sha256").update(script).digest();
+    scripthashIndex.set(Buffer.from(hash).reverse().toString("hex"), idx);
+  });
+}
+
 function batchGetHistory(
   addresses: string[],
   timeout = 5000,
@@ -210,18 +225,7 @@ function batchGetHistory(
 describe("electrum-batch-get-history pipelining", () => {
   it("overlaps requests on the multiplexed socket and keeps input order", async () => {
     // Build the scripthash index the fake server uses to identify addresses.
-    const ecc = requireCjs("@bitcoinerlab/secp256k1");
-    bitcoin.initEccLib(ecc);
-    const crypto = requireCjs("node:crypto");
-    scripthashIndex.clear();
-    ADDRESSES.forEach((addr, idx) => {
-      const script = bitcoin.address.toOutputScript(
-        addr,
-        bitcoin.networks.bitcoin,
-      );
-      const hash = crypto.createHash("sha256").update(script).digest();
-      scripthashIndex.set(Buffer.from(hash).reverse().toString("hex"), idx);
-    });
+    buildScripthashIndex();
 
     // 40 ms server-side latency per response: with sequential requests a
     // 24-address batch would take ~1s and never exceed 1 in-flight request.
@@ -259,6 +263,44 @@ describe("electrum-batch-get-history pipelining", () => {
     // silent address — which must also overlap, not serialize).
     expect(maxInFlightSeen).toBeGreaterThan(2);
     expect(elapsed).toBeLessThan(7000);
+  }, 15000);
+
+  it("one slow (timing-out) address does not collaterally fail other in-flight requests", async () => {
+    buildScripthashIndex();
+
+    // 700ms server-side latency per fast response with a 1000ms request
+    // timeout. Timeline (window 8, 24 addresses): wave 1 (idx 0-7) sent
+    // ~t=0, answered t=700; wave 2 (idx 8-15, incl. the silent idx 11) sent
+    // t=700, answered t=1400; wave 3 (idx 16-23) sent t=1400, answered
+    // t=2100. The silent request's timeout fires at ~t=1700 while all 8
+    // wave-3 requests are still in flight on the same multiplexed socket.
+    // If the timeout path destroyed the shared connection, those healthy
+    // requests would reject with "Socket closed" / "Connection not
+    // available" — this test fails against that behavior.
+    respondDelayMs = 700;
+    maxInFlightSeen = 0;
+
+    const result = await batchGetHistory(ADDRESSES, 1000);
+
+    expect(result.success).toBe(true);
+    expect(result.results).toHaveLength(ADDRESSES.length);
+
+    for (let i = 0; i < ADDRESSES.length; i++) {
+      const entry = result.results[i];
+      expect(entry.address).toBe(ADDRESSES[i]);
+      if (i === SILENT_INDEX) {
+        expect(entry.success).toBe(false);
+        expect(entry.error).toMatch(/timeout/i);
+      } else if (i === FAIL_INDEX) {
+        expect(entry.success).toBe(false);
+        expect(entry.error).toMatch(/index out of range/);
+      } else {
+        // No collateral failures: every other address must succeed with its
+        // index-encoded history, despite the timeout on the silent one.
+        expect(entry.success).toBe(true);
+        expect(entry.history).toHaveLength(i + 1);
+      }
+    }
   }, 15000);
 
   it("reports every address even when the server dies mid-batch", async () => {
