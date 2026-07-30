@@ -36,7 +36,8 @@ import { countUtxoLineage, countCustodySegments, countLineageSnapshots } from "@
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { exportBackup, estimateExportBytes } from "@/lib/backup/export";
 import { exportBip329LabelParts } from "@/lib/bip329-export";
-import { recordToBip329Line, matchesBip329ExportFilter, type Bip329ExportFilter, type Bip329ExportKind } from "@/lib/bip329";
+import { exportRecordsCsvParts } from "@/lib/csv-export";
+import { recordToBip329Line, matchesBip329ExportFilter, matchesRecordExportFilter, type Bip329ExportFilter, type Bip329ExportKind } from "@/lib/bip329";
 import { useTags } from "@/hooks/use-tags";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -186,6 +187,51 @@ export default function ExportPage() {
     });
     return () => { cancelled = true; };
   }, [labelFilter, recordsChangeSignal]);
+  // Records CSV export filters. Same vocabulary and behavior as the BIP-329
+  // filters above, but scoped to the spreadsheet (CSV) export — the two
+  // sections filter independently.
+  const [exportingCsv, setExportingCsv] = useState(false);
+  const [csvSearch, setCsvSearch] = useState("");
+  const [debouncedCsvSearch] = useDebouncedValue(csvSearch, 300);
+  const [csvKindFilter, setCsvKindFilter] = useState<"all" | Bip329ExportKind>("all");
+  const [csvTagFilter, setCsvTagFilter] = useState("all");
+  const [csvWalletFilter, setCsvWalletFilter] = useState("all");
+  const [csvMatchCount, setCsvMatchCount] = useState<number | null>(null);
+  const csvCountRunRef = useRef(0);
+
+  const csvFilter = useMemo<Bip329ExportFilter>(() => ({
+    search: debouncedCsvSearch,
+    kind: csvKindFilter,
+    tag: csvTagFilter === "all" ? undefined : csvTagFilter,
+    walletName: csvWalletFilter === "all" ? undefined : csvWalletFilter,
+  }), [debouncedCsvSearch, csvKindFilter, csvTagFilter, csvWalletFilter]);
+  const csvFiltersActive =
+    debouncedCsvSearch.trim() !== "" ||
+    csvKindFilter !== "all" ||
+    csvTagFilter !== "all" ||
+    csvWalletFilter !== "all";
+
+  // Live match count for the CSV export: same cursor walk + run-token guard as
+  // the BIP-329 count above, but every record is a candidate row (no
+  // labeled-and-exportable precondition).
+  useEffect(() => {
+    const runId = ++csvCountRunRef.current;
+    setCsvMatchCount(null);
+    let cancelled = false;
+    (async () => {
+      let matched = 0;
+      await eachRecord((record) => {
+        if (matchesRecordExportFilter(record, csvFilter)) matched++;
+      });
+      if (!cancelled && csvCountRunRef.current === runId) {
+        setCsvMatchCount(matched);
+      }
+    })().catch((error) => {
+      console.error("Failed to count matching CSV rows:", error);
+    });
+    return () => { cancelled = true; };
+  }, [csvFilter, recordsChangeSignal]);
+
   // When the user chooses "Export Anyway", this ref skips the disk check on the
   // re-triggered export so we don't loop back into the same warning.
   const bypassDiskCheckRef = useRef(false);
@@ -549,6 +595,59 @@ export default function ExportPage() {
     }
   };
 
+  // Records CSV export: same batched walk + Blob-parts approach as the BIP-329
+  // export, filtered through the shared predicate.
+  const handleExportCsv = async () => {
+    setExportingCsv(true);
+    try {
+      // Build the predicate from the IMMEDIATE control values, not csvFilter:
+      // csvFilter's search is debounced (300ms) for the live count, so a user
+      // who types — or clears — a search and clicks Export inside that window
+      // would otherwise get a file filtered by the stale previous query.
+      const exportFilter: Bip329ExportFilter = {
+        search: csvSearch,
+        kind: csvKindFilter,
+        tag: csvTagFilter === "all" ? undefined : csvTagFilter,
+        walletName: csvWalletFilter === "all" ? undefined : csvWalletFilter,
+      };
+      const exportFiltersActive =
+        csvSearch.trim() !== "" ||
+        csvKindFilter !== "all" ||
+        csvTagFilter !== "all" ||
+        csvWalletFilter !== "all";
+
+      const { parts, rowCount } = await exportRecordsCsvParts({ filter: exportFilter });
+
+      if (rowCount === 0) {
+        toast({
+          title: "No Records To Export",
+          description: exportFiltersActive
+            ? "No records match the current filters. Adjust or clear the filters and try again."
+            : "No records were found to export.",
+        });
+        return;
+      }
+
+      const dateStr = new Date().toISOString().split("T")[0];
+      const blob = new Blob(parts, { type: "text/csv;charset=utf-8" });
+      downloadBlob(blob, `kyutxo-records-${dateStr}.csv`);
+
+      toast({
+        title: "CSV Exported",
+        description: `Exported ${rowCount} record(s) as a CSV spreadsheet.`,
+      });
+    } catch (error) {
+      console.error("CSV export failed:", error);
+      toast({
+        variant: "destructive",
+        title: "CSV Export Failed",
+        description: error instanceof Error ? error.message : "Failed to export CSV",
+      });
+    } finally {
+      setExportingCsv(false);
+    }
+  };
+
   const estimatedSize = () => {
     const estimate = (recordCount * 500) + (attachmentCount * 100) + (tagCount * 50) + (categoryCount * 50);
     if (estimate < 1024) return `${estimate} B`;
@@ -804,6 +903,129 @@ export default function ExportPage() {
             >
               <Download className="h-4 w-4 mr-2" />
               {exportingLabels ? "Exporting Labels..." : "Export Labels (BIP-329 .jsonl)"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileSpreadsheet className="h-5 w-5" />
+              CSV Spreadsheet Export
+            </CardTitle>
+            <CardDescription>
+              Export your records as a CSV file for spreadsheets
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Downloads a <code className="text-xs bg-muted px-1 rounded">.csv</code> file (one record per row with
+              type, identifier, label, wallet, owner, tags, categories, notes, amount, and date) that opens in Excel,
+              Numbers, LibreOffice, or Google Sheets — useful for sharing data with an accountant.
+            </p>
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                The exported file contains unencrypted addresses, transaction IDs, labels, and notes. Store it securely.
+              </AlertDescription>
+            </Alert>
+
+            <div className="space-y-3 p-4 border rounded-lg bg-muted/50">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Filter className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">Filter Records (optional)</span>
+                </div>
+                {csvFiltersActive && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => {
+                      setCsvSearch("");
+                      setCsvKindFilter("all");
+                      setCsvTagFilter("all");
+                      setCsvWalletFilter("all");
+                    }}
+                    data-testid="button-csv-clear-filters"
+                  >
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="csv-search">Search</Label>
+                  <Input
+                    id="csv-search"
+                    value={csvSearch}
+                    onChange={(e) => setCsvSearch(e.target.value)}
+                    placeholder="Label, address, txid, or notes…"
+                    data-testid="input-csv-search"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Type</Label>
+                  <Select
+                    value={csvKindFilter}
+                    onValueChange={(v) => setCsvKindFilter(v as "all" | Bip329ExportKind)}
+                  >
+                    <SelectTrigger data-testid="select-csv-type">
+                      <SelectValue placeholder="All Types" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Types</SelectItem>
+                      <SelectItem value="address">Addresses</SelectItem>
+                      <SelectItem value="transaction">Transactions</SelectItem>
+                      <SelectItem value="utxo">UTXOs (inputs / outputs)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Tag</Label>
+                  <Select value={csvTagFilter} onValueChange={setCsvTagFilter}>
+                    <SelectTrigger data-testid="select-csv-tag">
+                      <SelectValue placeholder="All Tags" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Tags</SelectItem>
+                      {tags.map((tag) => (
+                        <SelectItem key={tag.name} value={tag.name}>{tag.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Wallet</Label>
+                  <Select value={csvWalletFilter} onValueChange={setCsvWalletFilter}>
+                    <SelectTrigger data-testid="select-csv-wallet">
+                      <SelectValue placeholder="All Wallets" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Wallets</SelectItem>
+                      {walletNames.map((wallet) => (
+                        <SelectItem key={wallet.name} value={wallet.name}>{wallet.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground" data-testid="text-csv-match-count">
+                {csvMatchCount === null
+                  ? "Counting matching records…"
+                  : `${csvMatchCount} record${csvMatchCount === 1 ? "" : "s"} will be exported.`}
+              </p>
+            </div>
+
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={handleExportCsv}
+              disabled={exportingCsv}
+              data-testid="button-export-csv"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              {exportingCsv ? "Exporting CSV..." : "Export Records (CSV)"}
             </Button>
           </CardContent>
         </Card>

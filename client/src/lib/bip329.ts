@@ -218,6 +218,62 @@ export function bip329LineKind(line: Bip329Line): Bip329ExportKind {
   return 'utxo'; // 'input' | 'output'
 }
 
+// Which export-kind bucket a raw records-table row falls into, without needing
+// a BIP-329 line: outpoint-shaped transaction refs are UTXOs (matching
+// bip329LineKind for input/output lines); 'other' records have no bucket and
+// only survive an 'all' kind filter.
+export function recordExportKind(
+  record: Pick<Bip329ExportableRecord, 'type' | 'inputString'>
+): Bip329ExportKind | 'other' {
+  if (record.type === 'address') return 'address';
+  if (record.type === 'transaction') {
+    return OUTPOINT_RE.test((record.inputString || '').trim()) ? 'utxo' : 'transaction';
+  }
+  return 'other';
+}
+
+// The normalized view of one exportable item the shared filter predicate
+// matches against. Both exports (BIP-329 JSONL and CSV) reduce their rows to
+// this shape so the filter semantics can never drift between them.
+export interface ExportFilterTarget {
+  kind: Bip329ExportKind | 'other';
+  label: string;
+  ref: string;
+  notes?: string;
+  tags?: string[];
+  walletName?: string;
+}
+
+// Shared filter predicate for both the BIP-329 and CSV exports.
+export function matchesExportFilter(
+  target: ExportFilterTarget,
+  filter?: Bip329ExportFilter
+): boolean {
+  if (!filter) return true;
+
+  if (filter.kind && filter.kind !== 'all' && target.kind !== filter.kind) {
+    return false;
+  }
+
+  if (filter.walletName && target.walletName !== filter.walletName) {
+    return false;
+  }
+
+  if (filter.tag && !(target.tags ?? []).includes(filter.tag)) {
+    return false;
+  }
+
+  const search = (filter.search ?? '').trim().toLowerCase();
+  if (search) {
+    const haystacks = [target.label, target.ref, target.notes ?? ''];
+    if (!haystacks.some(h => h.toLowerCase().includes(search))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // Decide whether one record (and the BIP-329 line it produced) survives the
 // filter. Call recordToBip329Line first and skip the record entirely when it
 // returns null — a record with no exportable line can never match.
@@ -226,27 +282,34 @@ export function matchesBip329ExportFilter(
   line: Bip329Line,
   filter?: Bip329ExportFilter
 ): boolean {
-  if (!filter) return true;
+  return matchesExportFilter(
+    {
+      kind: bip329LineKind(line),
+      label: line.label,
+      ref: line.ref,
+      notes: record.notes,
+      tags: record.tags,
+      walletName: record.walletName,
+    },
+    filter
+  );
+}
 
-  if (filter.kind && filter.kind !== 'all' && bip329LineKind(line) !== filter.kind) {
-    return false;
-  }
-
-  if (filter.walletName && record.walletName !== filter.walletName) {
-    return false;
-  }
-
-  if (filter.tag && !(record.tags ?? []).includes(filter.tag)) {
-    return false;
-  }
-
-  const search = (filter.search ?? '').trim().toLowerCase();
-  if (search) {
-    const haystacks = [line.label, line.ref, record.notes ?? ''];
-    if (!haystacks.some(h => h.toLowerCase().includes(search))) {
-      return false;
-    }
-  }
-
-  return true;
+// Same predicate applied to a raw records-table row (the CSV export has no
+// BIP-329 line — every record is a CSV row).
+export function matchesRecordExportFilter(
+  record: Bip329FilterableRecord,
+  filter?: Bip329ExportFilter
+): boolean {
+  return matchesExportFilter(
+    {
+      kind: recordExportKind(record),
+      label: record.label || '',
+      ref: record.inputString || '',
+      notes: record.notes,
+      tags: record.tags,
+      walletName: record.walletName,
+    },
+    filter
+  );
 }
