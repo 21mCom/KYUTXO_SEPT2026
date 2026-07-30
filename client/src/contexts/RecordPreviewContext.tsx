@@ -246,6 +246,11 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.error('[RecordPreview] Failed to load attachments for edit:', error);
         setEditingAttachments([]);
+        toast({
+          variant: "destructive",
+          title: "Attachments unavailable",
+          description: "Failed to load this record's attachments. The list shown may be incomplete.",
+        });
       }
     } catch (error) {
       console.error('[RecordPreview] Failed to load record for edit:', error);
@@ -274,8 +279,13 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('[RecordPreview] Failed to reload attachments for edit:', error);
       setEditingAttachments([]);
+      toast({
+        variant: "destructive",
+        title: "Attachments unavailable",
+        description: "Failed to load this record's attachments. The list shown may be incomplete.",
+      });
     }
-  }, [editingRecord]);
+  }, [editingRecord, toast]);
 
   const handleCheckDuplicate = useCallback(async (inputString: string) => {
     const matches = await getRecordsByInputString(inputString);
