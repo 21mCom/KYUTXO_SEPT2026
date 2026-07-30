@@ -14,10 +14,14 @@ const requireCjs = createRequire(import.meta.url);
 const {
   EXTERNAL_OPEN_ALLOWED_HOSTS,
   isExternalOpenAllowed,
+  DEV_SERVER_ORIGIN,
+  isNavigationAllowed,
   torRequestSchema,
 } = requireCjs("./security-utils.cjs") as {
   EXTERNAL_OPEN_ALLOWED_HOSTS: string[];
   isExternalOpenAllowed: (url: unknown) => boolean;
+  DEV_SERVER_ORIGIN: string;
+  isNavigationAllowed: (url: unknown) => boolean;
   torRequestSchema: {
     safeParse: (input: unknown) => { success: boolean; data?: unknown };
   };
@@ -68,6 +72,54 @@ describe("external-open allowlist", () => {
     expect(isExternalOpenAllowed(null)).toBe(false);
     expect(isExternalOpenAllowed(42)).toBe(false);
     expect(isExternalOpenAllowed({})).toBe(false);
+  });
+});
+
+describe("will-navigate allowlist", () => {
+  it("pins the dev server origin", () => {
+    expect(DEV_SERVER_ORIGIN).toBe("http://localhost:5000");
+  });
+
+  it.each([
+    // dev server origin
+    "http://localhost:5000",
+    "http://localhost:5000/",
+    "http://localhost:5000/some/route?query=1#hash",
+    // file: URLs (packaged app loads from disk)
+    "file:///home/user/app/dist/public/index.html",
+    "file:///C:/app/dist/public/index.html",
+  ])("allows in-window navigation to trusted URL: %s", (url) => {
+    expect(isNavigationAllowed(url)).toBe(true);
+  });
+
+  it.each([
+    // arbitrary https/http origins (a widened guard must fail these)
+    "https://evil.example.com/phishing",
+    "https://localhost:5000/", // wrong scheme → different origin
+    "http://localhost:5001/", // wrong port
+    "http://localhost.evil.com:5000/",
+    "http://127.0.0.1:5000/", // different host string → different origin
+    "https://mempool.space/tx/abc", // allowlisted for external open, not navigation
+    // scriptable / dangerous schemes
+    "javascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "about:blank",
+    // prefix-confusion schemes: only exactly `file:` may pass
+    "fileevil:///etc/passwd",
+    "file+foo:///x",
+    "files://host/share",
+    // malformed input
+    "not a url",
+    "",
+  ])("denies in-window navigation to untrusted URL: %s", (url) => {
+    expect(isNavigationAllowed(url)).toBe(false);
+  });
+
+  it("denies non-string input without throwing", () => {
+    expect(isNavigationAllowed(undefined)).toBe(false);
+    expect(isNavigationAllowed(null)).toBe(false);
+    expect(isNavigationAllowed(42)).toBe(false);
+    expect(isNavigationAllowed({})).toBe(false);
   });
 });
 

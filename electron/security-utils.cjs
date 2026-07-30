@@ -25,6 +25,22 @@ function isExternalOpenAllowed(rawUrl) {
   }
 }
 
+// In-window navigation is allowed only to the dev server origin or file:
+// URLs (the packaged app loads from disk). Anything else — arbitrary https
+// origins, scriptable schemes, malformed input — is denied so a compromised
+// page can't navigate the app window to an attacker site.
+const DEV_SERVER_ORIGIN = 'http://localhost:5000';
+
+function isNavigationAllowed(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.origin === DEV_SERVER_ORIGIN ||
+      parsed.protocol === 'file:';
+  } catch {
+    return false;
+  }
+}
+
 const torRequestSchema = z.object({
   url: z.string().min(1),
   method: z.string().optional(),
@@ -39,5 +55,7 @@ const torRequestSchema = z.object({
 module.exports = {
   EXTERNAL_OPEN_ALLOWED_HOSTS,
   isExternalOpenAllowed,
+  DEV_SERVER_ORIGIN,
+  isNavigationAllowed,
   torRequestSchema,
 };

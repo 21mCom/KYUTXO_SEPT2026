@@ -18,6 +18,7 @@ const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.
 
 const {
   isExternalOpenAllowed,
+  isNavigationAllowed,
   torRequestSchema,
 } = require('./security-utils.cjs');
 
@@ -396,10 +397,7 @@ app.on('web-contents-created', (event, contents) => {
   });
 
   contents.on('will-navigate', (event, navigationUrl) => {
-    const parsedUrl = new URL(navigationUrl);
-    
-    if (parsedUrl.origin !== 'http://localhost:5000' && 
-        !parsedUrl.protocol.startsWith('file')) {
+    if (!isNavigationAllowed(navigationUrl)) {
       event.preventDefault();
     }
   });
