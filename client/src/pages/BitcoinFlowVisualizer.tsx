@@ -26,7 +26,8 @@ import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { db } from "@/lib/database";
-import { getParticipantsByAddresses } from "@/lib/dataFacade";
+import { getParticipantsByAddresses, getSpendInputsByOutpoints } from "@/lib/dataFacade";
+import type { TransactionParticipant } from "@/lib/database";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useTags } from "@/hooks/use-tags";
@@ -279,6 +280,89 @@ function AddressFinderList({ addresses, onSelect, satsToBtcDisplay, formatDate }
   );
 }
 
+/**
+ * Per-address flow stats for the address finder. Exported for unit tests
+ * (Electrum blank-address spend attribution).
+ *
+ * Loads participant rows for the given addresses, then follows up with an
+ * outpoint-keyed load: Electrum-synced spend inputs carry a blank address, so
+ * the address-keyed load alone misses spend txs whose only link to an owned
+ * address is such an input. Each blank/foreign spend input is attributed back
+ * to the address that owns the spent output (like computeStatsForAddresses
+ * does), so balance/txCount don't overstate unspent funds.
+ */
+export async function computeAddressFlowStats(
+  addressStrings: string[],
+  signal?: AbortSignal,
+): Promise<Map<string, { outputSats: number; inputSats: number; lastTxTime: number; txCount: number }>> {
+  const participants = await getParticipantsByAddresses(addressStrings, signal);
+
+  const seenIds = new Set<number>();
+  const ownerByOutpoint = new Map<string, string>();
+  const ownedOutpoints: Array<[string, number]> = [];
+  for (const p of participants) {
+    if (p.id !== undefined) seenIds.add(p.id);
+    if (p.role === 'output' && p.vout !== undefined && p.vout !== null) {
+      ownedOutpoints.push([p.txid, p.vout]);
+      ownerByOutpoint.set(`${p.txid}:${p.vout}`, p.address);
+    }
+  }
+  const spendInputs = await getSpendInputsByOutpoints(ownedOutpoints, signal);
+  /** Blank/foreign-address spend inputs attributed to the owning address. */
+  const attributedSpendInputs: Array<{ owner: string; participant: TransactionParticipant }> = [];
+  for (const inp of spendInputs) {
+    if (inp.id !== undefined && seenIds.has(inp.id)) continue;
+    const owner = ownerByOutpoint.get(`${inp.prevTxid}:${inp.prevVout}`);
+    if (owner) attributedSpendInputs.push({ owner, participant: inp });
+  }
+
+  const txids = Array.from(new Set([
+    ...participants.map(p => p.txid),
+    ...attributedSpendInputs.map(a => a.participant.txid),
+  ]));
+  const txMap = new Map<string, number>();
+  for (let i = 0; i < txids.length; i += 500) {
+    const batch = txids.slice(i, i + 500);
+    const txs = await db.blockchainTransactions
+      .where('txid')
+      .anyOf(batch)
+      .toArray();
+    txs.forEach(tx => txMap.set(tx.txid, tx.blockTime));
+  }
+
+  const addressStats = new Map<string, { outputSats: number; inputSats: number; lastTxTime: number; txCount: number }>();
+  participants.forEach(p => {
+    const stats = addressStats.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txCount: 0 };
+    const blockTime = txMap.get(p.txid) || 0;
+    if (p.role === 'output') {
+      stats.outputSats += p.amount;
+    } else {
+      stats.inputSats += p.amount;
+    }
+    if (blockTime > stats.lastTxTime) {
+      stats.lastTxTime = blockTime;
+    }
+    stats.txCount++;
+    addressStats.set(p.address, stats);
+  });
+
+  // Merge outpoint-fetched spend inputs into their owning address's stats —
+  // this is what a fully-resolved sync would have produced (an input row
+  // carrying the owner's address).
+  attributedSpendInputs.forEach(({ owner, participant }) => {
+    const stats = addressStats.get(owner) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txCount: 0 };
+    const blockTime = txMap.get(participant.txid) || 0;
+    stats.inputSats += participant.amount;
+    if (blockTime > stats.lastTxTime) {
+      stats.lastTxTime = blockTime;
+    }
+    stats.txCount++;
+    addressStats.set(owner, stats);
+  });
+
+  return addressStats;
+}
+
 export default function BitcoinFlowVisualizer() {
   const [, navigate] = useLocation();
   const [searchAddress, setSearchAddress] = useState("");
@@ -346,39 +430,7 @@ export default function BitcoinFlowVisualizer() {
           return;
         }
 
-        const participants = await getParticipantsByAddresses(addressStrings, abortController.signal);
-
-        const txids = Array.from(new Set(participants.map(p => p.txid)));
-        const txMap = new Map<string, number>();
-        if (txids.length > 0) {
-          const txBatches: string[][] = [];
-          for (let i = 0; i < txids.length; i += 500) {
-            txBatches.push(txids.slice(i, i + 500));
-          }
-          for (const batch of txBatches) {
-            const txs = await db.blockchainTransactions
-              .where('txid')
-              .anyOf(batch)
-              .toArray();
-            txs.forEach(tx => txMap.set(tx.txid, tx.blockTime));
-          }
-        }
-
-        const addressStats = new Map<string, { outputSats: number; inputSats: number; lastTxTime: number; txCount: number }>();
-        participants.forEach(p => {
-          const stats = addressStats.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txCount: 0 };
-          const blockTime = txMap.get(p.txid) || 0;
-          if (p.role === 'output') {
-            stats.outputSats += p.amount;
-          } else {
-            stats.inputSats += p.amount;
-          }
-          if (blockTime > stats.lastTxTime) {
-            stats.lastTxTime = blockTime;
-          }
-          stats.txCount++;
-          addressStats.set(p.address, stats);
-        });
+        const addressStats = await computeAddressFlowStats(addressStrings, abortController.signal);
 
         const results: FilteredAddress[] = [];
         for (const record of filtered) {

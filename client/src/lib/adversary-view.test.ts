@@ -17,7 +17,7 @@ vi.mock("@/lib/database", () => ({
 }));
 
 vi.mock("@/lib/data/record-queries", () => ({
-  getParticipantsByAddresses: vi.fn().mockResolvedValue([]),
+  getParticipantsByAddressesWithOutpointSpends: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@/lib/data/record-crud", () => ({
@@ -760,14 +760,14 @@ describe("runAdversaryView abort", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
   });
 
-  it("threads the signal through to getParticipantsByAddresses", async () => {
+  it("threads the signal through to getParticipantsByAddressesWithOutpointSpends", async () => {
     const { runAdversaryView } = await import("./adversary-view");
-    const { getParticipantsByAddresses } = await import("@/lib/data/record-queries");
-    vi.mocked(getParticipantsByAddresses).mockResolvedValue([]);
+    const { getParticipantsByAddressesWithOutpointSpends } = await import("@/lib/data/record-queries");
+    vi.mocked(getParticipantsByAddressesWithOutpointSpends).mockResolvedValue([]);
     const controller = new AbortController();
 
     await runAdversaryView(["addr1"], undefined, controller.signal);
 
-    expect(getParticipantsByAddresses).toHaveBeenCalledWith(["addr1"], controller.signal);
+    expect(getParticipantsByAddressesWithOutpointSpends).toHaveBeenCalledWith(["addr1"], controller.signal);
   });
 });

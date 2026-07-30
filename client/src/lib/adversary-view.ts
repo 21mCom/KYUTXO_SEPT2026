@@ -32,7 +32,7 @@
 
 import { db } from "@/lib/database";
 import type { TransactionParticipant } from "@/lib/db-types";
-import { getParticipantsByAddresses } from "@/lib/data/record-queries";
+import { getParticipantsByAddressesWithOutpointSpends } from "@/lib/data/record-queries";
 import { getRecordsByInputStrings } from "@/lib/data/record-crud";
 import type { Record as DbRecord } from "@/lib/db-types";
 
@@ -292,7 +292,11 @@ async function buildAdversaryContext(
   const userSet = new Set(userAddresses);
 
   report("Adversary view: loading transaction participants\u2026");
-  const ownedParticipants = await getParticipantsByAddresses(userAddresses, signal);
+  // Outpoint-aware load: Electrum-synced spend inputs carry a blank address,
+  // so a pure address-keyed load would miss spend txs whose only link to an
+  // owned address is such an input. The helper merges those rows in, so the
+  // adversary's txid universe includes those spends too.
+  const ownedParticipants = await getParticipantsByAddressesWithOutpointSpends(userAddresses, signal);
 
   // Collect all txids that touch any owned address
   const ourTxids = new Set(ownedParticipants.map((p) => p.txid));
@@ -315,8 +319,25 @@ async function buildAdversaryContext(
     }
   }
 
-  const participantsByTxid = new Map<string, TransactionParticipant[]>();
+  // Attribute blank-address (Electrum-synced) spend inputs back to the
+  // address that owns the spent output. A real chain adversary sees the true
+  // prevout address on the public chain, so the blind heuristics (CIO,
+  // change-guess) must not skip those rows just because our local sync
+  // stored them with an empty address.
+  const addrByOutpoint = new Map<string, string>();
   for (const p of allParts) {
+    if (p.role === "output" && p.vout !== undefined && p.vout !== null && p.address) {
+      addrByOutpoint.set(`${p.txid}:${p.vout}`, p.address);
+    }
+  }
+
+  const participantsByTxid = new Map<string, TransactionParticipant[]>();
+  for (const raw of allParts) {
+    let p = raw;
+    if (p.role === "input" && !p.address && p.prevTxid && p.prevVout !== undefined && p.prevVout !== null) {
+      const owner = addrByOutpoint.get(`${p.prevTxid}:${p.prevVout}`);
+      if (owner) p = { ...p, address: owner };
+    }
     const list = participantsByTxid.get(p.txid);
     if (list) list.push(p);
     else participantsByTxid.set(p.txid, [p]);

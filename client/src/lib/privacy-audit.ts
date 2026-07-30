@@ -1,6 +1,6 @@
 import { db } from "@/lib/database";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/db-types";
-import { getParticipantsByAddresses } from "@/lib/data/record-queries";
+import { getParticipantsByAddressesWithOutpointSpends } from "@/lib/data/record-queries";
 import { lookupEntities, ENTITY_CATEGORY_TAG_NAMES, ENTITY_CATEGORY_LABELS, ENTITY_CATEGORY_COLORS, type EntityCategory } from "@/lib/privacy-entity-list";
 
 // ─── Severity ────────────────────────────────────────────────────────────────
@@ -265,7 +265,11 @@ async function buildAuditContext(
   const addressSet = new Set(userAddresses);
 
   onProgress?.("Loading transaction participants...");
-  const participants = await getParticipantsByAddresses(userAddresses, signal);
+  // Outpoint-aware load: Electrum-synced spend inputs carry a blank address,
+  // so a pure address-keyed load would miss spend txs whose only link to an
+  // owned address is such an input. The helper merges those rows in, so the
+  // txid set below (and thus the whole audit) sees those spends too.
+  const participants = await getParticipantsByAddressesWithOutpointSpends(userAddresses, signal);
 
   const ourTxids = new Set(participants.map((p: TransactionParticipant) => p.txid));
 
@@ -282,8 +286,28 @@ async function buildAuditContext(
     allParticipantsForTxs.push(...batchParticipants);
   }
 
-  const participantsByTxid = new Map<string, TransactionParticipant[]>();
+  // Attribute blank-address (Electrum-synced) spend inputs back to the
+  // address that owns the spent output. This is what a fully-resolved sync
+  // would have produced (an input row carrying the owner's address), and it
+  // lets the address-based heuristics (CIOH, address reuse, ...) see those
+  // spends instead of skipping rows with an empty address.
+  const addrByOutpoint = new Map<string, string>();
   for (const p of allParticipantsForTxs) {
+    if (p.role === "output" && p.vout !== undefined && p.vout !== null && p.address) {
+      addrByOutpoint.set(`${p.txid}:${p.vout}`, p.address);
+    }
+  }
+  const attributeBlankInput = (p: TransactionParticipant): TransactionParticipant => {
+    if (p.role === "input" && !p.address && p.prevTxid && p.prevVout !== undefined && p.prevVout !== null) {
+      const owner = addrByOutpoint.get(`${p.prevTxid}:${p.prevVout}`);
+      if (owner) return { ...p, address: owner };
+    }
+    return p;
+  };
+
+  const participantsByTxid = new Map<string, TransactionParticipant[]>();
+  for (const raw of allParticipantsForTxs) {
+    const p = attributeBlankInput(raw);
     const list = participantsByTxid.get(p.txid);
     if (list) {
       list.push(p);
@@ -307,7 +331,7 @@ async function buildAuditContext(
 
   return {
     userAddresses: addressSet,
-    participants,
+    participants: participants.map(attributeBlankInput),
     participantsByTxid,
     dustFlaggedOutpoints,
     transactions: txRecords,

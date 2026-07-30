@@ -15,7 +15,7 @@ import {
   DISPOSITION_TYPE_OPTIONS,
   USER_CURATED_TIERS,
 } from "@/lib/database";
-import { updateRecord, createRecord, getParticipantsByAddresses } from "@/lib/dataFacade";
+import { updateRecord, createRecord, getParticipantsByAddressesWithOutpointSpends } from "@/lib/dataFacade";
 import {
   countTransactions,
   getTransactionsByTxids,
@@ -202,7 +202,11 @@ export default function Nudgie() {
       }
       checkAbort(signal);
       try {
-        return await getParticipantsByAddresses(addresses, signal);
+        // Outpoint-aware load: Electrum-synced spend inputs carry a blank
+        // address, so a pure address-keyed load would miss spend txs whose
+        // only link to an owned address is such an input. The helper merges
+        // those rows in, so those spend transactions get nudges too.
+        return await getParticipantsByAddressesWithOutpointSpends(addresses, signal);
       } catch (e) {
         if (signal.aborted) throw e;
         return [] as TransactionParticipant[];

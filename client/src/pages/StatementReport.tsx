@@ -179,6 +179,10 @@ export default function StatementReport() {
 
       const addressSet = new Set(addresses);
 
+      // NOTE: intentionally NOT getParticipantsByAddressesWithOutpointSpends —
+      // this report already does its own outpoint-keyed follow-up below
+      // (getParticipantsByPrevOutKeys) which additionally attributes each
+      // blank-address spend input back to the owning address/amount.
       const allParticipants = await getParticipantsByAddresses(addresses, abortController.signal);
 
       const txidSet = new Set(allParticipants.map(p => p.txid));

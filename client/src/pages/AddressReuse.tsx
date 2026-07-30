@@ -37,7 +37,7 @@ import {
   X,
   Loader2
 } from "lucide-react";
-import { updateRecord, getParticipantsByAddresses } from "@/lib/dataFacade";
+import { updateRecord, getParticipantsByAddresses, getSpendInputsByOutpoints } from "@/lib/dataFacade";
 import { useToast } from "@/hooks/use-toast";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useOwners } from "@/hooks/use-owners";
@@ -80,41 +80,15 @@ const IMPORTANCE_OPTIONS: { value: AddressImportance | 'all'; label: string }[] 
 ];
 
 
-export default function AddressReuse() {
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.AddressReuse);
-  const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
-  const { toast } = useToast();
-  const { copy, isCopied } = useCopyToClipboard();
-  
-  // Filter states
-  const [reuseTypeFilter, setReuseTypeFilter] = useState<ReuseReason | 'all'>('all');
-  const [ownerFilter, setOwnerFilter] = useState<string>('all');
-  const [importanceFilter, setImportanceFilter] = useState<AddressImportance | 'all'>('all');
-  const [walletNameFilter, setWalletNameFilter] = useState<string>('all');
-  
-  // Dialog state for editing records
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<Record | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  
-  // Vocabulary hooks for filters and dialog
-  const { owners } = useOwners();
-  const { walletNames } = useWalletNames();
-  const { tags } = useTags();
-  const { categories } = useCategories();
-  const { seedNames } = useSeedNames();
-  const { walletSoftware } = useWalletSoftware();
-  
-  // Toggle for including blockchain-discovered addresses
-  const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
-
-  const dbChangeSignal = useDbChangeSignal(['records', 'transactionParticipants']);
-
-  const initialData = { reusedAddresses: [] as AddressReuseInfo[], totalBlockchainDiscovered: 0 };
-
-  const { value: computedData, isComputing: isProcessing } = useAsyncMemo(async (signal) => {
-    try {
+/**
+ * Address-reuse analysis core. Exported for unit tests (Electrum blank-address
+ * spend attribution): loads curated address records, their participants, plus
+ * outpoint-keyed blank-address spend inputs, and computes per-address reuse.
+ */
+export async function analyzeAddressReuse(
+  includeBlockchainDiscovered: boolean,
+  signal: AbortSignal,
+): Promise<{ reusedAddresses: AddressReuseInfo[]; totalBlockchainDiscovered: number }> {
     const blockchainCount = await db.records
       .where('addressImportance')
       .anyOf(['blockchain-discovered', 'pending-review'])
@@ -153,8 +127,35 @@ export default function AddressReuse() {
     const relevantParticipants = await getParticipantsByAddresses(addressArray, signal);
     checkAbort(signal);
 
+    // Electrum-synced spend inputs carry a blank address, so the address-keyed
+    // load above misses spend txs whose only link to an owned address is such
+    // an input. Follow up with an outpoint-keyed load for inputs spending the
+    // owned outputs we just fetched, and attribute each such input back to the
+    // address that owns the spent output (like computeStatsForAddresses does),
+    // so change-to-self reuse detection sees those spends too.
+    const seenIds = new Set<number>();
+    const ownerByOutpoint = new Map<string, string>();
+    const ownedOutpoints: Array<[string, number]> = [];
+    relevantParticipants.forEach(p => {
+      if (p.id !== undefined) seenIds.add(p.id);
+      if (p.role === 'output' && p.vout !== undefined && p.vout !== null) {
+        ownedOutpoints.push([p.txid, p.vout]);
+        ownerByOutpoint.set(`${p.txid}:${p.vout}`, p.address);
+      }
+    });
+    const spendInputs = await getSpendInputsByOutpoints(ownedOutpoints, signal);
+    checkAbort(signal);
+    /** Blank/foreign-address spend inputs attributed to the owning address. */
+    const attributedSpendInputs: Array<{ owner: string; txid: string }> = [];
+    for (const inp of spendInputs) {
+      if (inp.id !== undefined && seenIds.has(inp.id)) continue;
+      const owner = ownerByOutpoint.get(`${inp.prevTxid}:${inp.prevVout}`);
+      if (owner) attributedSpendInputs.push({ owner, txid: inp.txid });
+    }
+
     const relevantTxids = new Set<string>();
     relevantParticipants.forEach(p => relevantTxids.add(p.txid));
+    attributedSpendInputs.forEach(a => relevantTxids.add(a.txid));
 
     const txidToBlockTime = new Map<string, number>();
     if (relevantTxids.size > 0) {
@@ -183,6 +184,16 @@ export default function AddressReuse() {
       } else {
         entry.outputTxids.add(p.txid);
       }
+    });
+
+    // Merge outpoint-fetched spend inputs into their owning address's entry —
+    // this is what a fully-resolved sync would have produced (an input row
+    // carrying the owner's address).
+    attributedSpendInputs.forEach(({ owner, txid }) => {
+      if (!addressMap.has(owner)) {
+        addressMap.set(owner, { inputTxids: new Set(), outputTxids: new Set() });
+      }
+      addressMap.get(owner)!.inputTxids.add(txid);
     });
 
     const result: AddressReuseInfo[] = [];
@@ -249,6 +260,44 @@ export default function AddressReuse() {
     });
 
     return { reusedAddresses: result, totalBlockchainDiscovered: blockchainCount };
+}
+
+export default function AddressReuse() {
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.AddressReuse);
+  const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
+  const { toast } = useToast();
+  const { copy, isCopied } = useCopyToClipboard();
+  
+  // Filter states
+  const [reuseTypeFilter, setReuseTypeFilter] = useState<ReuseReason | 'all'>('all');
+  const [ownerFilter, setOwnerFilter] = useState<string>('all');
+  const [importanceFilter, setImportanceFilter] = useState<AddressImportance | 'all'>('all');
+  const [walletNameFilter, setWalletNameFilter] = useState<string>('all');
+  
+  // Dialog state for editing records
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<Record | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Vocabulary hooks for filters and dialog
+  const { owners } = useOwners();
+  const { walletNames } = useWalletNames();
+  const { tags } = useTags();
+  const { categories } = useCategories();
+  const { seedNames } = useSeedNames();
+  const { walletSoftware } = useWalletSoftware();
+  
+  // Toggle for including blockchain-discovered addresses
+  const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
+
+  const dbChangeSignal = useDbChangeSignal(['records', 'transactionParticipants']);
+
+  const initialData = { reusedAddresses: [] as AddressReuseInfo[], totalBlockchainDiscovered: 0 };
+
+  const { value: computedData, isComputing: isProcessing } = useAsyncMemo(async (signal) => {
+    try {
+      return await analyzeAddressReuse(includeBlockchainDiscovered, signal);
     } catch (error) {
       if (signal.aborted) throw error;
       console.error('[AddressReuse] Failed to load data:', error);
