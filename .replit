@@ -211,6 +211,10 @@ args = "trusted-types-allowlist"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "trusted-types-csp-sync"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "add-metadata-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -927,6 +931,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-trusted-types-allowlist.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "trusted-types-csp-sync"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-trusted-types-csp-sync.js"
 
 [workflows.workflow.metadata]
 isValidation = true
