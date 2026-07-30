@@ -64,7 +64,8 @@ vi.mock("@/lib/database", async () => {
 });
 
 // Imported after the mock so it binds to the TestDb.
-const { getTxidsForTxEntityFilter } = await import("@/lib/data/transaction-crud");
+const { getTxidsForTxEntityFilter, getOrderedTxidsForTxEntityFilterPrefix } =
+  await import("@/lib/data/transaction-crud");
 import type { TxEntityFilter } from "@/lib/data/transaction-crud";
 
 // ---------------------------------------------------------------------------
@@ -214,6 +215,84 @@ describe("transactions entity filter: engine vs Dexie equivalence", () => {
       expect(engineTxids).toEqual(sorted); // stable snapshot of order
     });
   }
+
+  for (const { name, filter } of FILTER_SHAPES) {
+    it(`bounded prefix walk agrees with engine order for ${name}`, async () => {
+      // Exhaustive walk (neededCount larger than the table) must reproduce the
+      // engine's newest-first ordering exactly, and report exhausted.
+      const prefix = await getOrderedTxidsForTxEntityFilterPrefix(filter, 100);
+      const engineTxids = getTransactionPage(engineDb, { limit: 100, ...filter }).map((r) => r.txid);
+      expect(prefix.exhausted).toBe(true);
+      expect(prefix.orderedTxids).toEqual(engineTxids);
+    });
+  }
+
+  it("bounded prefix walk stops early once neededCount matches are found", async () => {
+    const engineTxids = getTransactionPage(engineDb, { limit: 100, wallet: "W1" }).map((r) => r.txid);
+    expect(engineTxids.length).toBeGreaterThan(2);
+    const prefix = await getOrderedTxidsForTxEntityFilterPrefix({ wallet: "W1" }, 2);
+    expect(prefix.exhausted).toBe(false);
+    expect(prefix.orderedTxids).toEqual(engineTxids.slice(0, 2));
+  });
+
+  it("bounded prefix walk reads only the batches needed, not the whole table", async () => {
+    // Instrument row materialization: with batchSize=2 and one needed match on
+    // wallet=W1 (newest tx t1 matches), only the first 2-row batch should ever
+    // be read from blockchainTransactions — never the remaining 3 rows.
+    let txRowsRead = 0;
+    const countingHook = (obj: unknown) => { txRowsRead++; return obj as BlockchainTransaction; };
+    testDb.blockchainTransactions.hook("reading", countingHook);
+    try {
+      const prefix = await getOrderedTxidsForTxEntityFilterPrefix({ wallet: "W1" }, 1, undefined, 2);
+      expect(prefix.exhausted).toBe(false);
+      expect(prefix.orderedTxids).toEqual(["t1"]);
+      expect(txRowsRead).toBeLessThanOrEqual(2);
+    } finally {
+      testDb.blockchainTransactions.hook("reading").unsubscribe(countingHook);
+    }
+  });
+
+  it("bounded prefix walk keyset-pages correctly across duplicate blockTimes", async () => {
+    // Ties on blockTime exercise the (blockTime, seen-ids) cursor: seed a
+    // throwaway table where several txs share blockTimes, then verify a tiny
+    // batch size still reproduces the exact newest-first (blockTime DESC,
+    // id DESC) order with no skips or repeats.
+    const tieDb = new TestDb(`KYUTXO-tx-prefix-ties-${Date.now()}-${Math.random()}`);
+    try {
+      await tieDb.records.bulkAdd([
+        { id: 1, type: "address", inputString: "a1", addressImportance: "manual", tags: [], categories: [] } as unknown as DbRecord,
+      ]);
+      const ties = [
+        { id: 1, txid: "x1", blockTime: 300 }, { id: 2, txid: "x2", blockTime: 300 },
+        { id: 3, txid: "x3", blockTime: 300 }, { id: 4, txid: "x4", blockTime: 200 },
+        { id: 5, txid: "x5", blockTime: 200 }, { id: 6, txid: "x6", blockTime: 100 },
+      ];
+      await tieDb.blockchainTransactions.bulkAdd(
+        ties.map(t => ({ ...t, hasOpReturn: false, syncedAt: new Date(0) }) as unknown as BlockchainTransaction),
+      );
+      await tieDb.transactionParticipants.bulkAdd(
+        ties.map((t, i) => ({ id: i + 1, txid: t.txid, role: "output", address: "a1", amount: 1, vout: 0, recordId: 1 }) as TransactionParticipant),
+      );
+
+      const dbModule = await import("@/lib/database");
+      const realDb = dbModule.db;
+      (dbModule as { db: unknown }).db = tieDb;
+      try {
+        const prefix = await getOrderedTxidsForTxEntityFilterPrefix({ curatedOnly: true }, 100, undefined, 2);
+        expect(prefix.exhausted).toBe(true);
+        expect(prefix.orderedTxids).toEqual(["x3", "x2", "x1", "x5", "x4", "x6"]);
+      } finally {
+        (dbModule as { db: unknown }).db = realDb;
+      }
+    } finally {
+      await tieDb.delete();
+    }
+  });
+
+  it("bounded prefix walk short-circuits on an empty record dimension", async () => {
+    const prefix = await getOrderedTxidsForTxEntityFilterPrefix({ owner: "nobody" }, 25);
+    expect(prefix).toEqual({ orderedTxids: [], exhausted: true });
+  });
 
   it("keyset pagination over a filtered set is gap- and overlap-free", () => {
     const all = getTransactionPage(engineDb, { limit: 100, wallet: "W1" }).map((r) => r.txid);

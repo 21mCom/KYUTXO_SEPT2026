@@ -32,3 +32,5 @@ Other rules learned here:
 - Address filter matches participants directly (linked or not); record-linked
   dimensions join via the participant's recordId, so discovered records that
   inherit a walletName DO match a wallet filter once include-discovered is on.
+
+**Bounded fallback prefix:** for huge-vault first pages without the engine, don't materialize full per-dimension txid sets or even a full `primaryKeys()` scan (code review rejects both as O(table)). Keyset-page the blockTime index newest-first with a (blockTime, seen-ids-at-that-blockTime) cursor — Dexie reverse iteration yields id DESC within equal blockTime, matching engine order. Prove boundedness in tests with a small batchSize param + a Dexie `reading` hook counting materialized rows.

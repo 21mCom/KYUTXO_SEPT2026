@@ -290,28 +290,11 @@ function intersect(a: Set<string> | null, b: Set<string>): Set<string> {
 }
 
 /**
- * Resolve the set of txids matching an entity filter on the Dexie path. Each
- * dimension resolves independently (indexed record lookup → participants by
- * recordId; address goes straight to the participants address index) and the
- * per-dimension txid sets are intersected, mirroring the engine's AND-of-EXISTS.
+ * Per-record-dimension loaders for an entity filter: each returns the record
+ * ids matching that dimension via an indexed lookup. Shared by the full-set
+ * resolver and the bounded newest-first prefix walk so semantics stay in sync.
  */
-export async function getTxidsForTxEntityFilter(
-  filter: TxEntityFilter,
-  pause?: BatchPause,
-): Promise<Set<string>> {
-  let result: Set<string> | null = null;
-
-  if (filter.address) {
-    const txids = new Set<string>();
-    await db.transactionParticipants
-      .where('address')
-      .equals(filter.address)
-      .each(p => { txids.add(p.txid); });
-    result = intersect(result, txids);
-    if (result.size === 0) return result;
-    if (pause) await pause();
-  }
-
+function entityFilterRecordIdLoaders(filter: TxEntityFilter): Array<() => Promise<number[]>> {
   const recordDims: Array<() => Promise<number[]>> = [];
   if (filter.wallet) {
     const w = filter.wallet;
@@ -341,6 +324,33 @@ export async function getTxidsForTxEntityFilter(
         .primaryKeys()) as number[],
     );
   }
+  return recordDims;
+}
+
+/**
+ * Resolve the set of txids matching an entity filter on the Dexie path. Each
+ * dimension resolves independently (indexed record lookup → participants by
+ * recordId; address goes straight to the participants address index) and the
+ * per-dimension txid sets are intersected, mirroring the engine's AND-of-EXISTS.
+ */
+export async function getTxidsForTxEntityFilter(
+  filter: TxEntityFilter,
+  pause?: BatchPause,
+): Promise<Set<string>> {
+  let result: Set<string> | null = null;
+
+  if (filter.address) {
+    const txids = new Set<string>();
+    await db.transactionParticipants
+      .where('address')
+      .equals(filter.address)
+      .each(p => { txids.add(p.txid); });
+    result = intersect(result, txids);
+    if (result.size === 0) return result;
+    if (pause) await pause();
+  }
+
+  const recordDims = entityFilterRecordIdLoaders(filter);
 
   for (const getIds of recordDims) {
     const ids = await getIds();
@@ -351,6 +361,130 @@ export async function getTxidsForTxEntityFilter(
   }
 
   return result ?? new Set<string>();
+}
+
+export interface TxEntityFilterPrefix {
+  /** Matching txids in blockTime-descending (newest-first) order. */
+  orderedTxids: string[];
+  /**
+   * True when the whole transactions table was walked: orderedTxids is the
+   * COMPLETE ordered match list (its length is the exact filtered count).
+   * False means the walk stopped early after collecting `neededCount` matches,
+   * so orderedTxids is only a prefix and its length a lower bound.
+   */
+  exhausted: boolean;
+}
+
+/**
+ * Bounded newest-first fallback for huge vaults: walk transactions in
+ * blockTime-descending order and collect txids matching the entity filter,
+ * stopping as soon as `neededCount` matches are found. This lets the first
+ * page of the curated default view (or an entity-filtered view) render in
+ * time proportional to the page position instead of the vault size, while the
+ * exact full set from getTxidsForTxEntityFilter resolves in the background.
+ *
+ * Semantics match getTxidsForTxEntityFilter / the engine SQL exactly: each
+ * active dimension is an independent "some participant satisfies this"
+ * predicate and dimensions compose with AND (the matching participants may
+ * differ per dimension).
+ */
+export async function getOrderedTxidsForTxEntityFilterPrefix(
+  filter: TxEntityFilter,
+  neededCount: number,
+  pause?: BatchPause,
+  batchSize: number = ENTITY_BATCH,
+): Promise<TxEntityFilterPrefix> {
+  // Resolve every record-backed dimension to its record-id set up front (fast
+  // indexed key scans). An empty dimension means nothing can match.
+  const recordIdSets: Set<number>[] = [];
+  for (const getIds of entityFilterRecordIdLoaders(filter)) {
+    const ids = new Set(await getIds());
+    if (ids.size === 0) return { orderedTxids: [], exhausted: true };
+    recordIdSets.push(ids);
+    if (pause) await pause();
+  }
+  const address = filter.address;
+  const orderedTxids: string[] = [];
+
+  // Keyset paging down the blockTime index (newest-first). blockTime is not
+  // unique, so the cursor is (blockTime, ids already processed AT that
+  // blockTime): each round fetches belowOrEqual(cursor) with enough slack to
+  // skip the boundary rows it has already seen. Within equal blockTime Dexie's
+  // reverse index iteration yields descending primary key, matching the
+  // engine's blockTime DESC, id DESC order. Crucially, no round ever touches
+  // more than ~batchSize unseen rows, so work stops as soon as neededCount
+  // matches are found — never proportional to the whole table.
+  let cursorBlockTime: number | null = null;
+  let seenAtCursor = new Set<number>();
+
+  while (true) {
+    let batch: BlockchainTransaction[];
+    let fetchLimit: number;
+    if (cursorBlockTime === null) {
+      fetchLimit = batchSize;
+      batch = await db.blockchainTransactions
+        .orderBy('blockTime')
+        .reverse()
+        .limit(fetchLimit)
+        .toArray();
+    } else {
+      fetchLimit = batchSize + seenAtCursor.size;
+      batch = await db.blockchainTransactions
+        .where('blockTime')
+        .belowOrEqual(cursorBlockTime)
+        .reverse()
+        .limit(fetchLimit)
+        .toArray();
+    }
+    const exhaustedTable = batch.length < fetchLimit;
+
+    const fresh = batch.filter(
+      t => !(t.blockTime === cursorBlockTime && t.id != null && seenAtCursor.has(t.id as number)),
+    );
+
+    if (fresh.length > 0) {
+      // Advance the cursor past the processed rows.
+      const lastBlockTime = fresh[fresh.length - 1].blockTime;
+      if (lastBlockTime !== cursorBlockTime) {
+        cursorBlockTime = lastBlockTime;
+        seenAtCursor = new Set<number>();
+      }
+      for (const t of fresh) {
+        if (t.blockTime === cursorBlockTime && t.id != null) seenAtCursor.add(t.id as number);
+      }
+
+      const txids = fresh.map(t => t.txid);
+      const parts = await db.transactionParticipants.where('txid').anyOf(txids).toArray();
+      const byTxid = new Map<string, TransactionParticipant[]>();
+      for (const p of parts) {
+        const arr = byTxid.get(p.txid);
+        if (arr) arr.push(p);
+        else byTxid.set(p.txid, [p]);
+      }
+
+      for (const txid of txids) {
+        const txParts = byTxid.get(txid) ?? [];
+        let matches = !address || txParts.some(p => p.address === address);
+        if (matches) {
+          for (const idSet of recordIdSets) {
+            if (!txParts.some(p => p.recordId != null && idSet.has(p.recordId))) {
+              matches = false;
+              break;
+            }
+          }
+        }
+        if (matches) {
+          orderedTxids.push(txid);
+          if (orderedTxids.length >= neededCount) {
+            return { orderedTxids, exhausted: false };
+          }
+        }
+      }
+    }
+
+    if (exhaustedTable) return { orderedTxids, exhausted: true };
+    if (pause) await pause();
+  }
 }
 
 // =============================================================================

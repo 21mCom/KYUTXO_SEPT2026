@@ -19,7 +19,9 @@ import {
   getOrderedTransactionPrimaryKeysByBlockTime,
   getOpReturnTransactionPrimaryKeys,
   getTxidsForTxEntityFilter,
+  getOrderedTxidsForTxEntityFilterPrefix,
   type TxEntityFilter,
+  type TxEntityFilterPrefix,
 } from "@/lib/data/transaction-crud";
 import {
   getWalletNames,
@@ -687,6 +689,28 @@ export default function Transactions() {
   }, [includeBlockchainDiscovered, entitySignature, txDbSignal, engineReadySignal],
      { set: null as Set<string> | null, engine: false });
 
+  // Bounded newest-first prefix of the fallback txid set (Task #1691). On huge
+  // vaults the full-set walk above can take a long time in the browser preview;
+  // this walk stops as soon as it has enough matches to cover the current page,
+  // so the first page renders in bounded time. It only runs while the full set
+  // is unresolved on the Dexie path, and returns null everywhere else.
+  const { value: fallbackTxidPrefix } = useAsyncMemo(async (signal) => {
+    const needsSet = !includeBlockchainDiscovered || hasEntityFilter;
+    if (!needsSet || fallbackTxidState.set !== null || fallbackTxidState.engine) {
+      return null as TxEntityFilterPrefix | null;
+    }
+    const decision = await evaluateEngineFreshness('transactions');
+    checkAbort(signal);
+    if (decision.useEngine) return null as TxEntityFilterPrefix | null;
+    return getOrderedTxidsForTxEntityFilterPrefix(
+      { ...entityFilter, curatedOnly: !includeBlockchainDiscovered || undefined },
+      currentPage * ITEMS_PER_PAGE,
+      async () => { checkAbort(signal); await yieldToUI(); },
+    );
+  }, [includeBlockchainDiscovered, hasEntityFilter, entitySignature, currentPage,
+      fallbackTxidState, txDbSignal, engineReadySignal],
+     null as TxEntityFilterPrefix | null);
+
   const { value: txCounts } = useAsyncMemo(async (signal) => {
     // Native engine fast path for the transaction counts: when the mirror is
     // proven CURRENT for the tx/participants scope, SQLite counts (including the
@@ -723,9 +747,12 @@ export default function Transactions() {
     } else {
       const set = fallbackTxidState.set;
       if (set == null) {
-        // Set still resolving (or the gate flapped between memos) — report 0 for
-        // now; this memo re-runs when fallbackTxidState settles.
-        filteredCount = 0;
+        // Set still resolving — surface the bounded prefix as a lower-bound
+        // count (exact when the prefix walk exhausted the table) so the first
+        // page isn't clamped away; this memo re-runs when the full set settles.
+        filteredCount = (!opReturnOnly && fallbackTxidPrefix)
+          ? fallbackTxidPrefix.orderedTxids.length
+          : 0;
       } else if (opReturnOnly) {
         let count = 0;
         const txidArray = Array.from(set);
@@ -749,7 +776,7 @@ export default function Transactions() {
 
     return { totalDbCount, filteredCount, blockchainOnlyCount };
   }, [includeBlockchainDiscovered, opReturnOnly, hasEntityFilter, entitySignature,
-      fallbackTxidState, txDbSignal, engineReadySignal],
+      fallbackTxidState, fallbackTxidPrefix, txDbSignal, engineReadySignal],
      { totalDbCount: 0, filteredCount: 0, blockchainOnlyCount: 0 });
 
   const blockchainOnlyTxCount = txCounts.blockchainOnlyCount;
@@ -829,7 +856,23 @@ export default function Transactions() {
     }
 
     const txidSet = fallbackTxidState.set;
-    if (txidSet == null) return []; // still resolving; memo re-runs when it settles
+    if (txidSet == null) {
+      // Full set still resolving — serve this page from the bounded newest-first
+      // prefix so huge vaults render immediately. The prefix is already in
+      // blockTime-descending order, so it slices directly. OP_RETURN composes on
+      // the full set only (rare combo), so it keeps waiting.
+      const prefix = fallbackTxidPrefix;
+      if (!prefix || opReturnOnly) return [];
+      if (!prefix.exhausted && prefix.orderedTxids.length < dbOffset + ITEMS_PER_PAGE) return [];
+      const pageTxids = prefix.orderedTxids.slice(dbOffset, dbOffset + ITEMS_PER_PAGE);
+      if (pageTxids.length === 0) return [];
+      const pageTxs = await getTransactionsByTxids(pageTxids);
+      checkAbort(signal);
+      const byTxid = new Map(pageTxs.map(t => [t.txid, t]));
+      return pageTxids
+        .map(txid => byTxid.get(txid))
+        .filter((t): t is BlockchainTransaction => t !== undefined);
+    }
 
     const txidArray = Array.from(txidSet);
     const allMatching: BlockchainTransaction[] = [];
@@ -846,7 +889,8 @@ export default function Transactions() {
     filtered.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     return filtered.slice(dbOffset, dbOffset + ITEMS_PER_PAGE);
   }, [needsClientSideFiltering, includeBlockchainDiscovered, hasEntityFilter, entitySignature,
-      fallbackTxidState, opReturnOnly, dbOffset, safePageForOffset, txDbSignal, engineReadySignal],
+      fallbackTxidState, fallbackTxidPrefix, opReturnOnly, dbOffset, safePageForOffset,
+      txDbSignal, engineReadySignal],
      [] as BlockchainTransaction[]);
 
   const { value: scanResult, isComputing: scanLoading } = useAsyncMemo(async (signal) => {
