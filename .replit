@@ -919,12 +919,12 @@ isValidation = true
 name = "psbt-builder-node-check"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "npx vitest run client/src/lib/psbt.test.ts client/src/lib/psbt-metadata.test.ts client/src/lib/data/saved-psbts-crud.test.ts client/src/components/BuildPsbtDialog.test.tsx"
-
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/psbt.test.ts client/src/lib/psbt-metadata.test.ts client/src/lib/data/saved-psbts-crud.test.ts client/src/components/BuildPsbtDialog.test.tsx client/src/lib/backup/saved-psbts-roundtrip.runtime.test.ts"
 
 [[workflows.workflow]]
 name = "psbt-builder-browser-check"
