@@ -21,6 +21,7 @@
 
 import {
   bulkCreateRecords,
+  bulkSetDiscoveredFromRecordId,
   getRecordsByInputStrings,
   type CreateRecordData,
 } from "@/lib/data/record-crud";
@@ -94,6 +95,13 @@ export async function restoreLegacyRecords(
 
   const recordsToCreate: CreateRecordData[] = [];
   const oldIdsForCreate: Array<number | undefined> = [];
+  // Backup-id discovery targets for the records we create, index-aligned with
+  // recordsToCreate. `discoveredFromRecordId` is deliberately NOT copied into
+  // the insert payload — it is re-pointed through `recordIdMap` after the map
+  // is complete, and stays cleared when the target record is absent from the
+  // backup, so a restored pointer can never dangle or hit an unrelated record
+  // that reuses the old auto-increment id (mirrors the v3 restore path).
+  const oldDiscoveryTargets: Array<number | undefined> = [];
   for (let i = 0; i < records.length; i++) {
     const record = records[i];
     const { id, ...recordData } = record;
@@ -132,6 +140,11 @@ export async function restoreLegacyRecords(
       updatedAt: recordData.updatedAt || Date.now(),
     } as CreateRecordData);
     oldIdsForCreate.push(typeof id === "number" ? id : undefined);
+    oldDiscoveryTargets.push(
+      typeof recordData.discoveredFromRecordId === "number"
+        ? recordData.discoveredFromRecordId
+        : undefined,
+    );
   }
 
   if (recordsToCreate.length > 0) {
@@ -144,6 +157,28 @@ export async function restoreLegacyRecords(
       if (typeof oldId === "number") recordIdMap.set(oldId, newRecordIds[j]);
     }
     recordsAdded = recordsToCreate.length;
+
+    // Re-point discoveredFromRecordId through the now-complete recordIdMap
+    // (covers both created and merge-skipped source records). Targets absent
+    // from the backup stay cleared — the field was never inserted — so no
+    // dangling or colliding pointer can reach the vault. Only rows THIS
+    // restore inserted are touched; live records are never rewritten.
+    const BATCH = 500;
+    let batch: Array<{ id: number; discoveredFromRecordId: number }> = [];
+    for (let j = 0; j < newRecordIds.length; j++) {
+      const target = oldDiscoveryTargets[j];
+      if (target === undefined) continue;
+      const mapped = recordIdMap.get(target);
+      if (mapped === undefined || mapped === newRecordIds[j]) continue;
+      batch.push({ id: newRecordIds[j], discoveredFromRecordId: mapped });
+      if (batch.length >= BATCH) {
+        await bulkSetDiscoveredFromRecordId(batch, { skipNotification: true });
+        batch = [];
+      }
+    }
+    if (batch.length > 0) {
+      await bulkSetDiscoveredFromRecordId(batch, { skipNotification: true });
+    }
   }
 
   return { recordsAdded, recordsSkipped };

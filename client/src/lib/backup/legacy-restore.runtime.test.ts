@@ -369,6 +369,87 @@ describe("legacy restore: address sync state", () => {
   });
 });
 
+describe("legacy restore: discoveredFromRecordId remapping", () => {
+  it("replace mode re-points discovery pointers to the new live ids and clears absent targets", async () => {
+    const recordIdMap = new Map<number, number>();
+    const records = [
+      backupRecord(701, "addr-root"),
+      // discovered from 701 (present in backup) -> pointer re-pointed
+      backupRecord(702, "addr-child", { discoveredFromRecordId: 701 }),
+      // discovered from 888 (ABSENT from backup) -> pointer cleared, never dangles
+      backupRecord(703, "addr-dangling", { discoveredFromRecordId: 888 }),
+    ];
+
+    await restoreLegacyRecords(records, "replace", recordIdMap);
+
+    const live = await getAllRecords();
+    const root = live.find((r) => r.inputString === "addr-root")!;
+    const child = live.find((r) => r.inputString === "addr-child")!;
+    const dangling = live.find((r) => r.inputString === "addr-dangling")!;
+
+    // Pointer resolves to the NEW live id of the root, not the backup id 701.
+    expect(child.discoveredFromRecordId).toBe(root.id);
+    expect(child.discoveredFromRecordId).not.toBe(701);
+    // Absent target -> cleared, never left pointing at the stale backup id.
+    expect(dangling.discoveredFromRecordId).toBeUndefined();
+    // Timestamp-preserving fixup: the backup's timestamps are kept.
+    expect(child.createdAt).toBeDefined();
+  });
+
+  it("merge mode re-points a pointer to the PRE-EXISTING live record when the source was merge-skipped", async () => {
+    // Seed the discovery source so the backup's copy is merge-skipped.
+    const [existingId] = await bulkCreateRecords(
+      [
+        {
+          type: "address",
+          inputString: "addr-src",
+          label: "Existing source",
+          tags: [],
+          categories: [],
+        } as any,
+      ],
+      { skipNotification: true, skipVocabularySync: true },
+    );
+
+    const recordIdMap = new Map<number, number>();
+    await restoreLegacyRecords(
+      [
+        backupRecord(801, "addr-src"), // merge-skipped, maps 801 -> existingId
+        backupRecord(802, "addr-derived", { discoveredFromRecordId: 801 }),
+      ],
+      "merge",
+      recordIdMap,
+    );
+
+    const live = await getAllRecords();
+    const derived = live.find((r) => r.inputString === "addr-derived")!;
+    expect(derived.discoveredFromRecordId).toBe(existingId);
+  });
+
+  it("preserves the backup's createdAt/updatedAt on remapped records", async () => {
+    const recordIdMap = new Map<number, number>();
+    await restoreLegacyRecords(
+      [
+        backupRecord(901, "addr-ts-root", { createdAt: 111, updatedAt: 222 }),
+        backupRecord(902, "addr-ts-child", {
+          discoveredFromRecordId: 901,
+          createdAt: 333,
+          updatedAt: 444,
+        }),
+      ],
+      "replace",
+      recordIdMap,
+    );
+
+    const live = await getAllRecords();
+    const child = live.find((r) => r.inputString === "addr-ts-child")!;
+    expect(child.discoveredFromRecordId).toBe(recordIdMap.get(901));
+    // bulkSetDiscoveredFromRecordId must not bump timestamps.
+    expect(child.createdAt).toBe(333);
+    expect(child.updatedAt).toBe(444);
+  });
+});
+
 describe("remapRecordId", () => {
   it("returns undefined for null/undefined/unmapped ids and the mapped id otherwise", () => {
     const map = new Map<number, number>([[5, 50]]);
