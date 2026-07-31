@@ -50,6 +50,11 @@ import {
   clearAddressSyncState,
   getAllAddressSyncState,
 } from "@/lib/data/address-sync-crud";
+import {
+  clearRecordOrigins,
+  getAllRecordOrigins,
+  addRecordOrigin,
+} from "@/lib/data/record-origins-crud";
 import { db } from "@/lib/database";
 
 // ---------------------------------------------------------------------------
@@ -161,6 +166,7 @@ beforeEach(async () => {
   await clearTransactions({ skipNotification: true });
   await clearParticipants({ skipNotification: true });
   await clearAddressSyncState({ skipNotification: true });
+  await clearRecordOrigins({ skipNotification: true });
 
   writtenPaths = [];
   vi.stubGlobal(
@@ -247,6 +253,80 @@ describe("runLegacyJsonRestore: replace mode (plaintext)", () => {
     expect(summary.baseMessage).toContain("1 transactions");
     expect(summary.baseMessage).toContain("1 synced addresses");
     expect(summary.baseMessage).not.toContain("failed");
+  });
+});
+
+describe("runLegacyJsonRestore: recordOrigins (source history)", () => {
+  it("replace mode: remaps recordOrigin recordIds through the id map and re-inserts them; rows for absent records are dropped", async () => {
+    const data = {
+      ...makeBackupData(),
+      recordOrigins: [
+        { id: 1, recordId: 101, originType: "manual", source: "manual-entry", createdAt: 1_700_000_001 },
+        { id: 2, recordId: 102, originType: "bulk-import", source: "csv-import", label: "B", createdAt: 1_700_000_002 },
+        // Owning record 999 is never restored — must be dropped, not mislinked.
+        { id: 3, recordId: 999, originType: "manual", source: "manual-entry", createdAt: 1_700_000_003 },
+      ],
+    };
+    const file = await makePlainZip(data);
+    const { cb } = makeCallbacks();
+
+    await runLegacyJsonRestore(file, "", "replace", cb);
+
+    const records = await getAllRecords();
+    const liveA = records.find((r) => r.inputString === "addr-a")!.id;
+    const liveB = records.find((r) => r.inputString === "addr-b")!.id;
+
+    const origins = await getAllRecordOrigins();
+    expect(origins).toHaveLength(2);
+    const oA = origins.find((o) => o.source === "manual-entry")!;
+    const oB = origins.find((o) => o.source === "csv-import")!;
+    expect(oA.recordId).toBe(liveA);
+    expect(oA.createdAt).toBe(1_700_000_001);
+    expect(oB.recordId).toBe(liveB);
+    expect(oB.label).toBe("B");
+  });
+
+  it("merge mode: de-dupes by recordId + originType + source + createdAt against live rows and within the backup", async () => {
+    // Pre-existing record colliding with backup record "addr-a", carrying a
+    // live origin identical (by natural key) to one in the backup.
+    const [existingId] = await bulkCreateRecords(
+      [{ type: "address", inputString: "addr-a", label: "Existing", tags: [], categories: [] } as any],
+      { skipNotification: true, skipVocabularySync: true },
+    );
+    await addRecordOrigin(
+      { recordId: existingId, originType: "manual", source: "manual-entry", createdAt: 1_700_000_001 },
+      { skipNotification: true },
+    );
+
+    const data = {
+      ...makeBackupData(),
+      recordOrigins: [
+        // Duplicate of the live origin (same natural key) — must be skipped.
+        { id: 1, recordId: 101, originType: "manual", source: "manual-entry", createdAt: 1_700_000_001 },
+        // New origin for the same record — must be added.
+        { id: 2, recordId: 101, originType: "bulk-import", source: "csv-import", createdAt: 1_700_000_002 },
+        // Same-batch duplicate of the row above — only one inserted.
+        { id: 3, recordId: 101, originType: "bulk-import", source: "csv-import", createdAt: 1_700_000_002 },
+      ],
+    };
+    const file = await makePlainZip(data);
+    const { cb } = makeCallbacks();
+
+    await runLegacyJsonRestore(file, "", "merge", cb);
+
+    const origins = await getAllRecordOrigins();
+    const forExisting = origins.filter((o) => o.recordId === existingId);
+    expect(forExisting).toHaveLength(2);
+    expect(forExisting.filter((o) => o.source === "manual-entry")).toHaveLength(1);
+    expect(forExisting.filter((o) => o.source === "csv-import")).toHaveLength(1);
+  });
+
+  it("backups without a recordOrigins table restore cleanly with zero origins", async () => {
+    const file = await makePlainZip(makeBackupData()); // no recordOrigins key
+    const { cb } = makeCallbacks();
+    const summary = await runLegacyJsonRestore(file, "", "replace", cb);
+    expect(summary.baseMessage).toContain("Restored 2 records");
+    expect(await getAllRecordOrigins()).toHaveLength(0);
   });
 });
 

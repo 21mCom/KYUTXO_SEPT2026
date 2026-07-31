@@ -38,7 +38,12 @@ import {
 } from "@/lib/data/lineage-crud";
 import { clearEvidence, clearEvidenceAttachments } from "@/lib/data/evidence-crud";
 import { clearAttachments } from "@/lib/data/attachments-crud";
-import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
+import {
+  clearRecordOrigins,
+  bulkAddRecordOrigins,
+  getRecordOriginsByRecordIds,
+  type CreateRecordOriginData,
+} from "@/lib/data/record-origins-crud";
 import { clearCustomFields } from "@/lib/data/custom-fields-crud";
 import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
 import { clearPriceData } from "@/lib/data/price-data-crud";
@@ -68,6 +73,63 @@ export interface LegacyRestoreSummary {
   orphanedFilesRouted: number;
   /** Orphaned files whose Needs Review write failed — contents lost. */
   orphanedFilesLost: number;
+}
+
+/**
+ * Remap and re-insert recordOrigins rows from a legacy backup. Backup
+ * `recordId` values are rewritten through the old→new record id map built by
+ * restoreLegacyRecords; rows whose record was not restored are skipped. In
+ * merge mode, rows already present in the live table (matched by the natural
+ * key recordId + originType + source + createdAt — the same key the v3
+ * streaming restore de-dupes by) are skipped. Returns the number of rows
+ * inserted.
+ */
+async function restoreLegacyRecordOrigins(
+  backupRecordOrigins: unknown,
+  restoreMode: LegacyRestoreMode,
+  recordIdMap: Map<number, number>,
+): Promise<number> {
+  if (!Array.isArray(backupRecordOrigins) || backupRecordOrigins.length === 0) {
+    return 0;
+  }
+
+  const remapped: CreateRecordOriginData[] = [];
+  for (const o of backupRecordOrigins) {
+    if (!o || typeof o !== "object") continue;
+    const { id: _id, ...d } = o as Record<string, unknown>;
+    const oldRecordId = d.recordId;
+    if (typeof oldRecordId !== "number") continue;
+    const recordId = recordIdMap.get(oldRecordId);
+    if (recordId === undefined) continue;
+    remapped.push({ ...d, recordId } as CreateRecordOriginData);
+  }
+  if (remapped.length === 0) return 0;
+
+  let toInsert = remapped;
+  if (restoreMode === "merge") {
+    const originKey = (o: {
+      recordId: number;
+      originType?: unknown;
+      source?: unknown;
+      createdAt?: unknown;
+    }): string =>
+      [o.recordId, o.originType ?? "", o.source ?? "", o.createdAt ?? ""].join("|");
+    const affectedRecordIds = Array.from(new Set(remapped.map((o) => o.recordId)));
+    const seen = new Set<string>();
+    for (const live of await getRecordOriginsByRecordIds(affectedRecordIds)) {
+      seen.add(originKey(live));
+    }
+    toInsert = [];
+    for (const o of remapped) {
+      const k = originKey(o);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      toInsert.push(o);
+    }
+  }
+  if (toInsert.length === 0) return 0;
+  await bulkAddRecordOrigins(toInsert, { skipNotification: true });
+  return toInsert.length;
 }
 
 /**
@@ -121,7 +183,7 @@ export async function runLegacyJsonRestore(
     tags,
     categories,
     attachments,
-    recordOrigins: _recordOrigins,
+    recordOrigins: backupRecordOrigins = [],
     customFields: backupCustomFields,
     owners = [],
     walletNames = [],
@@ -202,6 +264,21 @@ export async function runLegacyJsonRestore(
   if (records && records.length > 0) {
     cb.onProgress(70, "Restoring records...");
   }
+
+  // Restore recordOrigins (source history driving the Conflict Resolution
+  // page). Mirrors restorePendingRecordOrigins in the v3 streaming restore:
+  // each row's recordId references a BACKUP record id, so it is rewritten
+  // through recordIdMap (rows whose owning record was not restored are
+  // dropped). In merge mode rows are de-duped against the live table by the
+  // same natural key (recordId + originType + source + createdAt) so merging
+  // an overlapping backup never accumulates duplicate history. Legacy backups
+  // without the table (default `[]`) restore cleanly with zero rows added.
+  const recordOriginsAdded = await restoreLegacyRecordOrigins(
+    backupRecordOrigins,
+    restoreMode,
+    recordIdMap,
+  );
+  void recordOriginsAdded;
 
   cb.onProgress(70, "Restoring tags and categories...");
 
