@@ -595,7 +595,10 @@ export interface CompactRowFilters {
   dropRecord(row: VaultRecord): boolean;
   // Returns the row to write for a KEPT record — scrubs a
   // `discoveredFromRecordId` that points at a dropped record so the backup
-  // never carries a dangling pointer.
+  // never carries a dangling pointer. (Restore additionally remaps every
+  // surviving pointer through its old→new id map and clears any whose target
+  // is absent — see remapDiscoveryPointers in restore.ts — so this scrub is
+  // about keeping the backup itself self-consistent.)
   scrubRecord(row: VaultRecord): VaultRecord;
   dropParticipant(row: TransactionParticipant): boolean;
   dropTransaction(row: BlockchainTransaction): boolean;

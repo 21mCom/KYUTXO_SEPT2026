@@ -562,6 +562,31 @@ export async function deleteRecord(id: number, options?: DeleteRecordOptions): P
   }
 }
 
+// Restore-only pointer fixup: re-points `discoveredFromRecordId` on rows a
+// backup restore just inserted, after the old→new record id map is complete.
+// Deliberately does NOT bump `updatedAt` (restore must preserve the backup's
+// timestamps byte-for-byte) and does NOT touch any other field. Rows that no
+// longer exist are silently skipped (a cancelled restore may have removed them).
+export async function bulkSetDiscoveredFromRecordId(
+  updates: Array<{ id: number; discoveredFromRecordId: number }>,
+  options?: { skipNotification?: boolean },
+): Promise<void> {
+  if (updates.length === 0) return;
+  const ids = updates.map((u) => u.id);
+  const existing = await db.records.bulkGet(ids);
+  const toPut: Record[] = [];
+  for (let i = 0; i < updates.length; i++) {
+    const row = existing[i];
+    if (!row) continue;
+    toPut.push({ ...row, discoveredFromRecordId: updates[i].discoveredFromRecordId });
+  }
+  if (toPut.length === 0) return;
+  await db.records.bulkPut(toPut);
+  if (!options?.skipNotification) {
+    notifyDbChange('records');
+  }
+}
+
 export interface ClearAllRecordsOptions {
   skipNotification?: boolean;
 }

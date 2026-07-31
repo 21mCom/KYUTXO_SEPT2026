@@ -661,10 +661,12 @@ describe("replace-restore of a compact backup", () => {
         delete restCmp.discoveredFromRecordId;
       }
       if (input === ADDR_F) {
-        // F's pointer aims at A (kept): it survives. (Restore keeps the raw
-        // backup value — id remapping of this pointer is a pre-existing
-        // limitation shared with FULL restores, asserted identical below.)
-        expect(restCmp.discoveredFromRecordId).toBe(originalIds.A);
+        // F's pointer aims at A (kept): restore REMAPS it through the id map
+        // to the RESTORED A's live id, so the discovery tree resolves the
+        // correct parent (never a stale backup id).
+        expect(restCmp.discoveredFromRecordId).toBe(restored.get(ADDR_A)!.id);
+        delete origCmp.discoveredFromRecordId;
+        delete restCmp.discoveredFromRecordId;
       }
       expect(restCmp, `record ${input} must survive byte-for-byte`).toEqual(origCmp);
     }
@@ -687,6 +689,15 @@ describe("replace-restore of a compact backup", () => {
     }
     for (const a of compactSnap.attachments) {
       expect(ids.has(a.recordId), `attachment ${a.filename} dangles`).toBe(true);
+    }
+    // Discovery-tree pointers are remapped through the id map, never dangling.
+    for (const r of compactSnap.records) {
+      if (r.discoveredFromRecordId !== undefined) {
+        expect(
+          ids.has(r.discoveredFromRecordId),
+          `discovery pointer on ${r.inputString} dangles`,
+        ).toBe(true);
+      }
     }
     // Every formerly-pruned participant is relinked to its rebuilt shell.
     const m = byInput(compactSnap.records);
@@ -758,14 +769,24 @@ describe("owned-history equivalence: compact restore == full restore", () => {
     expect(compactSnap.parts.map(partKey).sort()).toEqual(
       fullSnap.parts.filter(keptTx).map(partKey).sort(),
     );
-    // Kept address records byte-identical between the two restores (C's
-    // scrubbed pointer aside, which full keeps as B's stale backup id).
+    // Kept address records byte-identical between the two restores. Discovery
+    // pointers are compared per-vault: each restore remaps them to its OWN
+    // vault's live ids (compact clears C's — its target B was pruned; full
+    // remaps it to the restored B).
     const fullBy = byInput(fullSnap.records);
     const compactBy = byInput(compactSnap.records);
     for (const input of [ADDR_A, ADDR_C, ADDR_F, ADDR_G, ADDR_H, TX0, TX2, TX5]) {
       const f = stripId(fullBy.get(input)!) as { [k: string]: unknown };
       const c = stripId(compactBy.get(input)!) as { [k: string]: unknown };
       if (input === ADDR_C) {
+        expect(f.discoveredFromRecordId).toBe(fullBy.get(ADDR_B)!.id);
+        expect(c.discoveredFromRecordId).toBeUndefined();
+        delete f.discoveredFromRecordId;
+        delete c.discoveredFromRecordId;
+      }
+      if (input === ADDR_F) {
+        expect(f.discoveredFromRecordId).toBe(fullBy.get(ADDR_A)!.id);
+        expect(c.discoveredFromRecordId).toBe(compactBy.get(ADDR_A)!.id);
         delete f.discoveredFromRecordId;
         delete c.discoveredFromRecordId;
       }
@@ -824,6 +845,23 @@ describe("merge-restore of a compact backup", () => {
     const ids = new Set(snap.records.map((r) => r.id));
     for (const p of snap.parts) {
       if (p.recordId !== undefined) expect(ids.has(p.recordId)).toBe(true);
+    }
+
+    // Discovery-tree pointers are remapped in MERGE mode too. Bob's
+    // pre-existing record shifts every merged record's auto-increment id away
+    // from its backup id, so an unremapped pointer would dangle or hit the
+    // wrong record — F's must point at the MERGED vault's A.
+    const byInputMerged = byInput(snap.records);
+    const mergedA = byInputMerged.get(ADDR_A)!;
+    const mergedF = byInputMerged.get(ADDR_F)!;
+    expect(mergedF.discoveredFromRecordId).toBe(mergedA.id);
+    expect(mergedA.id).not.toBe(originalIds.A); // the remap actually did work
+    // C's pointer target (B) was pruned from the compact backup — cleared.
+    expect(byInputMerged.get(ADDR_C)!.discoveredFromRecordId).toBeUndefined();
+    for (const r of snap.records) {
+      if (r.discoveredFromRecordId !== undefined) {
+        expect(ids.has(r.discoveredFromRecordId)).toBe(true);
+      }
     }
   }, 60_000);
 

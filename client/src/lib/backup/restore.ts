@@ -37,6 +37,7 @@ import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import {
   bulkCreateRecords,
   bulkDeleteRecords,
+  bulkSetDiscoveredFromRecordId,
   clearAllRecords,
   getRecordsByInputStrings,
   type CreateRecordData,
@@ -475,6 +476,18 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   // restorePendingRecordOrigins(), called once the ZIP stream completes.
   let pendingRecordOrigins: any[] = [];
 
+  // Discovery-tree pointer fixup: `discoveredFromRecordId` on a backup record
+  // references a BACKUP record id, which may be a forward reference (the id
+  // map is only complete once the records stream — and, for compact backups,
+  // the shell rebuild — has finished). The field is therefore STRIPPED from
+  // every inserted row, and each stripped pointer is queued here as
+  // (new live id → old backup id). After the ZIP stream completes,
+  // remapDiscoveryPointers() re-points every link whose target exists in the
+  // id map; a pointer whose target is absent from the backup stays cleared,
+  // so a restore can never leave a pointer dangling or aimed at an unrelated
+  // record that happens to reuse the old auto-increment id.
+  const pendingDiscoveryLinks: Array<{ newId: number; oldTargetId: number }> = [];
+
   let manifest: BackupManifest | null = null;
   // Set synchronously when the manifest entry's header is reached. onEntry is
   // fflate's sync header callback, whereas `manifest` is only assigned later in
@@ -776,7 +789,15 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         }
       }
       const oldIds = toCreate.map((r) => r.id);
-      const payload: CreateRecordData[] = toCreate.map(({ id, ...rest }) => rest as CreateRecordData);
+      // Strip `discoveredFromRecordId` before insert — it holds a BACKUP id
+      // that can only be remapped once the id map is complete (see
+      // pendingDiscoveryLinks / remapDiscoveryPointers).
+      const oldDiscoveryTargets = toCreate.map((r) =>
+        typeof r.discoveredFromRecordId === "number" ? r.discoveredFromRecordId : undefined,
+      );
+      const payload: CreateRecordData[] = toCreate.map(
+        ({ id, discoveredFromRecordId, ...rest }) => rest as CreateRecordData,
+      );
       const newIds = await bulkCreateRecords(payload, {
         skipNotification: true,
         skipVocabularySync: true,
@@ -785,6 +806,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       for (let i = 0; i < newIds.length; i++) {
         const o = oldIds[i];
         if (typeof o === "number") idMap.set(o, newIds[i]);
+        const target = oldDiscoveryTargets[i];
+        if (typeof target === "number") {
+          pendingDiscoveryLinks.push({ newId: newIds[i], oldTargetId: target });
+        }
         if (isMerge) {
           const s = toCreate[i]?.inputString;
           if (typeof s === "string" && s !== "" && !mergedRecordIdByInputString.has(s)) {
@@ -1130,6 +1155,31 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     }
   }
 
+  // Re-points discoveredFromRecordId on the just-inserted records, now that
+  // the old→new id map is complete (records stream + compact shell rebuild).
+  // Pointers whose backup target is absent from the map stay CLEARED — the
+  // field was stripped at insert, so no dangling/colliding pointer can ever
+  // reach the vault. Only rows this restore inserted are touched, so a live
+  // record's pointer is never rewritten in merge mode, and merge-cancel undo
+  // (which deletes those rows) needs no extra bookkeeping.
+  async function remapDiscoveryPointers(): Promise<void> {
+    const BATCH = 500;
+    let batch: Array<{ id: number; discoveredFromRecordId: number }> = [];
+    for (const link of pendingDiscoveryLinks) {
+      throwIfAborted();
+      const mapped = idMap.get(link.oldTargetId);
+      if (mapped === undefined || mapped === link.newId) continue; // absent → stays cleared
+      batch.push({ id: link.newId, discoveredFromRecordId: mapped });
+      if (batch.length >= BATCH) {
+        await bulkSetDiscoveredFromRecordId(batch, { skipNotification: true });
+        batch = [];
+      }
+    }
+    if (batch.length > 0) {
+      await bulkSetDiscoveredFromRecordId(batch, { skipNotification: true });
+    }
+  }
+
   try {
     await readZipStream(opts.source, {
       onEntry(name) {
@@ -1311,6 +1361,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     // contracts as any other post-clear failure (reset-to-empty in replace
     // mode, undo log in merge mode).
     await restorePendingRecordOrigins();
+
+    // Re-link discovery-tree pointers through the completed id map — same
+    // failure/cancel contracts as above.
+    await remapDiscoveryPointers();
   } catch (err) {
     const aborted = opts.signal?.aborted ?? false;
     if (err instanceof BackupCancelledError || aborted) {
