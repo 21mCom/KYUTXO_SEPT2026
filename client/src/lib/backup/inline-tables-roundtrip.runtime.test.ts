@@ -511,7 +511,13 @@ describe("restoreInlineTables merge mode (inline lineage / custody segments)", (
         },
         "merge",
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      insertedUtxoLineageIds: [],
+      // Only the NEW segment was inserted; the duplicate was skipped.
+      insertedCustodySegmentIds: [expect.any(Number)],
+      insertedLineageSnapshotIds: [],
+      pendingRecordOrigins: [],
+    });
 
     const liveSegments = await getAllCustodySegments();
     expect(liveSegments).toHaveLength(2);
@@ -680,7 +686,12 @@ describe("restoreInlineTables merge mode (inline lineage / custody segments)", (
         },
         "merge",
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      insertedUtxoLineageIds: [],
+      insertedCustodySegmentIds: [],
+      insertedLineageSnapshotIds: [],
+      pendingRecordOrigins: [],
+    });
 
     const live = await getAllDustFlags();
     expect(live).toHaveLength(2);

@@ -360,6 +360,8 @@ describe("legacy restore: evidence", () => {
     await expect(restoreLegacyEvidence(undefined, undefined)).resolves.toEqual({
       evidenceAdded: 0,
       evidenceAttachmentsAdded: 0,
+      insertedEvidenceIds: [],
+      insertedEvidenceAttachmentIds: [],
     });
     expect(await getAllEvidence()).toHaveLength(0);
     expect(await getAllEvidenceAttachments()).toHaveLength(0);
