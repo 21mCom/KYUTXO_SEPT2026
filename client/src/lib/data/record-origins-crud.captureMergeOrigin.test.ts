@@ -220,6 +220,94 @@ describe("captureMergeOrigin — baseline backfill", () => {
   });
 });
 
+describe("captureMergeOrigin — duplicate-origin de-dup (Task: repeated imports)", () => {
+  const incoming = {
+    originType: "xpub-derived" as const,
+    source: "bulk-import-xpub",
+    owner: "Bob",
+    tags: ["incoming-tag"],
+  };
+
+  it("re-running the identical import refreshes the timestamp instead of appending a row", async () => {
+    const record = await seedRecord();
+
+    await captureMergeOrigin(record, incoming);
+    const afterFirst = await getRecordOriginsByRecordId(record.id!);
+    expect(afterFirst).toHaveLength(2); // baseline + incoming
+
+    const firstIncoming = afterFirst.find(
+      (o) => o.originType === "xpub-derived",
+    )!;
+
+    // Re-import same values a bit later.
+    await captureMergeOrigin(record, { ...incoming, createdAt: firstIncoming.createdAt + 5000 });
+
+    const afterSecond = await getRecordOriginsByRecordId(record.id!);
+    expect(afterSecond).toHaveLength(2); // no new row
+    const updated = afterSecond.find((o) => o.id === firstIncoming.id)!;
+    expect(updated.createdAt).toBe(firstIncoming.createdAt + 5000);
+  });
+
+  it("treats blank strings / empty arrays as equal to absent fields when comparing", async () => {
+    const record = await seedRecord();
+    await captureMergeOrigin(record, incoming);
+
+    await captureMergeOrigin(record, {
+      ...incoming,
+      label: "   ",
+      notes: "",
+      categories: [],
+      tags: ["incoming-tag"],
+    });
+
+    expect(await getRecordOriginsByRecordId(record.id!)).toHaveLength(2);
+  });
+
+  it("a re-import with CHANGED values still appends a new row", async () => {
+    const record = await seedRecord();
+    await captureMergeOrigin(record, incoming);
+
+    await captureMergeOrigin(record, { ...incoming, owner: "Carol" });
+
+    const origins = await getRecordOriginsByRecordId(record.id!);
+    expect(origins).toHaveLength(3);
+    const owners = origins
+      .filter((o) => o.originType === "xpub-derived")
+      .map((o) => o.owner)
+      .sort();
+    expect(owners).toEqual(["Bob", "Carol"]);
+  });
+
+  it("only de-dups against the same source/originType, not other sources", async () => {
+    const record = await seedRecord();
+    await captureMergeOrigin(record, incoming);
+
+    // Same values but a different source: appends.
+    await captureMergeOrigin(record, {
+      ...incoming,
+      source: "walletImport-sparrow",
+      originType: "wallet-sync",
+    });
+
+    expect(await getRecordOriginsByRecordId(record.id!)).toHaveLength(3);
+  });
+
+  it("de-dups against the MOST RECENT same-source origin only", async () => {
+    const record = await seedRecord();
+    await captureMergeOrigin(record, incoming);
+    // Changed value appends…
+    await captureMergeOrigin(record, { ...incoming, owner: "Carol" });
+    // …and re-asserting the OLD value appends again (it differs from the
+    // most recent same-source origin, which now says Carol).
+    await captureMergeOrigin(record, incoming);
+
+    const sameSource = (await getRecordOriginsByRecordId(record.id!)).filter(
+      (o) => o.originType === "xpub-derived",
+    );
+    expect(sameSource).toHaveLength(3);
+  });
+});
+
 describe("inferOriginTypeForRecord — mirrors the create-hook inference", () => {
   it("classifies by source/importance/xpub the way use-records does", () => {
     expect(

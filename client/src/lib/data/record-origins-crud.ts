@@ -128,6 +128,48 @@ export function inferOriginTypeForRecord(
   return 'manual';
 }
 
+// Normalize a value for duplicate comparison: blank/whitespace strings and
+// empty arrays collapse to undefined, arrays compare order-insensitively.
+function normalizeOriginValue(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed === '' ? undefined : trimmed;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return undefined;
+    return JSON.stringify([...value].sort());
+  }
+  if (value === null || value === undefined) return undefined;
+  return String(value);
+}
+
+// Fields that constitute an origin's "value" for duplicate detection.
+const ORIGIN_VALUE_FIELDS = [
+  ...ORIGIN_STRING_FIELDS,
+  'xpub',
+  'derivationPath',
+  'chainType',
+  'tags',
+  'categories',
+] as const;
+
+// True when the incoming origin carries exactly the same values as an
+// existing origin row (same source + originType assumed by the caller).
+function originValuesEqual(
+  existing: RecordOrigin,
+  incoming: MergeOriginInput
+): boolean {
+  for (const key of ORIGIN_VALUE_FIELDS) {
+    if (
+      normalizeOriginValue((existing as any)[key]) !==
+      normalizeOriginValue((incoming as any)[key])
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Record an import's incoming metadata as an origin row when a merge touches
 // an existing record. When the record has no origin history at all (created
 // via the raw data facade, restored from backup, etc.), first backfill a
@@ -148,14 +190,33 @@ export async function captureMergeOrigin(
     if (!recordId) return;
     if (!hasAnyOriginMetadata(incoming)) return;
 
-    const existingCount = await db.recordOrigins
+    const existingOrigins = await db.recordOrigins
       .where('recordId')
       .equals(recordId)
-      .count();
+      .toArray();
 
     const now = Date.now();
 
-    if (existingCount === 0) {
+    // De-dup: if the most recent origin from the same source/originType is
+    // value-identical to the incoming one, refresh its timestamp instead of
+    // appending another identical row. A changed value still appends (that
+    // is what re-opens resolved conflicts).
+    const sameSourceOrigins = existingOrigins
+      .filter(
+        (o) =>
+          o.originType === incoming.originType &&
+          (o.source || '') === (incoming.source || '')
+      )
+      .sort((a, b) => b.createdAt - a.createdAt);
+    const latestSameSource = sameSourceOrigins[0];
+    if (latestSameSource?.id && originValuesEqual(latestSameSource, incoming)) {
+      await db.recordOrigins.update(latestSameSource.id, {
+        createdAt: incoming.createdAt ?? now,
+      });
+      return;
+    }
+
+    if (existingOrigins.length === 0) {
       // Baseline must sort strictly before the incoming origin so "newest
       // origin" ordering reflects the merge direction.
       const baselineCreatedAt = Math.min(
