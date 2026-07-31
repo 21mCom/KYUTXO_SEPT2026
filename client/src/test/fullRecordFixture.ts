@@ -54,6 +54,9 @@ export const fullRecord: Required<DbRecord> = {
   costBasisUsd: 25000,
   counterpartyType: "exchange",
   counterpartyName: "Coinbase",
+  conflictResolutions: {
+    owner: { value: "Alice", resolvedAt: 1736899000000 },
+  },
   createdAt: 1736800000000,
   updatedAt: 1736899999000,
 };

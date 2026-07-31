@@ -17,7 +17,7 @@ import { phoenixAdapter } from './adapters/phoenix';
 import { walletOfSatoshiAdapter } from './adapters/wallet-of-satoshi';
 import { nunchukAdapter } from './adapters/nunchuk';
 import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
-import { createRecord, updateRecord, createRecordOrigin } from '../dataFacade';
+import { createRecord, updateRecord, createRecordOrigin, captureMergeOrigin } from '../dataFacade';
 import { beginBulkOperation, endBulkOperation } from '../database';
 
 export function scanForPrivateKeys(content: string): { hasPrivateKeys: boolean; warnings: string[] } {
@@ -231,25 +231,22 @@ export async function executeImport(
         
         await updateRecord(existingRecord.id, mergedData);
         
-        // Create record origin entry to track wallet sync source for merged records
-        try {
-          await createRecordOrigin({
-            recordId: existingRecord.id,
-            originType: 'wallet-sync',
-            source: options.sourceName,
-            label: parsedRecord.label,
-            notes: parsedRecord.notes,
-            tags: options.defaultTags,
-            categories: options.defaultCategories,
-            owner: options.owner,
-            walletName: options.walletName,
-            seedName: options.seedName,
-            walletSoftware: options.walletSoftware,
-            privateKeyStatus: options.privateKeyStatus,
-          });
-        } catch (originError) {
-          console.error('[WalletImport] Failed to create record origin for merge:', originError);
-        }
+        // Record the incoming wallet-sync metadata as an origin (backfilling
+        // a baseline origin first when the record has none) so differing
+        // values surface on the Conflict Resolution page. Non-fatal.
+        await captureMergeOrigin(existingRecord, {
+          originType: 'wallet-sync',
+          source: options.sourceName,
+          label: parsedRecord.label,
+          notes: parsedRecord.notes,
+          tags: options.defaultTags,
+          categories: options.defaultCategories,
+          owner: options.owner,
+          walletName: options.walletName,
+          seedName: options.seedName,
+          walletSoftware: options.walletSoftware,
+          privateKeyStatus: options.privateKeyStatus,
+        });
         
         result.updatedRecords++;
       } else {

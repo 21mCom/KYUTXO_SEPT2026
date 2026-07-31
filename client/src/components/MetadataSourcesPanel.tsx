@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
 import { format } from 'date-fns';
+import { useLocation } from 'wouter';
 import { ChevronDown, ChevronRight, History, Key, Upload, Edit3, Tag, FolderOpen, KeyRound, RefreshCw, Link2, AlertCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { type RecordOrigin, type RecordOriginType, type Record as DBRecord } from '@/lib/database';
+import { type RecordOrigin, type RecordOriginType, type Record as DBRecord, type ConflictResolutionMap } from '@/lib/database';
 import { getRecordOrigins } from '@/lib/dataFacade';
-import { SINGULAR_FIELDS, type FieldConfig } from '@/lib/conflict-detection';
+import { SINGULAR_FIELDS, detectSingularFieldConflicts, type FieldConfig } from '@/lib/conflict-detection';
 import { renderSourceNote } from '@/lib/renderSourceNote';
 
 interface RecordFields {
@@ -18,6 +19,7 @@ interface RecordFields {
   walletName?: string;
   walletSoftware?: string;
   privateKeyStatus?: string;
+  conflictResolutions?: ConflictResolutionMap;
 }
 
 interface MetadataSourcesPanelProps {
@@ -58,7 +60,7 @@ function isFieldDifferent(origin: RecordOrigin, record: RecordFields | undefined
   const originValue = origin[fieldKey] as string | undefined;
   if (!originValue || originValue.trim() === '') return false;
   
-  const recordKeyMap: Partial<{ [K in keyof RecordOrigin]: keyof RecordFields }> = {
+  const recordKeyMap: Partial<{ [K in keyof RecordOrigin]: keyof Omit<RecordFields, 'conflictResolutions'> }> = {
     label: 'label',
     owner: 'owner',
     seedName: 'seedName',
@@ -281,6 +283,7 @@ function OriginCard({ origin, record }: { origin: RecordOrigin; record?: RecordF
 }
 
 export function MetadataSourcesPanel({ recordId, record }: MetadataSourcesPanelProps) {
+  const [, navigate] = useLocation();
   const [origins, setOrigins] = useState<RecordOrigin[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -297,15 +300,9 @@ export function MetadataSourcesPanel({ recordId, record }: MetadataSourcesPanelP
         setOrigins(loadedOrigins);
         
         if (record) {
-          let conflictCount = 0;
-          for (const origin of loadedOrigins) {
-            for (const field of SINGULAR_FIELDS) {
-              if (isFieldDifferent(origin, record, field.key)) {
-                conflictCount++;
-              }
-            }
-          }
-          setTotalConflicts(conflictCount);
+          // Same shared detection the Conflict Resolution page uses, so the
+          // header count always agrees with what that page will show.
+          setTotalConflicts(detectSingularFieldConflicts(record, loadedOrigins).length);
         }
       } catch (err) {
         console.error('[MetadataSourcesPanel] Failed to load origins:', err);
@@ -347,7 +344,18 @@ export function MetadataSourcesPanel({ recordId, record }: MetadataSourcesPanelP
               <History className="h-4 w-4" />
               Metadata Sources ({origins.length})
               {totalConflicts > 0 && (
-                <Badge variant="outline" className="gap-1 text-orange-600 border-orange-300 bg-orange-50 dark:bg-orange-950/30 dark:border-orange-700">
+                <Badge
+                  variant="outline"
+                  className="gap-1 text-orange-600 border-orange-300 bg-orange-50 dark:bg-orange-950/30 dark:border-orange-700 cursor-pointer"
+                  onClick={(e) => {
+                    // Deep-link to the Conflict Resolution page for this
+                    // record without toggling the surrounding collapsible.
+                    e.stopPropagation();
+                    e.preventDefault();
+                    navigate(`/conflict-resolution?recordId=${recordId}`);
+                  }}
+                  data-testid="badge-sources-conflicts"
+                >
                   <AlertCircle className="h-3 w-3" />
                   {totalConflicts} conflicts
                 </Badge>

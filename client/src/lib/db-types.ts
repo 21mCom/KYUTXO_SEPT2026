@@ -250,10 +250,30 @@ export interface Record {
   // "Coinbase"), distinct from walletName/label. Used by the Acquisition &
   // Provenance appendix; falls back to walletName/label/counterpartyType when blank.
   counterpartyName?: string;
-  
+
+  // Per-field conflict resolutions recorded from the Conflict Resolution page.
+  // Keyed by singular field key (label/owner/seedName/walletName/
+  // walletSoftware/privateKeyStatus). A field with >=2 distinct origin values
+  // stays flagged as a conflict until a resolution is recorded here; a newer
+  // origin that introduces a different value after `resolvedAt` re-opens it.
+  // Optional and non-indexed — no Dexie schema version bump required.
+  conflictResolutions?: ConflictResolutionMap;
+
   createdAt: number;
   updatedAt: number;
 }
+
+// A single recorded conflict decision for one singular field.
+export interface ConflictFieldResolution {
+  // The value the user settled on (trimmed). Empty string means the user
+  // deliberately kept the field empty.
+  value: string;
+  // Timestamp (ms) when the resolution was recorded. Origins created after
+  // this time with a different value re-open the conflict.
+  resolvedAt: number;
+}
+
+export type ConflictResolutionMap = { [fieldKey: string]: ConflictFieldResolution };
 
 export interface Attachment {
   id?: number;

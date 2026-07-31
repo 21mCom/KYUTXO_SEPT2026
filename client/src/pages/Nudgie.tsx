@@ -15,7 +15,7 @@ import {
   DISPOSITION_TYPE_OPTIONS,
   USER_CURATED_TIERS,
 } from "@/lib/database";
-import { updateRecord, createRecord, getParticipantsByAddressesWithOutpointSpends } from "@/lib/dataFacade";
+import { updateRecord, createRecord, getRecord, captureMergeOrigin, getParticipantsByAddressesWithOutpointSpends } from "@/lib/dataFacade";
 import {
   countTransactions,
   getTransactionsByTxids,
@@ -548,6 +548,9 @@ export default function Nudgie() {
       let recordId: number;
 
       if (tx.existingRecordId) {
+        // Snapshot the pre-merge record so the incoming values can be
+        // recorded as an origin for conflict tracking.
+        const preMergeRecord = await getRecord(tx.existingRecordId);
         await updateRecord(tx.existingRecordId, { 
           label: label.trim(),
           notes: notes.trim(),
@@ -559,6 +562,18 @@ export default function Nudgie() {
           dispositionType,
           costBasisUsd,
         });
+        if (preMergeRecord) {
+          // Non-fatal origin capture (backfills a baseline when the record
+          // has no origin history).
+          await captureMergeOrigin(preMergeRecord, {
+            originType: 'manual',
+            source: 'nudgie',
+            label: label.trim() || undefined,
+            notes: notes.trim() || undefined,
+            tags: txTags.length > 0 ? [...txTags] : undefined,
+            categories: txCategories.length > 0 ? [...txCategories] : undefined,
+          });
+        }
         recordId = tx.existingRecordId;
       } else {
         recordId = await createRecord({
@@ -628,7 +643,16 @@ export default function Nudgie() {
 
     try {
       if (tx.existingRecordId) {
+        const preMergeRecord = await getRecord(tx.existingRecordId);
         await updateRecord(tx.existingRecordId, { label: quickLabel });
+        if (preMergeRecord) {
+          // Non-fatal origin capture for conflict tracking.
+          await captureMergeOrigin(preMergeRecord, {
+            originType: 'manual',
+            source: 'nudgie',
+            label: quickLabel,
+          });
+        }
       } else {
         await createRecord({
           type: 'transaction',
@@ -706,6 +730,21 @@ export default function Nudgie() {
 
       if (editingRecord.id) {
         await updateRecord(editingRecord.id, recordData);
+        // editingRecord still holds the pre-merge values; record the incoming
+        // metadata as an origin for conflict tracking. Non-fatal.
+        await captureMergeOrigin(editingRecord, {
+          originType: 'manual',
+          source: 'nudgie',
+          label: recordData.label || undefined,
+          notes: recordData.notes || undefined,
+          owner: recordData.owner || undefined,
+          walletName: recordData.walletName || undefined,
+          seedName: recordData.seedName || undefined,
+          walletSoftware: recordData.walletSoftware || undefined,
+          privateKeyStatus: recordData.privateKeyStatus || undefined,
+          tags: recordData.tags.length > 0 ? [...recordData.tags] : undefined,
+          categories: recordData.categories.length > 0 ? [...recordData.categories] : undefined,
+        });
         toast({ title: "Saved", description: "Address updated successfully" });
       } else {
         await createRecord(recordData);

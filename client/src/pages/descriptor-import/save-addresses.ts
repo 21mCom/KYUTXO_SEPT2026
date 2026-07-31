@@ -24,6 +24,7 @@ import {
 } from "@/lib/descriptor-import-utils";
 import {
   createRecordOrigin,
+  captureMergeOrigin,
   syncTagsToMaster,
   syncCategoriesToMaster,
   ensureOwner,
@@ -184,19 +185,21 @@ export async function saveDescriptorAddresses(
           ...vaultFields,
         });
 
-        try {
-          await createRecordOrigin({
-            recordId: existingRecord.id,
-            originType: "xpub-derived",
-            label,
-            notes: meta.notes || undefined,
-            tags,
-            categories,
-            source: meta.sourceName,
-          });
-        } catch (e) {
-          console.error("Failed to create record origin:", e);
-        }
+        // Record the incoming metadata as an origin (backfilling a baseline
+        // origin first when the record has none) so differing values surface
+        // on the Conflict Resolution page. Non-fatal.
+        await captureMergeOrigin(existingRecord, {
+          originType: "xpub-derived",
+          label,
+          notes: meta.notes || undefined,
+          owner: meta.owner || undefined,
+          walletName: meta.walletName || undefined,
+          seedName: meta.seedName || undefined,
+          walletSoftware: meta.walletSoftware || undefined,
+          tags,
+          categories,
+          source: meta.sourceName,
+        });
         updated++;
       } else {
         const recordId = await createRecord({

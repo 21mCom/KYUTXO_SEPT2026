@@ -41,7 +41,7 @@ import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
 import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
 import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
-import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, getRecord } from "@/lib/dataFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, captureMergeOrigin, getRecord } from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import {
@@ -388,6 +388,22 @@ export default function QuickTagger() {
               ...updateData,
               tags: mergedTags,
               categories: mergedCategories,
+            });
+            // Record the incoming metadata as an origin (backfilling a
+            // baseline first when the record has none) so differing values
+            // surface on the Conflict Resolution page. Non-fatal.
+            await captureMergeOrigin(existingRecord, {
+              originType: 'bulk-import',
+              source: 'quick-tagger',
+              label: updateData.label || undefined,
+              notes: updateData.notes || undefined,
+              owner: updateData.owner || undefined,
+              walletName: updateData.walletName || undefined,
+              seedName: updateData.seedName || undefined,
+              walletSoftware: updateData.walletSoftware || undefined,
+              privateKeyStatus: updateData.privateKeyStatus || undefined,
+              tags: selectedTags.length > 0 ? [...selectedTags] : undefined,
+              categories: selectedCategories.length > 0 ? [...selectedCategories] : undefined,
             });
             updated++;
           }

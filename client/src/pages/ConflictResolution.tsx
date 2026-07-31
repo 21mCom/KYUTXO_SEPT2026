@@ -28,11 +28,12 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { type Record as DBRecord, type RecordOrigin } from "@/lib/database";
-import { getRecordOrigins, updateRecord, getRecordsByIds } from "@/lib/dataFacade";
+import { getRecord, updateRecord, getRecordsByIds } from "@/lib/dataFacade";
 import { getAllRecordOrigins } from "@/lib/data/record-origins-crud";
 import { 
   SINGULAR_FIELDS, 
   detectSingularFieldConflicts, 
+  withFieldResolution,
   type FieldConflict,
   type FieldConfig 
 } from "@/lib/conflict-detection";
@@ -73,13 +74,22 @@ export default function ConflictResolution() {
     setIsLoading(true);
     try {
       const allOrigins = await getAllRecordOrigins();
-      const originCountByRecordId = new Map<number, number>();
+      // Group the already-fetched origins per record instead of re-querying
+      // them record-by-record (avoids an N+1 at scale).
+      const originsByRecordId = new Map<number, RecordOrigin[]>();
       allOrigins.forEach(o => {
-        originCountByRecordId.set(o.recordId, (originCountByRecordId.get(o.recordId) || 0) + 1);
+        const list = originsByRecordId.get(o.recordId);
+        if (list) {
+          list.push(o);
+        } else {
+          originsByRecordId.set(o.recordId, [o]);
+        }
       });
       
-      const multiOriginIds = Array.from(originCountByRecordId.entries())
-        .filter(([, count]) => count >= 2)
+      // A conflict needs >=2 distinct values, so records with fewer than 2
+      // origin rows can be skipped before fetching the records themselves.
+      const multiOriginIds = Array.from(originsByRecordId.entries())
+        .filter(([, list]) => list.length >= 2)
         .map(([id]) => id);
       
       if (multiOriginIds.length === 0) {
@@ -95,7 +105,7 @@ export default function ConflictResolution() {
       for (const record of records) {
         if (!record.id) continue;
         
-        const origins = await getRecordOrigins(record.id);
+        const origins = originsByRecordId.get(record.id) || [];
         if (origins.length < 2) continue;
         
         const conflicts = detectSingularFieldConflicts(record, origins);
@@ -186,7 +196,19 @@ export default function ConflictResolution() {
         throw new Error("Invalid record ID");
       }
       
-      await updateRecord(recordId, { [fieldKey]: valueToApply || "" });
+      // Fetch fresh so we merge into the latest resolution map instead of a
+      // possibly stale copy loaded when the page mounted.
+      const freshRecord = await getRecord(recordId);
+      const resolutions = withFieldResolution(
+        freshRecord?.conflictResolutions ?? selectedRecord.record.conflictResolutions,
+        selectedConflict.field.key,
+        valueToApply || ""
+      );
+      
+      await updateRecord(recordId, {
+        [fieldKey]: valueToApply || "",
+        conflictResolutions: resolutions,
+      });
       
       toast({
         title: "Conflict resolved",
@@ -200,6 +222,54 @@ export default function ConflictResolution() {
       toast({
         title: "Error",
         description: "Failed to apply the selected value",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResolving(false);
+    }
+  }
+
+  // Resolve by keeping whatever value the record currently holds: records the
+  // decision (so the conflict stops surfacing) without changing the field.
+  async function handleKeepCurrent() {
+    if (!selectedRecord || !selectedConflict) return;
+    
+    setIsResolving(true);
+    try {
+      const fieldKey = selectedConflict.field.recordKey;
+      if (!fieldKey) throw new Error("Invalid field key");
+      
+      const recordId = typeof selectedRecord.record.id === 'string' 
+        ? parseInt(selectedRecord.record.id, 10) 
+        : selectedRecord.record.id;
+      
+      if (!recordId || isNaN(recordId)) {
+        throw new Error("Invalid record ID");
+      }
+      
+      const freshRecord = await getRecord(recordId);
+      const currentRaw = (freshRecord ?? selectedRecord.record)[fieldKey];
+      const currentValue = typeof currentRaw === 'string' ? currentRaw.trim() : "";
+      const resolutions = withFieldResolution(
+        freshRecord?.conflictResolutions ?? selectedRecord.record.conflictResolutions,
+        selectedConflict.field.key,
+        currentValue
+      );
+      
+      await updateRecord(recordId, { conflictResolutions: resolutions });
+      
+      toast({
+        title: "Conflict resolved",
+        description: `Kept the current ${selectedConflict.field.label.toLowerCase()} value`,
+      });
+      
+      setResolveDialogOpen(false);
+      await loadRecordsWithConflicts();
+    } catch (error) {
+      console.error("Failed to resolve conflict:", error);
+      toast({
+        title: "Error",
+        description: "Failed to record the resolution",
         variant: "destructive",
       });
     } finally {
@@ -436,7 +506,15 @@ export default function ConflictResolution() {
             <Button variant="outline" onClick={() => setResolveDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleResolve} disabled={isResolving}>
+            <Button
+              variant="secondary"
+              onClick={handleKeepCurrent}
+              disabled={isResolving}
+              data-testid="button-keep-current"
+            >
+              Keep Current Value
+            </Button>
+            <Button onClick={handleResolve} disabled={isResolving} data-testid="button-apply-value">
               {isResolving ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />

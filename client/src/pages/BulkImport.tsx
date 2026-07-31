@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { createRecord } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, saveDerivationTemplate } from "@/lib/dataFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, captureMergeOrigin, saveDerivationTemplate } from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { getRecordsByType } from "@/lib/dataFacade";
 import { updateRecord } from "@/hooks/use-records";
@@ -515,27 +515,24 @@ export default function BulkImport() {
               addressImportance: newImportance,
             });
 
-            // Create a record origin entry to track xpub metadata
-            try {
-              await createRecordOrigin({
-                recordId: existingRecord.id,
-                originType: 'xpub-derived',
-                label: generatedLabel,
-                notes: notes || undefined,
-                tags: parsedTags,
-                categories: parsedCategories,
-                seedName: seedName || undefined,
-                walletSoftware: walletSoftware || undefined,
-                privateKeyStatus: privateKeyStatus || undefined,
-                owner: ownerInput || undefined,
-                walletName: walletNameInput || undefined,
-                xpub: isMultisigMode ? undefined : xpub,
-                derivationPath: derivationPath,
-                chainType: addr.chainType,
-              });
-            } catch (originError) {
-              console.error("Failed to create record origin:", originError);
-            }
+            // Record the incoming xpub metadata as an origin (backfilling a
+            // baseline origin first when the record has none) so differing
+            // values surface on the Conflict Resolution page. Non-fatal.
+            await captureMergeOrigin(existingRecord, {
+              originType: 'xpub-derived',
+              label: generatedLabel,
+              notes: notes || undefined,
+              tags: parsedTags,
+              categories: parsedCategories,
+              seedName: seedName || undefined,
+              walletSoftware: walletSoftware || undefined,
+              privateKeyStatus: privateKeyStatus || undefined,
+              owner: ownerInput || undefined,
+              walletName: walletNameInput || undefined,
+              xpub: isMultisigMode ? undefined : xpub,
+              derivationPath: derivationPath,
+              chainType: addr.chainType,
+            });
 
             mergedCount++;
           } else {

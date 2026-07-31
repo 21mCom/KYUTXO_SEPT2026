@@ -1,4 +1,8 @@
-import type { Record, RecordOrigin } from './database';
+import type {
+  Record,
+  RecordOrigin,
+  ConflictResolutionMap,
+} from './database';
 
 export type FieldType = 'union' | 'singular';
 
@@ -7,6 +11,19 @@ export interface FieldConfig {
   label: string;
   type: FieldType;
   recordKey?: keyof Record;
+}
+
+// Structural view of the record fields conflict detection needs. Full DB
+// `Record`s, the detail panel's stringified-id record shape, and
+// MetadataSourcesPanel's `RecordFields` are all assignable without casts.
+export interface ConflictRecordFields {
+  label?: string;
+  owner?: string;
+  seedName?: string;
+  walletName?: string;
+  walletSoftware?: string;
+  privateKeyStatus?: string;
+  conflictResolutions?: ConflictResolutionMap;
 }
 
 export const FIELD_CLASSIFICATIONS: FieldConfig[] = [
@@ -37,15 +54,27 @@ export interface RecordConflictInfo {
   hasConflicts: boolean;
 }
 
+// A singular field is in conflict when two or more origins carry distinct
+// non-empty values for it AND the disagreement has not been explicitly
+// resolved. Resolution state lives on the record (`conflictResolutions`) and
+// is written by the Conflict Resolution dialog; a newer origin that
+// introduces a different value after the resolution re-opens the conflict.
+//
+// NOTE: this intentionally does NOT auto-hide a conflict just because the
+// record's active value matches one of the origin values — every merge keeps
+// either the existing or the incoming value active, so that heuristic hid
+// virtually all real merge disagreements.
 export function detectSingularFieldConflicts(
-  record: Record,
+  record: ConflictRecordFields,
   origins: RecordOrigin[]
 ): FieldConflict[] {
   const conflicts: FieldConflict[] = [];
 
   for (const field of SINGULAR_FIELDS) {
-    const activeValue = record[field.recordKey as keyof Record] as string | undefined;
-    
+    const activeValue = record[field.recordKey as keyof ConflictRecordFields] as
+      | string
+      | undefined;
+
     const originValues: FieldConflict['originValues'] = [];
     const seenValues = new Set<string>();
 
@@ -65,25 +94,52 @@ export function detectSingularFieldConflicts(
       }
     }
 
-    // A conflict exists only if there are multiple distinct origin values
-    // AND the active value doesn't match any of them (meaning user hasn't resolved it yet)
-    if (originValues.length > 1) {
-      const normalizedActive = activeValue?.trim() || '';
-      const isResolved = normalizedActive !== '' && 
-        originValues.some(ov => ov.value === normalizedActive);
-      
-      // Only add as conflict if not resolved
-      if (!isResolved) {
-        conflicts.push({
-          field,
-          activeValue: activeValue?.trim(),
-          originValues: originValues.sort((a, b) => b.createdAt - a.createdAt),
-        });
-      }
+    if (originValues.length > 1 && !isFieldResolved(record, field, origins)) {
+      conflicts.push({
+        field,
+        activeValue: activeValue?.trim(),
+        originValues: originValues.sort((a, b) => b.createdAt - a.createdAt),
+      });
     }
   }
 
   return conflicts;
+}
+
+// A field counts as resolved when a resolution was recorded for it and no
+// origin added AFTER the resolution carries a different value. Origins that
+// re-assert the resolved value (or carry no value) do not re-open it.
+function isFieldResolved(
+  record: ConflictRecordFields,
+  field: FieldConfig,
+  origins: RecordOrigin[]
+): boolean {
+  const resolution = record.conflictResolutions?.[field.key];
+  if (!resolution) return false;
+
+  const resolvedValue = (resolution.value || '').trim();
+  for (const origin of origins) {
+    if (origin.createdAt <= resolution.resolvedAt) continue;
+    const originValue = (origin[field.key] as string | undefined)?.trim();
+    if (originValue && originValue !== resolvedValue) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Merge a new per-field resolution into an existing map (immutable). Keeps
+// the trim normalization in one place so detection and writers agree.
+export function withFieldResolution(
+  existing: ConflictResolutionMap | undefined,
+  fieldKey: string,
+  value: string,
+  resolvedAt: number = Date.now()
+): ConflictResolutionMap {
+  return {
+    ...(existing || {}),
+    [fieldKey]: { value: (value || '').trim(), resolvedAt },
+  };
 }
 
 export function getConflictingOriginsForField(
@@ -111,10 +167,16 @@ export function getConflictingOriginsForField(
   return result.sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function hasAnyConflicts(record: Record, origins: RecordOrigin[]): boolean {
+export function hasAnyConflicts(
+  record: ConflictRecordFields,
+  origins: RecordOrigin[]
+): boolean {
   return detectSingularFieldConflicts(record, origins).length > 0;
 }
 
-export function getConflictCount(record: Record, origins: RecordOrigin[]): number {
+export function getConflictCount(
+  record: ConflictRecordFields,
+  origins: RecordOrigin[]
+): number {
   return detectSingularFieldConflicts(record, origins).length;
 }

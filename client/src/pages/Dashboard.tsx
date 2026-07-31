@@ -30,7 +30,7 @@ import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
-import { syncTagsToMaster, syncCategoriesToMaster } from "@/lib/dataFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, getRecord, captureMergeOrigin } from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { useCustomFields, useSettings, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -479,7 +479,25 @@ export default function Dashboard() {
 
       // If record exists, update it instead of creating
       if (existingRecord?.id) {
+        // Snapshot the pre-merge record (the lookup map can be stale) so the
+        // incoming values can be recorded as an origin for conflict tracking.
+        const preMergeRecord = (await getRecord(existingRecord.id)) ?? existingRecord;
         await updateRecord(existingRecord.id, recordData);
+        // Non-fatal origin capture; backfills a baseline when the record has
+        // no origin history so the disagreement can surface later.
+        await captureMergeOrigin(preMergeRecord, {
+          originType: 'manual',
+          source: recordData.source || 'manual',
+          label: recordData.label || undefined,
+          notes: recordData.notes || undefined,
+          owner: recordData.owner || undefined,
+          walletName: recordData.walletName || undefined,
+          seedName: recordData.seedName || undefined,
+          walletSoftware: recordData.walletSoftware || undefined,
+          privateKeyStatus: recordData.privateKeyStatus || undefined,
+          tags: recordData.tags?.length ? [...recordData.tags] : undefined,
+          categories: recordData.categories?.length ? [...recordData.categories] : undefined,
+        });
         
         // Upload any new files for existing record
         if (files.length > 0) {

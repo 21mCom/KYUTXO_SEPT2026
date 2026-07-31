@@ -50,6 +50,7 @@ import type {
   DispositionType,
   CounterpartyType,
   BlockchainTransaction,
+  ConflictResolutionMap,
 } from "@/lib/database";
 import { 
   db,
@@ -110,6 +111,8 @@ interface RecordDetailPanelProps {
     cachedLastActivityTime?: number;
     cachedUtxoCount?: number;
     statsComputedAt?: number;
+    // Per-field conflict resolutions (drives shared conflict detection)
+    conflictResolutions?: ConflictResolutionMap;
   };
   attachments?: Attachment[];
   onAttachmentsChange?: () => void;
@@ -594,7 +597,7 @@ export function RecordDetailPanel({
           setConflictCount(0);
           return;
         }
-        const conflicts = detectSingularFieldConflicts(record as unknown as Parameters<typeof detectSingularFieldConflicts>[0], origins);
+        const conflicts = detectSingularFieldConflicts(record, origins);
         setConflictCount(conflicts.length);
       } catch (error) {
         console.error("Failed to check conflicts:", error);
