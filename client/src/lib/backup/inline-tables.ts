@@ -6,7 +6,10 @@
 //     settings survive), but a small allow-list of portable preferences (e.g.
 //     `disableOrphanCheck`) plus the user's custom Privacy Audit entity-list
 //     snapshot (`entityListSnapshot`) is merged from the backup on restore.
-//   - `recordOrigins` is cleared but NOT re-added (legacy never restored it).
+//   - `recordOrigins` is cleared here but re-added by the ORCHESTRATOR
+//     (restore.ts): its rows reference records by id, so they can only be
+//     remapped once the records stream has built the old→new id map. This
+//     module just hands the raw rows back via `pendingRecordOrigins`.
 // Records and the four record-dependent big tables are handled by the streaming
 // orchestrator (restore.ts), not here.
 //
@@ -393,6 +396,13 @@ export interface InlineRestoreResult {
   // MERGE INTO existing singleton rows rather than inserting new ones, and the
   // UI's pre-restore snapshot (undoInlinePrefs) already restores them.
   undoInlineMetadata?: () => Promise<number>;
+  // Raw `recordOrigins` rows from the backup, NOT inserted here: their
+  // `recordId` foreign keys reference the backup's record ids, and the
+  // old→new id map only exists once the records NDJSON stream has been
+  // processed by the orchestrator (which runs AFTER this inline restore).
+  // restore.ts remaps and inserts them at the end of the stream. Older
+  // backups without the key simply yield an empty array.
+  pendingRecordOrigins: any[];
 }
 
 export async function restoreInlineTables(
@@ -663,6 +673,7 @@ export async function restoreInlineTables(
     insertedUtxoLineageIds: [],
     insertedCustodySegmentIds: [],
     insertedLineageSnapshotIds: [],
+    pendingRecordOrigins: arr("recordOrigins"),
   };
 
   if (lineageRows.length) {
@@ -705,10 +716,12 @@ export async function restoreInlineTables(
     });
   }
 
-  // NOTE: recordOrigins is intentionally NOT restored (matches legacy restore
-  // behaviour). The `settings` table is not wholesale restored either, but a
-  // small allow-list of portable preferences is merged via
-  // restoreSettingsPreferences above.
+  // recordOrigins ride inline in the backup but are handed back RAW via
+  // `pendingRecordOrigins` (see InlineRestoreResult): their recordId foreign
+  // keys reference backup record ids, so restore.ts remaps and inserts them
+  // once the records stream has built the old→new id map. The `settings`
+  // table is not wholesale restored either, but a small allow-list of
+  // portable preferences is merged via restoreSettingsPreferences above.
 
   if (meta) {
     // Merge mode: expose an undo that removes exactly the metadata rows THIS

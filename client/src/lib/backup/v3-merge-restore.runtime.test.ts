@@ -84,6 +84,12 @@ import {
 } from "@/lib/data/derivation-templates-crud";
 import { getTags, getOwners, restoreTag, restoreOwner } from "@/lib/data/vocabulary-crud";
 import {
+  addRecordOrigin,
+  getAllRecordOrigins,
+  getRecordOriginsByRecordId,
+  clearRecordOrigins,
+} from "@/lib/data/record-origins-crud";
+import {
   addEvidence,
   addEvidenceAttachment,
   getAllEvidence,
@@ -137,6 +143,7 @@ async function clearEverything(): Promise<void> {
   await clearUtxoLineage({ skipNotification: true });
   await clearCustodySegments({ skipNotification: true });
   await clearLineageSnapshots({ skipNotification: true });
+  await clearRecordOrigins({ skipNotification: true });
   await clearNodeSettings({ skipNotification: true });
   await clearCustomFields({ skipNotification: true });
   await clearDerivationTemplates({ skipNotification: true });
@@ -156,6 +163,30 @@ async function seedExportedVault(): Promise<number> {
     skipNotification: true,
     skipVocabularySync: true,
   });
+  // Source-history rows (drive the Conflict Resolution page). Two origins with
+  // CONFLICTING labels so a restore that preserves them keeps the conflict
+  // visible without another import.
+  await addRecordOrigin(
+    {
+      recordId,
+      originType: "manual",
+      source: "manual-entry",
+      label: "Shared address",
+      createdAt: 1_700_000_000_000,
+    },
+    { skipNotification: true },
+  );
+  await addRecordOrigin(
+    {
+      recordId,
+      originType: "wallet-sync",
+      source: "walletImport-sparrow",
+      label: "Cold storage",
+      walletName: "Sparrow Main",
+      createdAt: 1_700_000_200_000,
+    },
+    { skipNotification: true },
+  );
   await addAttachment(
     {
       recordId,
@@ -396,6 +427,9 @@ async function snapshotVault() {
     txs: await getTransactionsByTxids([TXID_SHARED, TXID_LOCAL]),
     participants: await getParticipantsByTxids([TXID_SHARED, TXID_LOCAL]),
     syncState: (await getAllAddressSyncState()).map((s) => s.address).sort(),
+    origins: (await getAllRecordOrigins())
+      .map((o) => `${o.originType}|${o.source}|${o.createdAt}`)
+      .sort(),
     lineage: await getAllUtxoLineage(),
     segments: await getAllCustodySegments(),
     snapshots: await getAllLineageSnapshots(),
@@ -469,6 +503,10 @@ describe("v3 merge restore", () => {
       [RECORD_LOCAL.inputString, RECORD_SHARED.inputString].sort(),
     );
 
+    // Record origins: the backup's rows remapped onto the LIVE shared record
+    // and collided with its surviving origins by natural key — not doubled.
+    expect(after.origins).toHaveLength(2);
+
     // Lineage tables: unique/natural keys respected — nothing doubled.
     expect(after.lineage).toHaveLength(1);
     expect(after.segments).toHaveLength(1);
@@ -498,6 +536,7 @@ describe("v3 merge restore", () => {
     expect(again.lineage).toHaveLength(1);
     expect(again.segments).toHaveLength(1);
     expect(again.snapshots).toHaveLength(1);
+    expect(again.origins).toEqual(after.origins);
     expect(again.customFields).toEqual(["kyc-ref"]);
     expect(again.derivationTemplates).toHaveLength(1);
     expect(again.tags).toEqual(["kyc"]);
@@ -963,8 +1002,72 @@ describe("v3 merge restore", () => {
     expect(result.counts.utxoLineage).toBe(1);
     expect(result.counts.custodySegments).toBe(1);
     expect(result.counts.lineageSnapshots).toBe(1);
+    expect(result.counts.recordOrigins).toBe(2);
     const after = await snapshotVault();
     expect(after.records).toEqual([RECORD_SHARED.inputString]);
     expect(after.attachments).toEqual(["ab/receipt-hash.bin"]);
+    expect(after.origins).toHaveLength(2);
+  });
+
+  it("REPLACE restore preserves source history: origins are re-linked to the record's NEW id so conflicts survive without another import", async () => {
+    await seedExportedVault();
+    const blob = await exportToBlob();
+
+    // Full replace into a vault holding unrelated data — everything is cleared
+    // first, so record ids are reassigned from a fresh key space.
+    await clearEverything();
+    await bulkCreateRecords([RECORD_LOCAL], {
+      skipNotification: true,
+      skipVocabularySync: true,
+    });
+
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter,
+    });
+    expect(result.counts.recordOrigins).toBe(2);
+
+    const records = await getAllRecords();
+    expect(records).toHaveLength(1);
+    const restored = records[0];
+    expect(restored.inputString).toBe(RECORD_SHARED.inputString);
+
+    // Both conflicting origins are attached to the restored record's NEW id.
+    const origins = await getRecordOriginsByRecordId(restored.id!);
+    expect(origins).toHaveLength(2);
+    const bySource = new Map(origins.map((o) => [o.source, o]));
+    expect(bySource.get("manual-entry")?.label).toBe("Shared address");
+    expect(bySource.get("walletImport-sparrow")?.label).toBe("Cold storage");
+    expect(bySource.get("walletImport-sparrow")?.walletName).toBe("Sparrow Main");
+    // No stray origins pointing at absent records.
+    expect(await getAllRecordOrigins()).toHaveLength(2);
+  });
+
+  it("OLDER backups without recordOrigins inline data still restore cleanly (origins simply absent)", async () => {
+    await seedExportedVault();
+
+    // Simulate a pre-origins backup: export with an inline reader that omits
+    // the recordOrigins key entirely.
+    const { readInlineTables } = await import("./inline-tables");
+    const sink = new MemorySink();
+    await exportBackup({
+      sink: sink as BackupSink,
+      encrypted: false,
+      batchSize: 25,
+      attachmentIO,
+      readInline: async () => {
+        const { recordOrigins: _omitted, ...rest } = await readInlineTables();
+        return rest;
+      },
+    });
+    const blob = sink.blob as Blob;
+
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter,
+    });
+    expect(result.counts.records).toBe(1);
+    expect(result.counts.recordOrigins).toBe(0);
+    expect(await getAllRecordOrigins()).toHaveLength(0);
   });
 });

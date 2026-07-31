@@ -82,6 +82,12 @@ import {
   getExistingSegmentIds,
   getExistingSnapshotIds,
 } from "@/lib/data/lineage-crud";
+import {
+  bulkAddRecordOrigins,
+  bulkDeleteRecordOrigins,
+  getRecordOriginsByRecordIds,
+  type CreateRecordOriginData,
+} from "@/lib/data/record-origins-crud";
 import type {
   TransactionParticipant,
   UtxoLineage,
@@ -249,6 +255,8 @@ export interface RestoreResult {
     transactionParticipants: number;
     addressSyncState: number;
     blockchainTransactions: number;
+    // Record-origin (source history) rows re-linked to their restored records.
+    recordOrigins: number;
     utxoLineage: number;
     custodySegments: number;
     lineageSnapshots: number;
@@ -361,6 +369,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         participantIds: [] as number[],
         transactionIds: [] as number[],
         syncStateIds: [] as number[],
+        originIds: [] as number[],
         lineageIds: [] as number[],
         segmentIds: [] as number[],
         snapshotIds: [] as number[],
@@ -395,6 +404,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     await bulkDeleteAttachments(log.attachmentIds, { skipNotification: true });
     await bulkDeleteParticipants(log.participantIds, { skipNotification: true });
     await bulkDeleteAddressSyncState(log.syncStateIds, { skipNotification: true });
+    await bulkDeleteRecordOrigins(log.originIds, { skipNotification: true });
     await bulkDeleteUtxoLineage(log.lineageIds, { skipNotification: true });
     await bulkDeleteCustodySegments(log.segmentIds, { skipNotification: true });
     await bulkDeleteLineageSnapshots(log.snapshotIds, { skipNotification: true });
@@ -445,12 +455,20 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       log.participantIds.length +
       log.transactionIds.length +
       log.syncStateIds.length +
+      log.originIds.length +
       log.lineageIds.length +
       log.segmentIds.length +
       log.snapshotIds.length +
       inlineMetadataRemoved
     );
   }
+
+  // Raw recordOrigins rows from the backup's inline data (source history that
+  // drives the Conflict Resolution page). Their `recordId` foreign keys
+  // reference BACKUP record ids, so they can only be inserted after the
+  // records stream has built the old→new id map — see
+  // restorePendingRecordOrigins(), called once the ZIP stream completes.
+  let pendingRecordOrigins: any[] = [];
 
   let manifest: BackupManifest | null = null;
   // Set synchronously when the manifest entry's header is reached. onEntry is
@@ -472,6 +490,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     transactionParticipants: 0,
     addressSyncState: 0,
     blockchainTransactions: 0,
+    recordOrigins: 0,
     utxoLineage: 0,
     custodySegments: 0,
     lineageSnapshots: 0,
@@ -946,6 +965,56 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     report(`Restoring ${table}...`);
   }
 
+  // Insert the backup's recordOrigins rows (source history driving the
+  // Conflict Resolution page) once the whole ZIP stream has been processed, so
+  // the records old→new id map is complete. Rows whose owning record is absent
+  // (orphaned/skipped) are dropped — an origin without its record is
+  // meaningless. In merge mode rows are de-duped by their natural key
+  // (live recordId + originType + source + createdAt), covering both origins
+  // already live on the record AND duplicates within the incoming backup, so
+  // re-merging the identical backup is idempotent.
+  async function restorePendingRecordOrigins(): Promise<void> {
+    if (pendingRecordOrigins.length === 0) return;
+    throwIfAborted();
+    const remapped: CreateRecordOriginData[] = [];
+    for (const o of pendingRecordOrigins) {
+      if (!o || typeof o !== "object") continue;
+      const { id, ...d } = o as Record<string, unknown>;
+      const recordId = remap(idMap, d.recordId);
+      if (recordId === undefined) continue;
+      remapped.push({ ...d, recordId } as CreateRecordOriginData);
+    }
+    if (remapped.length === 0) return;
+
+    let toInsert = remapped;
+    if (isMerge) {
+      const originKey = (o: {
+        recordId: number;
+        originType?: unknown;
+        source?: unknown;
+        createdAt?: unknown;
+      }): string =>
+        [o.recordId, o.originType ?? "", o.source ?? "", o.createdAt ?? ""].join("|");
+      const affectedRecordIds = Array.from(new Set(remapped.map((o) => o.recordId)));
+      const seen = new Set<string>();
+      for (const live of await getRecordOriginsByRecordIds(affectedRecordIds)) {
+        seen.add(originKey(live));
+      }
+      toInsert = [];
+      for (const o of remapped) {
+        const k = originKey(o);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        toInsert.push(o);
+      }
+    }
+    if (toInsert.length > 0) {
+      const newIds = await bulkAddRecordOrigins(toInsert, { skipNotification: true });
+      if (mergeUndoLog) mergeUndoLog.originIds.push(...newIds);
+      counts.recordOrigins += toInsert.length;
+    }
+  }
+
   try {
     await readZipStream(opts.source, {
       onEntry(name) {
@@ -1015,6 +1084,12 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
             opts.onProgress?.({ percent: 9, phase: "Restoring metadata..." });
             const inline = await parseInline(manifest, key);
             const inlineResult = await restoreInlineFn(inline, restoreMode);
+            // Origins are inserted AFTER the records stream (id remap); older
+            // backups without the key (and older test doubles returning void)
+            // simply leave this empty.
+            if (inlineResult && Array.isArray(inlineResult.pendingRecordOrigins)) {
+              pendingRecordOrigins = inlineResult.pendingRecordOrigins;
+            }
             // Older v3 backups carry lineage/segments/snapshots INLINE instead
             // of streamed; those inserts are data rows too and must be part of
             // the merge-cancel undo log or cancelling a merge of an old backup
@@ -1114,6 +1189,12 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         return null; // ignore anything else
       },
     });
+
+    // The records id map is complete now — re-link and insert source-history
+    // rows. Runs inside the try so a failure/cancel here follows the same
+    // contracts as any other post-clear failure (reset-to-empty in replace
+    // mode, undo log in merge mode).
+    await restorePendingRecordOrigins();
   } catch (err) {
     const aborted = opts.signal?.aborted ?? false;
     if (err instanceof BackupCancelledError || aborted) {

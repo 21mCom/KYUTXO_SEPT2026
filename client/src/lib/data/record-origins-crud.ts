@@ -35,6 +35,25 @@ export async function addRecordOrigin(
   return id as number;
 }
 
+export async function bulkAddRecordOrigins(
+  rows: CreateRecordOriginData[],
+  options?: RecordOriginWriteOptions
+): Promise<number[]> {
+  if (rows.length === 0) return [];
+  const now = Date.now();
+  const origins: RecordOrigin[] = rows.map((data) => ({
+    ...data,
+    createdAt: data.createdAt ?? now,
+  }));
+
+  const ids = await db.recordOrigins.bulkAdd(origins, { allKeys: true });
+
+  if (!options?.skipNotification) {
+    notifyDbChange('recordOrigins');
+  }
+
+  return ids as number[];
+}
 export async function deleteRecordOriginsByRecordId(
   recordId: number,
   options?: RecordOriginWriteOptions
@@ -261,5 +280,17 @@ export async function captureMergeOrigin(
     );
   } catch (error) {
     console.error('Failed to record merge origin:', error);
+  }
+}
+
+export async function bulkDeleteRecordOrigins(
+  ids: number[],
+  options?: RecordOriginWriteOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+  await db.recordOrigins.bulkDelete(ids);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('recordOrigins');
   }
 }
