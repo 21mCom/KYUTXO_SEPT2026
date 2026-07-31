@@ -263,6 +263,10 @@ args = "database-doctor-recompute-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "filtered-scan-gate-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "utxo-resync-affected-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1075,6 +1079,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/conflict-detection.test.ts client/src/lib/data/record-origins-crud.captureMergeOrigin.test.ts client/src/lib/wallet-import/import-manager.mergeOrigins.test.ts client/src/pages/ConflictResolution.mergedImports.test.tsx client/src/pages/QuickTagger.mergeOrigins.test.tsx client/src/pages/Nudgie.mergeOrigins.test.tsx client/src/pages/Dashboard.mergeOrigins.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "filtered-scan-gate-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/address-stats.filteredScanGate.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
