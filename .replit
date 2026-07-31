@@ -39,6 +39,10 @@ args = "psbt-builder-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "quantum-scanner-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "psbt-builder-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1108,3 +1112,14 @@ args = "npx vitest run client/src/lib/backup/compact.classification.test.ts clie
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "quantum-scanner-node-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/QuantumRiskScanner.test.tsx"

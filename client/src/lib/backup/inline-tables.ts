@@ -88,6 +88,11 @@ import {
 } from "@/lib/data/lineage-crud";
 import { lineageIdentity, type RestoreMode } from "./legacy-restore-misc";
 import { FUND_TRAIL_LAYOUT_OPTIONS } from "@/components/fund-trail/view-data";
+import {
+  formatQuantumTagLevels,
+  sanitizeQuantumTagLevels,
+  type QuantumRiskLevel,
+} from "@/lib/quantum-risk";
 
 // Recognized Fund Trail layout values + their human-readable labels, derived
 // from the single source of truth so this allow-list never drifts from the UI.
@@ -205,6 +210,17 @@ const PORTABLE_PREFERENCES: PortablePreferenceDescriptor[] = [
         ? s.sourceOfFundsTxLimit
         : undefined,
     format: (v) => `${(v as number).toLocaleString()} transactions`,
+  },
+  {
+    key: "quantumTagLevels",
+    label: "Quantum Scanner tagged risk levels",
+    // Only carry a recognized selection: an array whose entries are all known
+    // risk levels (type-checked extract via sanitizeQuantumTagLevels). An empty
+    // array is valid — it round-trips the deliberate "analysis only, tag
+    // nothing" choice. Anything else (missing field on an older backup, or
+    // malformed entries) leaves the current value untouched.
+    extract: (s) => sanitizeQuantumTagLevels(s.quantumTagLevels),
+    format: (v) => formatQuantumTagLevels(v as QuantumRiskLevel[]),
   },
   {
     key: "entityListSnapshot",

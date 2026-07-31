@@ -89,6 +89,19 @@ function formatDeviceValue(key: string, settings: any): string | null {
       const n = snap.entries.length;
       return `${n} ${n === 1 ? "entry" : "entries"}`;
     }
+    case "quantumTagLevels": {
+      const levels = settings.quantumTagLevels;
+      if (!Array.isArray(levels)) return null;
+      if (levels.length === 0) return "None (analysis only)";
+      const labels: Record<string, string> = {
+        critical: "Critical",
+        high: "High",
+        medium: "Medium",
+        variable: "Variable",
+        low: "Low",
+      };
+      return levels.map((l: string) => labels[l] ?? String(l)).join(" + ");
+    }
     default:
       return null;
   }
@@ -178,6 +191,7 @@ describe("settings-preferences preview/restore parity", () => {
       fundTrailLayout: "sankey",
       intermediaryAddressCap: 25,
       sourceOfFundsTxLimit: 5000,
+      quantumTagLevels: ["critical", "medium"],
       entityListSnapshot: { entries: [{ address: "a" }] },
     };
 

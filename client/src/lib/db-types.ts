@@ -448,6 +448,12 @@ export interface Settings {
     showPrivateKeyStatus: boolean;
     includeSystemTags: boolean;
   };
+  // Which Quantum Risk Scanner risk levels receive their `quantum:*` tag when
+  // a scan runs. Stored as an optional array so older vaults keep the default
+  // (critical + high — see DEFAULT_QUANTUM_TAG_LEVELS in lib/quantum-risk.ts).
+  // An explicit empty array is meaningful: scans classify addresses but write
+  // no tags at all ("analysis only").
+  quantumTagLevels?: ('critical' | 'high' | 'medium' | 'variable' | 'low')[];
   // Optional user-supplied offline snapshot for the Privacy Audit entity list.
   // When present it is applied to the active list at runtime; the bundled list
   // remains the fallback (cleared via "reset to bundled"). `mode` records how

@@ -21,6 +21,14 @@ two parallel hand-maintained lists drift. Validity rules matter — only finite
 numbers, booleans, and non-empty well-formed entity-list snapshots count as
 "from backup"; everything else is "kept (this device)".
 
+**Test parity:** two runtime suites hard-code the descriptor list and fail on
+any new pref until updated: the preview suite's `KEYS` array
+(settings-preferences-preview.runtime.test.ts) and the parity suite's
+`formatDeviceValue` switch PLUS its "applies every pref" backupRow, which must
+carry a usable value for EVERY key (settings-preferences-preview-parity
+.runtime.test.ts). The SettingsPage preview page-tests assert subsets only and
+survive additions.
+
 **How to apply:** in the restore dialog, peek the manifest and (for v3) derive
 the key + parseInline to compute the preview BEFORE clearing the vault. This
 doubles as the wrong-password check: a bad password fails at parseInline,

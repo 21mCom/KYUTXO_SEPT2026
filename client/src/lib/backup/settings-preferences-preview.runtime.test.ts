@@ -18,6 +18,7 @@ const KEYS = [
   "fundTrailLayout",
   "intermediaryAddressCap",
   "sourceOfFundsTxLimit",
+  "quantumTagLevels",
   "entityListSnapshot",
 ] as const;
 
@@ -90,5 +91,21 @@ describe("previewSettingsPreferences", () => {
       { id: "default", privacyHistoryLimit: 45 },
     ]);
     expect(map.privacyHistoryLimit).toMatchObject({ fromBackup: true, backupValue: "45 runs" });
+  });
+
+  it("carries a recognized quantum tag-level selection (including the empty one) and rejects malformed ones", () => {
+    // Valid selection: normalized to severity order for display.
+    expect(byKey([{ id: "default", quantumTagLevels: ["low", "critical"] }]).quantumTagLevels)
+      .toMatchObject({ fromBackup: true, backupValue: "Critical + Low" });
+
+    // Empty array is a deliberate "analysis only" choice and must round-trip.
+    expect(byKey([{ id: "default", quantumTagLevels: [] }]).quantumTagLevels)
+      .toMatchObject({ fromBackup: true, backupValue: "None (analysis only)" });
+
+    // Unknown level names or non-array values are kept on device.
+    expect(byKey([{ id: "default", quantumTagLevels: ["critical", "bogus"] }]).quantumTagLevels)
+      .toMatchObject({ fromBackup: false, backupValue: null });
+    expect(byKey([{ id: "default", quantumTagLevels: "critical" }]).quantumTagLevels)
+      .toMatchObject({ fromBackup: false, backupValue: null });
   });
 });
