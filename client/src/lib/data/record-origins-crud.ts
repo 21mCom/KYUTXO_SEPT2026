@@ -89,6 +89,12 @@ export async function getRecordOriginsByRecordIds(
     .toArray();
 }
 
+export async function getRecordOriginsAfterId(
+  afterId: number,
+  limit: number
+): Promise<RecordOrigin[]> {
+  return db.recordOrigins.where('id').above(afterId).limit(limit).toArray();
+}
 export async function getAllRecordOrigins(): Promise<RecordOrigin[]> {
   return db.recordOrigins.toArray();
 }

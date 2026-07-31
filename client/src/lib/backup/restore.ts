@@ -268,6 +268,11 @@ export interface RestoreResult {
     // bytes could NOT be saved anywhere and were lost. Counted separately so
     // the UI can warn the user about actual data loss.
     orphanedAttachmentFilesLost: number;
+    // Discovered-record shells CREATED locally while restoring a compact
+    // backup (manifest.compact): participant rows whose record was pruned at
+    // export get a minimal blockchain-discovered address record rebuilt for
+    // their address, so no recordId dangles. Always 0 for full backups.
+    rebuiltDiscoveredShells: number;
   };
 }
 
@@ -478,6 +483,13 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   let manifestSeen = false;
   let key: CryptoKey | null = null;
   const idMap = new Map<number, number>();
+  // Compact-backup shell rebuild (manifest.compact === true): a compact export
+  // prunes bare blockchain-discovered records but keeps every participant row
+  // of the transactions that survive, still carrying the pruned record's old
+  // id. This maps each such ADDRESS to the record id that stands in for it —
+  // a reused live/restored record when one exists, else a shell created here.
+  let compactRestore = false;
+  const shellIdByAddress = new Map<string, number>();
   // Orphaned attachment metadata: relPath (objectStoragePath) → original
   // filename. Populated in handleBatch("attachments") for rows whose owning
   // record is absent. When the ZIP file bytes entry for that relPath arrives,
@@ -497,6 +509,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     attachmentFiles: 0,
     orphanedAttachmentFiles: 0,
     orphanedAttachmentFilesLost: 0,
+    rebuiltDiscoveredShells: 0,
   };
 
   // Becomes true once the destructive clear has run. After this point the
@@ -613,6 +626,102 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     const pct = 10 + Math.min(89, Math.round((processed / total()) * 89));
     opts.onProgress?.({ percent: pct, phase });
   };
+
+  // COMPACT BACKUP SHELL REBUILD — rebuilds a minimal blockchain-discovered
+  // address record for every participant row whose backup recordId is absent
+  // from the id map (its record was pruned by the compact export). A
+  // post-restore sync can NOT re-create those records (syncAddress skips
+  // already-synced heights and already-known txids, and counterparty discovery
+  // only runs for newly imported transactions), so they must be rebuilt
+  // locally from the kept rows. Resolution order per address: a record already
+  // resolved earlier in this restore, then an existing record with the same
+  // inputString (live rows in merge mode; just-restored rows in replace mode —
+  // records stream before participants), then a freshly created shell. Created
+  // shells join the merge undo log so cancelling a merge removes them.
+  async function rebuildDiscoveredShells(rows: any[]): Promise<void> {
+    // address → backup record ids awaiting a mapping; the first txid seen per
+    // address is kept as discovery provenance for a created shell.
+    const pendingOldIds = new Map<string, Set<number>>();
+    const firstTxidByAddress = new Map<string, string>();
+    for (const p of rows) {
+      const oldId = p?.recordId;
+      if (typeof oldId !== "number" || idMap.has(oldId)) continue;
+      const address = typeof p?.address === "string" ? p.address : "";
+      if (!address) continue; // nothing to rebuild from — row stays unlinked
+      const known = shellIdByAddress.get(address);
+      if (known !== undefined) {
+        idMap.set(oldId, known);
+        continue;
+      }
+      let set = pendingOldIds.get(address);
+      if (!set) {
+        set = new Set<number>();
+        pendingOldIds.set(address, set);
+      }
+      set.add(oldId);
+      if (!firstTxidByAddress.has(address) && typeof p?.txid === "string" && p.txid !== "") {
+        firstTxidByAddress.set(address, p.txid);
+      }
+    }
+    if (pendingOldIds.size === 0) return;
+
+    const resolve = (address: string, id: number) => {
+      shellIdByAddress.set(address, id);
+      for (const oldId of pendingOldIds.get(address) ?? []) idMap.set(oldId, id);
+      pendingOldIds.delete(address);
+    };
+
+    // Reuse identities this restore already knows (merge de-dup map) ...
+    for (const address of Array.from(pendingOldIds.keys())) {
+      const mapped = mergedRecordIdByInputString.get(address);
+      if (mapped !== undefined) resolve(address, mapped);
+    }
+    // ... then address records already in the DB.
+    if (pendingOldIds.size > 0) {
+      const found = await getRecordsByInputStrings(Array.from(pendingOldIds.keys()));
+      for (const r of found) {
+        if (r.type !== "address" || typeof r.id !== "number") continue;
+        if (!pendingOldIds.has(r.inputString)) continue;
+        resolve(r.inputString, r.id);
+      }
+    }
+    if (pendingOldIds.size === 0) return;
+
+    // Create fresh shells for the rest — the same minimal shape sync's own
+    // discovery creates (see findOrCreateAddressRecord), so they behave
+    // exactly like locally discovered rows. maxSyncedDepth -1 = never synced,
+    // so "Sync Deeper" naturally rebuilds their history on the next run.
+    const addresses = Array.from(pendingOldIds.keys());
+    const payload: CreateRecordData[] = addresses.map(
+      (address) =>
+        ({
+          type: "address",
+          inputString: address,
+          label: "",
+          tags: [],
+          categories: [],
+          owner: "Pending Review",
+          source: "blockchain-sync",
+          syncDepth: 1,
+          maxSyncedDepth: -1,
+          discoveredInTxid: firstTxidByAddress.get(address),
+          addressImportance: "blockchain-discovered",
+        }) as CreateRecordData,
+    );
+    const newIds = await bulkCreateRecords(payload, {
+      skipNotification: true,
+      skipVocabularySync: true,
+    });
+    if (mergeUndoLog) mergeUndoLog.recordIds.push(...newIds);
+    for (let i = 0; i < addresses.length; i++) {
+      const address = addresses[i];
+      resolve(address, newIds[i]);
+      if (isMerge && !mergedRecordIdByInputString.has(address)) {
+        mergedRecordIdByInputString.set(address, newIds[i]);
+      }
+    }
+    counts.rebuiltDiscoveredShells += addresses.length;
+  }
 
   async function handleBatch(table: StreamedTable, rows: any[]): Promise<void> {
     throwIfAborted();
@@ -736,6 +845,12 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       }
       counts.attachments += out.length;
     } else if (table === "transactionParticipants") {
+      // Compact backups: resolve pruned recordIds to reused records or locally
+      // rebuilt shells BEFORE any remap below (both the merge enrichment path
+      // and the insert path call remap), so no participant is left dangling.
+      if (compactRestore) {
+        await rebuildDiscoveredShells(rows);
+      }
       let incoming = rows;
       const toEnrichById = new Map<number, TransactionParticipant>();
       if (isMerge) {
@@ -1027,6 +1142,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               throw new Error("Not a v3 backup");
             }
             manifest = parsed;
+            compactRestore = manifest.compact === true;
 
             if (manifest.encrypted) {
               if (!opts.password) throw new Error("Password required for encrypted backup");

@@ -77,3 +77,4 @@
 - [Legacy-vault upgrade journey](legacy-vault-upgrade-journey.md) — v25 encrypted-at-rest vaults: pre-unlock schema walk + post-unlock decrypt+verify all need visible progress; seed browser tests via a static asset URL so the app never opens the DB first.
 - [Merge-cancel undo log](merge-cancel-undo-log.md) — every merge insert path (incl. inline lineage + writeReview files) must join the session undo log or cancel leaves residue.
 - [v3 merge de-dup contract](v3-merge-dedup-contract.md) — merge restore must de-dupe EVERY table (streamed + inline) by natural key, incl. same-batch/cross-batch dups; partial coverage fails review.
+- [Compact backup contract](compact-backup-contract.md) — prune only discovery-bare rows; restore rebuilds shells locally (sync can't recreate them); new tables/Record fields must be classified into the compact filters.

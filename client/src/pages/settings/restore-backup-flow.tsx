@@ -489,9 +489,16 @@ export function RestoreBackupFlow() {
           : restoreMode === "merge"
             ? " Merged with existing data (duplicates skipped)."
             : " Existing data was replaced.";
+        // Compact backups pruned discovery-only history at export; placeholder
+        // records were rebuilt locally for pruned addresses still referenced by
+        // kept transactions, and the user must re-run deep discovery to get the
+        // pruned history back (a plain re-sync skips already-known data).
+        const v3CompactMsg = result.manifest.compact
+          ? ` This was a compact backup: discovery-only history was skipped at export${result.counts.rebuiltDiscoveredShells > 0 ? ` (${result.counts.rebuiltDiscoveredShells} discovered address placeholder${result.counts.rebuiltDiscoveredShells !== 1 ? "s" : ""} rebuilt)` : ""}. Run Sync Deeper to rebuild deep discovery history.`
+          : "";
         toast({
           title: "Restore Successful",
-          description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}.${v3ReplacedMsg}${backfill.suffix}${v3OrphanMsg}${v3LostMsg}`,
+          description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}.${v3ReplacedMsg}${v3CompactMsg}${backfill.suffix}${v3OrphanMsg}${v3LostMsg}`,
           ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
             action: (
               <button

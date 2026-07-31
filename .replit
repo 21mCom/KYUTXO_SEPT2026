@@ -309,6 +309,10 @@ args = "legacy-upgrade-node-check"
 task = "workflow.run"
 args = "legacy-upgrade-scale-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "compact-backup-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1090,6 +1094,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/data/address-stats.filteredScanGate.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "compact-backup-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/backup/compact.classification.test.ts client/src/lib/backup/compact-roundtrip.runtime.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

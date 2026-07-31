@@ -45,6 +45,7 @@ import {
   countLineageSnapshots,
 } from "@/lib/data/lineage-crud";
 import { readInlineTables } from "./inline-tables";
+import { compactRowFilters, type CompactPlan, type CompactRowFilters } from "./compact";
 
 export interface AttachmentFileIO {
   listAll(): Promise<string[]>;
@@ -73,6 +74,12 @@ export interface ExportOptions {
   readInline?: () => Promise<Record<string, unknown[]>>;
   onProgress?: (p: ExportProgress) => void;
   signal?: AbortSignal;
+  // Compact backup: pre-computed drop plan (see compact.ts computeCompactPlan).
+  // When present, the stream omits the planned rows, the manifest carries the
+  // FILTERED counts (so restore progress/size estimates match the archive), and
+  // manifest.compact/compactDropped are set. Callers compute the plan first so
+  // memory-safety gates and disk estimates can use the filtered counts too.
+  compactPlan?: CompactPlan;
 }
 
 // Rough per-row disk allowance for the streamed DB tables in the backup ZIP.
@@ -125,6 +132,43 @@ const DEFAULT_BATCH = 1000;
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new BackupCancelledError();
+}
+
+// Applies the compact plan's per-table drop/scrub rules to one raw page.
+// Tables without a rule (attachments, lineageSnapshots) pass through untouched.
+function applyCompactFilters(
+  table: StreamedTable,
+  batch: Row[],
+  filters: CompactRowFilters,
+): Row[] {
+  switch (table) {
+    case "records":
+      return (batch as Parameters<CompactRowFilters["dropRecord"]>[0][])
+        .filter((r) => !filters.dropRecord(r))
+        .map((r) => filters.scrubRecord(r));
+    case "transactionParticipants":
+      return (batch as Parameters<CompactRowFilters["dropParticipant"]>[0][]).filter(
+        (r) => !filters.dropParticipant(r),
+      );
+    case "blockchainTransactions":
+      return (batch as Parameters<CompactRowFilters["dropTransaction"]>[0][]).filter(
+        (r) => !filters.dropTransaction(r),
+      );
+    case "addressSyncState":
+      return (batch as Parameters<CompactRowFilters["dropSyncState"]>[0][]).filter(
+        (r) => !filters.dropSyncState(r),
+      );
+    case "utxoLineage":
+      return (batch as Parameters<CompactRowFilters["dropLineage"]>[0][]).filter(
+        (r) => !filters.dropLineage(r),
+      );
+    case "custodySegments":
+      return (batch as Parameters<CompactRowFilters["dropSegment"]>[0][]).filter(
+        (r) => !filters.dropSegment(r),
+      );
+    default:
+      return batch;
+  }
 }
 
 export async function exportBackup(opts: ExportOptions): Promise<void> {
@@ -185,28 +229,40 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     totalAttachmentBytes = await sumAttachmentSizes();
   }
 
+  // Manifest counts: with a compact plan, the six filtered tables use the
+  // plan's exact post-filter counts (computed by the same predicates the
+  // stream below applies) so restore progress, the memory-export OOM guard,
+  // and disk estimates all describe the rows actually in the archive.
+  // Attachments and lineage snapshots are never filtered.
+  const plan = opts.compactPlan;
   const counts: BackupCounts = {
-    records: recordsCount,
+    records: plan ? plan.counts.records : recordsCount,
     attachments: attachmentsCount,
-    transactionParticipants: participantsCount,
-    addressSyncState: addressSyncCount,
-    blockchainTransactions: transactionsCount,
-    utxoLineage: utxoLineageCount,
-    custodySegments: custodySegmentsCount,
+    transactionParticipants: plan
+      ? plan.counts.transactionParticipants
+      : participantsCount,
+    addressSyncState: plan ? plan.counts.addressSyncState : addressSyncCount,
+    blockchainTransactions: plan
+      ? plan.counts.blockchainTransactions
+      : transactionsCount,
+    utxoLineage: plan ? plan.counts.utxoLineage : utxoLineageCount,
+    custodySegments: plan ? plan.counts.custodySegments : custodySegmentsCount,
     lineageSnapshots: lineageSnapshotsCount,
     attachmentFiles: attachmentPaths.length,
   };
 
+  // Progress denominator uses the RAW table sizes: a compact export still
+  // walks every row (dropping some), so raw units keep the bar honest.
   const totalUnits =
-    counts.records +
-    counts.attachments +
-    counts.transactionParticipants +
-    counts.addressSyncState +
-    counts.blockchainTransactions +
-    counts.utxoLineage +
-    counts.custodySegments +
-    counts.lineageSnapshots +
-    counts.attachmentFiles || 1;
+    recordsCount +
+    attachmentsCount +
+    participantsCount +
+    addressSyncCount +
+    transactionsCount +
+    utxoLineageCount +
+    custodySegmentsCount +
+    lineageSnapshotsCount +
+    attachmentPaths.length || 1;
   let processedUnits = 0;
   const reportUnits = (phase: string) => {
     // Reserve 5% head (counts/inline) and 5% tail (finalize).
@@ -230,6 +286,9 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     counts,
     totalAttachmentBytes,
     streamedTables: [...STREAMED_TABLES],
+    ...(plan
+      ? { compact: true, compactDropped: { ...plan.dropped } }
+      : {}),
     ...inlineEnvelope,
   };
 
@@ -242,7 +301,13 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
       new TextEncoder().encode(JSON.stringify(manifest)),
     );
 
-    // 2) The five big tables as NDJSON (one batch per line).
+    // 2) The five big tables as NDJSON (one batch per line). With a compact
+    // plan, each table's rows pass through the plan's drop predicates — the
+    // same functions that produced the manifest counts — and kept records get
+    // dangling `discoveredFromRecordId` pointers scrubbed. Keyset paging
+    // advances on the RAW batch (filtering must never stall the cursor), and
+    // fully-dropped batches simply emit no line.
+    const filters: CompactRowFilters | null = plan ? compactRowFilters(plan) : null;
     for (const table of STREAMED_TABLES) {
       const reader = STREAM_READERS[table];
       const lines = (async function* () {
@@ -251,7 +316,10 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
           throwIfAborted(signal);
           const batch = await reader(afterId, batchSize);
           if (batch.length === 0) break;
-          yield await serializeBatchLine(batch, key);
+          const outRows = filters ? applyCompactFilters(table, batch, filters) : batch;
+          if (outRows.length > 0) {
+            yield await serializeBatchLine(outRows, key);
+          }
           processedUnits += batch.length;
           reportUnits(`Exporting ${table}...`);
           const last = batch[batch.length - 1];

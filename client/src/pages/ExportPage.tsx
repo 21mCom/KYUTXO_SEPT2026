@@ -35,6 +35,7 @@ import { countAddressSyncState } from "@/lib/data/address-sync-crud";
 import { countUtxoLineage, countCustodySegments, countLineageSnapshots } from "@/lib/data/lineage-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { exportBackup, estimateExportBytes } from "@/lib/backup/export";
+import { computeCompactPlan, type CompactPlan } from "@/lib/backup/compact";
 import { exportBip329LabelParts } from "@/lib/bip329-export";
 import { exportRecordsCsvParts } from "@/lib/csv-export";
 import { recordToBip329Line, matchesBip329ExportFilter, matchesRecordExportFilter, type Bip329ExportFilter, type Bip329ExportKind } from "@/lib/bip329";
@@ -117,6 +118,9 @@ async function readAttachmentFile(relativePath: string): Promise<ArrayBuffer | n
 
 export default function ExportPage() {
   const [encrypted, setEncrypted] = useState(false);
+  // Compact backup (default OFF): omit blockchain-discovered records with no
+  // user-added metadata plus the discovery-only history beneath them.
+  const [compactBackup, setCompactBackup] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -303,6 +307,7 @@ export default function ExportPage() {
     let totalRowCount = 0;
     let exportAttachmentCount = 0;
     let countsKnown = false;
+    let snapshotRowCount = 0;
     try {
       const [
         records,
@@ -331,11 +336,52 @@ export default function ExportPage() {
         utxoLineage +
         custodySegments +
         lineageSnapshots;
+      snapshotRowCount = lineageSnapshots;
       exportAttachmentCount = attachments;
       countsKnown = true;
     } catch (error) {
       console.error("Failed to load counts before export:", error);
       countsKnown = false;
+    }
+
+    // Compact backup: build the drop plan BEFORE the memory-safety gate, the
+    // disk-space estimate, and the sink decision, so all three describe the
+    // FILTERED archive (the rows that will actually be written) rather than
+    // the full vault. The plan's counting pass uses the same predicates the
+    // export stream applies, so these numbers match the manifest exactly.
+    let compactPlan: CompactPlan | undefined;
+    if (compactBackup) {
+      try {
+        compactPlan = await computeCompactPlan({
+          onProgress: (p) => {
+            // Analysis occupies 0–20% of the bar; the export itself 20–100%.
+            setProgress(Math.round(p.percent * 0.2));
+            setProgressMessage(p.phase);
+          },
+        });
+        if (countsKnown) {
+          totalRowCount =
+            compactPlan.counts.records +
+            compactPlan.counts.blockchainTransactions +
+            compactPlan.counts.transactionParticipants +
+            compactPlan.counts.addressSyncState +
+            compactPlan.counts.utxoLineage +
+            compactPlan.counts.custodySegments +
+            snapshotRowCount;
+        }
+      } catch (error) {
+        console.error("Compact backup analysis failed:", error);
+        setExporting(false);
+        setProgress(0);
+        setProgressMessage("");
+        toast({
+          variant: "destructive",
+          title: "Export Failed",
+          description:
+            "Could not analyze the vault for a compact backup. Try again, or export a full backup.",
+        });
+        return;
+      }
     }
 
     const memorySafetyInput = {
@@ -474,9 +520,11 @@ export default function ExportPage() {
         sink,
         encrypted,
         password,
+        compactPlan,
         attachmentIO: { listAll: listAllAttachmentFiles, read: readAttachmentFile, totalBytes: totalAttachmentFileBytes },
         onProgress: (p) => {
-          setProgress(p.percent);
+          // With a compact plan, the analysis pass already used 0–20%.
+          setProgress(compactPlan ? 20 + Math.round(p.percent * 0.8) : p.percent);
           setProgressMessage(p.phase);
         },
       });
@@ -721,6 +769,36 @@ export default function ExportPage() {
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription className="text-sm">
                   Your backup will contain unencrypted plaintext data including Bitcoin addresses, transaction IDs, labels, notes, wallet names, owner information, and financial data. Anyone who obtains this file can read all of its contents. Consider enabling encryption above or storing the exported file in a secure location.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5 pr-4">
+                <Label className="text-base">Compact Backup</Label>
+                <p className="text-sm text-muted-foreground">
+                  Skip discovered records you never touched
+                </p>
+              </div>
+              <Switch
+                checked={compactBackup}
+                onCheckedChange={setCompactBackup}
+                data-testid="switch-compact-backup"
+              />
+            </div>
+
+            {compactBackup && (
+              <Alert data-testid="alert-compact-backup">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-sm">
+                  Skips blockchain-discovered records that carry no metadata you
+                  added (no tags, notes, owner, labels, or attachments), along
+                  with their sync state and any transactions that involve only
+                  those records. Everything you touched — your own addresses,
+                  balances, transaction history, and all curated records — is
+                  kept and restores identically. After restoring this backup,
+                  run Sync Deeper (or a Privacy Audit) again to rebuild the
+                  skipped deep-discovery history.
                 </AlertDescription>
               </Alert>
             )}

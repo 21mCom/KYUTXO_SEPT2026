@@ -77,6 +77,25 @@ export interface BackupManifest {
   // where callers fall back to the backup file's own size.
   totalAttachmentBytes?: number;
   streamedTables: string[];
+  // Compact backup marker (additive; no format-version bump — older readers
+  // simply ignore it). When true, the export omitted blockchain-discovered records
+  // with no user-added metadata plus the discovery-only history beneath them
+  // (their addressSyncState rows, and transactions/participants/utxoLineage/
+  // custodySegments rows in which no kept record participates). `counts` above
+  // are the FILTERED counts — they match the rows actually in the archive, so
+  // restore progress and size estimates stay consistent. Restore rebuilds
+  // discovered shells for participant rows whose record was dropped (see
+  // restore.ts) and tells the user to re-run deep discovery.
+  compact?: boolean;
+  // Rows omitted per table by the compact export (informational, for UI copy).
+  compactDropped?: {
+    records: number;
+    blockchainTransactions: number;
+    transactionParticipants: number;
+    addressSyncState: number;
+    utxoLineage: number;
+    custodySegments: number;
+  };
   // Small tables. Plaintext backups use `inline`; encrypted backups use
   // `inlineEnc` (a single base64 envelope of JSON.stringify(inline)).
   inline?: Record<string, unknown>;
