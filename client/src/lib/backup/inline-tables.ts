@@ -34,11 +34,13 @@ import {
   getAllCustomFields,
   addCustomField,
   clearCustomFields,
+  deleteCustomField,
 } from "@/lib/data/custom-fields-crud";
 import {
   getAllDerivationTemplates,
   addDerivationTemplate,
   clearDerivationTemplates,
+  deleteDerivationTemplate,
 } from "@/lib/data/derivation-templates-crud";
 import {
   getAllEvidence,
@@ -46,22 +48,27 @@ import {
   restoreEvidenceRows,
   clearEvidence,
   clearEvidenceAttachments,
+  deleteEvidence,
+  deleteEvidenceAttachment,
 } from "@/lib/data/evidence-crud";
 import {
   getAllPriceData,
   restorePriceDataRows,
   clearPriceData,
+  bulkDeletePriceData,
 } from "@/lib/data/price-data-crud";
 import { getAllSettings, getSettings, updateSettings } from "@/lib/data/settings-crud";
 import {
   getAllDustFlags,
   clearDustFlags,
   restoreDustFlagRows,
+  unmarkDustOutpoints,
 } from "@/lib/data/dust-flags-crud";
 import {
   getAllSavedPsbts,
   clearSavedPsbts,
   restoreSavedPsbtRows,
+  deleteSavedPsbt,
 } from "@/lib/data/saved-psbts-crud";
 import {
   getAllNodeSettings,
@@ -374,6 +381,18 @@ export interface InlineRestoreResult {
   insertedUtxoLineageIds: number[];
   insertedCustodySegmentIds: number[];
   insertedLineageSnapshotIds: number[];
+  // Merge mode only: removes every inline METADATA row this restore inserted
+  // (vocabulary names, custom fields, derivation templates, evidence documents
+  // and their attachment rows, price rows, dust flags, saved PSBTs), returning
+  // the number of rows removed. Wired into the merge-cancel undo pass in
+  // restore.ts so a cancelled merge leaves NO trace, not even tiny metadata.
+  // Absent in replace mode (a replace clears the vault first; there is no
+  // pre-restore state to return to).
+  //
+  // NOT covered: portable settings preferences and nodeSettings — those paths
+  // MERGE INTO existing singleton rows rather than inserting new ones, and the
+  // UI's pre-restore snapshot (undoInlinePrefs) already restores them.
+  undoInlineMetadata?: () => Promise<number>;
 }
 
 export async function restoreInlineTables(
@@ -390,6 +409,30 @@ export async function restoreInlineTables(
   // is unchanged: the orchestrator cleared these tables first, so every backup
   // row is added verbatim.
   const isMergeMode = restoreMode === "merge";
+
+  // Merge mode only: track every inline METADATA row this restore inserts, by
+  // fresh primary key (or, for dust flags, the unique outpoint natural key),
+  // so `undoInlineMetadata` on the returned result can remove exactly those
+  // rows if the merge is later cancelled. Pre-existing rows and rows skipped
+  // by the natural-key de-dup are never touched by the undo.
+  const meta = isMergeMode
+    ? {
+        tagIds: [] as number[],
+        categoryIds: [] as number[],
+        ownerIds: [] as number[],
+        walletNameIds: [] as number[],
+        seedNameIds: [] as number[],
+        walletSoftwareIds: [] as number[],
+        customFieldIds: [] as number[],
+        derivationTemplateIds: [] as number[],
+        evidenceIds: [] as number[],
+        evidenceAttachmentIds: [] as number[],
+        priceDataIds: [] as number[],
+        dustFlagOutpoints: [] as string[],
+        savedPsbtIds: [] as number[],
+      }
+    : null;
+
   const vocabSeen = async (
     existing: () => Promise<Array<{ name: string }>>,
   ): Promise<Set<string>> => {
@@ -408,41 +451,47 @@ export async function restoreInlineTables(
   for (const tag of arr("tags")) {
     const name = tag.name || "";
     if (vocabSkip(seenTags, name)) continue;
-    await restoreTag({
+    const newTagId = await restoreTag({
       name,
       color: tag.color || "#888888",
       createdAt: tag.createdAt || now,
     });
+    meta?.tagIds.push(newTagId);
   }
   const seenCategories = await vocabSeen(getCategories);
   for (const cat of arr("categories")) {
     const name = cat.name || "";
     if (vocabSkip(seenCategories, name)) continue;
-    await restoreCategory({ name, createdAt: cat.createdAt || now });
+    const newCategoryId = await restoreCategory({ name, createdAt: cat.createdAt || now });
+    meta?.categoryIds.push(newCategoryId);
   }
   const seenOwners = await vocabSeen(getOwners);
   for (const owner of arr("owners")) {
     const name = owner.name || "";
     if (vocabSkip(seenOwners, name)) continue;
-    await restoreOwner({ name, createdAt: owner.createdAt || now });
+    const newOwnerId = await restoreOwner({ name, createdAt: owner.createdAt || now });
+    meta?.ownerIds.push(newOwnerId);
   }
   const seenWalletNames = await vocabSeen(getWalletNames);
   for (const wn of arr("walletNames")) {
     const name = wn.name || "";
     if (vocabSkip(seenWalletNames, name)) continue;
-    await restoreWalletName({ name, createdAt: wn.createdAt || now });
+    const newWalletNameId = await restoreWalletName({ name, createdAt: wn.createdAt || now });
+    meta?.walletNameIds.push(newWalletNameId);
   }
   const seenSeedNames = await vocabSeen(getSeedNames);
   for (const sn of arr("seedNames")) {
     const name = sn.name || "";
     if (vocabSkip(seenSeedNames, name)) continue;
-    await restoreSeedName({ name, createdAt: sn.createdAt || now });
+    const newSeedNameId = await restoreSeedName({ name, createdAt: sn.createdAt || now });
+    meta?.seedNameIds.push(newSeedNameId);
   }
   const seenWalletSoftware = await vocabSeen(getWalletSoftware);
   for (const ws of arr("walletSoftware")) {
     const name = ws.name || "";
     if (vocabSkip(seenWalletSoftware, name)) continue;
-    await restoreWalletSoftware({ name, createdAt: ws.createdAt || now });
+    const newWalletSoftwareId = await restoreWalletSoftware({ name, createdAt: ws.createdAt || now });
+    meta?.walletSoftwareIds.push(newWalletSoftwareId);
   }
 
   // Merge mode: custom fields de-dupe by their unique `slug` (auto-derived
@@ -459,7 +508,11 @@ export async function restoreInlineTables(
       if (slug && existingFieldSlugs.has(slug)) continue;
       if (slug) existingFieldSlugs.add(slug);
     }
-    await addCustomField({ ...d, createdAt: d.createdAt || now }, { skipNotification: true });
+    const newFieldId = await addCustomField(
+      { ...d, createdAt: d.createdAt || now },
+      { skipNotification: true },
+    );
+    meta?.customFieldIds.push(newFieldId);
   }
 
   // Merge mode: derivation templates have no unique index, so de-dupe by their
@@ -490,7 +543,7 @@ export async function restoreInlineTables(
       if (existingTemplateKeys.has(key)) continue;
       existingTemplateKeys.add(key);
     }
-    await addDerivationTemplate(
+    const newTemplateId = await addDerivationTemplate(
       {
         fingerprint: d.fingerprint || "unknown",
         scriptType: d.scriptType || "P2WPKH",
@@ -507,6 +560,7 @@ export async function restoreInlineTables(
       },
       { skipNotification: true },
     );
+    meta?.derivationTemplateIds.push(newTemplateId);
   }
 
   // Evidence rows are re-`add`ed and so receive fresh auto-increment ids; the
@@ -517,13 +571,25 @@ export async function restoreInlineTables(
   // identity already exists (and their attachments), so merging the same backup
   // twice doesn't accumulate duplicate documents. Routed through the shared
   // restoreEvidenceRows helper so the v3 and legacy paths can never diverge.
-  await restoreEvidenceRows(arr("evidence"), arr("evidenceAttachments"), restoreMode);
+  const evidenceResult = await restoreEvidenceRows(
+    arr("evidence"),
+    arr("evidenceAttachments"),
+    restoreMode,
+  );
+  if (meta) {
+    meta.evidenceIds.push(...evidenceResult.insertedEvidenceIds);
+    meta.evidenceAttachmentIds.push(...evidenceResult.insertedEvidenceAttachmentIds);
+  }
 
   // Routed through the shared restorePriceDataRows helper so the v3 and legacy
   // paths can never diverge in how price rows are de-duplicated. In replace
   // mode the orchestrator cleared the vault first, so every row is added; in
   // merge mode the helper skips rows whose natural key already exists.
-  await restorePriceDataRows(arr("priceData"), restoreMode);
+  await restorePriceDataRows(
+    arr("priceData"),
+    restoreMode,
+    meta ? { insertedIds: meta.priceDataIds } : undefined,
+  );
 
   await restoreNodeSettingsRows(arr("nodeSettings"));
   await restoreSettingsPreferences(arr("settings"));
@@ -533,14 +599,24 @@ export async function restoreInlineTables(
   // and they restore cleanly. In replace mode the table was cleared above; in
   // merge mode rows whose unique `outpoint` already exists are skipped so the
   // unique index can't abort the restore mid-way.
-  await restoreDustFlagRows(arr("dustFlags"), restoreMode, { skipNotification: true });
+  await restoreDustFlagRows(
+    arr("dustFlags"),
+    restoreMode,
+    { skipNotification: true },
+    meta ? { insertedOutpoints: meta.dustFlagOutpoints } : undefined,
+  );
 
   // savedPsbts (unsigned PSBTs from the watch-only builder, Dexie v37) ride
   // inline like dustFlags. Older backups have no `savedPsbts` key and restore
   // cleanly. Rows carry no foreign keys into other tables (inputs reference
   // txids, which are stable), so no id remap is needed; in merge mode rows
   // whose PSBT bytes already exist are skipped.
-  await restoreSavedPsbtRows(arr("savedPsbts"), restoreMode, { skipNotification: true });
+  await restoreSavedPsbtRows(
+    arr("savedPsbts"),
+    restoreMode,
+    { skipNotification: true },
+    meta ? { insertedIds: meta.savedPsbtIds } : undefined,
+  );
 
   // utxoLineage and custodySegments are streamed tables now, so NEW backups
   // carry them as NDJSON (handled by the restore orchestrator) and won't have
@@ -633,5 +709,58 @@ export async function restoreInlineTables(
   // behaviour). The `settings` table is not wholesale restored either, but a
   // small allow-list of portable preferences is merged via
   // restoreSettingsPreferences above.
+
+  if (meta) {
+    // Merge mode: expose an undo that removes exactly the metadata rows THIS
+    // restore inserted (tracked above). Deletion order: evidence attachments
+    // before their evidence documents (deleteEvidence also sweeps attachments
+    // by evidenceId, so the explicit pass is belt-and-braces for attachments
+    // whose evidenceId did not remap to a merged document); everything else is
+    // independent. Vocabulary tables are unguarded (see file header) and are
+    // deleted directly, mirroring how they are cleared/added here.
+    result.undoInlineMetadata = async () => {
+      for (const id of meta.evidenceAttachmentIds) {
+        await deleteEvidenceAttachment(id, { skipNotification: true });
+      }
+      for (const id of meta.evidenceIds) {
+        await deleteEvidence(id, { skipNotification: true });
+      }
+      for (const id of meta.customFieldIds) {
+        await deleteCustomField(id, { skipNotification: true });
+      }
+      for (const id of meta.derivationTemplateIds) {
+        await deleteDerivationTemplate(id, { skipNotification: true });
+      }
+      await bulkDeletePriceData(meta.priceDataIds, { skipNotification: true });
+      if (meta.dustFlagOutpoints.length > 0) {
+        await unmarkDustOutpoints(meta.dustFlagOutpoints);
+      }
+      for (const id of meta.savedPsbtIds) {
+        await deleteSavedPsbt(id);
+      }
+      await db.tags.bulkDelete(meta.tagIds);
+      await db.categories.bulkDelete(meta.categoryIds);
+      await db.owners.bulkDelete(meta.ownerIds);
+      await db.walletNames.bulkDelete(meta.walletNameIds);
+      await db.seedNames.bulkDelete(meta.seedNameIds);
+      await db.walletSoftware.bulkDelete(meta.walletSoftwareIds);
+      return (
+        meta.tagIds.length +
+        meta.categoryIds.length +
+        meta.ownerIds.length +
+        meta.walletNameIds.length +
+        meta.seedNameIds.length +
+        meta.walletSoftwareIds.length +
+        meta.customFieldIds.length +
+        meta.derivationTemplateIds.length +
+        meta.evidenceIds.length +
+        meta.evidenceAttachmentIds.length +
+        meta.priceDataIds.length +
+        meta.dustFlagOutpoints.length +
+        meta.savedPsbtIds.length
+      );
+    };
+  }
+
   return result;
 }

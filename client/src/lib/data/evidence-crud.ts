@@ -239,13 +239,19 @@ export function evidenceIdentity(row: {
  * In REPLACE mode every row is added (the caller cleared the tables first),
  * which preserves the original append-only behaviour exactly.
  *
- * Returns the number of evidence rows and attachment rows actually written.
+ * Returns the number of evidence rows and attachment rows actually written,
+ * plus the fresh ids of exactly those rows so a cancelled merge can undo them.
  */
 export async function restoreEvidenceRows(
   evidence: any[] | undefined,
   evidenceAttachments: any[] | undefined,
   restoreMode: EvidenceRestoreMode = 'replace'
-): Promise<{ evidenceAdded: number; evidenceAttachmentsAdded: number }> {
+): Promise<{
+  evidenceAdded: number;
+  evidenceAttachmentsAdded: number;
+  insertedEvidenceIds: number[];
+  insertedEvidenceAttachmentIds: number[];
+}> {
   const now = Date.now();
   const evidenceIdMap = new Map<number, number>();
   // Backup evidence ids that were skipped as duplicates in merge mode, so their
@@ -290,8 +296,10 @@ export async function restoreEvidenceRows(
   }
 
   let evidenceAdded = 0;
+  const insertedEvidenceIds: number[] = [];
   if (toAddRows.length > 0) {
     const newIds = await bulkAddEvidence(toAddRows, { skipNotification: true });
+    insertedEvidenceIds.push(...newIds);
     toAddSource.forEach((ev, i) => {
       if (typeof ev.id === 'number' && typeof newIds[i] === 'number') {
         evidenceIdMap.set(ev.id, newIds[i]);
@@ -301,6 +309,7 @@ export async function restoreEvidenceRows(
   }
 
   let evidenceAttachmentsAdded = 0;
+  const insertedEvidenceAttachmentIds: number[] = [];
   const attachmentSource = Array.isArray(evidenceAttachments) ? evidenceAttachments : [];
   for (const ea of attachmentSource) {
     const { id, ...d } = ea;
@@ -313,7 +322,7 @@ export async function restoreEvidenceRows(
       typeof d.evidenceId === 'number'
         ? evidenceIdMap.get(d.evidenceId) ?? d.evidenceId
         : d.evidenceId;
-    await addEvidenceAttachment(
+    const newAttachmentId = await addEvidenceAttachment(
       {
         evidenceId: mappedEvidenceId,
         filename: d.filename || 'unknown',
@@ -324,8 +333,14 @@ export async function restoreEvidenceRows(
       },
       { skipNotification: true }
     );
+    insertedEvidenceAttachmentIds.push(newAttachmentId);
     evidenceAttachmentsAdded++;
   }
 
-  return { evidenceAdded, evidenceAttachmentsAdded };
+  return {
+    evidenceAdded,
+    evidenceAttachmentsAdded,
+    insertedEvidenceIds,
+    insertedEvidenceAttachmentIds,
+  };
 }

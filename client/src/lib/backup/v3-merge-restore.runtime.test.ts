@@ -83,6 +83,14 @@ import {
   clearDerivationTemplates,
 } from "@/lib/data/derivation-templates-crud";
 import { getTags, getOwners, restoreTag, restoreOwner } from "@/lib/data/vocabulary-crud";
+import {
+  addEvidence,
+  addEvidenceAttachment,
+  getAllEvidence,
+  getAllEvidenceAttachments,
+  clearEvidence,
+  clearEvidenceAttachments,
+} from "@/lib/data/evidence-crud";
 
 const attachmentIO: AttachmentFileIO = {
   async listAll() {
@@ -132,6 +140,8 @@ async function clearEverything(): Promise<void> {
   await clearNodeSettings({ skipNotification: true });
   await clearCustomFields({ skipNotification: true });
   await clearDerivationTemplates({ skipNotification: true });
+  await clearEvidence({ skipNotification: true });
+  await clearEvidenceAttachments({ skipNotification: true });
   await db.tags.clear();
   await db.categories.clear();
   await db.owners.clear();
@@ -274,6 +284,29 @@ async function seedExportedVault(): Promise<number> {
     } as any,
     { skipNotification: true },
   );
+  // Evidence documents (and their attachment rows) ride inline too — a
+  // cancelled merge must remove the ones it added, so seed one for export.
+  const evidenceId = await addEvidence(
+    {
+      title: "KYC letter",
+      documentType: "other",
+      originalDate: "2023-11-14",
+      tags: [],
+      partiesInvolved: [],
+    } as any,
+    { skipNotification: true },
+  );
+  await addEvidenceAttachment(
+    {
+      evidenceId,
+      filename: "kyc-letter.pdf",
+      mimeType: "application/pdf",
+      size: 321,
+      objectStoragePath: "ev/kyc-letter-hash.bin",
+      createdAt: 1_700_000_000_000,
+    },
+    { skipNotification: true },
+  );
   return recordId;
 }
 
@@ -370,6 +403,10 @@ async function snapshotVault() {
     derivationTemplates: await getAllDerivationTemplates(),
     tags: (await getTags()).map((t) => t.name).sort(),
     owners: (await getOwners()).map((o) => o.name).sort(),
+    evidence: (await getAllEvidence()).map((e) => e.title).sort(),
+    evidenceAttachments: (await getAllEvidenceAttachments())
+      .map((a) => a.filename)
+      .sort(),
   };
 }
 
@@ -758,6 +795,19 @@ describe("v3 merge restore", () => {
     expect(sharedParts[0].amount).toBe(0);
     expect(after.txs.find((t) => t.txid === TXID_LOCAL)!.blockHeight).toBe(810_000);
 
+    // Inline METADATA the merge added from the manifest is removed too: the
+    // vocabulary rows (tag/owner), custom field, derivation template and
+    // evidence document + its attachment row all came from the backup only
+    // (the live vault was cleared), so after the cancel none may remain.
+    expect(after.tags).toEqual(before.tags); // []
+    expect(after.owners).toEqual(before.owners);
+    expect(after.customFields).toEqual(before.customFields);
+    expect(after.derivationTemplates).toHaveLength(before.derivationTemplates.length);
+    expect(after.evidence).toEqual(before.evidence);
+    expect(after.evidenceAttachments).toEqual(before.evidenceAttachments);
+    expect(after.tags).toEqual([]);
+    expect(after.evidence).toEqual([]);
+
     // Exactly ONE normal attachment file had been written before the abort
     // (files stream in listAll order); it backed a row this merge inserted, so
     // the undo swept it from disk. The orphan's Needs Review file was swept
@@ -776,6 +826,13 @@ describe("v3 merge restore", () => {
     expect(recovered.records).toEqual(
       [RECORD_LOCAL.inputString, RECORD_SHARED.inputString].sort(),
     );
+    // The re-run also re-adds the inline metadata the cancel removed.
+    expect(recovered.tags).toEqual(["kyc"]);
+    expect(recovered.owners).toEqual(["Alice"]);
+    expect(recovered.customFields).toEqual(["kyc-ref"]);
+    expect(recovered.derivationTemplates).toHaveLength(1);
+    expect(recovered.evidence).toEqual(["KYC letter"]);
+    expect(recovered.evidenceAttachments).toEqual(["kyc-letter.pdf"]);
   });
 
   it("cancelling a merge also undoes lineage/segments/snapshots restored from INLINE compatibility data (older v3 backups)", async () => {

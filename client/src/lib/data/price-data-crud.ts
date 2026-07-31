@@ -128,9 +128,23 @@ function priceDedupKey(date: unknown, currency: unknown, asset: unknown): string
  *
  * Returns the number of rows actually written.
  */
+export async function bulkDeletePriceData(
+  ids: number[],
+  options?: PriceDataWriteOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+  await db.priceData.bulkDelete(ids);
+  if (!options?.skipNotification) {
+    notifyDbChange('priceData');
+  }
+}
+
 export async function restorePriceDataRows(
   priceData: any[] | undefined,
-  restoreMode: PriceRestoreMode
+  restoreMode: PriceRestoreMode,
+  // Optional collector: every freshly inserted row's id is pushed here, so a
+  // cancelled merge can undo exactly the rows this restore added.
+  collect?: { insertedIds?: number[] }
 ): Promise<number> {
   if (!priceData || priceData.length === 0) return 0;
 
@@ -162,7 +176,8 @@ export async function restorePriceDataRows(
       if (seen.has(key)) continue;
       seen.add(key);
     }
-    await addPriceData(pdData as CreatePriceData, { skipNotification: true });
+    const newId = await addPriceData(pdData as CreatePriceData, { skipNotification: true });
+    collect?.insertedIds?.push(newId);
     added++;
   }
 

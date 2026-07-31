@@ -64,6 +64,9 @@ export async function restoreSavedPsbtRows(
   rows: any[] | undefined,
   restoreMode: SavedPsbtRestoreMode,
   options?: SavedPsbtWriteOptions,
+  // Optional collector: every freshly inserted row's id is pushed here, so a
+  // cancelled merge can undo exactly the rows this restore added.
+  collect?: { insertedIds?: number[] },
 ): Promise<number> {
   if (!rows || rows.length === 0) return 0;
 
@@ -100,7 +103,10 @@ export async function restoreSavedPsbtRows(
   }
 
   if (toAdd.length > 0) {
-    await db.savedPsbts.bulkAdd(toAdd);
+    const newIds = await db.savedPsbts.bulkAdd(toAdd, { allKeys: true });
+    if (collect?.insertedIds) {
+      for (const id of newIds) collect.insertedIds.push(id as number);
+    }
     if (!options?.skipNotification) {
       notifyDbChange('savedPsbts');
     }

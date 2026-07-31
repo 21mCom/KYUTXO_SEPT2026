@@ -101,7 +101,11 @@ export type DustFlagRestoreMode = 'merge' | 'replace';
 export async function restoreDustFlagRows(
   rows: any[] | undefined,
   restoreMode: DustFlagRestoreMode,
-  options?: DustFlagWriteOptions
+  options?: DustFlagWriteOptions,
+  // Optional collector: every freshly inserted row's outpoint (the table's
+  // unique natural key) is pushed here, so a cancelled merge can undo exactly
+  // the rows this restore added via unmarkDustOutpoints.
+  collect?: { insertedOutpoints?: string[] }
 ): Promise<number> {
   if (!rows || rows.length === 0) return 0;
 
@@ -136,6 +140,9 @@ export async function restoreDustFlagRows(
 
   if (toAdd.length > 0) {
     await db.dustFlags.bulkAdd(toAdd);
+    if (collect?.insertedOutpoints) {
+      for (const r of toAdd) collect.insertedOutpoints.push(r.outpoint);
+    }
     if (!options?.skipNotification) {
       notifyDbChange('dustFlags');
     }

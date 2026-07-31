@@ -344,10 +344,12 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   // AND lineage/segments/snapshots restored from INLINE compatibility data in
   // older v3 backups (restoreInlineTables returns their inserted ids, which
   // join this log). Inline METADATA merged from the manifest (vocabulary
-  // names, custom fields, templates, evidence, prices) is NOT rolled back
-  // here — those merges are tiny, de-duped by natural key, and complete
-  // before the first streamed row, while portable preferences are separately
-  // restored by the UI's pre-restore snapshot (undoInlinePrefs).
+  // names, custom fields, templates, evidence, prices, dust flags, saved
+  // PSBTs) is rolled back too: restoreInlineTables tracks what it inserted
+  // and returns an `undoInlineMetadata` closure that this log carries, so a
+  // cancel removes even those tiny rows. Portable preferences remain
+  // separately restored by the UI's pre-restore snapshot (undoInlinePrefs) —
+  // they merge INTO existing singleton rows rather than inserting new ones.
   // If the undo pass itself fails partway, the cancel error reports
   // mergeUndoFailed and the old contract holds: re-running the merge is safe
   // because every table de-dupes by natural key.
@@ -376,6 +378,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         // Exact filenames writeReview() reported writing to the Needs Review
         // folder during THIS merge, so a cancel removes those bytes too.
         reviewFilesWritten: [] as string[],
+        // Undo closure from restoreInlineTables: removes the inline METADATA
+        // rows (vocabulary, custom fields, templates, evidence, prices, dust
+        // flags, saved PSBTs) this merge inserted from the manifest.
+        inlineMetadataUndo: null as (() => Promise<number>) | null,
       }
     : null;
 
@@ -402,6 +408,13 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       });
     }
     await bulkDeleteRecords(log.recordIds, { skipNotification: true });
+    // Inline METADATA the merge added from the manifest (vocabulary names,
+    // custom fields, templates, evidence, prices, dust flags, saved PSBTs) —
+    // removed AFTER the records that might reference the vocabulary names, so
+    // no live row is left pointing at a just-deleted name mid-undo.
+    const inlineMetadataRemoved = log.inlineMetadataUndo
+      ? await log.inlineMetadataUndo()
+      : 0;
     // Attachment files: sweep only files backing rows THIS merge inserted.
     const del = opts.attachmentWriter.delete;
     if (del) {
@@ -434,7 +447,8 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       log.syncStateIds.length +
       log.lineageIds.length +
       log.segmentIds.length +
-      log.snapshotIds.length
+      log.snapshotIds.length +
+      inlineMetadataRemoved
     );
   }
 
@@ -1009,6 +1023,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               mergeUndoLog.lineageIds.push(...inlineResult.insertedUtxoLineageIds);
               mergeUndoLog.segmentIds.push(...inlineResult.insertedCustodySegmentIds);
               mergeUndoLog.snapshotIds.push(...inlineResult.insertedLineageSnapshotIds);
+              // Inline metadata (vocabulary, custom fields, evidence, ...) the
+              // merge added is undone via this closure on cancel.
+              mergeUndoLog.inlineMetadataUndo =
+                inlineResult.undoInlineMetadata ?? null;
             }
           });
         }
