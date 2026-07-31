@@ -54,6 +54,12 @@ function makeWhereChain(label: string) {
   };
 }
 
+const orderBySpy = vi.fn();
+// resolveVisibleTierValues reads the distinct addressImportance index keys;
+// tests control the result (or make it throw) via these knobs.
+let uniqueKeysResult: unknown[] = [];
+let uniqueKeysError: Error | null = null;
+
 vi.mock("@/lib/database", () => ({
   db: {
     records: {
@@ -65,6 +71,15 @@ vi.mock("@/lib/database", () => ({
         toCollectionSpy();
         return makeCollection("toCollection()");
       },
+      orderBy: (field: string) => {
+        orderBySpy(field);
+        return {
+          uniqueKeys: () =>
+            uniqueKeysError
+              ? Promise.reject(uniqueKeysError)
+              : Promise.resolve(uniqueKeysResult),
+        };
+      },
     },
   },
 }));
@@ -75,6 +90,7 @@ import {
   looksLikeBitcoinIdentifier,
   pickPrimaryNarrowing,
   fetchRecordsPage,
+  resolveVisibleTierValues,
   USER_TIERS,
 } from "./records-query";
 
@@ -450,5 +466,87 @@ describe("buildIdentifierSearchCollection", () => {
     // inputStringLower equals (priority 1) wins over type equals (priority 10).
     expect(whereSpy).toHaveBeenCalledWith("inputStringLower");
     expect(equalsSpy).toHaveBeenCalledWith("where(inputStringLower)", addr);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task #1740 — dynamic visible-tier narrowing.
+//
+// The default-view (exclude blockchain-discovered) Dexie narrowing used to be
+// a STATIC anyOf(USER_TIERS), which silently dropped rows carrying legacy /
+// unrecognized tier strings from search while the browse path and the engine
+// (exclusion semantics) still showed them. The page now resolves the visible
+// tier list from the index's actual distinct keys and threads it through.
+// ---------------------------------------------------------------------------
+
+describe("dynamic visible tiers (resolveVisibleTierValues + visibleTierValues param)", () => {
+  beforeEach(() => {
+    uniqueKeysResult = [];
+    uniqueKeysError = null;
+  });
+
+  it("resolveVisibleTierValues unions stored tiers with the standard tiers, minus hidden ones", async () => {
+    uniqueKeysResult = [
+      "blockchain-discovered", // hidden — excluded
+      "pending-review", // hidden — excluded
+      "important", // legacy value — kept
+      "manual", // overlaps USER_TIERS — deduped
+      42, // non-string index key — ignored
+    ];
+    const values = await resolveVisibleTierValues();
+    expect(orderBySpy).toHaveBeenCalledWith("addressImportance");
+    expect([...values].sort()).toEqual(
+      [...new Set([...USER_TIERS, "important"])].sort(),
+    );
+  });
+
+  it("resolveVisibleTierValues falls back to the standard tiers when the index read fails", async () => {
+    uniqueKeysError = new Error("index unavailable");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const values = await resolveVisibleTierValues();
+      expect([...values].sort()).toEqual([...USER_TIERS].sort());
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("pickPrimaryNarrowing narrows to the provided visible tiers when blockchain is excluded", () => {
+    const dynamicTiers = [...USER_TIERS, "important", "auto-found"];
+    const s = pickPrimaryNarrowing("stash", [], false, dynamicTiers);
+    expect(s.source).toBe("address-importance-tiers");
+    expect(s.narrowing).toEqual({
+      kind: "anyOf",
+      field: "addressImportance",
+      values: dynamicTiers,
+    });
+  });
+
+  it("pickPrimaryNarrowing ignores visibleTierValues when blockchain is included (full-table)", () => {
+    const s = pickPrimaryNarrowing("stash", [], true, [...USER_TIERS, "important"]);
+    expect(s.source).toBe("full-table");
+  });
+
+  it("buildRecordsCollection threads visibleTierValues into the anyOf tier narrowing", () => {
+    const dynamicTiers = [...USER_TIERS, "important"];
+    buildRecordsCollection(
+      {
+        search: "stash",
+        columnFilters: [],
+        includeBlockchainDiscovered: false,
+        visibleTierValues: dynamicTiers,
+      },
+      () => true,
+    );
+    expect(anyOfSpy).toHaveBeenCalledWith("where(addressImportance)", dynamicTiers);
+  });
+
+  it("buildRecordsCollection still narrows to the static tiers when no dynamic list is provided", () => {
+    buildRecordsCollection(
+      { search: "stash", columnFilters: [], includeBlockchainDiscovered: false },
+      () => true,
+    );
+    expect(anyOfSpy).toHaveBeenCalledWith("where(addressImportance)", USER_TIERS);
   });
 });

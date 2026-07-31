@@ -317,6 +317,10 @@ args = "legacy-upgrade-scale-browser-check"
 task = "workflow.run"
 args = "compact-backup-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "records-search-visibility-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1123,3 +1127,14 @@ isValidation = true
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/pages/QuantumRiskScanner.test.tsx"
+
+[[workflows.workflow]]
+name = "records-search-visibility-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/records-query.test.ts client/src/lib/data/record-crud.tierInsertHardening.test.ts client/src/lib/engine/__tests__/records-search-tier-parity.test.ts client/src/pages/Records.hiddenMatches.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true

@@ -374,7 +374,10 @@ export function mapRecord(o: Record<string, unknown>): RecordRow {
     id: Number(o.id),
     type: toText(o.type) ?? 'other',
     inputString,
-    inputStringLower: toText(o.inputStringLower) ?? inputString.toLowerCase(),
+    // Always derive from inputString — never trust the Dexie row's stored
+    // inputStringLower, which legacy-decrypt-era rows can have blank/stale.
+    // Keeps the mirror column trustworthy for future index-backed queries.
+    inputStringLower: inputString.toLowerCase(),
     label: toText(o.label),
     notes: toText(o.notes),
     owner: toText(o.owner),

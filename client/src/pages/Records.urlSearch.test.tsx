@@ -69,6 +69,9 @@ vi.mock("@/lib/records-query", () => ({
   buildRecordsCollection: vi.fn(() => ({})),
   buildIdentifierSearchCollection: vi.fn(() => ({})),
   looksLikeBitcoinIdentifier: vi.fn(() => null),
+  resolveVisibleTierValues: vi.fn(() =>
+    Promise.resolve(["verified", "manual", "wallet-import", "xpub-derived"]),
+  ),
   fetchRecordsPage: vi.fn(() =>
     Promise.resolve({ records: [], total: 0, effectiveTotal: 0, truncated: false }),
   ),
@@ -104,10 +107,15 @@ vi.mock("@/lib/database", async () => {
   });
   const records = {
     where: (_idx: string) => ({
-      anyOf: (_v: unknown) => ({ count: () => Promise.resolve(0) }),
+      anyOf: (_v: unknown) => ({
+        count: () => Promise.resolve(0),
+        // Hidden-match counting walks the discovery tiers with until().each().
+        until: () => ({ each: () => Promise.resolve() }),
+      }),
       between: recordsBetween,
       equals: () => ({
         reverse: () => ({ limit: () => ({ toArray: () => Promise.resolve([]) }) }),
+        filter: () => ({ count: () => Promise.resolve(0) }),
       }),
       startsWithIgnoreCase: () => ({ limit: () => ({ toArray: () => Promise.resolve([]) }) }),
     }),

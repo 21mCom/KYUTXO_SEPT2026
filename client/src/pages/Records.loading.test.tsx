@@ -86,6 +86,9 @@ vi.mock("@/lib/records-query", () => ({
   buildRecordsCollection: vi.fn(() => ({})),
   buildIdentifierSearchCollection: vi.fn(() => ({})),
   looksLikeBitcoinIdentifier: vi.fn(() => null),
+  resolveVisibleTierValues: vi.fn(() =>
+    Promise.resolve(["verified", "manual", "wallet-import", "xpub-derived"]),
+  ),
   fetchRecordsPage: (...args: unknown[]) => mockDb.fetchRecordsPage(...args),
 }));
 

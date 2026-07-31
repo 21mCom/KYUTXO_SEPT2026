@@ -1,5 +1,6 @@
 import Dexie from 'dexie';
 import { db, notifyDbChange, isUserCuratedImportance, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type DerivationTemplate, type AddressImportance } from '../database';
+import { isValidImportanceTier, isHiddenDiscoveryTier, HIDDEN_DISCOVERY_TIERS } from '../db-types';
 import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from './vocabulary-crud';
 import { getActivityBus } from '../activity-bus';
 import { type GroupBy, GROUP_EMPTY_KEY, addressMatchesGroup, type AddressBalanceRow } from '../balance-grouping';
@@ -76,12 +77,51 @@ export interface CreateRecordOptions {
   skipVocabularySync?: boolean;
 }
 
-function deriveAddressImportance(data: CreateRecordData): AddressImportance {
-  if (data.addressImportance) return data.addressImportance;
+// Source-string markers written by the wallet/label import flows
+// (generateSourceName in WalletImport / MobileWalletImport / BIP329Import).
+// Matched with .includes() because merges concatenate sources with "; "
+// (merge-utils mergedSource), so an import marker can appear anywhere in the
+// string, not just at the start.
+const WALLET_IMPORT_SOURCE_MARKERS = ['walletImport-', 'mobileImport-', 'bip329Import'] as const;
+// Descriptor imports derive their addresses from a descriptor/xpub, so their
+// marker maps to the xpub-derived tier (those rows normally also carry a
+// derivationPath, which is the primary signal — the marker is a backstop).
+const DERIVED_SOURCE_MARKERS = ['descriptorImport-', 'xpub-import'] as const;
+
+function hasSourceMarker(source: string | undefined, markers: readonly string[]): boolean {
+  if (!source) return false;
+  return markers.some((m) => source.includes(m));
+}
+
+export function deriveAddressImportance(data: CreateRecordData): AddressImportance {
+  // Only honor a provided tier when it is one of the six recognized values.
+  // Restores of old backups can carry legacy/unknown tier strings verbatim;
+  // letting those through recreates rows that index-based tier queries (the
+  // Dexie anyOf narrowing on Records browse/search) silently skip. Fall
+  // through to provenance-based derivation instead, so every inserted row
+  // lands on a recognized tier. (The v29 migration normalized rows that
+  // already existed; this guards the insert path so restores cannot
+  // reintroduce the class. repairAddressImportanceTiers re-derives existing
+  // invalid rows through this same function.)
+  if (data.addressImportance && isValidImportanceTier(data.addressImportance)) {
+    return data.addressImportance;
+  }
+  // Sync provenance wins: rows discovered by blockchain sync must land back
+  // on a hidden discovery tier, never a curated one, or they would inflate
+  // the curated-tier balance surfaces (owned totals).
   if (data.syncDepth !== undefined && data.syncDepth > 0) return 'blockchain-discovered';
   if (data.source === 'blockchain-sync') return 'blockchain-discovered';
-  if (data.source?.startsWith('walletImport-')) return 'wallet-import';
-  if (data.source === 'xpub-import' || data.xpub || data.derivationPath) return 'xpub-derived';
+  // Wallet/label imports are user-owned metadata. Checked before the exactly
+  // 'blockchain-sync' fallback above would ever match a merged string like
+  // "blockchain-sync; walletImport-…" — a row the user imported is theirs.
+  if (hasSourceMarker(data.source, WALLET_IMPORT_SOURCE_MARKERS)) return 'wallet-import';
+  if (
+    hasSourceMarker(data.source, DERIVED_SOURCE_MARKERS) ||
+    data.xpub ||
+    data.derivationPath
+  ) {
+    return 'xpub-derived';
+  }
   return 'manual';
 }
 
@@ -738,6 +778,141 @@ export async function repairInputStringLower(
   return { scanned, fixed, ok };
 }
 
+/**
+ * Re-runnable repair for rows whose `addressImportance` is missing or an
+ * unrecognized legacy value (e.g. restored verbatim from a backup written
+ * before the tier vocabulary settled). Such rows silently drop out of every
+ * index-narrowed tier query (Dexie anyOf) even though the exclusion-based
+ * paths (engine SQL, residual filters) still show them.
+ *
+ * Normalization is provenance-aware — the same derivation used at insert time
+ * (sync provenance → blockchain-discovered, wallet import → wallet-import,
+ * xpub → xpub-derived, otherwise manual) — NOT the v29 migration's blanket
+ * 'manual'. Blanket 'manual' would promote sync-discovered rows into the
+ * user-curated tier allowlists that balance surfaces rely on, silently
+ * inflating "owned" totals; provenance derivation cannot.
+ *
+ * Fixed rows get a fresh `updatedAt`. This is deliberate: the native engine
+ * mirror's freshness fingerprint is (count, maxId, maxUpdatedAt) — a repair
+ * that preserved updatedAt would be invisible to the gate, leaving a
+ * CURRENT-looking mirror serving the old tiers until an unrelated write.
+ *
+ * Keyset iteration, abort-safe on huge vaults; safe to run any number of
+ * times (valid-tier rows are never touched).
+ */
+export async function repairAddressImportanceTiers(
+  onProgress?: (scanned: number, fixed: number) => void,
+): Promise<{ scanned: number; fixed: number; ok: boolean }> {
+  const BATCH = 1000;
+  let lastId = 0;
+  let scanned = 0;
+  let fixed = 0;
+  let ok = true;
+
+  try {
+    for (;;) {
+      const chunk = await db.records
+        .where('id')
+        .above(lastId)
+        .limit(BATCH)
+        .toArray();
+      if (chunk.length === 0) break;
+      lastId = chunk[chunk.length - 1].id!;
+      scanned += chunk.length;
+
+      const now = Date.now();
+      const toFix: Record[] = [];
+      for (const r of chunk) {
+        if (isValidImportanceTier(r.addressImportance)) continue;
+        const normalized = deriveAddressImportance({ ...r, addressImportance: undefined });
+        toFix.push({ ...r, addressImportance: normalized, updatedAt: now });
+      }
+
+      if (toFix.length > 0) {
+        await db.records.bulkPut(toFix);
+        fixed += toFix.length;
+      }
+
+      onProgress?.(scanned, fixed);
+      if (chunk.length < BATCH) break;
+      // Yield between batches so a huge vault does not freeze the renderer.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  } catch (err) {
+    ok = false;
+    console.error(
+      '[repairAddressImportanceTiers] Failed:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  if (fixed > 0) {
+    notifyDbChange('records');
+  }
+
+  return { scanned, fixed, ok };
+}
+
+export interface HiddenTierMatchCount {
+  /** Number of hidden-tier rows matching the current filters (up to matchCap). */
+  count: number;
+  /** True when counting stopped at matchCap — render as "cap+". */
+  capped: boolean;
+  /** True when the scan cap was hit before matchCap — the count is a lower bound. */
+  scanCapped: boolean;
+}
+
+/**
+ * Count blockchain-discovered / pending-review rows that match the current
+ * Records-page filters (minus the tier exclusion itself). Powers the
+ * "N matches hidden among discovered records" hint, so a search over the
+ * default view never dead-ends silently when the only matches are rows the
+ * discovered-records toggle hides.
+ *
+ * Runs as a deferred background count and is bounded on both sides: it stops
+ * after `matchCap` matches (UI shows "cap+") and after scanning `scanCap`
+ * hidden rows (a multi-million-row discovered set is never walked end to end
+ * just to render a hint). `isCancelled` lets a superseded page load abort the
+ * walk early. When `identifier` is set (the exact address/txid fast path) the
+ * count uses the inputStringLower index instead of walking hidden rows.
+ */
+export async function countHiddenTierMatches(opts: {
+  matches: (record: Record) => boolean;
+  identifier?: string | null;
+  matchCap?: number;
+  scanCap?: number;
+  isCancelled?: () => boolean;
+}): Promise<HiddenTierMatchCount> {
+  const matchCap = opts.matchCap ?? 1000;
+  const scanCap = opts.scanCap ?? 200_000;
+
+  if (opts.identifier) {
+    const count = await db.records
+      .where('inputStringLower')
+      .equals(opts.identifier.toLowerCase())
+      .filter((r) => isHiddenDiscoveryTier(r.addressImportance) && opts.matches(r))
+      .count();
+    return { count, capped: false, scanCapped: false };
+  }
+
+  let scanned = 0;
+  let count = 0;
+  await db.records
+    .where('addressImportance')
+    .anyOf([...HIDDEN_DISCOVERY_TIERS])
+    .until(() => count >= matchCap || scanned >= scanCap || (opts.isCancelled?.() ?? false))
+    .each((r) => {
+      scanned++;
+      if (opts.matches(r)) count++;
+    });
+
+  return {
+    count: Math.min(count, matchCap),
+    capped: count >= matchCap,
+    scanCapped: scanned >= scanCap && count < matchCap,
+  };
+}
+
 export async function countRecordsByType(type: string): Promise<number> {
   return db.records.where('type').equals(type).count();
 }
@@ -875,8 +1050,14 @@ export async function getRecordsPageByIdReverse(
   return db.records.orderBy('id').reverse().offset(offset).limit(limit).toArray();
 }
 
+// NOTE: the tier params below are deliberately `string`, not AddressImportance.
+// The Records page's default view resolves the visible tier list dynamically
+// (every distinct stored tier minus the hidden discovery tiers), so vaults
+// holding legacy/unrecognized tier strings still browse & search those rows
+// (parity with the engine's exclusion SQL). Index keys are plain strings, so
+// this is purely a type widening.
 export async function getAddressRecordsByImportanceTierLimited(
-  tier: AddressImportance,
+  tier: string,
   limit: number
 ): Promise<Record[]> {
   return db.records
@@ -903,7 +1084,7 @@ export async function getRecordsPageByTypeIdReverse(
 
 export async function getRecordsByTypeAndImportanceLimited(
   type: string,
-  tier: AddressImportance,
+  tier: string,
   limit: number
 ): Promise<Record[]> {
   return db.records
@@ -950,7 +1131,7 @@ export async function getRecordsPageByIdReverseKeyset(
 }
 
 export async function getAddressRecordsByImportanceTierPage(
-  tier: AddressImportance,
+  tier: string,
   opts: RecordsKeysetPageOptions
 ): Promise<Record[]> {
   const { limit, beforeIdExclusive } = opts;
@@ -987,7 +1168,7 @@ export async function getRecordsPageByTypeIdReverseKeyset(
 
 export async function getRecordsPageByTypeAndImportanceTiersKeyset(
   type: string,
-  tiers: AddressImportance[],
+  tiers: string[],
   opts: RecordsKeysetPageOptions
 ): Promise<Record[]> {
   if (tiers.length === 0) return [];
@@ -995,7 +1176,7 @@ export async function getRecordsPageByTypeAndImportanceTiersKeyset(
   // The [type+addressImportance] index can't keyset by id (it has no id
   // component), so walk the [type+id] index id-desc from the boundary and keep
   // only rows in the requested tiers, stopping once we have a full page.
-  const tierSet = new Set(tiers);
+  const tierSet = new Set<string>(tiers);
   return db.records
     .where('[type+id]')
     .between(
@@ -1005,7 +1186,7 @@ export async function getRecordsPageByTypeAndImportanceTiersKeyset(
       beforeIdExclusive == null
     )
     .reverse()
-    .and((r) => tierSet.has(r.addressImportance as AddressImportance))
+    .and((r) => r.addressImportance != null && tierSet.has(r.addressImportance))
     .limit(limit)
     .toArray();
 }
@@ -1129,7 +1310,7 @@ export async function countRecordsByCreatedAtWindow(
 
 export async function countRecordsByTypeAndImportanceTiers(
   type: string,
-  tiers: AddressImportance[]
+  tiers: string[]
 ): Promise<number> {
   if (tiers.length === 0) return 0;
   return db.records

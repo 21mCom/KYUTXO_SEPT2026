@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
-import { type Record as DbRecord, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS } from "@/lib/database";
+import { type Record as DbRecord, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS, isHiddenDiscoveryTier } from "@/lib/database";
 import { type PanelRecord, toPanelRecord } from "@/lib/recordToPanel";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
@@ -32,6 +32,8 @@ import {
   countRecordsByCreatedAtWindow,
   type CreatedAtCursor,
   bulkGetRecords,
+  countHiddenTierMatches,
+  type HiddenTierMatchCount,
 } from "@/lib/data/record-crud";
 import { DateAddedFilter, type DateAddedSort } from "@/components/DateAddedFilter";
 import {
@@ -69,7 +71,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { searchPendingClass } from "@/lib/search-pending-class";
-import { buildRecordsCollection, buildIdentifierSearchCollection, looksLikeBitcoinIdentifier, fetchRecordsPage, MAX_MATERIALIZE } from "@/lib/records-query";
+import { buildRecordsCollection, buildIdentifierSearchCollection, looksLikeBitcoinIdentifier, fetchRecordsPage, MAX_MATERIALIZE, resolveVisibleTierValues } from "@/lib/records-query";
 import { getActivityBus } from "@/lib/activity-bus";
 import { batchPreloadIdentifiers } from "@/lib/metadata-hover";
 
@@ -141,6 +143,11 @@ export default function Records() {
   const [totalCount, setTotalCount] = useState(0);
   const [navigableCount, setNavigableCount] = useState(0);
   const [resultsTruncated, setResultsTruncated] = useState(false);
+  // When a search/filter over the default view (discovered records hidden)
+  // ALSO matches hidden blockchain-discovered/pending-review rows, this holds
+  // that count so the UI can offer a one-click include instead of silently
+  // dead-ending on "No records match". Computed as a deferred count.
+  const [hiddenMatches, setHiddenMatches] = useState<HiddenTierMatchCount | null>(null);
   
   const [records, setRecords] = useState<ConvertedRecord[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
@@ -301,6 +308,7 @@ export default function Records() {
       setLoadPhase('Initializing');
       setCountLoading(false);
       setLoadError(null);
+      setHiddenMatches(null);
 
       const bus = getActivityBus();
       const taskId = `records-load-${version}`;
@@ -339,17 +347,14 @@ export default function Records() {
         const identifierSearch = looksLikeBitcoinIdentifier(search);
         const filtersActive = search !== '' || columnFilters.length > 0;
         
-        const filterFn = (record: DbRecord): boolean => {
+        // Residual predicate WITHOUT the tier exclusion — reused by the
+        // hidden-matches count, which asks "would this hidden-tier row match
+        // the current filters if it weren't hidden?".
+        const residualNoTier = (record: DbRecord): boolean => {
           // Recency window composes with every branch (identifier lookup,
           // substring search, date-added keyset) as a residual predicate.
           if (addedSince !== null && (record.createdAt ?? 0) < addedSince) {
             return false;
-          }
-          if (!includeBlockchainDiscovered) {
-            if (record.addressImportance === 'blockchain-discovered' || 
-                record.addressImportance === 'pending-review') {
-              return false;
-            }
           }
           for (const filter of columnFilters) {
             if (!matchesColumnFilter(record, filter)) return false;
@@ -365,6 +370,16 @@ export default function Records() {
             )) return false;
           }
           return true;
+        };
+
+        const filterFn = (record: DbRecord): boolean => {
+          // Exclusion semantics (matches the engine SQL and browse paths):
+          // hide only the two discovery tiers; missing/unrecognized tiers
+          // remain visible.
+          if (!includeBlockchainDiscovered && isHiddenDiscoveryTier(record.addressImportance)) {
+            return false;
+          }
+          return residualNoTier(record);
         };
         
         const singleTypeFilter = !search && columnFilters.length === 1 &&
@@ -449,6 +464,18 @@ export default function Records() {
           if (loadVersionRef.current !== version) return;
           useEngine = decision.useEngine;
         }
+
+        // Dexie default view: resolve the tier values to include dynamically
+        // (every distinct stored tier minus the hidden discovery tiers) so
+        // rows with unrecognized legacy tier strings stay visible in browse
+        // AND search — parity with the engine's exclusion SQL. O(#distinct
+        // tiers) via uniqueKeys; falls back to USER_CURATED_TIERS on error.
+        let visibleTiers: string[] | null = null;
+        if (!useEngine && !includeBlockchainDiscovered) {
+          visibleTiers = await resolveVisibleTierValues();
+          if (loadVersionRef.current !== version) return;
+        }
+        const dexieVisibleTiers: string[] = visibleTiers ?? USER_CURATED_TIERS;
         const engineOpts = {
           includeBlockchainDiscovered,
           type: engineTypeFilter ?? undefined,
@@ -467,7 +494,27 @@ export default function Records() {
         // amplifying load on huge vaults (the original stuck-loading cause). The
         // identifier/substring branches already derive their totals from the
         // awaited page fetch, so here they only refresh the hidden-records badge.
+        // Deferred hidden-matches count for the Dexie paths: when a search or
+        // filter runs over the default view (discovered hidden), count how
+        // many hidden-tier rows would match the same filters. Bounded on both
+        // sides (match cap → "1,000+", scan cap → lower bound) and
+        // cancellation-aware. The engine path derives the same number as an
+        // exact SQL count diff inside its count block instead.
+        const startDexieHiddenMatchesCount = () => {
+          if (useEngine || !filtersActive || includeBlockchainDiscovered) return;
+          countHiddenTierMatches({
+            matches: residualNoTier,
+            identifier: identifierSearch,
+            isCancelled: () => loadVersionRef.current !== version,
+          }).then((result) => {
+            if (loadVersionRef.current !== version) return;
+            setHiddenMatches(result.count > 0 ? result : null);
+          }).catch(e => { console.warn('[Records] Hidden-match count failed:', e); });
+        };
+
         const runDeferredCounts = () => {
+          startDexieHiddenMatchesCount();
+
           // Date-added Dexie branch: count the recency window (capped,
           // early-stop) with the same residual predicate the page fetch used,
           // plus the hidden-records badge. Identifier searches keep their own
@@ -496,15 +543,30 @@ export default function Records() {
           // global discovered count (all rows minus non-discovered rows).
           if (useEngine) {
             setCountLoading(true);
+            // Hidden-matches hint (exact on the engine): re-run the same
+            // filtered count with discovered rows included; the difference is
+            // how many matches the default view is hiding.
+            const wantHiddenMatches = filtersActive && !includeBlockchainDiscovered;
             Promise.all([
               engineCountRecords(engineOpts),
               engineCountRecords({ includeBlockchainDiscovered: true }),
               engineCountRecords({ includeBlockchainDiscovered: false }),
-            ]).then(([visible, all, nonDiscovered]) => {
+              wantHiddenMatches
+                ? engineCountRecords({ ...engineOpts, includeBlockchainDiscovered: true })
+                : Promise.resolve(null),
+            ]).then(([visible, all, nonDiscovered, withHidden]) => {
               if (loadVersionRef.current !== version) return;
               setTotalCount(visible);
               setNavigableCount(visible);
               setTotalBlockchainDiscovered(Math.max(0, all - nonDiscovered));
+              if (withHidden !== null) {
+                const hiddenCount = Math.max(0, withHidden - visible);
+                setHiddenMatches(
+                  hiddenCount > 0
+                    ? { count: hiddenCount, capped: false, scanCapped: false }
+                    : null,
+                );
+              }
             }).catch(e => { console.warn('[Records] Engine count failed:', e); })
               .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
             return;
@@ -544,7 +606,7 @@ export default function Records() {
             setCountLoading(true);
             const countPromise = includeBlockchainDiscovered
               ? countRecordsByType(singleTypeFilter)
-              : countRecordsByTypeAndImportanceTiers(singleTypeFilter, USER_CURATED_TIERS);
+              : countRecordsByTypeAndImportanceTiers(singleTypeFilter, dexieVisibleTiers);
             countPromise.then(c => {
               if (loadVersionRef.current !== version) return;
               setTotalCount(c);
@@ -672,14 +734,14 @@ export default function Records() {
           // deferred until after render (see runDeferredCounts).
           if (hasAnchor) {
             // Keyset: fetch up to PAGE_SIZE rows below the boundary from each
-            // tier, then k-way merge to the global top PAGE_SIZE.
-            const pageGroups = await Promise.all(USER_CURATED_TIERS.map(tier =>
+            // visible tier, then k-way merge to the global top PAGE_SIZE.
+            const pageGroups = await Promise.all(dexieVisibleTiers.map(tier =>
               getAddressRecordsByImportanceTierPage(tier, { limit: PAGE_SIZE, beforeIdExclusive })
             ));
             if (loadVersionRef.current !== version) return;
             rawRecords = mergeTopRecordsById(pageGroups, PAGE_SIZE);
           } else {
-            const pageGroups = await Promise.all(USER_CURATED_TIERS.map(tier =>
+            const pageGroups = await Promise.all(dexieVisibleTiers.map(tier =>
               getAddressRecordsByImportanceTierLimited(tier, pgOffset + PAGE_SIZE)
             ));
             if (loadVersionRef.current !== version) return;
@@ -701,14 +763,14 @@ export default function Records() {
               : await getRecordsPageByTypeIdReverse(typeVal, pgOffset, PAGE_SIZE);
           } else if (hasAnchor) {
             // Keyset: walk [type+id] id-desc from the boundary, keeping only the
-            // user-curated tiers, until a full page is collected.
+            // visible tiers, until a full page is collected.
             rawRecords = await getRecordsPageByTypeAndImportanceTiersKeyset(
               typeVal,
-              USER_CURATED_TIERS,
+              dexieVisibleTiers,
               { limit: PAGE_SIZE, beforeIdExclusive },
             );
           } else {
-            const groups = await Promise.all(USER_CURATED_TIERS.map(tier =>
+            const groups = await Promise.all(dexieVisibleTiers.map(tier =>
               getRecordsByTypeAndImportanceLimited(typeVal, tier, pgOffset + PAGE_SIZE)
             ));
             const merged = groups.flat().sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
@@ -724,7 +786,7 @@ export default function Records() {
           // inputStringLower (fast) instead of the residual substring scan.
           const built = buildIdentifierSearchCollection(
             identifierSearch,
-            { search, columnFilters, includeBlockchainDiscovered },
+            { search, columnFilters, includeBlockchainDiscovered, visibleTierValues: visibleTiers ?? undefined },
             filterFn,
           );
           const page = await fetchRecordsPage(
@@ -743,7 +805,7 @@ export default function Records() {
 
         } else {
           const built = buildRecordsCollection(
-            { search, columnFilters, includeBlockchainDiscovered },
+            { search, columnFilters, includeBlockchainDiscovered, visibleTierValues: visibleTiers ?? undefined },
             filterFn,
           );
           const page = await fetchRecordsPage(
@@ -953,6 +1015,36 @@ export default function Records() {
       return behaviorFilters.has(behaviorLabelFromCachedStats(r));
     });
   }, [records, behaviorFilters, behaviorFilterActive]);
+
+  // "N matches hidden among discovered records" hint. Rendered in the empty
+  // state AND under non-empty results, so a search whose only (or extra)
+  // matches carry a hidden discovery tier — e.g. a synced counterparty row the
+  // user tagged long ago — is never a silent dead end. One click flips the
+  // discovered-records toggle, which reloads with those rows included.
+  const hiddenMatchesNotice =
+    !includeBlockchainDiscovered && hiddenMatches && hiddenMatches.count > 0 ? (
+      <div
+        className="mt-3 flex flex-col items-center gap-2 text-sm text-muted-foreground"
+        data-testid="notice-hidden-matches"
+      >
+        <span>
+          {hiddenMatches.capped
+            ? `${hiddenMatches.count.toLocaleString()}+`
+            : hiddenMatches.count.toLocaleString()}
+          {hiddenMatches.count === 1 && !hiddenMatches.capped ? " match is" : " matches are"} hidden
+          among blockchain-discovered records
+          {hiddenMatches.scanCapped ? " (at least — large discovered set, partially checked)" : ""}.
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setIncludeBlockchainDiscovered(true)}
+          data-testid="button-show-hidden-matches"
+        >
+          Show hidden matches
+        </Button>
+      </div>
+    ) : null;
 
   useEffect(() => {
     if (currentPage > displayTotalPages && displayTotalPages > 0) {
@@ -1321,6 +1413,7 @@ export default function Records() {
                         ? "No address records found for this transaction. Addresses may not have been synced yet."
                         : "No records match your search"
                       : "No records found"}
+                    {hiddenMatchesNotice}
                   </div>
                 ) : (
                   <>
@@ -1352,6 +1445,9 @@ export default function Records() {
                         Showing the first {navigableCount.toLocaleString()}+ matches in index order.
                         Add more filters or refine your search to see exact counts and the full set.
                       </div>
+                    )}
+                    {hiddenMatchesNotice && (
+                      <div className="border-t pt-4 mt-4">{hiddenMatchesNotice}</div>
                     )}
                     {displayTotalPages > 1 && (
                       <div className="flex items-center justify-between border-t pt-4 mt-4">

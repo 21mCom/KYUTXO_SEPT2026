@@ -93,6 +93,9 @@ vi.mock("@/lib/records-query", () => ({
   buildRecordsCollection: vi.fn(() => ({})),
   buildIdentifierSearchCollection: vi.fn(() => ({})),
   looksLikeBitcoinIdentifier: vi.fn(() => null),
+  resolveVisibleTierValues: vi.fn(() =>
+    Promise.resolve(["verified", "manual", "wallet-import", "xpub-derived"]),
+  ),
   // Empty page so the selected id falls through to the directLoadedRecord path.
   fetchRecordsPage: vi.fn(() =>
     Promise.resolve({ records: [], total: 0, effectiveTotal: 0, truncated: false }),

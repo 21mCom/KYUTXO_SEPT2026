@@ -791,7 +791,13 @@ function buildRecordWhere(opts: RecordQueryOptions): { sql: string; bind: unknow
   if (search) {
     const like = `%${escapeLikeTerm(search)}%`;
     clauses.push(
-      "(inputStringLower LIKE ? ESCAPE '\\' OR lower(label) LIKE ? ESCAPE '\\' OR lower(owner) LIKE ? ESCAPE '\\' OR lower(walletName) LIKE ? ESCAPE '\\' OR lower(notes) LIKE ? ESCAPE '\\'" +
+      // lower(inputString), NOT the mirrored inputStringLower column: rows
+      // from legacy-decrypt-era vaults can carry a stale/blank
+      // inputStringLower, and a leading-wildcard LIKE can't use the index
+      // either way — deriving from inputString costs nothing extra and keeps
+      // such rows searchable (parity with the Dexie residual filter, which
+      // lowercases inputString directly).
+      "(lower(inputString) LIKE ? ESCAPE '\\' OR lower(label) LIKE ? ESCAPE '\\' OR lower(owner) LIKE ? ESCAPE '\\' OR lower(walletName) LIKE ? ESCAPE '\\' OR lower(notes) LIKE ? ESCAPE '\\'" +
         // tags is JSON array text; match per-tag (json_each) to mirror the Dexie
         // path's record.tags.some(t => t.includes(search)), never the raw JSON
         // text (which would false-positive on quotes/commas/escapes).

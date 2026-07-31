@@ -1,6 +1,7 @@
 import type Dexie from "dexie";
 import type { ColumnFilter } from "@/components/RecordFilters";
 import { db, type Record as DbRecord, type AddressImportance } from "@/lib/database";
+import { isHiddenDiscoveryTier } from "@/lib/db-types";
 
 export const USER_TIERS: AddressImportance[] = [
   "verified",
@@ -8,6 +9,46 @@ export const USER_TIERS: AddressImportance[] = [
   "wallet-import",
   "xpub-derived",
 ];
+
+/**
+ * Resolve the tier values the default Records view (discovered toggle off)
+ * should include when narrowing by the addressImportance index: every distinct
+ * tier value actually stored in the vault, minus the hidden discovery tiers,
+ * unioned with the four standard user tiers.
+ *
+ * WHY: the browse/engine paths use exclusion semantics ("everything except
+ * blockchain-discovered/pending-review"), but Dexie index narrowing must
+ * enumerate the values to include. Hardcoding USER_TIERS silently drops rows
+ * whose tier is an unrecognized legacy string (restored verbatim from an old
+ * backup) — visible when browsing, invisible to search. Enumerating the
+ * distinct stored values keeps inclusion === exclusion for every indexed row.
+ *
+ * LIMIT: rows with NO tier at all are absent from the addressImportance index
+ * and can never be returned by an index narrowing regardless of the value
+ * list. Those rows remain covered by the exclusion-based paths (engine SQL,
+ * residual filters, identifier fast path) and are normalized by the
+ * Database Doctor tier repair.
+ *
+ * Cost: uniqueKeys() walks distinct index keys only — O(#distinct tiers),
+ * effectively constant. Falls back to the standard tiers on any error so a
+ * failed probe can only ever narrow the view back to pre-existing behavior.
+ */
+export async function resolveVisibleTierValues(): Promise<string[]> {
+  try {
+    const keys = await db.records.orderBy("addressImportance").uniqueKeys();
+    const values = new Set<string>(USER_TIERS);
+    for (const k of keys) {
+      if (typeof k === "string" && !isHiddenDiscoveryTier(k)) values.add(k);
+    }
+    return [...values];
+  } catch (err) {
+    console.warn(
+      "[records-query] resolveVisibleTierValues failed; falling back to standard tiers:",
+      err instanceof Error ? err.message : err,
+    );
+    return [...USER_TIERS];
+  }
+}
 
 // Text fields whose `equals` comparison must be case-insensitive to match
 // the residual filterFn (which lowercases both sides). The pre-lowered
@@ -108,6 +149,12 @@ export interface BuildRecordsQueryParams {
   search: string;
   columnFilters: ColumnFilter[];
   includeBlockchainDiscovered: boolean;
+  /**
+   * Tier values the default view's addressImportance narrowing should include
+   * (from resolveVisibleTierValues). Optional: omitted (e.g. legacy callers /
+   * tests) falls back to the four standard USER_TIERS.
+   */
+  visibleTierValues?: string[];
 }
 
 export interface RecordsQueryStrategy {
@@ -133,8 +180,12 @@ export interface BuildRecordsQueryResult {
  *
  * Selection order:
  *   1. Most selective indexable column filter (by FIELD_PRIORITY).
- *   2. addressImportance.anyOf(USER_TIERS) when blockchain-discovered are
+ *   2. addressImportance.anyOf(visible tiers) when blockchain-discovered are
  *      excluded (always true when the user hasn't toggled the include).
+ *      The visible-tier list defaults to USER_TIERS; pass the dynamically
+ *      resolved list (resolveVisibleTierValues) so rows with unrecognized
+ *      legacy tier values stay searchable (parity with the exclusion-based
+ *      browse/engine paths).
  *   3. Full-table scan — only when the user opts in to include blockchain-
  *      discovered AND has no indexable column filter. Matches legacy
  *      behavior; bounded by MAX_MATERIALIZE in fetchRecordsPage.
@@ -143,6 +194,7 @@ export function pickPrimaryNarrowing(
   search: string,
   columnFilters: ColumnFilter[],
   includeBlockchainDiscovered: boolean,
+  visibleTierValues?: string[],
 ): RecordsQueryStrategy {
   const candidates = columnFilters
     .map(classifyFilter)
@@ -154,9 +206,11 @@ export function pickPrimaryNarrowing(
   }
 
   if (!includeBlockchainDiscovered) {
+    const values =
+      visibleTierValues && visibleTierValues.length > 0 ? visibleTierValues : USER_TIERS;
     return {
       source: "address-importance-tiers",
-      narrowing: { kind: "anyOf", field: "addressImportance", values: USER_TIERS },
+      narrowing: { kind: "anyOf", field: "addressImportance", values },
     };
   }
 
@@ -167,8 +221,13 @@ export function buildRecordsCollection(
   params: BuildRecordsQueryParams,
   residualPredicate: (record: DbRecord) => boolean,
 ): BuildRecordsQueryResult {
-  const { search, columnFilters, includeBlockchainDiscovered } = params;
-  const strategy = pickPrimaryNarrowing(search, columnFilters, includeBlockchainDiscovered);
+  const { search, columnFilters, includeBlockchainDiscovered, visibleTierValues } = params;
+  const strategy = pickPrimaryNarrowing(
+    search,
+    columnFilters,
+    includeBlockchainDiscovered,
+    visibleTierValues,
+  );
 
   let collection: Dexie.Collection<DbRecord, number>;
 

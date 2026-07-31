@@ -78,3 +78,5 @@
 - [Merge-cancel undo log](merge-cancel-undo-log.md) — every merge insert path (incl. inline lineage + writeReview files) must join the session undo log or cancel leaves residue.
 - [v3 merge de-dup contract](v3-merge-dedup-contract.md) — merge restore must de-dupe EVERY table (streamed + inline) by natural key, incl. same-batch/cross-batch dups; partial coverage fails review.
 - [Compact backup contract](compact-backup-contract.md) — prune only discovery-bare rows; restore rebuilds shells locally (sync can't recreate them); new tables/Record fields must be classified into the compact filters.
+- [Tier provenance classification](tier-provenance-classification.md) — never blanket-normalize invalid tiers; derive from source markers (substring match, "; "-merged sources) + syncDepth; repairs must bump updatedAt.
+- [Dexie inclusion vs exclusion parity](dexie-inclusion-vs-exclusion-parity.md) — anyOf narrowings hide unknown/missing enum keys that SQL exclusion shows; enumerate uniqueKeys dynamically + re-runnable repair; missing-key rows need alternate paths.

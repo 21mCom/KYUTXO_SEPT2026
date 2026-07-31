@@ -1,19 +1,29 @@
 /**
  * Database Doctor (Task #325).
  *
- * A strictly READ-ONLY diagnostic that reads raw rows straight from IndexedDB
- * via Dexie (`db`), bypassing the native read-engine and every normal read hook.
- * Its single job is to answer, in plain language, the question every other
- * screen has been failing to answer: "Is my data actually there and readable,
- * or is it still locked/blank?"
+ * The health CHECK is a strictly READ-ONLY diagnostic that reads raw rows
+ * straight from IndexedDB via Dexie (`db`), bypassing the native read-engine
+ * and every normal read hook. Its single job is to answer, in plain language,
+ * the question every other screen has been failing to answer: "Is my data
+ * actually there and readable, or is it still locked/blank?"
  *
- * It writes NOTHING to vault data. It never decrypts (so it needs no password)
- * — it only observes which fields are populated, which rows still carry the
- * legacy encryption markers left behind when the v27 migration stripped the
- * encryption flags without decrypting, and whether the one-time login decrypt +
- * search index repair ever completed. (The Balance Integrity card additionally
- * spools its stale-address report to a separate, local IndexedDB scratch store
- * — never the vault — see BalanceIntegrityCard below.)
+ * The check writes NOTHING to vault data. It never decrypts (so it needs no
+ * password) — it only observes which fields are populated, which rows still
+ * carry the legacy encryption markers left behind when the v27 migration
+ * stripped the encryption flags without decrypting, and whether the one-time
+ * login decrypt + search index repair ever completed.
+ *
+ * Separate, clearly-labeled REPAIR actions (Task #1740) are the explicit
+ * exceptions, and only run when the user clicks them:
+ *   - "Rebuild search keys" re-runs repairInputStringLower on demand, so rows
+ *     whose lowercase search key drifted AFTER the once-only login repair
+ *     already ran (its done-flag blocks re-runs) become searchable again.
+ *   - "Normalize importance tiers" repairs rows whose addressImportance is
+ *     missing or an unrecognized legacy value (restored verbatim from old
+ *     backups), which index-narrowed tier queries silently skip.
+ * (The Balance Integrity card's optional "Recompute" is the other explicit
+ * write; its check additionally spools a report to a separate, local scratch
+ * store — never the vault — see BalanceIntegrityCard below.)
  *
  * Reads are done in id-keyset batches with a yield between each so it stays
  * responsive even on very large vaults.
@@ -45,10 +55,16 @@ import { useToast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { db } from "@/lib/database";
+import { isValidImportanceTier, isHiddenDiscoveryTier } from "@/lib/db-types";
+import {
+  repairInputStringLower,
+  repairAddressImportanceTiers,
+} from "@/lib/data/record-crud";
 import {
   isLegacyDecryptComplete,
   getLegacyDecryptCompletedTables,
   isInputStringLowerRepaired,
+  setInputStringLowerRepaired,
 } from "@/lib/vault";
 import { isEncryptedPlaceholder } from "@/lib/legacy-decrypt";
 import {
@@ -91,6 +107,16 @@ interface RecordStats {
   blankLabel: number;
   lockedUnreadable: number; // payload present AND inputString blank/placeholder — the true "locked" signature
   markersRemaining: number; // rows carrying any leftover marker key (harmless cleanup candidates)
+  // inputStringLower !== lowercase(inputString) — the EXACT predicate the
+  // "Rebuild search keys" repair fixes. Superset of blank-lower-with-populated-
+  // input; excludes healthy blank/blank rows (unlike blankInputStringLower).
+  searchKeyDesynced: number;
+  missingTier: number; // no addressImportance at all (pre-tier legacy rows)
+  invalidTier: number; // unrecognized tier string (e.g. restored from an old backup)
+  // Hidden discovery-tier rows (blockchain-discovered/pending-review) that carry
+  // user metadata (label/tags/notes) — healthy, but invisible in the default
+  // Records view, which is the #1 "my old tagged record vanished" cause.
+  hiddenTierTagged: number;
 }
 
 interface SampleRow {
@@ -218,6 +244,10 @@ export default function DatabaseDoctor() {
         blankLabel: 0,
         lockedUnreadable: 0,
         markersRemaining: 0,
+        searchKeyDesynced: 0,
+        missingTier: 0,
+        invalidTier: 0,
+        hiddenTierTagged: 0,
       };
       const samples: SampleRow[] = [];
 
@@ -252,6 +282,32 @@ export default function DatabaseDoctor() {
 
           if (isBlank(row["inputStringLower"])) recordStats.blankInputStringLower += 1;
           if (isBlank(row["label"])) recordStats.blankLabel += 1;
+
+          // Search-key desync: the exact predicate repairInputStringLower uses.
+          // (A blank lower on a row whose inputString is also blank is healthy
+          // and does NOT count.)
+          const inputVal = row["inputString"];
+          const expectedLower =
+            typeof inputVal === "string" && inputVal ? inputVal.toLowerCase() : "";
+          if (row["inputStringLower"] !== expectedLower) recordStats.searchKeyDesynced += 1;
+
+          // Tier health: missing or unrecognized tiers silently drop out of
+          // index-narrowed tier queries; hidden-tier rows carrying user
+          // metadata explain "my old tagged record doesn't show up".
+          const tierVal = row["addressImportance"];
+          if (tierVal === undefined || tierVal === null || tierVal === "") {
+            recordStats.missingTier += 1;
+          } else if (!isValidImportanceTier(tierVal)) {
+            recordStats.invalidTier += 1;
+          }
+          if (isHiddenDiscoveryTier(typeof tierVal === "string" ? tierVal : undefined)) {
+            const tagsVal = row["tags"];
+            const hasUserMeta =
+              !isBlank(row["label"]) ||
+              !isBlank(row["notes"]) ||
+              (Array.isArray(tagsVal) && tagsVal.length > 0);
+            if (hasUserMeta) recordStats.hiddenTierTagged += 1;
+          }
 
           const lockedUnreadable = isLockedUnreadable(row);
           const marker = hasAnyMarker(row);
@@ -313,10 +369,11 @@ export default function DatabaseDoctor() {
             Database Doctor
           </h1>
           <p className="text-sm text-muted-foreground">
-            A safe, read-only health check. It looks directly at your stored data and tells you, in
-            plain language, whether your records are actually there and readable — or whether they
-            are still locked from an unfinished migration. It never changes, deletes, or unlocks
-            anything.
+            A safe health check. It looks directly at your stored data and tells you, in plain
+            language, whether your records are actually there and readable — or whether they are
+            still locked from an unfinished migration. The check itself never changes, deletes, or
+            unlocks anything; the only writes are the clearly-labeled repair buttons, which run
+            only when you click them.
           </p>
         </div>
 
@@ -365,6 +422,7 @@ export default function DatabaseDoctor() {
         {phase === "done" && result && (
           <>
             <RecordHealthCard stats={result.recordStats} flags={result.flags} />
+            <RepairToolsCard stats={result.recordStats} onRepairComplete={runCheck} />
             <SamplesCard samples={result.samples} />
             <TableCountsCard tableCounts={result.tableCounts} />
             <MigrationStatusCard flags={result.flags} />
@@ -412,12 +470,23 @@ function Verdict({ result }: { result: DoctorResult }) {
         `${unreadableNoPayload.toLocaleString()} records have a blank or "[encrypted]" address/transaction with no recoverable encrypted data (blank or incomplete).`,
       );
     }
-  } else if (recordStats.blankInputStringLower > 0) {
+  } else if (
+    recordStats.searchKeyDesynced > 0 ||
+    recordStats.invalidTier > 0 ||
+    recordStats.missingTier > 0
+  ) {
     tone = "warn";
-    title = "Your records have data, but the search index is incomplete.";
-    lines.push(
-      `${recordStats.blankInputStringLower.toLocaleString()} records are missing their lowercase search key, so search may not find them. This is repaired automatically the next time you log in.`,
-    );
+    title = "Your records are readable, but some may not show up in search or lists.";
+    if (recordStats.searchKeyDesynced > 0) {
+      lines.push(
+        `${recordStats.searchKeyDesynced.toLocaleString()} records have an out-of-date search key, so typing their address or transaction ID into search may not find them. Use "Rebuild search keys" below to fix this now — the automatic login-time repair only ever runs once, so it will not fix these on its own.`,
+      );
+    }
+    if (recordStats.invalidTier > 0 || recordStats.missingTier > 0) {
+      lines.push(
+        `${(recordStats.invalidTier + recordStats.missingTier).toLocaleString()} records have a missing or unrecognized importance tier (often restored from an older backup), which can make them invisible to some filtered views. Use "Normalize importance tiers" below to fix them.`,
+      );
+    }
   } else {
     lines.push(
       `All ${recordStats.total.toLocaleString()} records have their data populated and none are locked.`,
@@ -442,6 +511,15 @@ function Verdict({ result }: { result: DoctorResult }) {
   ) {
     lines.push(
       `${recordStats.markersRemaining.toLocaleString()} records still carry leftover migration markers. This is harmless — your data is readable — but you can tidy them up with the cleanup tool in Settings.`,
+    );
+  }
+
+  // Tagged-but-hidden discovered rows are healthy data, but they are the #1
+  // reason an old tagged record "disappears": the default Records view hides
+  // discovery-tier rows. Surface the explanation whatever the overall tone.
+  if (recordStats.hiddenTierTagged > 0) {
+    lines.push(
+      `${recordStats.hiddenTierTagged.toLocaleString()} blockchain-discovered records carry your labels, tags, or notes. They are healthy but hidden from the default Records view — turn on "Include blockchain-discovered" there, or use the "Show hidden matches" button that now appears under search results.`,
     );
   }
 
@@ -535,6 +613,29 @@ function RecordHealthCard({ stats, flags }: { stats: RecordStats; flags: Migrati
           highlight={stats.blankInputStringLower > 0}
         />
         <StatLine
+          label="Search key out of date (repairable)"
+          value={stats.searchKeyDesynced.toLocaleString()}
+          testid="stat-search-key-desynced"
+          highlight={stats.searchKeyDesynced > 0}
+        />
+        <StatLine
+          label="Missing importance tier"
+          value={stats.missingTier.toLocaleString()}
+          testid="stat-missing-tier"
+          highlight={stats.missingTier > 0}
+        />
+        <StatLine
+          label="Unrecognized importance tier (repairable)"
+          value={stats.invalidTier.toLocaleString()}
+          testid="stat-invalid-tier"
+          highlight={stats.invalidTier > 0}
+        />
+        <StatLine
+          label="Hidden discovered records with your labels/tags"
+          value={stats.hiddenTierTagged.toLocaleString()}
+          testid="stat-hidden-tier-tagged"
+        />
+        <StatLine
           label="With a blank label"
           value={stats.blankLabel.toLocaleString()}
           testid="stat-blank-label"
@@ -556,6 +657,180 @@ function RecordHealthCard({ stats, flags }: { stats: RecordStats; flags: Migrati
             {flags.legacyDecryptComplete
               ? 'The migration is marked complete, but these records are still locked — a past run finished early. Use Settings → "Restore Locked Data" to unlock them.'
               : 'The login-time unlock has not finished, so the locked records above are not recovered yet. Use Settings → "Restore Locked Data" to unlock them.'}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The Doctor's only vault-writing tools (besides the Balance card's recompute),
+ * and both are idempotent, batch-yielding repairs:
+ *
+ * - "Rebuild search keys": re-runs repairInputStringLower on demand. The
+ *   login-time run is gated by a once-only vault flag, so rows that drifted
+ *   AFTER that flag was set are otherwise never repaired — this button is the
+ *   escape hatch. On success it (re)arms the flag so the login path stays
+ *   skipped.
+ * - "Normalize importance tiers": re-derives addressImportance for rows whose
+ *   stored tier is missing or unrecognized (e.g. restored verbatim from an old
+ *   backup), using the row's own provenance — sync/discovery provenance maps
+ *   back to a hidden discovery tier, user-created rows to a user tier. It
+ *   deliberately does NOT blanket-promote rows to "manual": that would leak
+ *   sync-discovered rows into curated balance totals.
+ */
+function RepairToolsCard({
+  stats,
+  onRepairComplete,
+}: {
+  stats: RecordStats;
+  onRepairComplete: () => void;
+}) {
+  const { toast } = useToast();
+  const [running, setRunning] = useState<null | "searchKeys" | "tiers">(null);
+  const [repairProgress, setRepairProgress] = useState("");
+
+  const runSearchKeyRepair = async () => {
+    setRunning("searchKeys");
+    setRepairProgress("");
+    try {
+      const res = await repairInputStringLower((scanned, fixed) => {
+        setRepairProgress(
+          `Checked ${scanned.toLocaleString()} records — rebuilt ${fixed.toLocaleString()}…`,
+        );
+      });
+      if (res.ok) {
+        // (Re)arm the once-only login flag: the on-demand run just did the work,
+        // so the login path can keep skipping.
+        await setInputStringLowerRepaired(true).catch(() => {});
+        toast({
+          title: "Search keys rebuilt",
+          description: `Rebuilt ${res.fixed.toLocaleString()} of ${res.scanned.toLocaleString()} checked records.`,
+        });
+      } else {
+        toast({
+          title: "Search key rebuild did not finish",
+          description: "The vault changed or an error occurred mid-run. Nothing was harmed — run it again to finish.",
+          variant: "destructive",
+        });
+      }
+      onRepairComplete();
+    } catch (err) {
+      toast({
+        title: "Search key rebuild failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setRunning(null);
+      setRepairProgress("");
+    }
+  };
+
+  const runTierRepair = async () => {
+    setRunning("tiers");
+    setRepairProgress("");
+    try {
+      const res = await repairAddressImportanceTiers((scanned, fixed) => {
+        setRepairProgress(
+          `Checked ${scanned.toLocaleString()} records — fixed ${fixed.toLocaleString()}…`,
+        );
+      });
+      if (res.ok) {
+        toast({
+          title: "Importance tiers normalized",
+          description: `Fixed ${res.fixed.toLocaleString()} of ${res.scanned.toLocaleString()} checked records.`,
+        });
+      } else {
+        toast({
+          title: "Tier repair did not finish",
+          description: "An error occurred mid-run. Repaired rows were kept — run it again to finish.",
+          variant: "destructive",
+        });
+      }
+      onRepairComplete();
+    } catch (err) {
+      toast({
+        title: "Tier repair failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setRunning(null);
+      setRepairProgress("");
+    }
+  };
+
+  return (
+    <Card data-testid="card-repair-tools">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <RefreshCw className="h-5 w-5" />
+          Repair tools
+        </CardTitle>
+        <CardDescription>
+          These are the only buttons on this page that change stored data. Both are safe to run any
+          time: they only rewrite the affected bookkeeping fields (search keys and importance
+          tiers) — never your addresses, labels, tags, or notes — and running them twice is
+          harmless.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Rebuild search keys</p>
+            <p className="text-xs text-muted-foreground max-w-md">
+              {stats.searchKeyDesynced > 0
+                ? `${stats.searchKeyDesynced.toLocaleString()} records currently have an out-of-date search key.`
+                : "No out-of-date search keys detected right now."}{" "}
+              The automatic login-time repair runs only once ever, so drift that happened later is
+              only fixed here.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={runSearchKeyRepair}
+            disabled={running !== null}
+            data-testid="button-repair-search-keys"
+          >
+            {running === "searchKeys" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Rebuild search keys
+          </Button>
+        </div>
+        <Separator />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Normalize importance tiers</p>
+            <p className="text-xs text-muted-foreground max-w-md">
+              {stats.missingTier + stats.invalidTier > 0
+                ? `${(stats.missingTier + stats.invalidTier).toLocaleString()} records currently have a missing or unrecognized tier.`
+                : "No missing or unrecognized tiers detected right now."}{" "}
+              Each affected record is re-classified from its own origin (imported, manual, or
+              discovered during sync) — discovered records stay out of your curated balances.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={runTierRepair}
+            disabled={running !== null}
+            data-testid="button-repair-tiers"
+          >
+            {running === "tiers" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Normalize tiers
+          </Button>
+        </div>
+        {running !== null && repairProgress && (
+          <p className="text-sm text-muted-foreground" data-testid="text-repair-progress">
+            {repairProgress}
           </p>
         )}
       </CardContent>

@@ -48,6 +48,36 @@ export const ALL_IMPORTANCE_TIERS: AddressImportance[] = [
   'pending-review',
 ];
 
+// The tiers hidden by the Records page's default view (the "Show discovered"
+// toggle off). Single source of truth for every surface that needs the
+// exclusion semantics — browse, search, hidden-match counting, and repairs —
+// so a new hidden tier can never be excluded in one path but leak in another.
+export const HIDDEN_DISCOVERY_TIERS: AddressImportance[] = [
+  'blockchain-discovered',
+  'pending-review',
+];
+
+/**
+ * True when `value` is one of the six recognized importance tiers. Rows can
+ * carry unrecognized tier strings (restored from old backups written before
+ * the tier vocabulary settled) or no tier at all (pre-tier legacy rows);
+ * treat both as "not valid" so they can be normalized rather than silently
+ * falling through index-based queries.
+ */
+export function isValidImportanceTier(value: unknown): value is AddressImportance {
+  return typeof value === 'string' && (ALL_IMPORTANCE_TIERS as string[]).includes(value);
+}
+
+/**
+ * Exclusion predicate matching the engine's SQL semantics
+ * (`addressImportance IS NULL OR addressImportance NOT IN (hidden tiers)`):
+ * a row is visible in the default Records view unless its tier is one of the
+ * HIDDEN_DISCOVERY_TIERS. Missing and unrecognized tiers are visible.
+ */
+export function isHiddenDiscoveryTier(value: string | undefined | null): boolean {
+  return value === 'blockchain-discovered' || value === 'pending-review';
+}
+
 // Canonical human-readable labels for each importance tier. This is the single
 // source of truth for tier display names. Keeping it next to ALL_IMPORTANCE_TIERS
 // (and typed as a full mapping over AddressImportance) means a newly added or
