@@ -83,6 +83,10 @@ args = "bip329-export-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "v3-merge-restore-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "note-rendering"
 
 [[workflows.workflow.tasks]]
@@ -1033,3 +1037,14 @@ isValidation = true
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/contexts/RecordPreviewContext.editAttachmentsToast.test.tsx"
+
+[[workflows.workflow]]
+name = "v3-merge-restore-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-v3-merge-restore-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
