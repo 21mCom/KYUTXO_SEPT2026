@@ -43,6 +43,10 @@ args = "quantum-scanner-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "quantum-scan-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "psbt-builder-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1126,7 +1130,18 @@ isValidation = true
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/pages/QuantumRiskScanner.test.tsx"
+args = "npx vitest run client/src/pages/QuantumRiskScanner.test.tsx client/src/pages/QuantumRiskScanner.scale.test.tsx"
+
+[[workflows.workflow]]
+name = "quantum-scan-scale-browser-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-quantum-scan-scale-browser.mjs"
 
 [[workflows.workflow]]
 name = "records-search-visibility-node-check"

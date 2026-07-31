@@ -19,9 +19,9 @@ import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { beginBulkOperation, endBulkOperation, notifyDbChange } from "@/lib/database";
 import { createTag } from "@/lib/data/vocabulary-crud";
-import { updateRecord, getRecordsByType } from "@/lib/data/record-crud";
+import { bulkUpdateRecords, getRecordsByType } from "@/lib/data/record-crud";
 import { getInputParticipants } from "@/lib/data/transaction-crud";
 import { useTags } from "@/hooks/use-tags";
 import { useToast } from "@/hooks/use-toast";
@@ -259,15 +259,33 @@ export default function QuantumRiskScanner() {
 
         beginBulkOperation();
         try {
-          for (let idx = 0; idx < pendingWrites.length; idx++) {
-            const write = pendingWrites[idx];
+          // Write in chunks through the bulk CRUD helper: a first scan of a
+          // huge vault can change tens of thousands of records, and serial
+          // per-record updateRecord calls take minutes. Each chunk is one
+          // Dexie bulkPut; yielding between chunks keeps the progress bar and
+          // the page responsive.
+          const CHUNK_SIZE = 500;
+          for (let start = 0; start < pendingWrites.length; start += CHUNK_SIZE) {
+            const chunk = pendingWrites.slice(start, start + CHUNK_SIZE);
             // skipVocabularySync: the scan manages the quantum:* vocabulary
             // itself (above, selected levels only); it must not create
             // vocabulary entries for the record's other tags as a side effect.
-            await updateRecord(write.recordId, { tags: write.tags }, { skipVocabularySync: true });
-            setTaggingProgress({ current: idx + 1, total: pendingWrites.length });
-            if (idx % 10 === 9) await new Promise(r => setTimeout(r, 0));
+            // skipNotification: a single notifyDbChange fires after all chunks
+            // so live queries refresh once instead of per chunk.
+            const { errorCount } = await bulkUpdateRecords(
+              chunk.map(w => ({ id: w.recordId, changes: { tags: w.tags } })),
+              { skipVocabularySync: true, skipNotification: true },
+            );
+            if (errorCount > 0) {
+              throw new Error(`${errorCount} record${errorCount !== 1 ? "s" : ""} could not be updated (not found).`);
+            }
+            setTaggingProgress({
+              current: Math.min(start + chunk.length, pendingWrites.length),
+              total: pendingWrites.length,
+            });
+            await new Promise(r => setTimeout(r, 0));
           }
+          if (pendingWrites.length > 0) notifyDbChange('records');
         } finally {
           endBulkOperation();
         }

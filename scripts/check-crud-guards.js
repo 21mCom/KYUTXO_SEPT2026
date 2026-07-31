@@ -236,7 +236,7 @@ for (const file of files) {
   for (let i = 0; i < lines.length; i++) {
     const writeMatch = lines[i].match(WRITE_PATTERN);
     if (writeMatch) {
-      const tableName = readMatch[1];
+      const tableName = writeMatch[1];
       const guard = GUARDED_TABLES.find(g => g.table === tableName);
       writeViolations.push({
         file: path.relative(ROOT, file),
