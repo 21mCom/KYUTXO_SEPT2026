@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useLocation } from "wouter";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { Plus, Grid3x3, List, ChevronLeft, ChevronRight, Trash2, X, Settings2 } from "lucide-react";
@@ -44,6 +45,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAddressStatsWithLoading } from "@/hooks/use-address-stats";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
+import { countHiddenTierMatches, type HiddenTierMatchCount } from "@/lib/data/record-crud";
 import type { Record } from "@/lib/database";
 import type { Attachment } from "@/lib/database";
 import { searchPendingClass } from "@/lib/search-pending-class";
@@ -51,7 +53,13 @@ import { searchPendingClass } from "@/lib/search-pending-class";
 type SortDirection = "asc" | "desc" | null;
 type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | "walletName" | "balance" | "lastTxDate" | "txCount" | string;
 
+// Sentinel id for the column filter applied from the `?walletName=` deep link
+// (Wallet Overview drill-down), so it can be replaced/removed without touching
+// any filters the user added by hand.
+const URL_WALLET_FILTER_ID = "url-walletName";
+
 export default function Dashboard() {
+  const [location] = useLocation();
   const [search, setSearch] = useState("");
   const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.Dashboard);
   const [view, setView] = useState<"grid" | "table">("table");
@@ -93,7 +101,14 @@ export default function Dashboard() {
   // Column filters state
   const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
 
-  const hasClientSideFilters = debouncedSearch.trim() !== '' || 
+  // When a search/filter over the default view (discovered records hidden)
+  // ALSO matches hidden blockchain-discovered/pending-review rows, this holds
+  // that count so the UI can offer a one-click include instead of silently
+  // dead-ending on "No records found". Computed as a deferred, bounded count.
+  const [hiddenMatches, setHiddenMatches] = useState<HiddenTierMatchCount | null>(null);
+  const hiddenMatchVersionRef = useRef(0);
+
+  const hasClientSideFilters = debouncedSearch.trim() !== '' ||
     (filter.type !== undefined && filter.type !== 'all') || 
     filter.tags.length > 0 || 
     filter.categories.length > 0 || 
@@ -146,6 +161,34 @@ export default function Dashboard() {
 
     loadEditingAttachments();
   }, [editingRecord?.id]);
+
+  // Honor the Wallet Overview drill-down (`/?walletName=...`): apply it as a
+  // Wallet Name column filter and auto-include discovered records, so the
+  // linked wallet's rows are visible even when they are all discovery-tier.
+  // The wouter location carries the query string only in hash-routed
+  // (packaged) mode; in browser mode it rides on window.location.search.
+  useEffect(() => {
+    let walletNameParam: string | null = null;
+    try {
+      const queryIndex = location.indexOf('?');
+      const rawQuery = queryIndex >= 0
+        ? location.substring(queryIndex + 1)
+        : (window.location.search || '').replace(/^\?/, '');
+      walletNameParam = new URLSearchParams(rawQuery).get('walletName');
+    } catch (error) {
+      console.error('[Dashboard] Failed to parse query params:', error);
+    }
+    setColumnFilters(prev => {
+      const rest = prev.filter(f => f.id !== URL_WALLET_FILTER_ID);
+      if (!walletNameParam) {
+        return rest.length === prev.length ? prev : rest;
+      }
+      return [...rest, { id: URL_WALLET_FILTER_ID, field: 'walletName', operator: 'equals', value: walletNameParam }];
+    });
+    if (walletNameParam) {
+      setIncludeBlockchainDiscovered(true);
+    }
+  }, [location]);
 
   const uniqueFilterValues = useMemo((): globalThis.Record<string, string[]> => {
     const clean = (names: string[]) =>
@@ -200,6 +243,8 @@ export default function Dashboard() {
         results = results.filter(record =>
           record.label.toLowerCase().includes(lowerQuery) ||
           record.inputString.toLowerCase().includes(lowerQuery) ||
+          record.owner?.toLowerCase().includes(lowerQuery) ||
+          record.walletName?.toLowerCase().includes(lowerQuery) ||
           record.notes?.toLowerCase().includes(lowerQuery) ||
           record.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
           record.categories.some(cat => cat.toLowerCase().includes(lowerQuery))
@@ -214,6 +259,50 @@ export default function Dashboard() {
 
     applyFiltersAsync();
   }, [debouncedSearch, filter, records, includeBlockchainDiscovered, columnFilters, allAddressStats]);
+
+  // Deferred hidden-matches count (parity with the Records page): when a
+  // search or column filter runs over the default view (discovered hidden),
+  // count how many hidden-tier rows would match the same predicate if they
+  // weren't hidden. Runs only after the filtered view has rendered, is
+  // bounded on both sides (match cap / scan cap inside countHiddenTierMatches),
+  // and is version-guarded so a superseded filter change never sets state.
+  const searchOrColumnFilterActive = debouncedSearch.trim() !== '' || columnFilters.length > 0;
+  useEffect(() => {
+    const version = ++hiddenMatchVersionRef.current;
+    setHiddenMatches(null);
+    if (includeBlockchainDiscovered || !searchOrColumnFilterActive || isLoading) {
+      return;
+    }
+    const lowerQuery = debouncedSearch.trim().toLowerCase();
+    // Same predicate as the visible pipeline above, minus the tier exclusion.
+    const matches = (record: Record): boolean => {
+      if (applyColumnFilters([record] as unknown as Array<{ [key: string]: unknown }>, columnFilters).length === 0) {
+        return false;
+      }
+      if (filter.type && filter.type !== "all" && record.type !== filter.type) return false;
+      if (filter.tags.length > 0 && !filter.tags.some(tag => record.tags.includes(tag))) return false;
+      if (filter.categories.length > 0 && !filter.categories.some(cat => record.categories.includes(cat))) return false;
+      if (lowerQuery) {
+        return (
+          record.label.toLowerCase().includes(lowerQuery) ||
+          record.inputString.toLowerCase().includes(lowerQuery) ||
+          record.owner?.toLowerCase().includes(lowerQuery) ||
+          record.walletName?.toLowerCase().includes(lowerQuery) ||
+          record.notes?.toLowerCase().includes(lowerQuery) ||
+          record.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
+          record.categories.some(cat => cat.toLowerCase().includes(lowerQuery))
+        );
+      }
+      return true;
+    };
+    countHiddenTierMatches({
+      matches,
+      isCancelled: () => hiddenMatchVersionRef.current !== version,
+    }).then(result => {
+      if (hiddenMatchVersionRef.current !== version) return;
+      setHiddenMatches(result.count > 0 ? result : null);
+    }).catch(e => { console.warn('[Dashboard] Hidden-match count failed:', e); });
+  }, [includeBlockchainDiscovered, searchOrColumnFilterActive, isLoading, debouncedSearch, filter, columnFilters, filteredRecords]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -341,6 +430,33 @@ export default function Dashboard() {
   }, [currentPage, totalPages]);
 
   const selectedRecord = records.find(r => r.id === selectedRecordId);
+
+  // "N matches hidden among discovered records" hint, rendered in the empty
+  // state and under non-empty results (parity with the Records page notice).
+  const hiddenMatchesNotice =
+    !includeBlockchainDiscovered && hiddenMatches && hiddenMatches.count > 0 ? (
+      <div
+        className="mt-3 flex flex-col items-center gap-2 text-sm text-muted-foreground"
+        data-testid="notice-hidden-matches"
+      >
+        <span>
+          {hiddenMatches.capped
+            ? `${hiddenMatches.count.toLocaleString()}+`
+            : hiddenMatches.count.toLocaleString()}
+          {hiddenMatches.count === 1 && !hiddenMatches.capped ? " match is" : " matches are"} hidden
+          among blockchain-discovered records
+          {hiddenMatches.scanCapped ? " (at least — large discovered set, partially checked)" : ""}.
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setIncludeBlockchainDiscovered(true)}
+          data-testid="button-show-hidden-matches"
+        >
+          Show hidden matches
+        </Button>
+      </div>
+    ) : null;
 
   const uniqueSeedNames = seedNames.map(s => s.name).filter(n => n);
   const uniqueWalletSoftware = walletSoftware.map(w => w.name).filter(n => n);
@@ -1001,6 +1117,7 @@ export default function Dashboard() {
             {/* One-click demo loading for presenters — the component renders
                 itself only when the vault is truly empty (zero records). */}
             <DemoVaultLoader />
+            {hiddenMatchesNotice}
           </div>
         ) : (
           <>
@@ -1067,6 +1184,10 @@ export default function Dashboard() {
                   statsLoading={statsEnabled && allAddressStatsLoading}
                 />
               </>
+            )}
+
+            {hiddenMatchesNotice && (
+              <div className="border-t pt-4 mt-4">{hiddenMatchesNotice}</div>
             )}
 
             {/* Pagination Controls */}

@@ -345,6 +345,10 @@ args = "launch-token-node-check"
 task = "workflow.run"
 args = "tor-proxy-hardening-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dashboard-hidden-matches-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1225,6 +1229,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run server/tor-proxy.test.ts server/tor-proxy.transport.test.ts electron/tor-proxy.test.ts electron/security-utils.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dashboard-hidden-matches-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/pages/Dashboard.hiddenMatches.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
