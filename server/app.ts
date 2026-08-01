@@ -8,6 +8,7 @@ import express, {
 } from "express";
 
 import { registerRoutes } from "./routes";
+import { rejectUnknownHosts } from "./launch-token";
 import { MAX_INCOMING_CONTENT_LENGTH } from "./tor-proxy";
 
 export function log(message: string, source = "express") {
@@ -37,6 +38,12 @@ app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   next();
 });
+
+// DNS-rebinding defense: reject any request whose Host header is not
+// loopback (or the Replit dev domain). Registered before the body parsers so
+// even parser-rejected requests from rebound hostnames never get a useful
+// response. See launch-token.ts for the attack description.
+app.use(rejectUnknownHosts);
 
 // The Tor proxy accepts JSON envelopes up to its declared 1 MB cap, which is
 // larger than the global default JSON limit (100 KB). Give it its own parser

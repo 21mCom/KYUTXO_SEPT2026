@@ -7,7 +7,9 @@ import {
   LAUNCH_TOKEN,
   LAUNCH_TOKEN_HEADER,
   injectLaunchToken,
+  isAllowedHost,
   launchTokenMetaTag,
+  rejectUnknownHosts,
   requireLaunchToken,
 } from "./launch-token";
 
@@ -64,6 +66,102 @@ describe("requireLaunchToken middleware", () => {
 
   it("generates a high-entropy per-launch token by default", () => {
     expect(LAUNCH_TOKEN.length).toBeGreaterThanOrEqual(32);
+  });
+});
+
+describe("isAllowedHost (DNS-rebinding defense)", () => {
+  const savedReplId = process.env.REPL_ID;
+  afterEach(() => {
+    if (savedReplId === undefined) delete process.env.REPL_ID;
+    else process.env.REPL_ID = savedReplId;
+  });
+
+  it("allows loopback hostnames with and without ports", () => {
+    expect(isAllowedHost("localhost")).toBe(true);
+    expect(isAllowedHost("localhost:5000")).toBe(true);
+    expect(isAllowedHost("127.0.0.1")).toBe(true);
+    expect(isAllowedHost("127.0.0.1:5000")).toBe(true);
+    expect(isAllowedHost("[::1]")).toBe(true);
+    expect(isAllowedHost("[::1]:5000")).toBe(true);
+    expect(isAllowedHost("LOCALHOST:5000")).toBe(true);
+  });
+
+  it("rejects rebound / arbitrary hostnames", () => {
+    expect(isAllowedHost(undefined)).toBe(false);
+    expect(isAllowedHost("")).toBe(false);
+    expect(isAllowedHost("attacker.com")).toBe(false);
+    expect(isAllowedHost("attacker.com:5000")).toBe(false);
+    expect(isAllowedHost("localhost.attacker.com")).toBe(false);
+    expect(isAllowedHost("127.0.0.1.attacker.com")).toBe(false);
+    expect(isAllowedHost("evillocalhost")).toBe(false);
+    // Unbracketed junk that merely contains loopback-ish text
+    expect(isAllowedHost("[::1].attacker.com")).toBe(false);
+  });
+
+  it("rejects malformed port suffixes that smuggle a hostname", () => {
+    expect(isAllowedHost("localhost:5000.attacker.com")).toBe(false);
+    expect(isAllowedHost("127.0.0.1:5000.attacker.com")).toBe(false);
+    expect(isAllowedHost("[::1]:5000.attacker.com")).toBe(false);
+    expect(isAllowedHost("[::1]:attacker.com")).toBe(false);
+    expect(isAllowedHost("localhost:attacker.com")).toBe(false);
+    expect(isAllowedHost("localhost:")).toBe(false);
+    expect(isAllowedHost("[::1]:")).toBe(false);
+    expect(isAllowedHost("127.0.0.1:65536x")).toBe(false);
+  });
+
+  it("allows .replit.dev only when REPL_ID is set", () => {
+    delete process.env.REPL_ID;
+    expect(isAllowedHost("my-app.replit.dev")).toBe(false);
+    process.env.REPL_ID = "test-repl";
+    expect(isAllowedHost("my-app.replit.dev")).toBe(true);
+    expect(isAllowedHost("my-app.replit.dev:443")).toBe(true);
+    expect(isAllowedHost("evil-replit.dev")).toBe(false);
+    expect(isAllowedHost("replit.dev.attacker.com")).toBe(false);
+  });
+});
+
+describe("rejectUnknownHosts middleware", () => {
+  async function startHostGuardedApp(): Promise<string> {
+    const app = express();
+    app.use(rejectUnknownHosts);
+    app.get("/api/ping", (_req, res) => res.json({ ok: true }));
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.on("listening", resolve));
+    const { port } = server!.address() as AddressInfo;
+    return `http://127.0.0.1:${port}`;
+  }
+
+  it("serves requests with a loopback Host header", async () => {
+    const base = await startHostGuardedApp();
+    const res = await fetch(`${base}/api/ping`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it("rejects requests with a rebound Host header", async () => {
+    // undici's fetch silently drops a custom Host header, so issue the raw
+    // request with node:http to actually simulate the rebound hostname.
+    const base = await startHostGuardedApp();
+    const { port } = server!.address() as AddressInfo;
+    const http = await import("node:http");
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port,
+          path: "/api/ping",
+          headers: { Host: "attacker.com" },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    expect(status).toBe(403);
+    void base;
   });
 });
 
