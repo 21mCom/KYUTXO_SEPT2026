@@ -36,3 +36,6 @@ After many back-to-back validation runs, a check can fail on `input-password` ti
 **Scroll assertions:** never select the page scroller with `div.flex-1.overflow-auto` alone — the sidebar matches too; scope to `main ... .p-6`.
 
 **Lock starvation at validation scale:** with ~17 browser checks all serializing on /tmp/kyutxo-browser-check.lock, the 20-minute acquire timeout guarantees mass failures — most checks time out waiting while one long check holds the lock. Failures whose log says "timed out waiting for lock" are queue starvation, not regressions: verify the checks touching your change serially, then use an audited validation skip.
+
+## Wedged lock owner dooms the whole queue
+If one browser check hangs while holding the shared /tmp lock (0% CPU, no log progress after "reusing dev server"), every queued check — including yours — fails on the 20-minute lock timeout, not on assertions. Diagnose by reading the failing check's tail (look for "timed out ... waiting for ... lock (held by pid ...)") and `ps` on the owner. Completion reviews also count reloads as NOT logout: browser checks that claim login transitions must click the app's real logout control and verify the password screen appears.
