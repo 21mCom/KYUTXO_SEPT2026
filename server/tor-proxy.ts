@@ -56,6 +56,10 @@ export const MAX_INCOMING_CONTENT_LENGTH = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MIN_TIMEOUT_MS = 1_000;
 export const MAX_TIMEOUT_MS = 120_000;
+// Cap on the bytes read from an upstream response. A misbehaving or hostile
+// provider could otherwise stream an unbounded body and exhaust process
+// memory (response bodies used to be read fully via .json()/.text()).
+export const MAX_RESPONSE_BODY_BYTES = 25 * 1024 * 1024;
 // Concurrency limit so the endpoint can't exhaust sockets/memory.
 export const MAX_CONCURRENT_PROXIED_REQUESTS = 8;
 export const MAX_QUEUED_PROXIED_REQUESTS = 64;
@@ -329,6 +333,55 @@ function serializeRequestBody(body: unknown): string | undefined {
   return serialized;
 }
 
+// ============================================================================
+// BOUNDED RESPONSE READING
+// ============================================================================
+export class ResponseTooLargeError extends Error {
+  constructor() {
+    super(`Upstream response exceeded ${MAX_RESPONSE_BODY_BYTES / (1024 * 1024)} MB`);
+    this.name = "ResponseTooLargeError";
+  }
+}
+
+const RESPONSE_TOO_LARGE_MESSAGE = `Upstream response too large (over ${MAX_RESPONSE_BODY_BYTES / (1024 * 1024)} MB). The request was aborted to protect memory.`;
+
+// Read an upstream response body incrementally, aborting as soon as it grows
+// past MAX_RESPONSE_BODY_BYTES instead of buffering it whole. Works with both
+// node-fetch (Node Readable) and WHATWG (undici Response) body streams — both
+// are async-iterable. Throwing out of for-await destroys/cancels the stream.
+async function readBodyBounded(
+  body: unknown,
+  maxBytes: number = MAX_RESPONSE_BODY_BYTES,
+): Promise<string> {
+  if (body === null || body === undefined) return "";
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of body as AsyncIterable<unknown>) {
+    const buf = Buffer.isBuffer(chunk)
+      ? chunk
+      : typeof chunk === "string"
+        ? Buffer.from(chunk)
+        : Buffer.from(chunk as Uint8Array);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new ResponseTooLargeError();
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// Shared response-body handling: bounded read + content-type-aware parse.
+async function readResponseData(response: {
+  headers: { get(name: string): string | null };
+  body?: unknown;
+}): Promise<{ data: unknown; contentType: string | null }> {
+  const contentType = response.headers.get("content-type");
+  const raw = await readBodyBounded(response.body);
+  const data = contentType?.includes("application/json") ? JSON.parse(raw) : raw;
+  return { data, contentType };
+}
+
 // Log a proxy failure server-side WITHOUT the raw error message: fetch/socks
 // error strings embed proxy and target URLs, which are internal detail. The
 // error name is enough to diagnose (AbortError, TypeError, ...).
@@ -350,6 +403,7 @@ type FetchImpl = (url: string, init?: object) => Promise<{
   headers: { get(name: string): string | null };
   json(): Promise<unknown>;
   text(): Promise<string>;
+  body?: unknown;
 }>;
 let cachedNodeFetch: FetchImpl | undefined;
 async function getNodeFetch(): Promise<FetchImpl> {
@@ -408,13 +462,7 @@ export async function makeProxiedRequest(req: ProxyRequest & { torProxyUrl?: str
 
       const latency = Date.now() - startTime;
 
-      let data: unknown;
-      const contentType = response.headers.get("content-type");
-      if (contentType?.includes("application/json")) {
-        data = await response.json();
-      } else {
-        data = await response.text();
-      }
+      const { data, contentType } = await readResponseData(response);
 
       return {
         success: response.ok,
@@ -431,6 +479,10 @@ export async function makeProxiedRequest(req: ProxyRequest & { torProxyUrl?: str
     const latency = Date.now() - startTime;
 
     if (error instanceof Error) {
+      if (error instanceof ResponseTooLargeError) {
+        return { success: false, error: RESPONSE_TOO_LARGE_MESSAGE, latency };
+      }
+
       if (error.name === "AbortError") {
         return {
           success: false,
@@ -492,13 +544,7 @@ async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
 
       const latency = Date.now() - startTime;
 
-      let data: unknown;
-      const contentType = response.headers.get("content-type");
-      if (contentType?.includes("application/json")) {
-        data = await response.json();
-      } else {
-        data = await response.text();
-      }
+      const { data, contentType } = await readResponseData(response);
 
       return {
         success: response.ok,
@@ -515,6 +561,10 @@ async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
     const latency = Date.now() - startTime;
 
     if (error instanceof Error) {
+      if (error instanceof ResponseTooLargeError) {
+        return { success: false, error: RESPONSE_TOO_LARGE_MESSAGE, latency };
+      }
+
       if (error.name === "AbortError") {
         return {
           success: false,

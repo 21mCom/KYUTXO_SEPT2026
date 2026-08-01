@@ -358,6 +358,54 @@ function serializeRequestBody(body) {
   return typeof body === "string" ? body : JSON.stringify(body);
 }
 
+// ============================================================================
+// BOUNDED RESPONSE READING (mirrors server/tor-proxy.ts)
+// ============================================================================
+// Cap on the bytes read from an upstream response. A misbehaving or hostile
+// provider could otherwise stream an unbounded body and exhaust process
+// memory (response bodies used to be read fully via .json()/.text()).
+const MAX_RESPONSE_BODY_BYTES = 25 * 1024 * 1024;
+
+class ResponseTooLargeError extends Error {
+  constructor() {
+    super(`Upstream response exceeded ${MAX_RESPONSE_BODY_BYTES / (1024 * 1024)} MB`);
+    this.name = "ResponseTooLargeError";
+  }
+}
+
+const RESPONSE_TOO_LARGE_MESSAGE = `Upstream response too large (over ${MAX_RESPONSE_BODY_BYTES / (1024 * 1024)} MB). The request was aborted to protect memory.`;
+
+// Read an upstream response body incrementally, aborting as soon as it grows
+// past MAX_RESPONSE_BODY_BYTES instead of buffering it whole. Works with both
+// node-fetch (Node Readable) and WHATWG body streams — both are
+// async-iterable. Throwing out of for-await destroys/cancels the stream.
+async function readBodyBounded(body, maxBytes = MAX_RESPONSE_BODY_BYTES) {
+  if (body === null || body === undefined) return "";
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of body) {
+    const buf = Buffer.isBuffer(chunk)
+      ? chunk
+      : typeof chunk === "string"
+        ? Buffer.from(chunk)
+        : Buffer.from(chunk);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new ResponseTooLargeError();
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// Shared response-body handling: bounded read + content-type-aware parse.
+async function readResponseData(response) {
+  const contentType = response.headers.get("content-type");
+  const raw = await readBodyBounded(response.body);
+  const data = contentType && contentType.includes("application/json") ? JSON.parse(raw) : raw;
+  return { data, contentType };
+}
+
 async function makeProxiedRequest(requestParams) {
   const { SocksProxyAgent } = require('socks-proxy-agent');
   const fetch = await getFetch();
@@ -392,13 +440,7 @@ async function makeProxiedRequest(requestParams) {
 
       const latency = Date.now() - startTime;
 
-      let data;
-      const contentType = response.headers.get("content-type");
-      if (contentType && contentType.includes("application/json")) {
-        data = await response.json();
-      } else {
-        data = await response.text();
-      }
+      const { data, contentType } = await readResponseData(response);
 
       return {
         success: response.ok,
@@ -413,6 +455,10 @@ async function makeProxiedRequest(requestParams) {
     }
   } catch (error) {
     const latency = Date.now() - startTime;
+
+    if (error instanceof ResponseTooLargeError) {
+      return { success: false, error: RESPONSE_TOO_LARGE_MESSAGE, latency };
+    }
 
     if (error.name === "AbortError") {
       return {
@@ -487,16 +533,9 @@ async function makeDirectRequest(requestParams) {
     }
 
     const contentType = response.headers.get('content-type') || '';
-    let data;
 
-    console.log(`[KYUTXO] [${new Date().toISOString()}] Reading response body - contentType: ${contentType}`);
-    if (contentType.includes('application/json')) {
-      data = await response.json();
-      console.log(`[KYUTXO] [${new Date().toISOString()}] JSON parsed - items: ${Array.isArray(data) ? data.length : 'object'}, elapsed: ${Date.now() - startTime}ms`);
-    } else {
-      data = await response.text();
-      console.log(`[KYUTXO] [${new Date().toISOString()}] Text read - length: ${data.length} chars, elapsed: ${Date.now() - startTime}ms`);
-    }
+    console.log(`[KYUTXO] [${new Date().toISOString()}] Reading response body (bounded) - contentType: ${contentType}`);
+    const { data } = await readResponseData(response);
 
     const latency = Date.now() - startTime;
     console.log(`[KYUTXO] [${new Date().toISOString()}] makeDirectRequest SUCCESS - total latency: ${latency}ms`);
@@ -522,6 +561,10 @@ async function makeDirectRequest(requestParams) {
     };
   } catch (error) {
     const latency = Date.now() - startTime;
+
+    if (error instanceof ResponseTooLargeError) {
+      return { success: false, error: RESPONSE_TOO_LARGE_MESSAGE, latency };
+    }
 
     if (error.name === 'AbortError') {
       console.log(`[KYUTXO] [${new Date().toISOString()}] makeDirectRequest TIMEOUT - elapsed: ${latency}ms`);
@@ -617,6 +660,7 @@ module.exports = {
   TOR_BROWSER_PROXY,
   ALLOWED_API_HOSTS,
   MAX_REQUEST_BODY_BYTES,
+  MAX_RESPONSE_BODY_BYTES,
   MAX_TIMEOUT_MS,
   MAX_CONCURRENT_PROXIED_REQUESTS,
   MAX_QUEUED_PROXIED_REQUESTS,

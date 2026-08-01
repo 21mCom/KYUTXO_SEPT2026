@@ -13,6 +13,7 @@ import router, {
   MAX_TIMEOUT_MS,
   MAX_CONCURRENT_PROXIED_REQUESTS,
   MAX_QUEUED_PROXIED_REQUESTS,
+  MAX_RESPONSE_BODY_BYTES,
 } from "./tor-proxy";
 import { app as productionApp } from "./app";
 
@@ -307,6 +308,58 @@ describe("/api/tor endpoints", () => {
     expect(body.error).toMatch(/Cannot connect to the Tor proxy/);
 
     tracker.expectAllCleared();
+  });
+
+  it("rejects an oversized upstream response cleanly instead of buffering it", async () => {
+    // A hostile/misbehaving upstream that streams far more than the cap. If
+    // the proxy buffered the whole body (the old .json()/.text() behavior),
+    // this would drain all 200 MB; the bounded reader must abort early.
+    const chunk = new Uint8Array(1024 * 1024);
+    let produced = 0;
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (produced >= 200 * 1024 * 1024) {
+              controller.close();
+              return;
+            }
+            produced += chunk.length;
+            controller.enqueue(chunk);
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    ));
+
+    const res = await post("/api/tor/request", { url: "https://mempool.space/api/blocks" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.error).toMatch(/response too large/i);
+    // The upstream stream was cancelled shortly past the cap, not drained.
+    expect(produced).toBeLessThan(MAX_RESPONSE_BODY_BYTES + 16 * 1024 * 1024);
+  }, 30000);
+
+  it("still succeeds for a streamed response within the cap", async () => {
+    const payload = JSON.stringify({ height: 850123 });
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(payload));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    ));
+
+    const res = await post("/api/tor/request", { url: "https://mempool.space/api/blocks/tip" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.data.height).toBe(850123);
   });
 
   it("rejects settings mutation without a valid token and never allowlists the attacker's host", async () => {

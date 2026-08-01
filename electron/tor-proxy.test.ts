@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createRequire } from "node:module";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 
 const requireCjs = createRequire(import.meta.url);
 const {
@@ -12,6 +14,7 @@ const {
   makeProxiedRequest,
   makeDirectRequest,
   MAX_REQUEST_BODY_BYTES,
+  MAX_RESPONSE_BODY_BYTES,
   MAX_TIMEOUT_MS,
 } = requireCjs("./tor-proxy.cjs") as {
   isAllowedUrl: (url: string) => { allowed: boolean; reason?: string; isLocal?: boolean };
@@ -23,6 +26,7 @@ const {
   makeProxiedRequest: (params: { url: string; timeout?: number; torProxyUrl?: string }) => Promise<{ success: boolean; error?: string }>;
   makeDirectRequest: (params: { url: string; timeout?: number }) => Promise<{ success: boolean; error?: string }>;
   MAX_REQUEST_BODY_BYTES: number;
+  MAX_RESPONSE_BODY_BYTES: number;
   MAX_TIMEOUT_MS: number;
 };
 
@@ -174,6 +178,43 @@ describe("electron tor-proxy helpers", () => {
     expect(logged).not.toContain("127.0.0.1:9");
     expect(result.error).not.toContain("127.0.0.1:9");
   });
+
+  it("rejects an oversized upstream response cleanly instead of buffering it", async () => {
+    // A hostile/misbehaving upstream that streams far more than the cap. The
+    // bounded reader must abort early instead of buffering the whole body.
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const chunk = Buffer.alloc(1024 * 1024);
+    let produced = 0;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      const write = () => {
+        while (produced < 200 * 1024 * 1024) {
+          produced += chunk.length;
+          if (!res.write(chunk)) {
+            res.once("drain", write);
+            return;
+          }
+        }
+        res.end();
+      };
+      write();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const result = await makeDirectRequest({
+        url: `http://127.0.0.1:${port}/huge`,
+        timeout: 60_000,
+      });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/response too large/i);
+      // The upstream stream was cancelled shortly past the cap, not drained.
+      expect(produced).toBeLessThan(MAX_RESPONSE_BODY_BYTES + 32 * 1024 * 1024);
+    } finally {
+      (server as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 30000);
 
   it("forwards only allowlisted headers", () => {
     expect(
