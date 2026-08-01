@@ -28,6 +28,9 @@ function logBenchmark(
   sqliteMs: number,
   sqliteRows: number
 ): void {
+  // Benchmark output is a development aid only — keep it out of production
+  // consoles (and packaged-app logs) entirely.
+  if (!import.meta.env.DEV) return;
   const faster = sqliteMs < dexieMs ? 'SQLite' : 'Dexie';
   const ratio = sqliteMs > 0 ? (dexieMs / sqliteMs).toFixed(2) : '∞';
   const rowMismatch = dexieRows !== sqliteRows ? '  ⚠ ROW COUNT MISMATCH' : '';

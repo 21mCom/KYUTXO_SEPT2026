@@ -19,6 +19,34 @@ async function ensureDir(dirPath: string): Promise<void> {
   }
 }
 
+// Log a filesystem/IO failure server-side WITHOUT the raw error message: Node
+// error messages embed absolute filesystem paths (ENOENT '/home/...'), which
+// are internal detail that should not reach logs any more than clients. The
+// error name + errno code are enough to diagnose.
+function logServerError(context: string, error: unknown): void {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    console.error(`${context}: ${error.name}${code ? ` (${code})` : ''}`);
+  } else {
+    console.error(`${context}: unknown error`);
+  }
+}
+
+// Build an RFC 6266 Content-Disposition header value. The plain filename=
+// fallback is restricted to printable ASCII with quotes/backslashes/control
+// chars (incl. CR/LF header injection) stripped; the RFC 5987 filename*=
+// parameter carries the full UTF-8 name for modern clients.
+export function toContentDisposition(filename: string): string {
+  const fallback = filename
+    .replace(/[^\x20-\x7e]/g, '_')
+    .replace(/["\\]/g, '_');
+  const encoded = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase(),
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
 // Safely resolve a caller-supplied relative attachment path to an absolute path
 // inside ATTACHMENTS_DIR. Strips a leading `attachments/` prefix (Electron stores
 // without it), rejects absolute paths and any `..` traversal segment, and enforces
@@ -103,8 +131,8 @@ router.post('/upload', upload.single('file'), async (req: Request, res) => {
       size: file.size,
     });
   } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Upload failed' });
+    logServerError('Upload error', error);
+    res.status(500).json({ error: 'Upload failed' });
   }
 });
 
@@ -160,8 +188,8 @@ router.get('/list-all', async (req, res) => {
     
     res.json({ success: true, files: result, totalBytes });
   } catch (error) {
-    console.error('List all attachments error:', error);
-    res.status(500).json({ error: error instanceof Error ? error.message : 'List failed' });
+    logServerError('List all attachments error', error);
+    res.status(500).json({ error: 'List failed' });
   }
 });
 
@@ -194,8 +222,8 @@ router.post('/write', upload.single('file'), async (req: Request, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    console.error('Write attachment error:', error);
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Write failed' });
+    logServerError('Write attachment error', error);
+    res.status(500).json({ error: 'Write failed' });
   }
 });
 
@@ -238,8 +266,8 @@ router.post('/rename', async (req: Request, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    console.error('Rename error:', error);
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Rename failed' });
+    logServerError('Rename error', error);
+    res.status(500).json({ error: 'Rename failed' });
   }
 });
 
@@ -266,11 +294,11 @@ router.get('/download/:path(*)', async (req, res) => {
     const filename = path.basename(filePath);
     
     res.set('Content-Type', 'application/octet-stream');
-    res.set('Content-Disposition', `attachment; filename="${filename}"`);
+    res.set('Content-Disposition', toContentDisposition(filename));
     res.send(buffer);
   } catch (error) {
-    console.error('Download error:', error);
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Download failed' });
+    logServerError('Download error', error);
+    res.status(500).json({ error: 'Download failed' });
   }
 });
 
@@ -297,8 +325,8 @@ router.delete('/:path(*)', async (req, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    console.error('Delete error:', error);
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Delete failed' });
+    logServerError('Delete error', error);
+    res.status(500).json({ error: 'Delete failed' });
   }
 });
 

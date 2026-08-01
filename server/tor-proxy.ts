@@ -122,6 +122,17 @@ function isAllowedUrl(url: string, additionalAllowedHost?: string, trustedLocalH
   }
 }
 
+// Log a proxy failure server-side WITHOUT the raw error message: fetch/socks
+// error strings embed proxy and target URLs, which are internal detail. The
+// error name is enough to diagnose (AbortError, TypeError, ...).
+function logProxyError(context: string, error: unknown): void {
+  if (error instanceof Error) {
+    console.error(`${context}: ${error.name}`);
+  } else {
+    console.error(`${context}: unknown error`);
+  }
+}
+
 interface ProxyRequest {
   url: string;
   method?: "GET" | "POST" | "PUT" | "DELETE";
@@ -202,18 +213,20 @@ async function makeProxiedRequest(req: ProxyRequest): Promise<ProxyResponse> {
       if (error.message.includes("ECONNREFUSED")) {
         return {
           success: false,
-          error: `Cannot connect to Tor proxy at ${proxyUrl}. Make sure Tor is running.`,
+          error: "Cannot connect to the Tor proxy. Make sure Tor is running.",
           latency,
         };
       }
-      
+
+      // Raw exception text can embed proxy/target URLs — keep it off the wire.
+      logProxyError("[KYUTXO] Tor proxy request failed", error);
       return {
         success: false,
-        error: error.message,
+        error: "Proxy request failed",
         latency,
       };
     }
-    
+
     return {
       success: false,
       error: "Unknown error occurred",
@@ -277,14 +290,16 @@ async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
       if (error.message.includes("ECONNREFUSED")) {
         return {
           success: false,
-          error: `Cannot connect to ${req.url}. Make sure the host is reachable.`,
+          error: "Cannot connect to the target host. Make sure the host is reachable.",
           latency,
         };
       }
-      
+
+      // Raw exception text can embed the target URL — keep it off the wire.
+      logProxyError("[KYUTXO] Direct request failed", error);
       return {
         success: false,
-        error: error.message,
+        error: "Direct request failed",
         latency,
       };
     }
@@ -317,7 +332,7 @@ router.post("/request", async (req: Request, res: Response) => {
 
   // Use direct request for trusted local hosts (skip Tor proxy)
   if (urlCheck.isLocal) {
-    console.log(`[KYUTXO] Making direct request to trusted local host: ${url}`);
+    console.log(`[KYUTXO] Making direct request to trusted local host: ${new URL(url).hostname}`);
     const result = await makeDirectRequest({
       url,
       method,
@@ -424,12 +439,13 @@ router.get("/status", async (_req: Request, res: Response) => {
         });
       }
     } catch (error) {
+      logProxyError(`[KYUTXO] Tor status check (${proxy.name}) failed`, error);
       results.push({
         name: proxy.name,
         url: proxy.url,
         port: proxy.port,
         available: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: "Status check failed",
       });
     }
   }

@@ -81,3 +81,4 @@
 - [Tier provenance classification](tier-provenance-classification.md) — never blanket-normalize invalid tiers; derive from source markers (substring match, "; "-merged sources) + syncDepth; repairs must bump updatedAt.
 - [Dexie inclusion vs exclusion parity](dexie-inclusion-vs-exclusion-parity.md) — anyOf narrowings hide unknown/missing enum keys that SQL exclusion shows; enumerate uniqueKeys dynamically + re-runnable repair; missing-key rows need alternate paths.
 - [GitHub push & build pipeline](github-push-build-pipeline.md) — gitPush callback can silently no-op; verify via ls-remote + credential-helper push; PAT lacks Actions read; win CI npm spawns need shell:true.
+- [Express always-on middleware order](express-always-on-middleware-order.md) — response-wide headers must be app.use'd BEFORE body parsers, or parser-rejected requests bypass them via error dispatch.

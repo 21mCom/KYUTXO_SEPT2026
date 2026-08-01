@@ -27,6 +27,16 @@ declare module 'http' {
     rawBody: unknown
   }
 }
+// Baseline security response headers for EVERY response (API and static).
+// Registered before the body parsers on purpose: when a parser rejects a
+// malformed body, Express jumps straight to error dispatch and skips any
+// normal middleware registered after the parsers — those error responses
+// would otherwise go out without the header.
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  next();
+});
+
 app.use(express.json({
   verify: (req, _res, buf) => {
     req.rawBody = buf;
@@ -34,24 +44,17 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: false }));
 
-app.use((req, res, next) => {
+// Request logger. Deliberately logs only method/path/status/duration — never
+// the response body. API responses here can carry attachment metadata, proxy
+// target URLs, or error detail that must not end up in logs.
+export function requestLogger(req: Request, res: Response, next: NextFunction) {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
 
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
 
       if (logLine.length > 80) {
         logLine = logLine.slice(0, 79) + "…";
@@ -62,20 +65,40 @@ app.use((req, res, next) => {
   });
 
   next();
-});
+}
+app.use(requestLogger);
+
+// Global error handler. Internal (5xx) detail — filesystem paths, OS errors,
+// stack text — stays server-side; production clients get a stable generic
+// message. 4xx messages are intentional client-facing strings and pass
+// through. The error is logged server-side and NEVER rethrown: throwing after
+// the response is sent crashes the whole process.
+export function errorMiddleware(
+  err: any,
+  req: Request,
+  res: Response,
+  _next: NextFunction,
+) {
+  const status = err.status || err.statusCode || 500;
+  const isProduction = req.app.get("env") === "production";
+  const expose = !isProduction || status < 500;
+  const message = expose
+    ? err.message || "Internal Server Error"
+    : "Internal Server Error";
+
+  if (status >= 500) {
+    console.error(`[express] ${req.method} ${req.path} failed:`, err);
+  }
+
+  res.status(status).json({ message });
+}
 
 export default async function runApp(
   setup: (app: Express, server: Server) => Promise<void>,
 ) {
   const server = await registerRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    res.status(status).json({ message });
-    throw err;
-  });
+  app.use(errorMiddleware);
 
   // importantly run the final setup after setting up all the other routes so
   // the catch-all route doesn't interfere with the other routes
