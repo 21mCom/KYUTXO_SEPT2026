@@ -398,6 +398,10 @@ export default function QuantumRiskScanner() {
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => (flatItems[index]?.kind === "header" ? HEADER_ESTIMATE : ROW_ESTIMATE),
     overscan: 20,
+    // Dynamic measurement: rows whose tag badges wrap onto extra lines are
+    // taller than ROW_ESTIMATE; measuring the rendered elements keeps deep
+    // scroll offsets accurate instead of drifting on wrapped rows.
+    measureElement: (el) => el.getBoundingClientRect().height,
     scrollMargin,
     // Stable keys so toggling a group or changing filters (which shifts item
     // indices) can't reuse a cached size from a different item kind.
@@ -681,7 +685,12 @@ export default function QuantumRiskScanner() {
                 if (item.kind === "header") {
                   const LevelIcon = item.level.icon;
                   return (
-                    <div key={virtualItem.key} className={virtualItem.index === 0 ? "" : "pt-3"}>
+                    <div
+                      key={virtualItem.key}
+                      ref={rowVirtualizer.measureElement}
+                      data-index={virtualItem.index}
+                      className={virtualItem.index === 0 ? "" : "pt-3"}
+                    >
                       <div
                         className={`rounded-t-md border bg-card ${item.open ? "" : "rounded-b-md"}`}
                         data-testid={`group-${item.level.key}`}
@@ -718,6 +727,8 @@ export default function QuantumRiskScanner() {
                 return (
                   <div
                     key={virtualItem.key}
+                    ref={rowVirtualizer.measureElement}
+                    data-index={virtualItem.index}
                     className={`border-x bg-card px-6 ${isLast ? "border-b rounded-b-md" : ""}`}
                   >
                     <div
