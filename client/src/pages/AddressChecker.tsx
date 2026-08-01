@@ -179,16 +179,24 @@ function renderFirstSeen(row: AddressRow, onLoad: () => void, isHistoryRunning: 
 const AddressCheckRow = memo(function AddressCheckRow({
   row,
   i,
+  virtualIndex,
+  measureRef,
   isHistoryRunning,
   onLoadHistory,
 }: {
   row: AddressRow;
   i: number;
+  /** Index of this row inside the virtualizer's item list (displayRows). */
+  virtualIndex: number;
+  /** rowVirtualizer.measureElement — dynamic row-height measurement. */
+  measureRef: (el: HTMLTableRowElement | null) => void;
   isHistoryRunning: boolean;
   onLoadHistory: (index: number) => void;
 }) {
   return (
     <TableRow
+      ref={measureRef}
+      data-index={virtualIndex}
       data-testid={`row-address-${i}`}
       data-funded={
         !row.isInvalid && row.status === "done" && (row.info?.balanceSats ?? 0) > 0
@@ -762,7 +770,15 @@ export default function AddressChecker() {
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_ESTIMATE,
     overscan: 20,
+    // Dynamic measurement: rows whose content wraps onto extra lines (long
+    // addresses, badges, error tooltips) are taller than ROW_ESTIMATE;
+    // measuring the rendered elements keeps deep scroll offsets accurate
+    // instead of drifting on wrapped rows (see QuantumRiskScanner).
+    measureElement: (el) => el.getBoundingClientRect().height,
     scrollMargin,
+    // Stable keys so toggling "Hide 0-transaction addresses" (which shifts
+    // item indices) can't reuse a cached measured size from a different row.
+    getItemKey: (index) => displayRows[index]?.i ?? index,
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
 
@@ -963,6 +979,8 @@ export default function AddressChecker() {
                             key={entry.i}
                             row={entry.row}
                             i={entry.i}
+                            virtualIndex={virtualRow.index}
+                            measureRef={rowVirtualizer.measureElement}
                             isHistoryRunning={isHistoryRunning}
                             onLoadHistory={runHistoryForRow}
                           />
