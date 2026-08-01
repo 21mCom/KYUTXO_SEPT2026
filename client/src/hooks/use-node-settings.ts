@@ -6,6 +6,7 @@ import {
   putNodeSettings,
   updateNodeSettings as updateStoredNodeSettings,
 } from '@/lib/data/node-settings-crud';
+import { syncTorProxySettings, torProxySettingsFromNodeSettings } from '@/lib/tor-proxy-settings-sync';
 
 const DEFAULT_NODE_SETTINGS: NodeSettings = {
   id: 'default',
@@ -51,6 +52,20 @@ export function useNodeSettings() {
         trustedLocalHosts: settings.trustedLocalHosts ?? [...DEFAULT_TRUSTED_LOCAL_HOSTS],
       }
     : DEFAULT_NODE_SETTINGS;
+
+  // Keep the Tor proxy's server-side allowlist/proxy settings in sync with the
+  // stored node settings (deduped — only pushes when they actually change).
+  const syncKey = JSON.stringify([
+    nodeSettings.providerType,
+    nodeSettings.customUrl,
+    nodeSettings.allowLocalNetwork,
+    nodeSettings.trustedLocalHosts,
+    nodeSettings.torProxyUrl,
+  ]);
+  useEffect(() => {
+    void syncTorProxySettings(torProxySettingsFromNodeSettings(nodeSettings));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncKey]);
 
   const updateSettings = async (updates: Partial<Omit<NodeSettings, 'id'>>) => {
     const existing = await getNodeSettings('default');

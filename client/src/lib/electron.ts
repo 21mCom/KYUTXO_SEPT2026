@@ -194,17 +194,21 @@ export interface ElectrumBatchUtxoResult {
   error?: string;
 }
 
+// Per-request allowlist/proxy overrides were removed: the main process derives
+// them from settings pushed via torUpdateSettings.
 export interface TorRequestParams {
   url: string;
   method?: string;
   headers?: Record<string, string>;
   body?: unknown;
   timeout?: number;
-  torProxyUrl?: string;
-  allowedHost?: string;
-  trustedLocalHosts?: string[];  // Whitelist of allowed local IPs/hostnames
 }
 
+export interface TorUpdateSettingsParams {
+  customProviderUrl?: string;
+  trustedLocalHosts?: string[];
+  torProxyUrl?: string;
+}
 export interface TorRequestResult {
   success: boolean;
   status?: number;
@@ -321,9 +325,10 @@ interface ElectronAPI {
   readNeedsReview: (name: string) => Promise<{ success: boolean; data?: ArrayBuffer; error?: string }>;
   deleteNeedsReview: (name: string) => Promise<{ success: boolean; error?: string }>;
   // Tor proxy operations
-  torTest: (torProxyUrl?: string) => Promise<TorTestResult>;
+  torTest: () => Promise<TorTestResult>;
   torRequest: (params: TorRequestParams) => Promise<TorRequestResult>;
   torStatus: () => Promise<TorStatusResult>;
+  torUpdateSettings: (settings: TorUpdateSettingsParams) => Promise<{ success: boolean; error?: string }>;
   // Electrum protocol operations
   electrumTest: (params: ElectrumTestParams) => Promise<ElectrumTestResult>;
   electrumGetHistory: (params: ElectrumHistoryParams) => Promise<ElectrumHistoryResult>;

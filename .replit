@@ -341,6 +341,10 @@ args = "server-response-hygiene-node-check"
 task = "workflow.run"
 args = "launch-token-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "tor-proxy-hardening-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1210,6 +1214,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run server/launch-token.test.ts server/attachments.security.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "tor-proxy-hardening-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run server/tor-proxy.test.ts server/tor-proxy.transport.test.ts electron/tor-proxy.test.ts electron/security-utils.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

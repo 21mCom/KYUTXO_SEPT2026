@@ -65,12 +65,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   isPortableMode: () => ipcRenderer.invoke('is-portable-mode'),
   
   // Tor proxy operations
-  torTest: (torProxyUrl) => 
-    ipcRenderer.invoke('tor-test', { torProxyUrl }),
+  torTest: () => 
+    ipcRenderer.invoke('tor-test'),
   torRequest: (params) => 
     ipcRenderer.invoke('tor-request', params),
   torStatus: () => 
     ipcRenderer.invoke('tor-status'),
+  torUpdateSettings: (settings) =>
+    ipcRenderer.invoke('tor-update-settings', settings),
   
   // Electrum protocol operations
   electrumTest: (params) =>

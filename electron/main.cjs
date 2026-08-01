@@ -6,9 +6,10 @@ const url = require('url');
 const {
   DEFAULT_TOR_PROXY,
   TOR_BROWSER_PROXY,
-  isAllowedUrl,
   makeProxiedRequest,
-  makeDirectRequest,
+  getTorProxySettings,
+  updateTorProxySettings,
+  handleTorRequest,
 } = require('./tor-proxy.cjs');
 
 const { registerFileHandlers } = require('./file-handlers.cjs');
@@ -21,6 +22,7 @@ const {
   isNavigationAllowed,
   escapeHtml,
   torRequestSchema,
+  torProxySettingsSchema,
 } = require('./security-utils.cjs');
 
 let mainWindow;
@@ -178,14 +180,27 @@ registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow: () => mainWi
 // TOR PROXY IPC HANDLERS
 // ============================================================================
 
-ipcMain.handle('tor-test', async (event, { torProxyUrl }) => {
+// Renderer pushes its stored node settings here (on load and on change); the
+// allowlist and SOCKS proxy selection for 'tor-request' derive from this
+// main-process state, never from per-request input.
+ipcMain.handle('tor-update-settings', async (event, rawSettings) => {
+  const parsed = torProxySettingsSchema.safeParse(rawSettings);
+  if (!parsed.success) {
+    return { success: false, error: `Invalid tor settings: ${parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
+  }
+  return updateTorProxySettings(parsed.data);
+});
+
+ipcMain.handle('tor-test', async () => {
   const proxiesToTest = [
     { name: "Tor Browser", url: TOR_BROWSER_PROXY },
     { name: "Tor Service", url: DEFAULT_TOR_PROXY },
   ];
 
-  if (torProxyUrl) {
-    proxiesToTest.unshift({ name: "Custom", url: torProxyUrl });
+  // Test the configured custom proxy first (from main-process settings).
+  const configuredProxy = getTorProxySettings().torProxyUrl;
+  if (configuredProxy && configuredProxy !== TOR_BROWSER_PROXY && configuredProxy !== DEFAULT_TOR_PROXY) {
+    proxiesToTest.unshift({ name: "Custom", url: configuredProxy });
   }
 
   for (const proxy of proxiesToTest) {
@@ -227,34 +242,9 @@ ipcMain.handle('tor-request', async (event, rawArgs) => {
   if (!parsedArgs.success) {
     return { success: false, error: `Invalid tor-request input: ${parsedArgs.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
   }
-  const { url: requestUrl, method, headers, body, timeout, torProxyUrl, allowedHost, trustedLocalHosts } = parsedArgs.data;
-  if (!requestUrl) {
-    return { success: false, error: "URL is required" };
-  }
-
-  const urlCheck = isAllowedUrl(requestUrl, allowedHost, trustedLocalHosts || []);
-  if (!urlCheck.allowed) {
-    return { success: false, error: urlCheck.reason || "URL not allowed" };
-  }
-
-  if (urlCheck.isLocal) {
-    return await makeDirectRequest({
-      url: requestUrl,
-      method,
-      headers,
-      body,
-      timeout,
-    });
-  }
-
-  return await makeProxiedRequest({
-    url: requestUrl,
-    method,
-    headers,
-    body,
-    timeout,
-    torProxyUrl,
-  });
+  // Allowlisting, proxy selection, and resource bounds are enforced inside
+  // handleTorRequest from main-process settings (see tor-proxy.cjs).
+  return await handleTorRequest(parsedArgs.data);
 });
 
 ipcMain.handle('tor-status', async () => {

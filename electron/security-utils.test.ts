@@ -18,6 +18,7 @@ const {
   isNavigationAllowed,
   escapeHtml,
   torRequestSchema,
+  torProxySettingsSchema,
 } = requireCjs("./security-utils.cjs") as {
   EXTERNAL_OPEN_ALLOWED_HOSTS: string[];
   isExternalOpenAllowed: (url: unknown) => boolean;
@@ -25,6 +26,9 @@ const {
   isNavigationAllowed: (url: unknown, opts?: { isDev?: boolean }) => boolean;
   escapeHtml: (value: unknown) => string;
   torRequestSchema: {
+    safeParse: (input: unknown) => { success: boolean; data?: unknown };
+  };
+  torProxySettingsSchema: {
     safeParse: (input: unknown) => { success: boolean; data?: unknown };
   };
 };
@@ -211,11 +215,25 @@ describe("tor-request input schema", () => {
       headers: { Accept: "application/json" },
       body: undefined,
       timeout: 15000,
-      torProxyUrl: "socks5://127.0.0.1:9050",
-      allowedHost: "mempool.space",
-      trustedLocalHosts: ["127.0.0.1"],
     });
     expect(result.success).toBe(true);
+  });
+
+  it("strips legacy per-request allowlist/proxy fields", () => {
+    // These fields were removed from the schema on purpose: allowlisting and
+    // the SOCKS proxy URL come from main-process settings, not request input.
+    const result = torRequestSchema.safeParse({
+      url: "https://mempool.space/api",
+      torProxyUrl: "socks5://evil.example.com:9050",
+      allowedHost: "evil.example.com",
+      trustedLocalHosts: ["192.168.1.99"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("torProxyUrl");
+      expect(result.data).not.toHaveProperty("allowedHost");
+      expect(result.data).not.toHaveProperty("trustedLocalHosts");
+    }
   });
 
   it.each([
@@ -230,9 +248,34 @@ describe("tor-request input schema", () => {
     ["non-integer timeout", { url: "https://mempool.space", timeout: 1.5 }],
     ["non-positive timeout", { url: "https://mempool.space", timeout: 0 }],
     ["non-string method", { url: "https://mempool.space", method: 7 }],
-    ["non-string torProxyUrl", { url: "https://mempool.space", torProxyUrl: { host: "x" } }],
-    ["non-array trustedLocalHosts", { url: "https://mempool.space", trustedLocalHosts: "127.0.0.1" }],
   ])("rejects malformed input: %s", (_label, input) => {
     expect(torRequestSchema.safeParse(input).success).toBe(false);
+  });
+});
+
+describe("tor-proxy settings schema", () => {
+  it("accepts a full valid settings payload", () => {
+    const result = torProxySettingsSchema.safeParse({
+      customProviderUrl: "http://mynodeabcdef.onion:3002",
+      trustedLocalHosts: ["192.168.1.50", "umbrel.local"],
+      torProxyUrl: "socks5h://127.0.0.1:9050",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an empty payload and null-cleared fields", () => {
+    expect(torProxySettingsSchema.safeParse({}).success).toBe(true);
+    expect(torProxySettingsSchema.safeParse({ customProviderUrl: null, torProxyUrl: null }).success).toBe(true);
+  });
+
+  it.each([
+    ["non-string customProviderUrl", { customProviderUrl: 42 }],
+    ["overlong customProviderUrl", { customProviderUrl: `https://${"a".repeat(3000)}.com` }],
+    ["non-array trustedLocalHosts", { trustedLocalHosts: "192.168.1.1" }],
+    ["empty-string trusted host", { trustedLocalHosts: [""] }],
+    ["too many trusted hosts", { trustedLocalHosts: Array.from({ length: 65 }, (_, i) => `192.168.1.${i}`) }],
+    ["non-string torProxyUrl", { torProxyUrl: { host: "x" } }],
+  ])("rejects malformed settings: %s", (_label, input) => {
+    expect(torProxySettingsSchema.safeParse(input).success).toBe(false);
   });
 });

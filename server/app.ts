@@ -8,6 +8,7 @@ import express, {
 } from "express";
 
 import { registerRoutes } from "./routes";
+import { MAX_INCOMING_CONTENT_LENGTH } from "./tor-proxy";
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -36,6 +37,19 @@ app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   next();
 });
+
+// The Tor proxy accepts JSON envelopes up to its declared 1 MB cap, which is
+// larger than the global default JSON limit (100 KB). Give it its own parser
+// first so legitimate transaction broadcasts aren't rejected with 413 by
+// generic parsing before the route's own policy runs. This parser-level limit
+// is the hard cap; body-parser skips requests that are already parsed, so the
+// global parser below never re-reads /api/tor bodies.
+app.use("/api/tor", express.json({
+  limit: MAX_INCOMING_CONTENT_LENGTH,
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
 app.use(express.json({
   verify: (req, _res, buf) => {

@@ -325,17 +325,19 @@ export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
 }
 
 // Tor connectivity testing
-// Test if Tor is available and working
-export async function testTorConnectivity(customProxyUrl?: string): Promise<TorTestResult> {
+// Test if Tor is available and working. The proxies tested (including the
+// user's configured custom SOCKS proxy) come from server-side settings — sync
+// settings via syncTorProxySettings first if unsaved changes should apply.
+export async function testTorConnectivity(): Promise<TorTestResult> {
   try {
     if (isElectron()) {
       const electronAPI = getElectronAPI();
-      return await electronAPI.torTest(customProxyUrl);
+      return await electronAPI.torTest();
     } else {
       const response = await fetch('/api/tor/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ torProxyUrl: customProxyUrl }),
+        body: JSON.stringify({}),
       });
       return await response.json();
     }

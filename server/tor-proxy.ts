@@ -1,23 +1,35 @@
 import { Router, Request, Response } from "express";
 import { SocksProxyAgent } from "socks-proxy-agent";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 
 const router = Router();
 
 const DEFAULT_TOR_PROXY = "socks5h://127.0.0.1:9050";
 const TOR_BROWSER_PROXY = "socks5h://127.0.0.1:9150";
 
-// SECURITY NOTE: This Tor proxy is designed for a desktop Electron application
-// where the "client" and "server" run on the same machine controlled by the user.
-// The threat model does NOT include protecting against the user themselves.
-// 
-// SSRF protections implemented:
-// 1. Private IP range blocking (localhost, 10.x, 172.16-31.x, 192.168.x, etc.)
-// 2. Allowlist for known Bitcoin API providers
-// 3. Dynamic allowlist extension via allowedHost for user-configured custom nodes
+// ============================================================================
+// SECURITY MODEL
+// ============================================================================
+// This endpoint is a relay: it fetches arbitrary URLs on behalf of whoever can
+// reach the HTTP server. To keep it from becoming a semi-open relay (especially
+// while the server is LAN-reachable), all trust decisions are made SERVER-SIDE:
 //
-// Known limitations for future enhancement:
-// - DNS rebinding not fully mitigated (would require resolving hostnames server-side)
-// - allowedHost is client-supplied (acceptable in desktop context, reconsider if server is exposed)
+// 1. Destinations are restricted to a server-side allowlist: known Esplora
+//    providers, check.torproject.org, and the user's configured custom provider
+//    (pushed to the server via POST /api/tor/settings from stored settings).
+//    Callers can NO LONGER extend the allowlist per request — the old
+//    `allowedHost` / `trustedLocalHosts` request fields are ignored.
+// 2. .onion destinations are only allowed when they match the configured
+//    custom provider host (the user's own node), not arbitrary onions.
+// 3. Private/local addresses require the host to appear in the configured
+//    trusted-local-hosts list (also pushed via /api/tor/settings).
+// 4. The SOCKS proxy URL comes from server-side settings, never per request.
+// 5. Resource exhaustion bounds: methods and headers are allowlisted, request
+//    bodies and timeouts are capped, and concurrency is limited.
+//
+// Known limitations:
+// - DNS rebinding is not fully mitigated (would require resolving hostnames
+//   server-side and pinning the resolved IP).
 
 // Allowed hostnames for Bitcoin API requests - prevents SSRF attacks
 const ALLOWED_API_HOSTS = [
@@ -27,8 +39,136 @@ const ALLOWED_API_HOSTS = [
   "blockstream.info",
   // Tor project (for testing)
   "check.torproject.org",
-  // Note: .onion addresses are always allowed (user's own nodes)
 ];
+
+// ============================================================================
+// RESOURCE BOUNDS
+// ============================================================================
+const ALLOWED_METHODS = new Set(["GET", "POST"]);
+// Only these caller-supplied headers are forwarded upstream. Anything else
+// (auth tokens, cookies, arbitrary headers) is stripped.
+const ALLOWED_FORWARD_HEADERS = new Set(["content-type", "accept"]);
+// Cap on the serialized body forwarded upstream (tx broadcast hex fits well
+// under this; anything larger is not a legitimate Esplora call).
+export const MAX_REQUEST_BODY_BYTES = 256 * 1024;
+// Cap on the incoming proxied-request envelope itself.
+export const MAX_INCOMING_CONTENT_LENGTH = 1024 * 1024;
+const DEFAULT_TIMEOUT_MS = 60_000;
+const MIN_TIMEOUT_MS = 1_000;
+export const MAX_TIMEOUT_MS = 120_000;
+// Concurrency limit so the endpoint can't exhaust sockets/memory.
+export const MAX_CONCURRENT_PROXIED_REQUESTS = 8;
+export const MAX_QUEUED_PROXIED_REQUESTS = 64;
+const QUEUE_WAIT_TIMEOUT_MS = 30_000;
+
+export function clampProxyTimeout(timeout?: number): number {
+  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
+    return DEFAULT_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(Math.floor(timeout), MIN_TIMEOUT_MS), MAX_TIMEOUT_MS);
+}
+
+// ============================================================================
+// SERVER-SIDE SETTINGS (pushed by the client from stored node settings)
+// ============================================================================
+export interface TorProxySettings {
+  customProviderUrl?: string; // Full URL of the configured custom Esplora provider
+  trustedLocalHosts: string[]; // User-configured trusted local IPs/hostnames
+  torProxyUrl?: string; // socks5(h):// URL of the user's Tor proxy
+}
+
+let torProxySettings: TorProxySettings = { trustedLocalHosts: [] };
+
+let settingsInitialized = false;
+export function getTorProxySettings(): TorProxySettings {
+  return torProxySettings;
+}
+
+// Test hook: restore the empty (deny-everything-custom) defaults.
+export function resetTorProxySettings(): void {
+  torProxySettings = { trustedLocalHosts: [] };
+  settingsInitialized = false;
+}
+
+function isValidSocksProxyUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "socks5:" && parsed.protocol !== "socks5h:") return false;
+    if (!parsed.hostname) return false;
+    const port = parseInt(parsed.port, 10);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeTrustedLocalHosts(input: unknown): { ok: true; hosts: string[] } | { ok: false; error: string } {
+  if (input === undefined || input === null) return { ok: true, hosts: [] };
+  if (!Array.isArray(input)) return { ok: false, error: "trustedLocalHosts must be an array of hostnames" };
+  if (input.length > 64) return { ok: false, error: "trustedLocalHosts is limited to 64 entries" };
+  const hosts: string[] = [];
+  for (const entry of input) {
+    if (typeof entry !== "string") return { ok: false, error: "trustedLocalHosts entries must be strings" };
+    const trimmed = entry.trim();
+    if (!trimmed || trimmed.length > 253 || /[\s/:]/.test(trimmed)) {
+      return { ok: false, error: `Invalid trusted local host entry: '${String(entry).slice(0, 64)}'` };
+    }
+    hosts.push(trimmed);
+  }
+  return { ok: true, hosts };
+}
+
+// Validate and store settings pushed by the client. Rejects the whole update
+// if any field is malformed (fail closed).
+export function updateTorProxySettings(input: unknown): { success: boolean; error?: string } {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return { success: false, error: "Settings payload must be an object" };
+  }
+  const raw = input as Record<string, unknown>;
+
+  let customProviderUrl: string | undefined;
+  if (raw.customProviderUrl !== undefined && raw.customProviderUrl !== null && raw.customProviderUrl !== "") {
+    if (typeof raw.customProviderUrl !== "string" || raw.customProviderUrl.length > 2048) {
+      return { success: false, error: "customProviderUrl must be a string URL" };
+    }
+    try {
+      const parsed = new URL(raw.customProviderUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return { success: false, error: "customProviderUrl must be an http(s) URL" };
+      }
+    } catch {
+      return { success: false, error: "customProviderUrl is not a valid URL" };
+    }
+    customProviderUrl = raw.customProviderUrl;
+  }
+
+  const trusted = sanitizeTrustedLocalHosts(raw.trustedLocalHosts);
+  if (!trusted.ok) return { success: false, error: trusted.error };
+
+  let torProxyUrl: string | undefined;
+  if (raw.torProxyUrl !== undefined && raw.torProxyUrl !== null && raw.torProxyUrl !== "") {
+    if (typeof raw.torProxyUrl !== "string" || !isValidSocksProxyUrl(raw.torProxyUrl)) {
+      return { success: false, error: "torProxyUrl must be a socks5:// or socks5h:// URL with a port" };
+    }
+    torProxyUrl = raw.torProxyUrl;
+  }
+
+  torProxySettings = { customProviderUrl, trustedLocalHosts: trusted.hosts, torProxyUrl };
+  settingsInitialized = true;
+  return { success: true };
+}
+
+// Hostname of the configured custom provider (lowercased), or undefined.
+function getConfiguredCustomProviderHost(): string | undefined {
+  const url = torProxySettings.customProviderUrl;
+  if (!url) return undefined;
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
 
 // Check if a hostname matches private/local IP patterns
 function isPrivateAddress(hostname: string): boolean {
@@ -49,77 +189,144 @@ function isPrivateAddress(hostname: string): boolean {
   return privatePatterns.some(p => p.test(hostname));
 }
 
-function isAllowedUrl(url: string, additionalAllowedHost?: string, trustedLocalHosts: string[] = []): { allowed: boolean; reason?: string; isLocal?: boolean } {
+function hostMatches(hostname: string, allowed: string): boolean {
+  return hostname === allowed || hostname.endsWith('.' + allowed);
+}
+
+// SSRF guard. All trust inputs come from server-side settings, never from the
+// individual request.
+export function isAllowedUrl(url: string): { allowed: boolean; reason?: string; isLocal?: boolean } {
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase();
-    
-    // Allow .onion addresses (user's self-hosted nodes)
+    const customHost = getConfiguredCustomProviderHost();
+    const settings = getTorProxySettings();
+
+    // .onion destinations: only the user's configured custom provider onion is
+    // allowed (their own self-hosted node). Arbitrary onions are rejected.
     if (hostname.endsWith('.onion')) {
-      return { allowed: true };
-    }
-    
-    // Check if this is a private/local address
-    const isPrivate = isPrivateAddress(hostname);
-    
-    if (isPrivate) {
-      // For private addresses, check against trusted local hosts whitelist
-      if (trustedLocalHosts && trustedLocalHosts.length > 0) {
-        const isTrusted = trustedLocalHosts.some(trusted => {
-          const trustedLower = trusted.toLowerCase();
-          return hostname === trustedLower || 
-                 hostname.startsWith(trustedLower + ':') ||
-                 hostname.startsWith(trustedLower + '.');
-        });
-        
-        if (isTrusted) {
-          console.log(`[KYUTXO] Allowing trusted local host: ${hostname}`);
-          return { allowed: true, isLocal: true };
-        }
+      if (customHost && customHost.endsWith('.onion') && hostMatches(hostname, customHost)) {
+        return { allowed: true };
       }
-      
-      return { 
-        allowed: false, 
-        reason: `Local address '${hostname}' is not in your trusted hosts whitelist. Add it in Node Settings → Trusted Local Hosts.` 
+      return {
+        allowed: false,
+        reason: `Onion host '${hostname}' is not your configured provider. Set it as your custom provider in Node Settings first.`,
       };
     }
-    
-    // Build dynamic allowlist including client-provided host
-    const allowedHosts = [...ALLOWED_API_HOSTS];
-    if (additionalAllowedHost) {
-      try {
-        const additionalParsed = new URL(additionalAllowedHost);
-        const additionalHostname = additionalParsed.hostname.toLowerCase();
-        // Only add if not a private address
-        if (!isPrivateAddress(additionalHostname)) {
-          allowedHosts.push(additionalHostname);
-        }
-      } catch {
-        // Invalid URL, ignore
+
+    // Check if this is a private/local address
+    if (isPrivateAddress(hostname)) {
+      const isTrusted = settings.trustedLocalHosts.some(trusted => {
+        const trustedLower = trusted.toLowerCase();
+        return hostname === trustedLower ||
+               hostname.startsWith(trustedLower + ':') ||
+               hostname.startsWith(trustedLower + '.');
+      });
+
+      if (isTrusted) {
+        return { allowed: true, isLocal: true };
       }
+
+      return {
+        allowed: false,
+        reason: `Local address '${hostname}' is not in your trusted hosts whitelist. Add it in Node Settings → Trusted Local Hosts.`
+      };
     }
-    
-    // Check against allowlist
-    const isAllowed = allowedHosts.some(allowed => 
-      hostname === allowed || hostname.endsWith('.' + allowed)
-    );
-    
-    if (!isAllowed) {
-      return { 
-        allowed: false, 
+
+    // Build the server-side allowlist: known providers + configured custom provider
+    const allowedHosts = [...ALLOWED_API_HOSTS];
+    if (customHost && !isPrivateAddress(customHost)) {
+      allowedHosts.push(customHost);
+    }
+
+    if (!allowedHosts.some(allowed => hostMatches(hostname, allowed))) {
+      return {
+        allowed: false,
         reason: `Host '${hostname}' is not in the allowed list. Only Bitcoin API providers are permitted.`
       };
     }
-    
+
     // Only allow HTTPS for non-.onion, non-local hosts
     if (parsed.protocol !== 'https:') {
       return { allowed: false, reason: "Only HTTPS URLs are allowed (except for .onion and local addresses)" };
     }
-    
+
     return { allowed: true };
   } catch {
     return { allowed: false, reason: "Invalid URL format" };
   }
+}
+
+// ============================================================================
+// CONCURRENCY LIMITER (semaphore with a bounded queue)
+// ============================================================================
+let activeProxiedRequests = 0;
+const proxyWaitQueue: Array<{
+  resolve: () => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+}> = [];
+
+class ProxyQueueError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = "ProxyQueueError";
+  }
+}
+
+async function acquireProxySlot(): Promise<void> {
+  if (activeProxiedRequests < MAX_CONCURRENT_PROXIED_REQUESTS) {
+    activeProxiedRequests++;
+    return;
+  }
+  if (proxyWaitQueue.length >= MAX_QUEUED_PROXIED_REQUESTS) {
+    throw new ProxyQueueError("Too many proxied requests in flight. Try again shortly.", 429);
+  }
+  await new Promise<void>((resolve, reject) => {
+    const entry = {
+      resolve: () => {
+        clearTimeout(entry.timer);
+        resolve();
+      },
+      reject: (err: Error) => {
+        clearTimeout(entry.timer);
+        reject(err);
+      },
+      timer: setTimeout(() => {
+        const idx = proxyWaitQueue.indexOf(entry);
+        if (idx >= 0) proxyWaitQueue.splice(idx, 1);
+        reject(new ProxyQueueError("Timed out waiting for a free proxy slot. Try again shortly.", 429));
+      }, QUEUE_WAIT_TIMEOUT_MS),
+    };
+    proxyWaitQueue.push(entry);
+  });
+  activeProxiedRequests++;
+}
+
+function releaseProxySlot(): void {
+  activeProxiedRequests--;
+  const next = proxyWaitQueue.shift();
+  if (next) next.resolve();
+}
+
+// ============================================================================
+// REQUEST SANITIZATION
+// ============================================================================
+function sanitizeForwardHeaders(headers: unknown): Record<string, string> | undefined {
+  if (typeof headers !== "object" || headers === null || Array.isArray(headers)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+    if (typeof value !== "string") continue;
+    const lower = key.toLowerCase();
+    if (ALLOWED_FORWARD_HEADERS.has(lower)) out[lower] = value.slice(0, 512);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function serializeRequestBody(body: unknown): string | undefined {
+  if (body === undefined || body === null) return undefined;
+  const serialized = typeof body === "string" ? body : JSON.stringify(body);
+  return serialized;
 }
 
 // Log a proxy failure server-side WITHOUT the raw error message: fetch/socks
@@ -133,15 +340,31 @@ function logProxyError(context: string, error: unknown): void {
   }
 }
 
+// node-fetch (not the global undici fetch) is REQUIRED here: only node-fetch
+// honors the `agent` option. Undici silently ignores `agent` and would connect
+// directly, sending "Tor-proxied" traffic over clearnet.
+type FetchImpl = (url: string, init?: object) => Promise<{
+  ok: boolean;
+  status: number;
+  statusText: string;
+  headers: { get(name: string): string | null };
+  json(): Promise<unknown>;
+  text(): Promise<string>;
+}>;
+let cachedNodeFetch: FetchImpl | undefined;
+async function getNodeFetch(): Promise<FetchImpl> {
+  if (!cachedNodeFetch) {
+    cachedNodeFetch = (await import("node-fetch")).default as unknown as FetchImpl;
+  }
+  return cachedNodeFetch;
+}
+
 interface ProxyRequest {
   url: string;
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: string;
   headers?: Record<string, string>;
   body?: unknown;
   timeout?: number;
-  torProxyUrl?: string;
-  allowedHost?: string; // Client-specified allowed host for custom providers
-  trustedLocalHosts?: string[]; // Whitelist of allowed local IPs/hostnames
 }
 
 interface ProxyResponse {
@@ -154,53 +377,59 @@ interface ProxyResponse {
   contentType?: string; // Preserve upstream content-type
 }
 
-async function makeProxiedRequest(req: ProxyRequest): Promise<ProxyResponse> {
+export async function makeProxiedRequest(req: ProxyRequest & { torProxyUrl?: string }): Promise<ProxyResponse> {
   const startTime = Date.now();
   const proxyUrl = req.torProxyUrl || DEFAULT_TOR_PROXY;
-  const timeout = req.timeout || 60000;
+  const timeout = clampProxyTimeout(req.timeout);
 
   try {
+    const fetchImpl = await getNodeFetch();
     const agent = new SocksProxyAgent(proxyUrl);
-    
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    const fetchOptions: RequestInit = {
+    const fetchOptions: Record<string, unknown> = {
       method: req.method || "GET",
       headers: req.headers,
       signal: controller.signal,
-      // @ts-expect-error - agent is valid for Node.js fetch
       agent,
     };
 
-    if (req.body && (req.method === "POST" || req.method === "PUT")) {
-      fetchOptions.body = JSON.stringify(req.body);
+    const body = serializeRequestBody(req.body);
+    if (body && (req.method === "POST" || req.method === "PUT")) {
+      fetchOptions.body = body;
     }
 
-    const response = await fetch(req.url, fetchOptions);
-    clearTimeout(timeoutId);
+    // The timeout MUST be cleared on every exit path (including fetch
+    // rejection), or repeated failures accumulate live timers/controllers.
+    try {
+      const response = await fetchImpl(req.url, fetchOptions);
 
-    const latency = Date.now() - startTime;
-    
-    let data: unknown;
-    const contentType = response.headers.get("content-type");
-    if (contentType?.includes("application/json")) {
-      data = await response.json();
-    } else {
-      data = await response.text();
+      const latency = Date.now() - startTime;
+
+      let data: unknown;
+      const contentType = response.headers.get("content-type");
+      if (contentType?.includes("application/json")) {
+        data = await response.json();
+      } else {
+        data = await response.text();
+      }
+
+      return {
+        success: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        data,
+        latency,
+        contentType: contentType || undefined,
+      };
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    return {
-      success: response.ok,
-      status: response.status,
-      statusText: response.statusText,
-      data,
-      latency,
-      contentType: contentType || undefined,
-    };
   } catch (error) {
     const latency = Date.now() - startTime;
-    
+
     if (error instanceof Error) {
       if (error.name === "AbortError") {
         return {
@@ -209,7 +438,7 @@ async function makeProxiedRequest(req: ProxyRequest): Promise<ProxyResponse> {
           latency,
         };
       }
-      
+
       if (error.message.includes("ECONNREFUSED")) {
         return {
           success: false,
@@ -238,46 +467,53 @@ async function makeProxiedRequest(req: ProxyRequest): Promise<ProxyResponse> {
 // Direct request without Tor proxy (for trusted local hosts)
 async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
   const startTime = Date.now();
-  const timeout = req.timeout || 60000;
+  const timeout = clampProxyTimeout(req.timeout);
 
   try {
+    const fetchImpl = await getNodeFetch();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    const fetchOptions: RequestInit = {
+    const fetchOptions: Record<string, unknown> = {
       method: req.method || "GET",
       headers: req.headers,
       signal: controller.signal,
     };
 
-    if (req.body && (req.method === "POST" || req.method === "PUT")) {
-      fetchOptions.body = JSON.stringify(req.body);
+    const body = serializeRequestBody(req.body);
+    if (body && (req.method === "POST" || req.method === "PUT")) {
+      fetchOptions.body = body;
     }
 
-    const response = await fetch(req.url, fetchOptions);
-    clearTimeout(timeoutId);
+    // The timeout MUST be cleared on every exit path (including fetch
+    // rejection), or repeated failures accumulate live timers/controllers.
+    try {
+      const response = await fetchImpl(req.url, fetchOptions);
 
-    const latency = Date.now() - startTime;
-    
-    let data: unknown;
-    const contentType = response.headers.get("content-type");
-    if (contentType?.includes("application/json")) {
-      data = await response.json();
-    } else {
-      data = await response.text();
+      const latency = Date.now() - startTime;
+
+      let data: unknown;
+      const contentType = response.headers.get("content-type");
+      if (contentType?.includes("application/json")) {
+        data = await response.json();
+      } else {
+        data = await response.text();
+      }
+
+      return {
+        success: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        data,
+        latency,
+        contentType: contentType || undefined,
+      };
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    return {
-      success: response.ok,
-      status: response.status,
-      statusText: response.statusText,
-      data,
-      latency,
-      contentType: contentType || undefined,
-    };
   } catch (error) {
     const latency = Date.now() - startTime;
-    
+
     if (error instanceof Error) {
       if (error.name === "AbortError") {
         return {
@@ -286,7 +522,7 @@ async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
           latency,
         };
       }
-      
+
       if (error.message.includes("ECONNREFUSED")) {
         return {
           success: false,
@@ -303,7 +539,7 @@ async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
         latency,
       };
     }
-    
+
     return {
       success: false,
       error: "Unknown error occurred",
@@ -312,60 +548,135 @@ async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
   }
 }
 
-router.post("/request", async (req: Request, res: Response) => {
-  const { url, method, headers, body, timeout, torProxyUrl, allowedHost, trustedLocalHosts } = req.body as ProxyRequest;
+// ============================================================================
+// ROUTES
+// ============================================================================
 
-  if (!url) {
+// Issues the per-process settings token, but only to loopback clients — this
+// is what makes /settings an authorized local channel rather than a
+// LAN-writable trust API.
+router.get("/settings-token", (req: Request, res: Response) => {
+  if (!isLoopbackRequest(req)) {
+    return res.status(403).json({
+      success: false,
+      error: "Tor proxy settings can only be managed from the local machine.",
+    });
+  }
+  res.json({ success: true, token: SETTINGS_BOOTSTRAP_TOKEN });
+});
+
+// The client pushes the relevant slice of its stored node settings here (on
+// load and whenever they change). All allowlisting and proxy decisions for
+// /request are derived from this server-held state, never per-request input.
+router.post("/settings", (req: Request, res: Response) => {
+  if (!hasValidSettingsToken(req)) {
+    return res.status(403).json({
+      success: false,
+      error: "Missing or invalid settings token. Tor proxy settings can only be managed by the local application.",
+    });
+  }
+  const result = updateTorProxySettings(req.body);
+  if (!result.success) {
+    return res.status(400).json({ success: false, error: result.error });
+  }
+  res.json({ success: true });
+});
+
+router.post("/request", async (req: Request, res: Response) => {
+  // Bound the incoming envelope (the global JSON parser applies its own cap
+  // too; this gives a clean, explicit 413 for the proxy route).
+  const contentLength = parseInt(req.headers["content-length"] || "", 10);
+  if (Number.isFinite(contentLength) && contentLength > MAX_INCOMING_CONTENT_LENGTH) {
+    return res.status(413).json({ success: false, error: "Request too large" });
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const { url, timeout } = body as { url?: string; timeout?: number };
+  const method = typeof body.method === "string" ? body.method.toUpperCase() : "GET";
+  // NOTE: legacy per-request `allowedHost`, `trustedLocalHosts`, and
+  // `torProxyUrl` fields are deliberately ignored — trust is server-side now.
+
+  if (!url || typeof url !== "string") {
     return res.status(400).json({ success: false, error: "URL is required" });
   }
 
-  // Validate URL to prevent SSRF attacks
-  // allowedHost allows the client to specify their configured provider URL for custom nodes
-  // trustedLocalHosts allows direct local network connections
-  const urlCheck = isAllowedUrl(url, allowedHost, trustedLocalHosts || []);
+  if (!ALLOWED_METHODS.has(method)) {
+    return res.status(405).json({ success: false, error: `Method ${method} is not allowed through the proxy` });
+  }
+
+  const serializedBody = serializeRequestBody(body.body);
+  if (serializedBody && serializedBody.length > MAX_REQUEST_BODY_BYTES) {
+    return res.status(413).json({ success: false, error: "Request body too large" });
+  }
+
+  const headers = sanitizeForwardHeaders(body.headers);
+
+  // Validate URL to prevent SSRF attacks (server-side allowlist only)
+  const urlCheck = isAllowedUrl(url);
   if (!urlCheck.allowed) {
-    return res.status(403).json({ 
-      success: false, 
+    // If the local application hasn't pushed settings yet (e.g. right after a
+    // server restart), tell it apart from a genuine rejection so it can sync
+    // settings and retry once.
+    if (!settingsInitialized) {
+      return res.status(428).json({
+        success: false,
+        errorCode: "TOR_SETTINGS_NOT_INITIALIZED",
+        error: "Tor proxy settings have not been synced by the local application yet.",
+      });
+    }
+    return res.status(403).json({
+      success: false,
       error: urlCheck.reason || "URL not allowed"
     });
   }
 
-  // Use direct request for trusted local hosts (skip Tor proxy)
-  if (urlCheck.isLocal) {
-    console.log(`[KYUTXO] Making direct request to trusted local host: ${new URL(url).hostname}`);
-    const result = await makeDirectRequest({
+  let slotAcquired = false;
+  try {
+    await acquireProxySlot();
+    slotAcquired = true;
+
+    const proxiedReq: ProxyRequest = {
       url,
       method,
       headers,
-      body,
-      timeout,
+      body: serializedBody,
+      timeout: clampProxyTimeout(typeof timeout === "number" ? timeout : undefined),
+    };
+
+    // Use direct request for trusted local hosts (skip Tor proxy)
+    if (urlCheck.isLocal) {
+      console.log(`[KYUTXO] Making direct request to trusted local host: ${new URL(url).hostname}`);
+      const result = await makeDirectRequest(proxiedReq);
+      return res.json(result);
+    }
+
+    // Use Tor proxy for remote/onion addresses; SOCKS URL comes from
+    // server-side settings, never from the request.
+    const result = await makeProxiedRequest({
+      ...proxiedReq,
+      torProxyUrl: getTorProxySettings().torProxyUrl,
     });
-    return res.json(result);
+    res.json(result);
+  } catch (error) {
+    if (error instanceof ProxyQueueError) {
+      return res.status(error.statusCode).json({ success: false, error: error.message });
+    }
+    throw error;
+  } finally {
+    if (slotAcquired) releaseProxySlot();
   }
-
-  // Use Tor proxy for remote/onion addresses
-  const result = await makeProxiedRequest({
-    url,
-    method,
-    headers,
-    body,
-    timeout,
-    torProxyUrl,
-  });
-
-  res.json(result);
 });
 
-router.post("/test", async (req: Request, res: Response) => {
-  const { torProxyUrl } = req.body as { torProxyUrl?: string };
-  
-  const proxiesToTest = [
-    { name: "Tor Browser", url: TOR_BROWSER_PROXY },
-    { name: "Tor Service", url: DEFAULT_TOR_PROXY },
+router.post("/test", async (_req: Request, res: Response) => {
+  const proxiesToTest: { name: string; url: string; port?: number }[] = [
+    { name: "Tor Browser", url: TOR_BROWSER_PROXY, port: 9150 },
+    { name: "Tor Service", url: DEFAULT_TOR_PROXY, port: 9050 },
   ];
 
-  if (torProxyUrl) {
-    proxiesToTest.unshift({ name: "Custom", url: torProxyUrl });
+  // Test the configured custom proxy first (from server-side settings).
+  const configuredProxy = getTorProxySettings().torProxyUrl;
+  if (configuredProxy && configuredProxy !== TOR_BROWSER_PROXY && configuredProxy !== DEFAULT_TOR_PROXY) {
+    proxiesToTest.unshift({ name: "Custom", url: configuredProxy });
   }
 
   for (const proxy of proxiesToTest) {
@@ -373,10 +684,10 @@ router.post("/test", async (req: Request, res: Response) => {
       const result = await makeProxiedRequest({
         url: "https://check.torproject.org/api/ip",
         torProxyUrl: proxy.url,
-        timeout: 15000,
+        timeout: 10000,
       });
 
-      if (result.success && result.data) {
+      if (result.success) {
         const torCheck = result.data as { IsTor?: boolean; IP?: string };
         if (torCheck.IsTor) {
           return res.json({
@@ -455,10 +766,25 @@ router.get("/status", async (_req: Request, res: Response) => {
   res.json({
     torAvailable: anyAvailable,
     proxies: results,
-    recommendation: anyAvailable 
+    recommendation: anyAvailable
       ? `Tor is available via ${results.find(r => r.available && r.isTor)?.name}`
       : "No Tor proxy detected. Please start Tor Browser or install the Tor service.",
   });
 });
 
 export default router;
+
+function hasValidSettingsToken(req: Request): boolean {
+  const presented = req.headers["x-tor-settings-token"];
+  if (typeof presented !== "string" || presented.length !== SETTINGS_BOOTSTRAP_TOKEN.length) {
+    return false;
+  }
+  return timingSafeEqual(Buffer.from(presented), Buffer.from(SETTINGS_BOOTSTRAP_TOKEN));
+}
+
+function isLoopbackRequest(req: Request): boolean {
+  const addr = req.socket.remoteAddress || "";
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+const SETTINGS_BOOTSTRAP_TOKEN = randomBytes(32).toString("hex");

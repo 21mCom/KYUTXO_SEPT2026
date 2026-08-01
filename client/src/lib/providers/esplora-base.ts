@@ -1,4 +1,5 @@
 import { isElectron, getElectronAPI } from '../electron';
+import { syncTorProxySettings, invalidateTorProxySettingsSync } from '../tor-proxy-settings-sync';
 import { BlockchainProvider, ApiTransaction, AddressInfo, AddressHistoryDates, DEFAULT_RATE_LIMIT_DELAY, TOR_RATE_LIMIT_DELAY, isLocalOrPrivateUrl } from './types';
 
 // Base class with shared functionality for Esplora-compatible APIs
@@ -100,6 +101,15 @@ export abstract class EsploraProvider implements BlockchainProvider {
 
     const startTime = Date.now();
 
+    // Ensure the proxy's server-side allowlist knows this provider's host (and
+    // the configured trusted local hosts / SOCKS proxy) before requesting.
+    // Deduped: only re-pushes when the payload actually changes.
+    await syncTorProxySettings({
+      customProviderUrl: this.baseUrl,
+      trustedLocalHosts: this.trustedLocalHosts,
+      torProxyUrl: this.torProxyUrl,
+    });
+
     if (isElectron()) {
       const electronAPI = getElectronAPI();
       console.log(`[KYUTXO] [${new Date().toISOString()}] Calling Electron IPC torRequest...`);
@@ -109,9 +119,6 @@ export abstract class EsploraProvider implements BlockchainProvider {
         url,
         method: 'GET',
         timeout: this.timeout,
-        torProxyUrl: this.torProxyUrl,
-        allowedHost: this.baseUrl,
-        trustedLocalHosts: this.trustedLocalHosts,
       });
       if (externalSignal) {
         result = await new Promise<typeof result>((resolve, reject) => {
@@ -129,19 +136,31 @@ export abstract class EsploraProvider implements BlockchainProvider {
     } else {
       // Browser proxy path: pass the external signal so the connection to our
       // local proxy server is aborted when the user stops the resolve.
-      const proxyResponse = await fetch('/api/tor/request', {
+      const requestInit: RequestInit = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url,
           method: 'GET',
           timeout: this.timeout,
-          torProxyUrl: this.torProxyUrl,
-          allowedHost: this.baseUrl,
-          trustedLocalHosts: this.trustedLocalHosts,
         }),
         signal: externalSignal,
-      });
+      };
+      let proxyResponse = await fetch('/api/tor/request', requestInit);
+      if (proxyResponse.status === 428) {
+        // The server lost its synced settings (e.g. it restarted). Re-push and
+        // retry once before surfacing the failure.
+        invalidateTorProxySettingsSync();
+        await syncTorProxySettings(
+          {
+            customProviderUrl: this.baseUrl,
+            trustedLocalHosts: this.trustedLocalHosts,
+            torProxyUrl: this.torProxyUrl,
+          },
+          { force: true },
+        );
+        proxyResponse = await fetch('/api/tor/request', requestInit);
+      }
       result = await proxyResponse.json();
     }
 

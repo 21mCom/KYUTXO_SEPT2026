@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useNodeSettings } from "@/hooks/use-node-settings";
+import { syncTorProxySettings, torProxySettingsFromNodeSettings } from "@/lib/tor-proxy-settings-sync";
 import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
 import { NodeProviderType, NodeSettings as NodeSettingsType, DEFAULT_TRUSTED_LOCAL_HOSTS } from "@/lib/database";
 import { 
@@ -262,7 +263,10 @@ export default function NodeSettings() {
     setTorTestResult(null);
     
     try {
-      const result = await testTorConnectivity(currentSettings.torProxyUrl);
+      // Push the current (including unsaved) settings so the proxy tests the
+      // configured custom SOCKS proxy server-side.
+      await syncTorProxySettings(torProxySettingsFromNodeSettings(currentSettings));
+      const result = await testTorConnectivity();
       setTorTestResult(result);
       
       if (result.success) {

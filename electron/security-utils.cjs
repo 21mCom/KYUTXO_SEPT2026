@@ -56,15 +56,24 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+// NOTE: per-request torProxyUrl / allowedHost / trustedLocalHosts were removed
+// deliberately — allowlisting and the SOCKS proxy URL are derived from
+// main-process settings (see torProxySettingsSchema / 'tor-update-settings'),
+// never from individual request input.
 const torRequestSchema = z.object({
   url: z.string().min(1),
   method: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   body: z.unknown().optional(),
   timeout: z.number().int().positive().optional(),
-  torProxyUrl: z.string().optional(),
-  allowedHost: z.string().optional(),
-  trustedLocalHosts: z.array(z.string()).optional(),
+});
+
+// Settings pushed by the renderer (from stored node settings) that drive the
+// main-process allowlist and proxy selection for 'tor-request'.
+const torProxySettingsSchema = z.object({
+  customProviderUrl: z.string().max(2048).nullish(),
+  trustedLocalHosts: z.array(z.string().min(1).max(253)).max(64).optional(),
+  torProxyUrl: z.string().max(255).nullish(),
 });
 
 module.exports = {
@@ -74,4 +83,5 @@ module.exports = {
   isNavigationAllowed,
   escapeHtml,
   torRequestSchema,
+  torProxySettingsSchema,
 };
