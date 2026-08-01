@@ -248,6 +248,10 @@ export interface RestoreOptions {
   ) => Promise<InlineRestoreResult | void>;
   onProgress?: (p: RestoreProgress) => void;
   signal?: AbortSignal;
+  // Test hook: override the per-attachment-file byte cap (defaults to
+  // MAX_ATTACHMENT_FILE_BYTES) so tests can exercise the streaming bound
+  // without crafting 100 MiB archive entries.
+  maxAttachmentFileBytes?: number;
 }
 
 export interface RestoreResult {
@@ -279,8 +283,7 @@ export interface RestoreResult {
   };
 }
 
-// Peeks just the manifest (first ZIP entry) without reading the whole archive,
-// so callers can detect v3 vs legacy and decide which restore path to use.
+export const MAX_ATTACHMENT_FILE_BYTES = 100 * 1024 * 1024; // 100 MiB
 export async function peekManifest(
   source: AsyncIterable<Uint8Array>,
 ): Promise<unknown | null> {
@@ -1300,6 +1303,15 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
 
         if (name.startsWith(`${ATTACHMENTS_DIR}/`) && !name.endsWith("/")) {
           const relPath = name.slice(ATTACHMENTS_DIR.length + 1);
+          // A crafted archive can carry traversal/absolute entry names that
+          // lexically escape the attachments dir. Reject the archive with a
+          // clear error instead of writing outside the root (the platform
+          // writers would refuse anyway, with a much less actionable error).
+          if (!isSafeAttachmentRelPath(relPath)) {
+            throw new Error(
+              `Unsafe attachment path in backup archive: ${JSON.stringify(name)}`,
+            );
+          }
           return collectBytesConsumer(async (bytes) => {
             throwIfAborted();
             const ab = bytes.buffer.slice(
@@ -1353,7 +1365,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
             counts.attachmentFiles += 1;
             processed += 1;
             report("Restoring attachment files...");
-          });
+          }, { maxBytes: opts.maxAttachmentFileBytes ?? MAX_ATTACHMENT_FILE_BYTES });
         }
 
         return null; // ignore anything else
@@ -1494,4 +1506,14 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
 
   opts.onProgress?.({ percent: 100, phase: "Restore complete" });
   return { manifest, counts };
+}
+
+export function isSafeAttachmentRelPath(relPath: unknown): relPath is string {
+  if (typeof relPath !== "string" || relPath.length === 0) return false;
+  if (relPath.includes("\0")) return false;
+  if (relPath.startsWith("/") || relPath.startsWith("\\")) return false;
+  if (/^[a-zA-Z]:[\\/]/.test(relPath)) return false; // Windows drive absolute
+  const segments = relPath.split(/[\\/]+/);
+  if (segments.some((s) => s === "..")) return false;
+  return true;
 }

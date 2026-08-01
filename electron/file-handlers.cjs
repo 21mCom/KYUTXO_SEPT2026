@@ -1,7 +1,99 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
-function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir, portableMode }) {
+// Hard cap on a single attachment's bytes, mirrored on the server
+// (server/attachments.ts). Without it a restore/backup-stream write of an
+// unbounded file lands on disk (and crosses IPC) unchecked. Overridable via
+// registerFileHandlers options so tests can exercise the cap cheaply.
+const DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024; // 100 MiB
+
+// Filesystem-level containment, mirroring server/attachments.ts. The lexical
+// checks in each handler reject `..`/absolute paths, but a SYMLINK planted
+// inside the attachments tree (e.g. `attachments/evil -> /etc`) would still
+// redirect reads/writes/deletes outside the data root. A symlink AT the target
+// is ALWAYS rejected (lstat), even one pointing back inside the root —
+// otherwise read/delete/rename would act on the link's TARGET under a
+// different attachment's path (cross-attachment disclosure/loss), and a write
+// would truncate that target. Existing non-link targets must realpath inside
+// the root; for absent write targets the nearest existing ancestor must be
+// inside the root.
+// Returns the canonical absolute path when contained, null when it is a link
+// or escapes.
+// O_NOFOLLOW (Linux/macOS) makes the OPEN itself refuse a symlink at the final
+// path component, closing the check-then-open race for that component; it is
+// undefined on Windows, where the realpath containment checks still apply.
+const NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
+
+// THREAT MODEL: these handlers defend against PLANTED symlinks — links placed
+// in the attachments tree by a crafted backup/restore or by earlier tampering
+// — which are rejected (realpath containment) at operation time, with
+// O_NOFOLLOW making the final open refuse a link swapped in after the check.
+// A CONCURRENT local attacker racing the check-then-act interval on
+// intermediate path components is OUT OF SCOPE: such an attacker already has
+// write access to the vault's data directory and can read/modify attachments
+// directly, so no pathname check could stop them.
+function realpathContainedSync(baseDir, absPath, baseReal) {
+  const base = baseReal || fs.realpathSync(baseDir);
+  // Reject a symlink AT the target before any realpath resolution. lstat sees
+  // the link itself (including dangling links), so this single check covers
+  // both existing and dangling symlinks.
+  try {
+    if (fs.lstatSync(absPath).isSymbolicLink()) return null;
+  } catch {
+    // ENOENT: genuinely absent — the normal write-target case.
+  }
+  try {
+    const real = fs.realpathSync(absPath);
+    if (real !== base && !real.startsWith(base + path.sep)) return null;
+    return real;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  let dir = path.dirname(absPath);
+  // `tail` accumulates path components root-first (unshift prepends each
+  // parent), so it is joined as-is — reversing it would target the WRONG
+  // location (basename/dir instead of dir/basename).
+  const tail = [path.basename(absPath)];
+  for (;;) {
+    try {
+      const realDir = fs.realpathSync(dir);
+      if (realDir !== base && !realDir.startsWith(base + path.sep)) return null;
+      return path.join(realDir, ...tail);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(dir);
+      if (parent === dir) return null; // reached filesystem root — not contained
+      tail.unshift(path.basename(dir));
+      dir = parent;
+    }
+  }
+}
+
+// Lexical existence check. fs.existsSync FOLLOWS symlinks, so it reports a
+// dangling symlink as absent — a following write would then escape through
+// the link. lstat sees the link itself.
+function lexistsSync(p) {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Cryptographically random filename suffix (8 hex chars), replacing the old
+// 3-char Math.random() suffix; collisions are additionally retried by callers
+// via the 'wx' (O_EXCL) write flag.
+function randomSuffix() {
+  return crypto.randomBytes(4).toString('hex');
+}
+
+function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir, portableMode, maxAttachmentBytes }) {
+  const maxAttachmentBytesLimit =
+    typeof maxAttachmentBytes === 'number' && maxAttachmentBytes > 0
+      ? maxAttachmentBytes
+      : DEFAULT_MAX_ATTACHMENT_BYTES;
   // Stored attachment paths may or may not carry an `attachments/` prefix
   // depending on which backend wrote them: the Express server stores paths WITH
   // the prefix (relative to the data dir), while Electron stores them WITHOUT it
@@ -30,24 +122,39 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
 
   ipcMain.handle('save-attachment', async (event, { identifier, filename, data }) => {
     try {
+      const buffer = Buffer.from(data);
+      if (buffer.byteLength > maxAttachmentBytesLimit) {
+        return { success: false, error: `Attachment exceeds the maximum size of ${maxAttachmentBytesLimit} bytes` };
+      }
       const sanitizedIdentifier = identifier.replace(/[^a-zA-Z0-9_-]/g, '_');
       const recordDir = path.join(attachmentsDir, sanitizedIdentifier);
-      
+
       if (!fs.existsSync(recordDir)) {
         fs.mkdirSync(recordDir, { recursive: true });
       }
-      
-      // Add 3-character random suffix to prevent overwrites
-      const randomSuffix = Math.random().toString(36).substring(2, 5);
+
+      // Containment: a symlink planted at (or above) the identifier directory
+      // would redirect the write outside the attachments root even though
+      // every name here is self-generated. Verify the REAL location first.
+      const realDir = realpathContainedSync(attachmentsDir, recordDir);
+      if (!realDir) {
+        return { success: false, error: 'Access denied' };
+      }
+
+      // Unique filename: crypto-random suffix + O_EXCL write with collision
+      // retry, so an existing file can never be overwritten or raced into.
       const ext = path.extname(filename);
       const baseName = path.basename(filename, ext);
-      const uniqueFilename = `${baseName}_${randomSuffix}${ext}`;
-      
-      const filePath = path.join(recordDir, uniqueFilename);
-      const buffer = Buffer.from(data);
-      fs.writeFileSync(filePath, buffer);
-      
-      return { success: true, path: path.join(sanitizedIdentifier, uniqueFilename) };
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const uniqueFilename = `${baseName}_${randomSuffix()}${ext}`;
+        try {
+          fs.writeFileSync(path.join(realDir, uniqueFilename), buffer, { flag: 'wx' });
+          return { success: true, path: path.join(sanitizedIdentifier, uniqueFilename) };
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+        }
+      }
+      return { success: false, error: 'Could not allocate a unique filename' };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -64,7 +171,21 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       if (!resolvedPath.startsWith(resolvedAttachmentsDir + path.sep) && resolvedPath !== resolvedAttachmentsDir) {
         return { success: false, error: 'Path traversal detected' };
       }
-      const data = fs.readFileSync(filePath);
+      // Symlink containment: the file (or a directory above it) must not be a
+      // symlink redirecting the read outside the attachments root.
+      const realPath = realpathContainedSync(attachmentsDir, filePath);
+      if (!realPath) {
+        return { success: false, error: 'Access denied' };
+      }
+      // O_NOFOLLOW: the open itself refuses a symlink swapped in at the final
+      // component after the containment check (no-op on Windows).
+      let data;
+      const fh = fs.openSync(realPath, fs.constants.O_RDONLY | NOFOLLOW);
+      try {
+        data = fs.readFileSync(fh);
+      } finally {
+        fs.closeSync(fh);
+      }
       // Return exactly the file's bytes. fs.readFileSync can hand back a Buffer
       // that is a view into a larger shared pool (for small files), so exposing
       // `data.buffer` directly would leak unrelated pooled bytes and corrupt the
@@ -87,8 +208,16 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       if (!resolvedPath.startsWith(resolvedAttachmentsDir + path.sep) && resolvedPath !== resolvedAttachmentsDir) {
         return { success: false, error: 'Path traversal detected' };
       }
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+      // Symlink containment: unlinking THROUGH a symlinked directory component
+      // would delete a file outside the attachments root. Missing files stay
+      // an idempotent success (lexical lstat, not existsSync, so a dangling
+      // symlink is seen and refused rather than followed).
+      if (lexistsSync(filePath)) {
+        const realPath = realpathContainedSync(attachmentsDir, filePath);
+        if (!realPath) {
+          return { success: false, error: 'Access denied' };
+        }
+        fs.unlinkSync(realPath);
       }
       return { success: true };
     } catch (error) {
@@ -101,11 +230,22 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       const sanitizedIdentifier = identifier.replace(/[^a-zA-Z0-9_-]/g, '_');
       const recordDir = path.join(attachmentsDir, sanitizedIdentifier);
       
-      if (!fs.existsSync(recordDir)) {
+      if (!lexistsSync(recordDir)) {
         return { success: true, files: [] };
       }
       
-      const files = fs.readdirSync(recordDir);
+      // Symlink containment: a planted link at the identifier directory must
+      // not turn this listing into a disclosure of OUTSIDE directory contents.
+      const realDir = realpathContainedSync(attachmentsDir, recordDir);
+      if (!realDir) {
+        return { success: false, error: 'Access denied' };
+      }
+      
+      // Regular files only — planted links/sockets/subdirs are skipped.
+      const files = fs
+        .readdirSync(realDir, { withFileTypes: true })
+        .filter((e) => e.isFile())
+        .map((e) => e.name);
       return { success: true, files };
     } catch (error) {
       return { success: false, error: error.message };
@@ -131,7 +271,7 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
         return { success: false, error: 'Path traversal detected' };
       }
 
-      if (!fs.existsSync(oldFilePath)) {
+      if (!lexistsSync(oldFilePath)) {
         return { success: false, error: 'Source file not found' };
       }
 
@@ -140,7 +280,17 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
         fs.mkdirSync(newDir, { recursive: true });
       }
 
-      fs.renameSync(oldFilePath, newFilePath);
+      // Symlink containment, checked AT OPERATION TIME (not validate-then-act)
+      // so a directory swapped for a symlink after the checks above cannot
+      // redirect the rename outside the attachments root (TOCTOU window).
+      const baseReal = fs.realpathSync(attachmentsDir);
+      const oldReal = realpathContainedSync(attachmentsDir, oldFilePath, baseReal);
+      const newDirReal = realpathContainedSync(attachmentsDir, newDir, baseReal);
+      if (!oldReal || !newDirReal) {
+        return { success: false, error: 'Access denied' };
+      }
+
+      fs.renameSync(oldReal, path.join(newDirReal, path.basename(newFilePath)));
 
       // Try to remove old directory if empty
       const oldDir = path.dirname(oldFilePath);
@@ -180,13 +330,18 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       for (const entry of entries) {
         if (entry.isDirectory()) {
           const subDir = path.join(attachmentsDir, entry.name);
-          const files = fs.readdirSync(subDir);
+          // withFileTypes so SYMLINKS inside the directory are visible as
+          // links: a planted link to an outside file must be skipped, not
+          // followed (statSync would follow it and leak the target's bytes
+          // into the backup listing and size total).
+          const files = fs.readdirSync(subDir, { withFileTypes: true });
           
           for (const file of files) {
+            if (!file.isFile()) continue; // skips symlinks, sockets, subdirs
             // Return relative paths like "identifier/filename.ext"
-            result.push(path.join(entry.name, file));
+            result.push(path.join(entry.name, file.name));
             try {
-              totalBytes += fs.statSync(path.join(subDir, file)).size;
+              totalBytes += fs.statSync(path.join(subDir, file.name)).size;
             } catch {
               // File vanished between readdir and stat — skip its bytes.
             }
@@ -227,6 +382,11 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
         return { success: false, error: 'Path traversal detected' };
       }
       
+      const buffer = Buffer.from(data);
+      if (buffer.byteLength > maxAttachmentBytesLimit) {
+        return { success: false, error: `Attachment exceeds the maximum size of ${maxAttachmentBytesLimit} bytes` };
+      }
+      
       const dir = path.dirname(filePath);
       
       // Create directory if needed
@@ -234,8 +394,26 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
         fs.mkdirSync(dir, { recursive: true });
       }
       
-      const buffer = Buffer.from(data);
-      fs.writeFileSync(filePath, buffer);
+      // Symlink containment, checked AFTER mkdir (which follows symlinked
+      // components) on the FULL target path: proves the directory being
+      // written into is inside the root AND rejects a dangling symlink at the
+      // target (a following write would create the linked file outside).
+      const realFile = realpathContainedSync(attachmentsDir, filePath);
+      if (!realFile) {
+        return { success: false, error: 'Access denied' };
+      }
+      
+      // O_NOFOLLOW: the open itself refuses a symlink swapped in at the final
+      // component after the containment check (no-op on Windows).
+      const fh = fs.openSync(
+        realFile,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | NOFOLLOW,
+      );
+      try {
+        fs.writeFileSync(fh, buffer);
+      } finally {
+        fs.closeSync(fh);
+      }
       
       return { success: true };
     } catch (error) {
@@ -281,15 +459,18 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       for (const entry of entries) {
         if (entry.isDirectory()) {
           const subDir = path.join(attachmentsDir, entry.name);
-          let names;
+          let dirents;
           try {
-            names = await fs.promises.readdir(subDir);
+            // withFileTypes so planted SYMLINKS are skipped, not followed
+            // (statSync would follow a link and count outside bytes).
+            dirents = await fs.promises.readdir(subDir, { withFileTypes: true });
           } catch {
             continue;
           }
-          for (const name of names) {
+          for (const dirent of dirents) {
+            if (!dirent.isFile()) continue;
             try {
-              const stat = await fs.promises.stat(path.join(subDir, name));
+              const stat = await fs.promises.stat(path.join(subDir, dirent.name));
               if (stat.isFile()) {
                 totalBytes += stat.size;
                 fileCount += 1;
@@ -340,18 +521,25 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       }
 
       // De-duplicate: if <name> already exists, try <stem>_1<ext>, _2, ...
+      // lexistsSync (lstat) so a DANGLING SYMLINK at a candidate name counts
+      // as taken — existsSync would follow the link, report it absent, and a
+      // following write would land OUTSIDE the folder.
       const ext = path.extname(safeName);
       const stem = safeName.slice(0, safeName.length - ext.length);
       let candidate = safeName;
       let counter = 0;
-      while (fs.existsSync(path.join(needsReviewDir, candidate))) {
+      while (lexistsSync(path.join(needsReviewDir, candidate))) {
         counter++;
         candidate = `${stem}_${counter}${ext}`;
       }
 
       const dest = path.join(needsReviewDir, candidate);
       const buffer = Buffer.from(data);
-      fs.writeFileSync(dest, buffer);
+      if (buffer.byteLength > maxAttachmentBytesLimit) {
+        return { success: false, error: `Attachment exceeds the maximum size of ${maxAttachmentBytesLimit} bytes` };
+      }
+      // O_EXCL: never overwrite (or write through a link at) an existing name.
+      fs.writeFileSync(dest, buffer, { flag: 'wx' });
       return { success: true, savedPath: dest };
     } catch (error) {
       return { success: false, error: error.message };

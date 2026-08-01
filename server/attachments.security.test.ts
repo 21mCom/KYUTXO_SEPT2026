@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as path from "path";
-import { resolveAttachmentPath } from "./attachments";
+import * as fs from "fs";
+import * as os from "os";
+import { resolveAttachmentPath, containedRealPath } from "./attachments";
 
 const BASE = path.resolve(
   process.env.KYUTXO_DATA_DIR || path.join(process.cwd(), "data"),
@@ -50,5 +52,96 @@ describe("resolveAttachmentPath", () => {
   it("rejects inputs that resolve to the attachments base directory itself", () => {
     expect(resolveAttachmentPath("attachments/")).toBeNull();
     expect(resolveAttachmentPath(".")).toBeNull();
+  });
+});
+
+// containedRealPath: filesystem-level (realpath) containment that closes the
+// symlink gap left by the lexical resolveAttachmentPath checks.
+describe("containedRealPath", () => {
+  let root: string;
+  let base: string;
+  let outside: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "kyutxo-contained-"));
+    base = path.join(root, "attachments");
+    outside = path.join(root, "outside");
+    fs.mkdirSync(base, { recursive: true });
+    fs.mkdirSync(outside, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("returns the canonical path for a real file inside the root", async () => {
+    const f = path.join(base, "dir", "file.bin");
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, "x");
+    expect(await containedRealPath(base, f)).toBe(fs.realpathSync(f));
+  });
+
+  it("returns the would-be path for a missing write target under real dirs", async () => {
+    const dir = path.join(base, "dir");
+    fs.mkdirSync(dir, { recursive: true });
+    const target = path.join(dir, "new.bin");
+    expect(await containedRealPath(base, target)).toBe(
+      path.join(fs.realpathSync(dir), "new.bin"),
+    );
+  });
+
+  it("returns the would-be path when SEVERAL directory levels are missing", async () => {
+    // Guards the ancestor-walk join order: the reconstructed path must be
+    // base/a/b/c.bin, not a reversal like base/c.bin/a/b.
+    const target = path.join(base, "a", "b", "c.bin");
+    expect(await containedRealPath(base, target)).toBe(
+      path.join(fs.realpathSync(base), "a", "b", "c.bin"),
+    );
+  });
+
+  it("rejects a symlinked FILE pointing outside the root", async () => {
+    const secret = path.join(outside, "secret.txt");
+    fs.writeFileSync(secret, "secret");
+    const link = path.join(base, "link.txt");
+    fs.symlinkSync(secret, link);
+    expect(await containedRealPath(base, link)).toBeNull();
+    // The outside file is untouched (nothing read/written through the link).
+    expect(fs.readFileSync(secret, "utf8")).toBe("secret");
+  });
+
+  it("rejects a path nested under a symlinked DIRECTORY pointing outside", async () => {
+    fs.writeFileSync(path.join(outside, "secret.txt"), "secret");
+    fs.symlinkSync(outside, path.join(base, "evil"), "dir");
+    expect(await containedRealPath(base, path.join(base, "evil", "secret.txt"))).toBeNull();
+    // Also rejected for a write target that does not exist yet.
+    expect(await containedRealPath(base, path.join(base, "evil", "new.txt"))).toBeNull();
+  });
+
+  it("rejects a DANGLING symlink at the write target", async () => {
+    // realpath() reports ENOENT for dangling links; a following writeFile
+    // would CREATE the outside target through the link.
+    const link = path.join(base, "dangle.txt");
+    fs.symlinkSync(path.join(outside, "created.txt"), link);
+    expect(await containedRealPath(base, link)).toBeNull();
+    expect(fs.existsSync(path.join(outside, "created.txt"))).toBe(false);
+  });
+
+  it("rejects an in-root symlink (read/delete/rename must never act on the link's target)", async () => {
+    // Even though the link resolves INSIDE the root, acting on the resolved
+    // target would let one attachment's path read/delete/move ANOTHER
+    // attachment's bytes.
+    const real = path.join(base, "real.txt");
+    fs.writeFileSync(real, "x");
+    const link = path.join(base, "inner-link.txt");
+    fs.symlinkSync(real, link);
+    expect(await containedRealPath(base, link)).toBeNull();
+  });
+
+  it("rejects a target in a sibling directory sharing the base prefix", async () => {
+    const sibling = path.join(root, "attachments_evil");
+    fs.mkdirSync(sibling);
+    const f = path.join(sibling, "x.txt");
+    fs.writeFileSync(f, "x");
+    expect(await containedRealPath(base, f)).toBeNull();
   });
 });

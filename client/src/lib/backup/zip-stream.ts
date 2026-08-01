@@ -174,12 +174,34 @@ export async function* blobChunks(
   }
 }
 
+// Thrown when a ZIP entry's bytes exceed a caller-imposed cap. Used by the
+// restore path so a crafted archive cannot force an unbounded in-memory
+// buffer (collectBytesConsumer accumulates the whole entry before onDone).
+export class ZipEntryTooLargeError extends Error {
+  maxBytes: number;
+  constructor(maxBytes: number) {
+    super(`ZIP entry exceeds the maximum size of ${maxBytes} bytes`);
+    this.name = "ZipEntryTooLargeError";
+    this.maxBytes = maxBytes;
+  }
+}
+
 // Consumer that buffers an entry's bytes into one Uint8Array (for small entries
-// like the manifest, or a single attachment file).
-export function collectBytesConsumer(onDone: (bytes: Uint8Array) => Promise<void> | void): ZipEntryConsumer {
+// like the manifest, or a single attachment file). `opts.maxBytes` aborts the
+// entry as soon as accumulated bytes exceed the cap — BEFORE the buffer grows
+// unboundedly — instead of discovering the size only at onEnd.
+export function collectBytesConsumer(
+  onDone: (bytes: Uint8Array) => Promise<void> | void,
+  opts: { maxBytes?: number } = {},
+): ZipEntryConsumer {
   const parts: Uint8Array[] = [];
+  let buffered = 0;
   return {
     onChunk(chunk) {
+      buffered += chunk.length;
+      if (opts.maxBytes != null && buffered > opts.maxBytes) {
+        throw new ZipEntryTooLargeError(opts.maxBytes);
+      }
       parts.push(chunk);
     },
     async onEnd() {

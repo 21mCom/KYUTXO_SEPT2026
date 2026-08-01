@@ -1,10 +1,65 @@
-import { Router, type Request } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import * as fs from 'fs/promises';
+import { constants as fsConstants } from 'fs';
 import * as path from 'path';
+import { randomBytes } from 'crypto';
+
+// O_NOFOLLOW (Linux/macOS) makes the OPEN itself refuse a symlink at the final
+// path component, closing the check-then-open race for that component; it is
+// undefined on Windows, where the realpath containment checks still apply.
+const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+
+// THREAT MODEL: these routes defend against PLANTED symlinks — links placed in
+// the attachments tree by a crafted backup/restore or by earlier tampering —
+// which are rejected (realpath containment) at operation time, with O_NOFOLLOW
+// making the final open refuse a link swapped in after the check. A CONCURRENT
+// local attacker racing the check-then-act interval on intermediate path
+// components is OUT OF SCOPE: such an attacker already has write access to the
+// data directory and can read/modify attachments directly, so no pathname
+// check could stop them.
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
+
+// Hard cap on a single attachment's bytes. multer's memoryStorage buffers the
+// whole upload in memory, so WITHOUT a limit a single POST can exhaust server
+// memory; with `limits.fileSize` multer aborts the stream as soon as the cap is
+// exceeded instead of buffering unboundedly. The same cap covers the restore
+// write path (which shares the upload middleware). Override via env for tests.
+export const MAX_ATTACHMENT_BYTES =
+  Number(process.env.KYUTXO_MAX_ATTACHMENT_BYTES) > 0
+    ? Number(process.env.KYUTXO_MAX_ATTACHMENT_BYTES)
+    : 100 * 1024 * 1024; // 100 MiB
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_ATTACHMENT_BYTES,
+    files: 1,
+    fields: 20,
+  },
+});
+
+// Wraps multer so a rejected upload (oversized file, too many fields) becomes a
+// clean JSON 413/400 instead of an Express default 500 HTML error page.
+function singleFileUpload(req: Request, res: Response, next: NextFunction): void {
+  upload.single('file')(req, res, (err: unknown) => {
+    if (err instanceof multer.MulterError) {
+      const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+      const message =
+        err.code === 'LIMIT_FILE_SIZE'
+          ? `Attachment exceeds the maximum size of ${MAX_ATTACHMENT_BYTES} bytes`
+          : `Upload rejected: ${err.message}`;
+      res.status(status).json({ error: message });
+      return;
+    }
+    if (err) {
+      next(err);
+      return;
+    }
+    next();
+  });
+}
 
 // Data directory for local file storage
 const DATA_DIR = process.env.KYUTXO_DATA_DIR || path.join(process.cwd(), 'data');
@@ -69,6 +124,99 @@ export function resolveAttachmentPath(relativePath: unknown): string | null {
   return resolved;
 }
 
+// Filesystem-level containment: resolveAttachmentPath is LEXICAL only, so a
+// symlink planted inside the attachments tree (e.g. `attachments/evil ->
+// /etc`) would redirect reads/writes/deletes outside the data root even though
+// the lexical checks pass. This helper rejects symlinks and verifies the REAL
+// location stays inside the real attachments root:
+//   - A symlink AT the target is ALWAYS rejected (lstat), even one pointing
+//     back inside the root — otherwise read/delete/rename would act on the
+//     link's TARGET under a different attachment's path (cross-attachment
+//     disclosure/loss), and a write would truncate that target.
+//   - If the target exists, its realpath must be inside the root (a symlinked
+//     directory component pointing outside fails here).
+//   - If it does not exist (a write target), the nearest existing ancestor's
+//     realpath must be inside the root.
+// Returns the canonical absolute path when contained, null when the path is a
+// link or escapes. `baseReal` is realpath(baseDir); pass it in when checking
+// several paths against the same root in one operation.
+export async function containedRealPath(
+  baseDir: string,
+  absPath: string,
+  baseReal?: string,
+): Promise<string | null> {
+  const base = baseReal ?? (await fs.realpath(baseDir));
+  // Reject a symlink AT the target before any realpath resolution. lstat sees
+  // the link itself (including dangling links), so this single check covers
+  // both existing and dangling symlinks.
+  try {
+    if ((await fs.lstat(absPath)).isSymbolicLink()) return null;
+  } catch {
+    // ENOENT: genuinely absent — the normal write-target case.
+  }
+  // Existing target: realpath resolves any intermediate symlink components.
+  try {
+    const real = await fs.realpath(absPath);
+    if (real !== base && !real.startsWith(base + path.sep)) return null;
+    return real;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  // Non-existent target: walk up to the nearest existing ancestor and verify
+  // ITS real location (a symlinked directory component pointing outside fails
+  // here). `tail` accumulates path components root-first (unshift prepends
+  // each parent), so it is joined as-is — reversing it would write to the
+  // WRONG location (basename/dir instead of dir/basename).
+  let dir = path.dirname(absPath);
+  const tail: string[] = [path.basename(absPath)];
+  for (;;) {
+    try {
+      const realDir = await fs.realpath(dir);
+      if (realDir !== base && !realDir.startsWith(base + path.sep)) return null;
+      return path.join(realDir, ...tail);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = path.dirname(dir);
+      if (parent === dir) return null; // reached filesystem root — not contained
+      tail.unshift(path.basename(dir));
+      dir = parent;
+    }
+  }
+}
+
+// Combined guard for paths that must already exist and be real (read/delete/
+// rename-source): lexical resolve + realpath containment. Returns null when
+// unsafe OR when the path does not exist.
+export async function resolveExistingAttachmentPath(
+  relativePath: unknown,
+): Promise<string | null> {
+  const lexical = resolveAttachmentPath(relativePath);
+  if (!lexical) return null;
+  await ensureDir(ATTACHMENTS_DIR);
+  return containedRealPath(ATTACHMENTS_DIR, lexical);
+}
+
+// Combined guard for write targets (upload/restore-write/rename-destination):
+// lexical resolve + containment of the nearest existing ancestor + dangling-
+// symlink rejection. The parent directory is NOT created here; callers must
+// re-check containment AFTER creating directories and immediately before
+// writing so a validate-then-act gap cannot be exploited (see rename).
+export async function resolveWriteAttachmentPath(
+  relativePath: unknown,
+): Promise<string | null> {
+  const lexical = resolveAttachmentPath(relativePath);
+  if (!lexical) return null;
+  await ensureDir(ATTACHMENTS_DIR);
+  return containedRealPath(ATTACHMENTS_DIR, lexical);
+}
+
+// Cryptographically random filename suffix (8 hex chars = 32 bits of entropy,
+// vs. the previous 3-char Math.random() suffix) to make collisions/overwrites
+// practically impossible. Callers still retry on EEXIST via the 'wx' flag.
+function randomSuffix(): string {
+  return randomBytes(4).toString('hex');
+}
+
 // Sanitize identifier for use as directory name
 function sanitizeIdentifier(identifier: string): string {
   if (!identifier) return 'unknown';
@@ -92,7 +240,7 @@ function sanitizeIdentifier(identifier: string): string {
 }
 
 // Upload attachment
-router.post('/upload', upload.single('file'), async (req: Request, res) => {
+router.post('/upload', singleFileUpload, async (req: Request, res) => {
   try {
     const file = (req as any).file;
     if (!file) {
@@ -110,16 +258,33 @@ router.post('/upload', upload.single('file'), async (req: Request, res) => {
     const attachmentDir = path.join(ATTACHMENTS_DIR, sanitizedId);
     await ensureDir(attachmentDir);
 
-    // Create unique filename with 3-char random suffix to prevent overwrites
-    const randomSuffix = Math.random().toString(36).substring(2, 5);
+    // Containment: a symlink planted at (or above) the identifier directory
+    // would redirect the write outside the attachments root even though every
+    // name here is self-generated. Verify the REAL directory location first.
+    const realDir = await containedRealPath(ATTACHMENTS_DIR, attachmentDir);
+    if (!realDir) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Unique filename: crypto-random suffix + O_EXCL write with collision
+    // retry, so an existing file can never be overwritten or raced into.
     const safeFilename = file.originalname.replace(/[<>:"/\\|?*]/g, '_');
     const ext = path.extname(safeFilename);
     const baseName = path.basename(safeFilename, ext);
-    const filename = `${baseName}_${randomSuffix}${ext}`;
-    const filePath = path.join(attachmentDir, filename);
-    
-    // Write file to local filesystem
-    await fs.writeFile(filePath, file.buffer);
+    let filename = '';
+    let wrote = false;
+    for (let attempt = 0; attempt < 10 && !wrote; attempt++) {
+      filename = `${baseName}_${randomSuffix()}${ext}`;
+      try {
+        await fs.writeFile(path.join(realDir, filename), file.buffer, { flag: 'wx' });
+        wrote = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+    }
+    if (!wrote) {
+      return res.status(500).json({ error: 'Could not allocate a unique filename' });
+    }
 
     // Return relative path for storage in database
     const relativePath = path.join('attachments', sanitizedId, filename);
@@ -155,13 +320,18 @@ router.get('/list-all', async (req, res) => {
       for (const entry of entries) {
         if (entry.isDirectory()) {
           const subDir = path.join(ATTACHMENTS_DIR, entry.name);
-          const files = await fs.readdir(subDir);
+          // withFileTypes so SYMLINKS inside the directory are visible as
+          // links: a planted link to an outside file must be skipped, not
+          // followed (stat() would follow it and leak the target's bytes
+          // into the backup listing and size total).
+          const files = await fs.readdir(subDir, { withFileTypes: true });
           
           for (const file of files) {
+            if (!file.isFile()) continue; // skips symlinks, sockets, subdirs
             // Return relative paths like "identifier/filename.ext"
-            result.push(path.join(entry.name, file));
+            result.push(path.join(entry.name, file.name));
             try {
-              totalBytes += (await fs.stat(path.join(subDir, file))).size;
+              totalBytes += (await fs.stat(path.join(subDir, file.name))).size;
             } catch {
               // File vanished between readdir and stat — skip its bytes.
             }
@@ -194,7 +364,7 @@ router.get('/list-all', async (req, res) => {
 });
 
 // Write attachment from backup (for restore) - MUST be before wildcard routes
-router.post('/write', upload.single('file'), async (req: Request, res) => {
+router.post('/write', singleFileUpload, async (req: Request, res) => {
   try {
     const file = (req as any).file;
     if (!file) {
@@ -207,18 +377,37 @@ router.post('/write', upload.single('file'), async (req: Request, res) => {
       return res.status(400).json({ error: 'Relative path is required' });
     }
 
-    // Security check: ensure path stays within ATTACHMENTS_DIR
+    // Security check: ensure path stays within ATTACHMENTS_DIR — lexically AND
+    // through any planted symlinks (containment of the nearest existing
+    // ancestor + dangling-symlink rejection at the target).
     const filePath = resolveAttachmentPath(relativePath);
     if (!filePath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Create directory if needed
+    // Create directory if needed, then RE-CHECK containment of the FULL target
+    // path: mkdir -p follows symlinked components, so the re-check is what
+    // proves the directory being written into is really inside the root, and
+    // it also catches a dangling symlink at the target itself.
     const dir = path.dirname(filePath);
     await ensureDir(dir);
+    const realFile = await containedRealPath(ATTACHMENTS_DIR, filePath);
+    if (!realFile) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     
-    // Write file
-    await fs.writeFile(filePath, file.buffer);
+    // Write file (restore legitimately overwrites colliding paths). O_NOFOLLOW
+    // makes the open itself refuse a symlink swapped in at the final component
+    // after the containment check (no-op on Windows).
+    const fh = await fs.open(
+      realFile,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | NOFOLLOW,
+    );
+    try {
+      await fh.writeFile(file.buffer);
+    } finally {
+      await fh.close();
+    }
 
     res.json({ success: true });
   } catch (error) {
@@ -236,25 +425,51 @@ router.post('/rename', async (req: Request, res) => {
       return res.status(400).json({ error: 'Both oldPath and newPath are required' });
     }
 
-    const oldFilePath = resolveAttachmentPath(oldPath);
-    const newFilePath = resolveAttachmentPath(newPath);
-    if (!oldFilePath || !newFilePath) {
+    // Lexical check first (keeps the historical 404 vs 403 split).
+    const oldLexical = resolveAttachmentPath(oldPath);
+    const newFilePath = await resolveWriteAttachmentPath(newPath);
+    if (!oldLexical || !newFilePath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
     try {
-      await fs.access(oldFilePath);
+      await fs.lstat(oldLexical);
     } catch {
       return res.status(404).json({ error: 'Source file not found' });
+    }
+
+    // Symlink-aware containment for BOTH endpoints. The source must really
+    // live inside the root; the destination's nearest existing ancestor must
+    // be inside the root and the destination must not be a (dangling) symlink.
+    const oldFilePath = await containedRealPath(
+      ATTACHMENTS_DIR,
+      oldLexical,
+      await fs.realpath(ATTACHMENTS_DIR),
+    );
+    if (!oldFilePath) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
     const newDir = path.dirname(newFilePath);
     await ensureDir(newDir);
 
-    await fs.rename(oldFilePath, newFilePath);
+    // TOCTOU: re-verify containment of BOTH paths immediately before the
+    // rename, so a directory swapped for a symlink AFTER the checks above is
+    // caught at operation time instead of slipping through the
+    // validate-then-act window.
+    const baseReal = await fs.realpath(ATTACHMENTS_DIR);
+    const [oldReal, newDirReal] = await Promise.all([
+      containedRealPath(ATTACHMENTS_DIR, oldFilePath, baseReal),
+      containedRealPath(ATTACHMENTS_DIR, newDir, baseReal),
+    ]);
+    if (!oldReal || !newDirReal) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    await fs.rename(oldReal, path.join(newDirReal, path.basename(newFilePath)));
 
     // Try to remove old directory if empty
-    const oldDir = path.dirname(oldFilePath);
+    const oldDir = path.dirname(oldReal);
     try {
       const remaining = await fs.readdir(oldDir);
       if (remaining.length === 0) {
@@ -276,22 +491,40 @@ router.get('/download/:path(*)', async (req, res) => {
   try {
     const relativePath = req.params.path;
     // Resolve against ATTACHMENTS_DIR regardless of whether the stored path
-    // carries an `attachments/` prefix (Electron stores without it). This keeps
-    // both prefixed and non-prefixed paths readable while rejecting traversal.
+    // carries an `attachments/` prefix (Electron stores without it).
     const filePath = resolveAttachmentPath(relativePath);
     if (!filePath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Check file exists
+    // Symlink containment: unlinking THROUGH a symlinked directory component
+    // would delete a file outside the attachments root. (Deleting a symlink
+    // AT the target only removes the link itself, but we still refuse it —
+    // attachment paths must be real files.) Missing files stay an idempotent
+    // success, so check existence lexically first.
     try {
-      await fs.access(filePath);
-    } catch {
-      return res.status(404).json({ error: 'File not found' });
+      await fs.lstat(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return res.json({ success: true, alreadyDeleted: true });
+      }
+      throw error;
+    }
+    const realPath = await containedRealPath(ATTACHMENTS_DIR, filePath);
+    if (!realPath) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
-    const buffer = await fs.readFile(filePath);
-    const filename = path.basename(filePath);
+    // O_NOFOLLOW: the open itself refuses a symlink swapped in at the final
+    // component after the containment check (no-op on Windows).
+    const fh = await fs.open(realPath, fsConstants.O_RDONLY | NOFOLLOW);
+    let buffer: Buffer;
+    try {
+      buffer = await fh.readFile();
+    } finally {
+      await fh.close();
+    }
+    const filename = path.basename(realPath);
     
     res.set('Content-Type', 'application/octet-stream');
     res.set('Content-Disposition', toContentDisposition(filename));
@@ -313,15 +546,25 @@ router.delete('/:path(*)', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
+    // Symlink containment: unlinking THROUGH a symlinked directory component
+    // would delete a file outside the attachments root. (Deleting a symlink
+    // AT the target only removes the link itself, but we still refuse it —
+    // attachment paths must be real files.) Missing files stay an idempotent
+    // success, so check existence lexically first.
     try {
-      await fs.unlink(filePath);
+      await fs.lstat(filePath);
     } catch (error) {
-      // File doesn't exist - treat as success for idempotent deletes
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return res.json({ success: true, alreadyDeleted: true });
       }
       throw error;
     }
+    const realPath = await containedRealPath(ATTACHMENTS_DIR, filePath);
+    if (!realPath) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    await fs.unlink(realPath);
 
     res.json({ success: true });
   } catch (error) {
