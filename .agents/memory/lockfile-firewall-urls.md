@@ -21,3 +21,7 @@ drizzle config files) are off-limits.
 
 **How to apply:** any task that runs the package manager (new deps, font packages,
 etc.) must do this rewrite as part of the change, or the workflow goes red.
+
+## Malformed rewrite trap (2026-08)
+
+A naive host-only rewrite of firewall URLs (which the OLD check-lockfile-urls fix-hint itself suggested) produces `https://registry.npmjs.org/<name>-<ver>.tgz` — missing the `/-/` segment — which 404s exactly like the firewall URL but passes a firewall-string-only gate, then kills post-merge `npm install` AND `npm ci` on the GitHub runner. Canonical form: `https://registry.npmjs.org/<name>/-/<basename>-<ver>.tgz` (scoped: name keeps `@scope/`, basename drops it). Reliable repair: derive name from the lockfile key after the last `node_modules/` + entry.version, rewrite `resolved`, then `npm install` to prove fetchability. The gate now also fails on npmjs URLs lacking `/-/`.

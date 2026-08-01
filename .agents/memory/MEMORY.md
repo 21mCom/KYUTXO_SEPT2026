@@ -2,7 +2,7 @@
 - [Records deferred counts](records-load-defer-counts.md) — never start count queries before the first page renders; superseded loads must spawn no counts; guard every count setter by load version.
 - [Backup streaming guards](backup-streaming-guards.md) — fflate onEntry is sync (manifest-order via a flag); memory-export OOM guard must aggregate all streamed-table counts.
 - [Restore cancellation contract](restore-cancel-contract.md) — cancel before clear keeps vault intact; after clear resets to verified-empty; if cleanup fails, fail closed with a distinct hard error (never claim clean).
-- [Lockfile firewall URLs](lockfile-firewall-urls.md) — any npm install writes package-firewall.replit.local URLs; rewrite to registry.npmjs.org or the lockfile-urls CI gate fails.
+- [Lockfile firewall URLs](lockfile-firewall-urls.md) — firewall URLs break external npm ci; rewrite needs the /-/ tarball form (host-only rewrites 404 and sneak past a firewall-string gate).
 - [fontsource-variable imports](fontsource-variable-imports.md) — bare @fontsource-variable import is wght-only; use opsz.css + *-italic.css to match a Google ital,opsz,wght request.
 - [sqlite-wasm Vite loading](sqlite-wasm-vite-loading.md) — wasm dies in Vite dev (SPA serves HTML for .wasm); load via `?url`+locateFile; verify in a real browser; persisted()=no ≠ not-persisted.
 - [Native SQLite read-engine](native-sqlite-engine.md) — at-scale SQL = native better-sqlite3 in an Electron worker_thread, NOT sqlite-wasm (corrupts ~6GB); TRUNCATE not WAL; renderer imports the worker type-only.
