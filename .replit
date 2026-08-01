@@ -357,6 +357,10 @@ args = "tor-proxy-hardening-node-check"
 task = "workflow.run"
 args = "dashboard-hidden-matches-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "legacy-restore-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1270,6 +1274,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-attachment-hardening-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "legacy-restore-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/backup/legacy-restore.runtime.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
