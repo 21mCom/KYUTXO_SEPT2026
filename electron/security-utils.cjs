@@ -60,6 +60,86 @@ function escapeHtml(value) {
 // deliberately — allowlisting and the SOCKS proxy URL are derived from
 // main-process settings (see torProxySettingsSchema / 'tor-update-settings'),
 // never from individual request input.
+
+// --- IPC error sanitization -------------------------------------------------
+// Raw exception messages from Node embed absolute filesystem paths (ENOENT
+// '/home/...'), proxy/target URLs, and host:port details. In the packaged app
+// these strings cross the IPC bridge and reach the renderer/UI. Mirror the
+// server's logServerError/logProxyError pattern: return a stable generic
+// message to the renderer while preserving user-actionable hints (timeout,
+// connection refused, ...) as fixed strings, and log only the error name +
+// errno code main-process-side.
+
+// Ordered classification: first match wins. Each entry maps a family of raw
+// errors to ONE stable user-facing string that carries the actionable hint
+// without any path/URL/host detail.
+const IPC_ERROR_HINTS = [
+  {
+    match: (name, code, msg) =>
+      name === 'AbortError' || code === 'ETIMEDOUT' || /\btime(?:d\s+)?out\b/i.test(msg),
+    message: 'Request timed out. The server may be slow or unreachable — try increasing the timeout.',
+  },
+  {
+    match: (_name, code, msg) => code === 'ECONNREFUSED' || msg.includes('ECONNREFUSED'),
+    message: 'Connection refused. Make sure the server (or Tor proxy) is running and reachable.',
+  },
+  {
+    match: (_name, code, msg) =>
+      code === 'ENOTFOUND' || code === 'EAI_AGAIN' || msg.includes('ENOTFOUND') || msg.includes('EAI_AGAIN'),
+    message: 'Host not found. Check the server address.',
+  },
+  {
+    match: (_name, code, msg) =>
+      code === 'ECONNRESET' || code === 'EPIPE' || msg.includes('ECONNRESET') || /socket (?:closed|hang ?up)/i.test(msg),
+    message: 'Connection closed unexpectedly. Please try again.',
+  },
+  {
+    match: (_name, code, msg) =>
+      /certificate|CERT_|SSL|TLS/i.test(code || '') || /certificate|\bSSL\b|\bTLS\b/i.test(msg),
+    message: 'Secure connection failed. Check your SSL/TLS settings.',
+  },
+  {
+    match: (_name, code) => code === 'ENOENT',
+    message: 'File not found.',
+  },
+  {
+    match: (_name, code) => code === 'EACCES' || code === 'EPERM',
+    message: 'Permission denied by the operating system.',
+  },
+  {
+    match: (_name, code) => code === 'ENOSPC',
+    message: 'Not enough disk space.',
+  },
+];
+
+// Convert any thrown value into a stable, generic message safe to send over
+// IPC to the renderer. `fallback` names the failed operation without leaking
+// detail (e.g. 'Failed to save attachment').
+function sanitizeIpcError(error, fallback = 'Operation failed') {
+  const name = error && typeof error.name === 'string' ? error.name : '';
+  const code = error && typeof error.code === 'string' ? error.code : '';
+  const msg = error && typeof error.message === 'string' ? error.message : '';
+  for (const hint of IPC_ERROR_HINTS) {
+    try {
+      if (hint.match(name, code, msg)) return hint.message;
+    } catch {
+      // A matcher must never break sanitization — fall through to next.
+    }
+  }
+  return fallback;
+}
+
+// Log a failure main-process-side WITHOUT the raw error message (which can
+// embed paths/URLs/hosts). The error name + errno code are enough to diagnose.
+function logMainError(context, error) {
+  if (error instanceof Error) {
+    const code = typeof error.code === 'string' ? error.code : '';
+    console.error(`${context}: ${error.name}${code ? ` (${code})` : ''}`);
+  } else {
+    console.error(`${context}: unknown error`);
+  }
+}
+
 const torRequestSchema = z.object({
   url: z.string().min(1),
   method: z.string().optional(),
@@ -203,6 +283,8 @@ module.exports = {
   DEV_SERVER_ORIGIN,
   isNavigationAllowed,
   escapeHtml,
+  sanitizeIpcError,
+  logMainError,
   torRequestSchema,
   torProxySettingsSchema,
   electrumIpcSchemas,

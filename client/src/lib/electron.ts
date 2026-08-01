@@ -225,7 +225,8 @@ export interface TorRequestResult {
 
 export interface TorProxyStatus {
   name: string;
-  url: string;
+  /** Omitted by newer desktop builds: proxy URLs stay out of IPC payloads. */
+  url?: string;
   port: number;
   available: boolean;
   isTor?: boolean;
@@ -254,7 +255,6 @@ export interface EngineEnvelope<T = unknown> {
 // kyutxo-demo-vault.zip found next to the executable or in the data directory.
 export interface DemoVaultCheckResult {
   present: boolean;
-  path?: string;
   size?: number;
   error?: string;
 }
@@ -297,9 +297,6 @@ export interface EngineBridge {
 
 // Type declarations for Electron API exposed via preload
 interface ElectronAPI {
-  getAppDataPath: () => Promise<string>;
-  getAttachmentsPath: () => Promise<string>;
-  getDataPath: () => Promise<string>;
   saveAttachment: (identifier: string, filename: string, data: ArrayBuffer) => Promise<{ success: boolean; path?: string; error?: string }>;
   readAttachment: (relativePath: string) => Promise<{ success: boolean; data?: ArrayBuffer; error?: string }>;
   deleteAttachment: (relativePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -309,7 +306,7 @@ interface ElectronAPI {
   writeAttachment: (relativePath: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
   renameAttachment: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>;
   // Streaming backup writer (export) — chunks are written straight to disk.
-  backupOpen: (suggestedName: string) => Promise<{ success: boolean; id?: string; filePath?: string; canceled?: boolean; error?: string }>;
+  backupOpen: (suggestedName: string) => Promise<{ success: boolean; id?: string; canceled?: boolean; error?: string }>;
   backupWrite: (id: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
   backupClose: (id: string) => Promise<{ success: boolean; error?: string }>;
   backupAbort: (id: string) => Promise<{ success: boolean; error?: string }>;
@@ -322,8 +319,7 @@ interface ElectronAPI {
   // Total byte size of all attachment files (pre-flight export size estimate)
   getAttachmentsSize: () => Promise<{ success: boolean; totalBytes?: number; fileCount?: number; error?: string }>;
   // Needs Review folder (orphaned restore attachments)
-  getNeedsReviewPath: () => Promise<string>;
-  writeNeedsReview: (originalFilename: string, data: ArrayBuffer) => Promise<{ success: boolean; path?: string; error?: string }>;
+  writeNeedsReview: (originalFilename: string, data: ArrayBuffer) => Promise<{ success: boolean; savedName?: string; error?: string }>;
   openNeedsReviewFolder: () => Promise<{ success: boolean; error?: string }>;
   listNeedsReview: () => Promise<{ success: boolean; files?: NeedsReviewFile[]; error?: string }>;
   readNeedsReview: (name: string) => Promise<{ success: boolean; data?: ArrayBuffer; error?: string }>;

@@ -48,7 +48,7 @@ export function DemoVaultLoader() {
   const [message, setMessage] = useState("");
   // Absolute path of an on-disk demo vault detected via Electron IPC, or null
   // when absent / on web builds (→ keep the file-picker behaviour).
-  const [electronDemoPath, setElectronDemoPath] = useState<string | null>(null);
+  const [electronDemoAvailable, setElectronDemoAvailable] = useState(false);
 
   // Electron-only: probe for kyutxo-demo-vault.zip next to the executable or
   // in the data directory. When found, the button loads it with one click.
@@ -59,7 +59,7 @@ export function DemoVaultLoader() {
     api
       .checkDemoVault()
       .then((res) => {
-        if (!cancelled && res.present && res.path) setElectronDemoPath(res.path);
+        if (!cancelled && res.present) setElectronDemoAvailable(true);
       })
       .catch(() => {
         // Probe failure just means we fall back to the picker.
@@ -186,7 +186,7 @@ export function DemoVaultLoader() {
       <Button
         variant="outline"
         onClick={() =>
-          electronDemoPath
+          electronDemoAvailable
             ? runDemoRestore(electronDemoVaultChunks)
             : fileInputRef.current?.click()
         }
@@ -207,10 +207,10 @@ export function DemoVaultLoader() {
         </div>
       ) : (
         <p className="text-xs text-muted-foreground text-center max-w-xs">
-          {electronDemoPath ? (
+          {electronDemoAvailable ? (
             <span data-testid="text-demo-vault-detected">
-              Demo vault found at <span className="font-mono break-all">{electronDemoPath}</span>.
-              One click fills this fresh vault with the demo dataset.
+              Demo vault found alongside the app. One click fills this fresh vault with the demo
+              dataset.
             </span>
           ) : (
             <>

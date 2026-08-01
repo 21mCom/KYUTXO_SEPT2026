@@ -281,17 +281,26 @@ export default function NodeSettings() {
           description: `Connected via ${result.proxyName}. Exit IP: ${result.torIp}`,
         });
         
-        // Auto-save the detected working proxy URL so it's used for syncs
-        if (result.proxyUrl && result.proxyUrl !== currentSettings.torProxyUrl) {
+        // Auto-save the detected working proxy URL so it's used for syncs.
+        // Newer desktop builds omit proxyUrl from the IPC payload; map the
+        // proxy name back to its known built-in URL ("Custom" needs no update
+        // since the setting already holds the custom URL).
+        const builtInProxyUrls: Record<string, string> = {
+          "Tor Browser": "socks5://127.0.0.1:9150",
+          "Tor Service": "socks5://127.0.0.1:9050",
+        };
+        const detectedProxyUrl =
+          result.proxyUrl ?? (result.proxyName ? builtInProxyUrls[result.proxyName] : undefined);
+        if (detectedProxyUrl && detectedProxyUrl !== currentSettings.torProxyUrl) {
           try {
-            await updateSettings({ torProxyUrl: result.proxyUrl });
+            await updateSettings({ torProxyUrl: detectedProxyUrl });
             setPendingChanges(prev => {
               const { torProxyUrl, ...rest } = prev;
               return rest;
             });
           } catch (saveError) {
             // If auto-save fails, keep it as a pending change so user can save manually
-            setPendingChanges(prev => ({ ...prev, torProxyUrl: result.proxyUrl }));
+            setPendingChanges(prev => ({ ...prev, torProxyUrl: detectedProxyUrl }));
             console.error('[KYUTXO] Failed to auto-save Tor proxy URL:', saveError);
           }
         }

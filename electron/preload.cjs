@@ -4,9 +4,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
   // File system operations
-  getAppDataPath: () => ipcRenderer.invoke('get-app-data-path'),
-  getAttachmentsPath: () => ipcRenderer.invoke('get-attachments-path'),
-  getDataPath: () => ipcRenderer.invoke('get-data-path'),
   
   // Attachment operations
   saveAttachment: (identifier, filename, data) => 
@@ -36,8 +33,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Orphaned-attachment review folder (populated during restore when an
   // attachment's owning record is absent — never linked to any record).
-  getNeedsReviewPath: () =>
-    ipcRenderer.invoke('get-needs-review-path'),
   writeNeedsReview: (filename, data) =>
     ipcRenderer.invoke('write-needs-review', { filename, data }),
   openNeedsReviewFolder: () =>

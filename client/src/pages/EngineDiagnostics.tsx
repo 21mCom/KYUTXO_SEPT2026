@@ -376,7 +376,7 @@ export default function EngineDiagnostics() {
                     <div className="flex items-start justify-between gap-4 py-1.5">
                       <span className="text-sm text-muted-foreground shrink-0">Database file</span>
                       <span className="text-sm font-medium break-all text-right" data-testid="text-db-path">
-                        {dbInfo?.dbPath ?? snapshot.dbPath ?? "—"}
+                        engine.sqlite
                       </span>
                     </div>
                     <StatRow label="Database file size" value={fmtBytes(snapshot.fileStats?.sizeBytes)} testid="text-db-size" />

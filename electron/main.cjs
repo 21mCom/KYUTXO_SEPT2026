@@ -21,6 +21,8 @@ const {
   isExternalOpenAllowed,
   isNavigationAllowed,
   escapeHtml,
+  sanitizeIpcError,
+  logMainError,
   torRequestSchema,
   torProxySettingsSchema,
 } = require('./security-utils.cjs');
@@ -68,16 +70,19 @@ if (portableMode) {
   app.setPath('userData', dataDir);
   
   console.log('[KYUTXO] PORTABLE MODE ENABLED');
-  console.log('[KYUTXO] Portable directory:', portableDir);
-  console.log('[KYUTXO] Data directory:', dataDir);
-  console.log('[KYUTXO] userData path set to:', app.getPath('userData'));
+  // Absolute paths stay out of main-process logs.
+  console.log('[KYUTXO] Portable mode enabled');
+  // Never log the resolved data directory: absolute paths stay out of logs.
+  console.log('[KYUTXO] Data directory resolved');
+  console.log('[KYUTXO] userData path configured');
 } else {
   ({ dataDir, attachmentsDir, needsReviewDir } = resolveDataDirs({
     baseDir: app.getPath('userData'),
     portableMode: false,
   }));
   console.log('[KYUTXO] STANDARD MODE');
-  console.log('[KYUTXO] Data directory:', dataDir);
+  // Never log the resolved data directory: absolute paths stay out of logs.
+  console.log('[KYUTXO] Data directory resolved');
 }
 
 function ensureDirectories() {
@@ -115,17 +120,17 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   } else {
     const indexPath = path.join(app.getAppPath(), 'dist', 'public', 'index.html');
-    console.log('[KYUTXO] Loading from:', indexPath);
-    
+    console.log('[KYUTXO] Loading packaged renderer');
+
     mainWindow.loadFile(indexPath).catch((err) => {
-      console.error('[KYUTXO] Failed to load index.html:', err);
+      // No absolute paths or raw error text in logs or the fallback page.
+      logMainError('[KYUTXO] Failed to load packaged renderer', err);
       mainWindow.loadURL(`data:text/html,
         <html>
           <body style="background:#1a1a2e;color:white;font-family:sans-serif;padding:40px;">
             <h1>Error Loading KYUTXO</h1>
-            <p>Failed to load: ${escapeHtml(indexPath)}</p>
-            <p>Error: ${escapeHtml(err.message)}</p>
-            <p>App path: ${escapeHtml(app.getAppPath())}</p>
+            <p>The application interface could not be loaded.</p>
+            <p>${escapeHtml(sanitizeIpcError(err, 'Failed to load the application files. Try reinstalling the app.'))}</p>
           </body>
         </html>
       `);
@@ -216,7 +221,9 @@ ipcMain.handle('tor-test', async () => {
         if (torCheck.IsTor) {
           return {
             success: true,
-            proxyUrl: proxy.url,
+            // Proxy URLs never cross the IPC bridge; the renderer maps the
+            // proxy name back to its known built-in URL (and already holds
+            // any custom URL in its own settings).
             proxyName: proxy.name,
             isTor: true,
             torIp: torCheck.IP,
@@ -233,7 +240,9 @@ ipcMain.handle('tor-test', async () => {
   return {
     success: false,
     error: "Could not connect to Tor. Make sure Tor Browser or Tor service is running.",
-    testedProxies: proxiesToTest.map(p => p.url),
+    // Report only proxy names — a renderer-supplied custom proxy URL must not
+    // be echoed back in the failure payload.
+    testedProxies: proxiesToTest.map(p => p.name),
   };
 });
 
@@ -267,7 +276,6 @@ ipcMain.handle('tor-status', async () => {
         const torCheck = result.data;
         results.push({
           name: proxy.name,
-          url: proxy.url,
           port: proxy.port,
           available: true,
           isTor: torCheck.IsTor || false,
@@ -277,19 +285,19 @@ ipcMain.handle('tor-status', async () => {
       } else {
         results.push({
           name: proxy.name,
-          url: proxy.url,
           port: proxy.port,
           available: false,
           error: result.error,
         });
       }
     } catch (error) {
+      // Raw exception text can embed proxy URLs/paths — keep it off the bridge.
+      logMainError(`[KYUTXO] Tor status check (${proxy.name}) failed`, error);
       results.push({
         name: proxy.name,
-        url: proxy.url,
         port: proxy.port,
         available: false,
-        error: error.message || "Unknown error",
+        error: sanitizeIpcError(error, "Status check failed"),
       });
     }
   }

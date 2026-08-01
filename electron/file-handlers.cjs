@@ -1,4 +1,5 @@
 const path = require('path');
+const { sanitizeIpcError, logMainError } = require('./security-utils.cjs');
 const fs = require('fs');
 const crypto = require('crypto');
 
@@ -104,18 +105,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       ? p.slice('attachments/'.length)
       : p;
 
-  ipcMain.handle('get-app-data-path', () => {
-    return require('electron').app.getPath('userData');
-  });
-
-  ipcMain.handle('get-data-path', () => {
-    return dataDir;
-  });
-
-  ipcMain.handle('get-attachments-path', () => {
-    return attachmentsDir;
-  });
-
+  // Note: absolute data/attachments paths are deliberately NOT exposed over
+  // IPC; the renderer only ever needs presence/mode flags.
   ipcMain.handle('is-portable-mode', () => {
     return portableMode;
   });
@@ -156,7 +147,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       }
       return { success: false, error: 'Could not allocate a unique filename' };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] save-attachment failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to save attachment') };
     }
   });
 
@@ -193,7 +185,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       const exact = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
       return { success: true, data: exact };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] read-attachment failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to read attachment') };
     }
   });
 
@@ -221,7 +214,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       }
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] delete-attachment failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to delete attachment') };
     }
   });
 
@@ -248,7 +242,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
         .map((e) => e.name);
       return { success: true, files };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] list-attachments failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to list attachments') };
     }
   });
 
@@ -305,7 +300,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
 
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] rename-attachment failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to rename attachment') };
     }
   });
 
@@ -361,7 +357,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       
       return { success: true, files: result, totalBytes };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] list-all-attachments failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to list attachments') };
     }
   });
 
@@ -417,7 +414,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] write-attachment failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to write attachment') };
     }
   });
 
@@ -439,7 +437,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       const totalBytes = stats.blocks * stats.bsize;
       return { success: true, freeBytes, totalBytes };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] get-disk-space failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to check disk space') };
     }
   });
 
@@ -491,18 +490,14 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       }
       return { success: true, totalBytes, fileCount };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] get-attachments-size failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to measure attachments size') };
     }
-  });
-
-  // Get the path of the Needs Review folder (for display in UI after restore).
-  ipcMain.handle('get-needs-review-path', () => {
-    return needsReviewDir;
   });
 
   // Write an orphaned attachment to the Needs Review folder under its original
   // filename, de-duping name collisions by appending _1, _2, ... before the
-  // extension. Returns the absolute path of the file that was written.
+  // extension. Returns the saved (possibly de-duped) filename.
   ipcMain.handle('write-needs-review', async (event, { filename, data }) => {
     try {
       if (!filename || typeof filename !== 'string') {
@@ -540,9 +535,11 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       }
       // O_EXCL: never overwrite (or write through a link at) an existing name.
       fs.writeFileSync(dest, buffer, { flag: 'wx' });
-      return { success: true, savedPath: dest };
+      // Return the folder-relative name only; absolute paths stay main-side.
+      return { success: true, savedName: candidate };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] write-needs-review failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to save file to the Needs Review folder') };
     }
   });
 
@@ -556,7 +553,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       await shell.openPath(needsReviewDir);
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] open-needs-review-folder failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to open the Needs Review folder') };
     }
   });
 
@@ -588,7 +586,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       files.sort((a, b) => b.routedAt - a.routedAt);
       return { success: true, files };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] list-needs-review failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to list Needs Review files') };
     }
   });
 
@@ -615,7 +614,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
         data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
       };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] read-needs-review failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to read Needs Review file') };
     }
   });
 
@@ -638,7 +638,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       await fs.promises.unlink(target);
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] delete-needs-review failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to delete Needs Review file') };
     }
   });
 
@@ -680,9 +681,11 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     try {
       const found = findDemoVault();
       if (!found) return { present: false };
-      return { present: true, path: found.filePath, size: found.size };
+      // Absolute paths never cross the IPC bridge; presence + size suffice.
+      return { present: true, size: found.size };
     } catch (error) {
-      return { present: false, error: error.message };
+      logMainError('[KYUTXO] check-demo-vault failed', error);
+      return { present: false, error: sanitizeIpcError(error, 'Failed to check for the demo vault') };
     }
   });
 
@@ -716,7 +719,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
         await handle.close();
       }
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] read-demo-vault failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to read the demo vault') };
     }
   });
 
@@ -748,9 +752,12 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       });
       const id = `backup_${++backupSeq}`;
       backupStreams.set(id, { stream, filePath: result.filePath });
-      return { success: true, id, filePath: result.filePath };
+      // The absolute save path stays main-side; the renderer only needs the
+      // opaque stream id.
+      return { success: true, id };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] backup-open failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to open the backup file for writing') };
     }
   });
 
@@ -764,7 +771,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       });
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] backup-write failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to write to the backup file') };
     }
   });
 
@@ -778,7 +786,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       backupStreams.delete(id);
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] backup-close failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to finalize the backup file') };
     }
   });
 
@@ -795,7 +804,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       }
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] backup-abort failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to abort the backup') };
     }
   });
 }

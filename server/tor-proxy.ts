@@ -116,7 +116,8 @@ function sanitizeTrustedLocalHosts(input: unknown): { ok: true; hosts: string[] 
     if (typeof entry !== "string") return { ok: false, error: "trustedLocalHosts entries must be strings" };
     const trimmed = entry.trim();
     if (!trimmed || trimmed.length > 253 || /[\s/:]/.test(trimmed)) {
-      return { ok: false, error: `Invalid trusted local host entry: '${String(entry).slice(0, 64)}'` };
+      // Fixed text: user-supplied entries are never reflected back in responses.
+      return { ok: false, error: 'Invalid trusted local host entry: entries must be non-empty hostnames or IP addresses under 254 characters.' };
     }
     hosts.push(trimmed);
   }

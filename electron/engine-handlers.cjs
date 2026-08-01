@@ -11,6 +11,7 @@
  * external + asarUnpack'd so the native addon loads from disk in production.
  */
 const path = require('path');
+const { sanitizeIpcError, logMainError } = require('./security-utils.cjs');
 const { Worker } = require('worker_threads');
 
 let worker = null;
@@ -37,7 +38,7 @@ function forwardFinalizeProgress(progress) {
       win.webContents.send('engine:finalizeProgress', progress);
     }
   } catch (err) {
-    console.error('[KYUTXO][engine] failed to forward finalize progress:', err);
+    logMainError('[KYUTXO][engine] failed to forward finalize progress', err);
   }
 }
 
@@ -58,7 +59,7 @@ function ensureWorker() {
     else p.reject(new Error(res.error || 'Engine worker error'));
   });
   worker.on('error', (err) => {
-    console.error('[KYUTXO][engine] worker error:', err);
+    logMainError('[KYUTXO][engine] worker error', err);
     rejectAllPending(err);
     worker = null; // allow a fresh spawn on the next call
   });
@@ -96,16 +97,31 @@ function call(type, extra) {
 function registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow }) {
   dbPath = path.join(dataDir, 'engine.sqlite');
   getWindowRef = typeof getWindow === 'function' ? getWindow : null;
-  console.log('[KYUTXO][engine] db path:', dbPath);
+  // Absolute paths stay out of main-process logs.
+  console.log('[KYUTXO][engine] db path resolved');
 
   // Every handler returns a uniform envelope so the renderer never has to catch
   // a rejected invoke — it inspects { ok, result, error } instead.
+  // Hand-written input-validation messages are safe to surface verbatim;
+  // anything else (worker/SQLite failures) can embed filesystem paths, so it
+  // is logged sanitized main-side and reduced to a stable generic message.
   const wrap = (fn) => async (_event, payload) => {
     try {
       return { ok: true, result: await fn(payload) };
     } catch (err) {
-      return { ok: false, error: err && err.message ? err.message : String(err) };
+      if (err && err.engineInputError === true) {
+        // Hand-written validation text created via invalidInput() below.
+        const safeInputMessage = err.message;
+        return { ok: false, error: safeInputMessage };
+      }
+      logMainError('[KYUTXO][engine] operation failed', err);
+      return { ok: false, error: sanitizeIpcError(err, 'Engine operation failed') };
     }
+  };
+  const invalidInput = (message) => {
+    const e = new Error(message);
+    e.engineInputError = true;
+    return e;
   };
 
   ipcMain.handle('engine:init', wrap(() => call('init')));
@@ -113,18 +129,18 @@ function registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow }) {
   ipcMain.handle('engine:seedBegin', wrap(() => call('seedBegin')));
   ipcMain.handle('engine:seedBatch', wrap((p) => {
     const { table, rows } = p || {};
-    if (typeof table !== 'string') throw new Error('seedBatch requires a table name');
-    if (!Array.isArray(rows)) throw new Error('seedBatch requires a rows array');
+    if (typeof table !== 'string') throw invalidInput('seedBatch requires a table name');
+    if (!Array.isArray(rows)) throw invalidInput('seedBatch requires a rows array');
     return call('seedBatch', { table, rows });
   }));
   ipcMain.handle('engine:seedFinish', wrap((p) => {
     const { sourceCounts } = p || {};
-    if (!sourceCounts || typeof sourceCounts !== 'object') throw new Error('seedFinish requires sourceCounts');
+    if (!sourceCounts || typeof sourceCounts !== 'object') throw invalidInput('seedFinish requires sourceCounts');
     return call('seedFinish', { sourceCounts });
   }));
   ipcMain.handle('engine:query', wrap((p) => {
     const { name, args } = p || {};
-    if (typeof name !== 'string') throw new Error('query requires a name');
+    if (typeof name !== 'string') throw invalidInput('query requires a name');
     return call('query', { name, args });
   }));
   ipcMain.handle('engine:benchmark', wrap(() => call('benchmark')));
@@ -133,10 +149,12 @@ function registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow }) {
   ipcMain.handle('engine:clear', wrap(() => call('clear')));
   ipcMain.handle('engine:generateSynthetic', wrap((p) => {
     const { spec } = p || {};
-    if (!spec || typeof spec !== 'object') throw new Error('generateSynthetic requires a spec object');
+    if (!spec || typeof spec !== 'object') throw invalidInput('generateSynthetic requires a spec object');
     return call('generateSynthetic', { spec });
   }));
-  ipcMain.handle('engine:dbInfo', wrap(() => ({ dbPath, portableMode: !!portableMode })));
+  // The absolute db path is deliberately not exposed; the renderer shows the
+  // storage mode and the fixed engine filename instead.
+  ipcMain.handle('engine:dbInfo', wrap(() => ({ portableMode: !!portableMode })));
 }
 
 async function stopEngineWorker() {
@@ -144,7 +162,7 @@ async function stopEngineWorker() {
   try {
     await worker.terminate();
   } catch (err) {
-    console.error('[KYUTXO][engine] error terminating worker:', err);
+    logMainError('[KYUTXO][engine] error terminating worker', err);
   } finally {
     worker = null;
     rejectAllPending(new Error('Engine worker terminated'));

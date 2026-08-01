@@ -66,9 +66,8 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         if (!result.success) {
           throw new Error(result.error ?? `Failed to write ${originalFilename} to Needs Review folder`);
         }
-        if (result.path) {
-          const base = result.path.split(/[\\/]/).pop();
-          if (base) return base;
+        if (result.savedName) {
+          return result.savedName;
         }
       }
     },

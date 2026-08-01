@@ -1,9 +1,11 @@
+const { sanitizeIpcError, logMainError } = require('./security-utils.cjs');
+
 const DEFAULT_TOR_PROXY = "socks5h://127.0.0.1:9050";
 const TOR_BROWSER_PROXY = "socks5h://127.0.0.1:9150";
 
-// ============================================================================
+// ---------------------------------------------------------------------------
 // SECURITY MODEL (mirrors server/tor-proxy.ts)
-// ============================================================================
+// ---------------------------------------------------------------------------
 // The renderer asks the main process to fetch URLs on its behalf. To keep this
 // from becoming an open relay, all trust decisions live in the MAIN PROCESS:
 // destinations are restricted to a built-in allowlist plus the user's
@@ -21,7 +23,8 @@ async function getFetch() {
       // Dynamic import for node-fetch (ESM module)
       nodeFetch = (await import('node-fetch')).default;
     } catch (error) {
-      console.error('[KYUTXO] Failed to load node-fetch for Tor proxy:', error.name);
+      // Raw module-load errors embed filesystem paths — log name/code only.
+      logMainError('[KYUTXO] Failed to load node-fetch for Tor proxy', error);
       throw new Error('Tor proxy requires node-fetch module. Please ensure it is installed.');
     }
   }
@@ -100,9 +103,9 @@ async function detectWorkingTorProxy() {
   return DEFAULT_TOR_PROXY;
 }
 
-// ============================================================================
+// ---------------------------------------------------------------------------
 // RESOURCE BOUNDS
-// ============================================================================
+// ---------------------------------------------------------------------------
 const ALLOWED_METHODS = new Set(["GET", "POST"]);
 // Only these caller-supplied headers are forwarded upstream.
 const ALLOWED_FORWARD_HEADERS = new Set(["content-type", "accept"]);
@@ -124,9 +127,9 @@ function clampProxyTimeout(timeout) {
   return Math.min(Math.max(Math.floor(timeout), MIN_TIMEOUT_MS), MAX_TIMEOUT_MS);
 }
 
-// ============================================================================
+// ---------------------------------------------------------------------------
 // MAIN-PROCESS SETTINGS (pushed by the renderer from stored node settings)
-// ============================================================================
+// ---------------------------------------------------------------------------
 let torProxySettings = { trustedLocalHosts: [] };
 
 function getTorProxySettings() {
@@ -190,7 +193,8 @@ function updateTorProxySettings(input) {
       }
       const trimmed = entry.trim();
       if (!trimmed || trimmed.length > 253 || /[\s/:]/.test(trimmed)) {
-        return { success: false, error: `Invalid trusted local host entry: '${String(entry).slice(0, 64)}'` };
+        // Fixed text: renderer-supplied entries are never reflected back over IPC.
+        return { success: false, error: 'Invalid trusted local host entry: entries must be non-empty hostnames or IP addresses under 254 characters.' };
       }
       trustedLocalHosts.push(trimmed);
     }
@@ -261,7 +265,9 @@ function isAllowedUrl(urlString) {
       }
       return {
         allowed: false,
-        reason: `Onion host '${hostname}' is not your configured provider. Set it as your custom provider in Node Settings first.`,
+        // Keep the hostname out of the rejection reason: this string travels
+        // over IPC to the renderer and into logs.
+        reason: 'This onion host is not your configured provider. Set it as your custom provider in Node Settings first.',
       };
     }
 
@@ -276,13 +282,15 @@ function isAllowedUrl(urlString) {
       });
 
       if (isTrusted) {
-        console.log(`[KYUTXO] Allowing trusted local host: ${hostname}`);
+        // Never log the hostname — private node endpoints stay out of logs.
+        console.log('[KYUTXO] Allowing trusted local host');
         return { allowed: true, isLocal: true };
       }
 
       return {
         allowed: false,
-        reason: `Local address '${hostname}' is not in your trusted hosts whitelist. Add it in Node Settings → Trusted Local Hosts.`
+        // Keep the hostname out of the rejection reason (crosses IPC / logs).
+        reason: 'This local address is not in your trusted hosts whitelist. Add it in Node Settings → Trusted Local Hosts.'
       };
     }
 
@@ -293,7 +301,8 @@ function isAllowedUrl(urlString) {
     }
 
     if (!allowedHosts.some(allowed => hostMatches(hostname, allowed))) {
-      return { allowed: false, reason: `Host '${hostname}' is not in the allowed list` };
+      // Hostname deliberately omitted from the reason (crosses IPC / logs).
+      return { allowed: false, reason: 'Host is not in the allowed list' };
     }
 
     return { allowed: true };
@@ -302,9 +311,9 @@ function isAllowedUrl(urlString) {
   }
 }
 
-// ============================================================================
+// ---------------------------------------------------------------------------
 // CONCURRENCY LIMITER (semaphore with a bounded queue)
-// ============================================================================
+// ---------------------------------------------------------------------------
 let activeProxiedRequests = 0;
 const proxyWaitQueue = [];
 
@@ -339,9 +348,9 @@ function releaseProxySlot() {
   if (next) next.resolve();
 }
 
-// ============================================================================
+// ---------------------------------------------------------------------------
 // REQUEST SANITIZATION
-// ============================================================================
+// ---------------------------------------------------------------------------
 function sanitizeForwardHeaders(headers) {
   if (typeof headers !== "object" || headers === null || Array.isArray(headers)) return undefined;
   const out = {};
@@ -475,13 +484,12 @@ async function makeProxiedRequest(requestParams) {
         latency,
       };
     }
-
-    // Raw exception text can embed proxy/target URLs — keep it away from the
-    // renderer and out of routine logs.
-    logProxyError("[KYUTXO] Tor proxy request failed", error);
+    
+    // Raw exception text can embed proxy/target URLs — keep it off the bridge.
+    logMainError('[KYUTXO] Tor proxy request failed', error);
     return {
       success: false,
-      error: "Proxy request failed",
+      error: sanitizeIpcError(error, "Proxy request failed"),
       latency,
     };
   }
@@ -493,6 +501,7 @@ async function makeDirectRequest(requestParams) {
   const startTime = Date.now();
   const timeout = clampProxyTimeout(requestParams.timeout);
 
+  // Never log the renderer-supplied target URL: it can name a private local node.
   console.log(`[KYUTXO] [${new Date().toISOString()}] makeDirectRequest START - timeout: ${timeout}ms`);
 
   try {
@@ -574,7 +583,7 @@ async function makeDirectRequest(requestParams) {
         latency,
       };
     }
-
+    
     if (error.message && error.message.includes('ECONNREFUSED')) {
       return {
         success: false,
@@ -583,12 +592,12 @@ async function makeDirectRequest(requestParams) {
       };
     }
 
-    // Raw exception text can embed the target URL — keep it away from the
-    // renderer and out of routine logs.
-    logProxyError("[KYUTXO] Direct request failed", error);
+    // Raw exception text can embed the target URL — keep it off the bridge
+    // and out of the logs (log only name + errno code).
+    logMainError(`[KYUTXO] [${new Date().toISOString()}] makeDirectRequest ERROR (elapsed: ${latency}ms)`, error);
     return {
       success: false,
-      error: "Direct request failed",
+      error: sanitizeIpcError(error, "Direct request failed"),
       latency,
     };
   }

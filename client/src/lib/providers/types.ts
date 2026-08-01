@@ -198,7 +198,8 @@ export interface TorStatus {
   torAvailable: boolean;
   proxies: Array<{
     name: string;
-    url: string;
+    /** Omitted by newer desktop builds: proxy URLs stay out of IPC payloads. */
+    url?: string;
     port: number;
     available: boolean;
     isTor?: boolean;

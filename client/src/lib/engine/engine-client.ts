@@ -96,7 +96,6 @@ export interface ReopenResult {
 }
 
 export interface DbInfo {
-  dbPath: string;
   portableMode: boolean;
 }
 

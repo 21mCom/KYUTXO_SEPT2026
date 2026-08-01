@@ -1,4 +1,5 @@
 const net = require('net');
+const { sanitizeIpcError, logMainError } = require('./security-utils.cjs');
 const tls = require('tls');
 const crypto = require('crypto');
 const bitcoin = require('bitcoinjs-lib');
@@ -30,6 +31,18 @@ const electrumPool = {
   requestIdCounter: 0,
 };
 
+// Redact a connection key (user-supplied host:port) for logging. Private node
+// addresses must never appear in main-process logs; a stable opaque id keeps
+// log lines correlatable across a session without exposing the endpoint.
+const connLogIds = new Map();
+let connLogSeq = 0;
+function describeKey(key) {
+  if (!connLogIds.has(key)) {
+    connLogIds.set(key, `conn#${++connLogSeq}`);
+  }
+  return connLogIds.get(key);
+}
+
 // Start keepalive timer
 function startKeepalive() {
   if (electrumPool.keepaliveInterval) return;
@@ -40,7 +53,7 @@ function startKeepalive() {
     for (const [key, conn] of electrumPool.connections.entries()) {
       // Close idle connections (no pending requests for >60s)
       if (now - conn.lastUsed > electrumPool.CONNECTION_TIMEOUT && conn.pendingMap.size === 0) {
-        console.log(`[Electrum Pool] Closing idle connection: ${key}`);
+        console.log(`[Electrum Pool] Closing idle connection: ${describeKey(key)}`);
         try { conn.socket.destroy(); } catch (e) {}
         electrumPool.connections.delete(key);
         continue;
@@ -52,7 +65,7 @@ function startKeepalive() {
           await pooledRequest(key, 'server.ping', [], 5000);
           conn.lastUsed = Date.now();
         } catch (e) {
-          console.log(`[Electrum Pool] Keepalive failed for ${key}: ${e.message}`);
+          logMainError(`[Electrum Pool] Keepalive failed for ${describeKey(key)}`, e);
           conn.healthy = false;
           try { conn.socket.destroy(); } catch (e) {}
           electrumPool.connections.delete(key);
@@ -106,7 +119,14 @@ function setupMultiplexedHandler(conn, key) {
           clearTimeout(pending.timeoutId);
           
           if (response.error) {
-            pending.reject(new Error(response.error.message || JSON.stringify(response.error)));
+            // Tag server-originated JSON-RPC errors: their text comes from the
+            // remote Electrum server (e.g. "height out of range") and carries
+            // no local paths/URLs, so it is safe — and useful — to surface to
+            // the renderer as-is. Local system errors are NOT tagged and get
+            // sanitized at the IPC boundary (see toIpcError).
+            const serverError = new Error(response.error.message || JSON.stringify(response.error));
+            serverError.electrumServerError = true;
+            pending.reject(serverError);
           } else {
             pending.resolve(response.result);
           }
@@ -120,7 +140,7 @@ function setupMultiplexedHandler(conn, key) {
   conn.socket.on('data', conn.dataHandler);
   
   conn.socket.on('error', (err) => {
-    console.log(`[Electrum Pool] Socket error on ${key}: ${err.message}`);
+    logMainError(`[Electrum Pool] Socket error on ${describeKey(key)}`, err);
     conn.healthy = false;
     // Reject all pending requests
     for (const [id, pending] of conn.pendingMap.entries()) {
@@ -132,7 +152,7 @@ function setupMultiplexedHandler(conn, key) {
   });
   
   conn.socket.on('close', () => {
-    console.log(`[Electrum Pool] Socket closed: ${key}`);
+    console.log(`[Electrum Pool] Socket closed: ${describeKey(key)}`);
     // Reject all pending requests
     for (const [id, pending] of conn.pendingMap.entries()) {
       clearTimeout(pending.timeoutId);
@@ -167,7 +187,7 @@ function pooledRequest(key, method, params = [], timeout = 30000) {
       // by the normal error/close handlers and the keepalive/idle lifecycle;
       // a late response for this id is simply ignored by the data handler
       // (the pending entry is gone).
-      console.log(`[Electrum Pool] Request timeout on ${key} for ${method}; rejecting only this request (${conn.pendingMap.size} others in flight, connection kept open)`);
+      console.log(`[Electrum Pool] Request timeout on ${describeKey(key)} for ${method}; rejecting only this request (${conn.pendingMap.size} others in flight, connection kept open)`);
       reject(new Error(`Request timeout after ${timeout/1000}s for ${method}`));
     }, timeout);
     
@@ -180,7 +200,7 @@ function pooledRequest(key, method, params = [], timeout = 30000) {
       conn.pendingMap.delete(id);
       clearTimeout(timeoutId);
       // Write error - mark unhealthy and close
-      console.log(`[Electrum Pool] Write error on ${key}, marking connection unhealthy`);
+      console.log(`[Electrum Pool] Write error on ${describeKey(key)}, marking connection unhealthy`);
       conn.healthy = false;
       try { conn.socket.destroy(); } catch (e2) {}
       electrumPool.connections.delete(key);
@@ -268,9 +288,13 @@ async function createTcpSocket(cleanedHost, port, torOptions, timeout) {
     info.socket.setTimeout(timeout);
     return info.socket;
   } catch (err) {
-    throw new Error(
-      `Connection failed via Tor proxy ${proxyUrl}: ${err.message}. Make sure Tor is running.`,
+    // No proxy URL or raw error text: this message crosses the IPC bridge.
+    const torErr = new Error(
+      'Connection failed via the Tor proxy. Make sure Tor is running and the proxy settings are correct.',
     );
+    torErr.code = err && err.code ? err.code : undefined;
+    torErr.safeForIpc = true;
+    throw torErr;
   }
 }
 
@@ -290,15 +314,30 @@ function isStructurallySelfSigned(cert) {
   return subject !== '' && subject === flattenX509Name(cert.issuer);
 }
 
+// Bound + scrub a remote-supplied certificate display string before it can
+// cross the IPC bridge: strip control characters, collapse whitespace, and
+// cap the length. Returns undefined for empty/non-string input.
+function sanitizeCertDisplayField(value, maxLen = 128) {
+  if (typeof value !== 'string') return undefined;
+  const cleaned = value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+  return cleaned || undefined;
+}
+
+// A fingerprint is only ever interpolated into IPC-visible text when it has
+// the expected colon-separated hex shape; anything else is replaced.
+function safeFingerprint(value) {
+  return typeof value === 'string' && /^[0-9A-Fa-f:]{32,128}$/.test(value) ? value.toUpperCase() : '(invalid fingerprint)';
+}
+
 // Extract display metadata + SHA-256 fingerprint from a peer certificate.
 function describeCertificate(cert) {
   if (!cert || !cert.raw || !cert.fingerprint256) return null;
   return {
     fingerprint: cert.fingerprint256,
-    subject: cert.subject && (cert.subject.CN || cert.subject.O) ? (cert.subject.CN || cert.subject.O) : undefined,
-    issuer: cert.issuer && (cert.issuer.CN || cert.issuer.O) ? (cert.issuer.CN || cert.issuer.O) : undefined,
-    validFrom: cert.valid_from,
-    validTo: cert.valid_to,
+    subject: sanitizeCertDisplayField(cert.subject && (cert.subject.CN || cert.subject.O)),
+    issuer: sanitizeCertDisplayField(cert.issuer && (cert.issuer.CN || cert.issuer.O)),
+    validFrom: sanitizeCertDisplayField(cert.valid_from, 64),
+    validTo: sanitizeCertDisplayField(cert.valid_to, 64),
     selfSigned: isStructurallySelfSigned(cert),
   };
 }
@@ -369,8 +408,10 @@ function evaluateCertificate(tlsSocket, host, port, storePath) {
       return {
         ok: false,
         code: 'CERT_INVALID',
+        // Fixed text: the configured hostname and the raw identity-check
+        // detail stay main-side, never on the IPC bridge.
         message:
-          `The server's TLS certificate is not valid for ${host} (${identityError.message}). ` +
+          'The server\'s TLS certificate is not valid for the configured hostname. ' +
           'If you previously trusted this server, its certificate may have been replaced — this can mean a man-in-the-middle attack.',
         certificate: certInfo || undefined,
       };
@@ -389,8 +430,10 @@ function evaluateCertificate(tlsSocket, host, port, storePath) {
     return {
       ok: false,
       code: 'CERT_INVALID',
+      // Fixed text: raw verification detail (which can embed the configured
+      // hostname) is logged main-side only, never sent over IPC.
       message:
-        `The server's TLS certificate failed verification (${authError}) and is not a self-signed certificate, ` +
+        "The server's TLS certificate failed verification and is not a self-signed certificate, " +
         'so it cannot be trusted manually. Fix the certificate on the server (valid chain, matching hostname, not expired). ' +
         'If you previously trusted this server, its certificate may have been replaced — this can mean a man-in-the-middle attack.',
       certificate: certInfo || undefined,
@@ -401,7 +444,7 @@ function evaluateCertificate(tlsSocket, host, port, storePath) {
     return {
       ok: false,
       code: 'CERT_UNTRUSTED',
-      message: `The server's TLS certificate could not be verified (${authError}) and no certificate was presented to inspect.`,
+      message: "The server's TLS certificate could not be verified and no certificate was presented to inspect.",
     };
   }
 
@@ -416,9 +459,11 @@ function evaluateCertificate(tlsSocket, host, port, storePath) {
     return {
       ok: false,
       code: 'CERT_FINGERPRINT_CHANGED',
+      // No host:port in IPC-visible text; fingerprints are shape-validated
+      // before interpolation.
       message:
-        `The server's TLS certificate does NOT match the certificate you previously trusted for ${host}:${port} ` +
-        `(expected ${pinned.fingerprint}, got ${certInfo.fingerprint}). ` +
+        "The server's TLS certificate does NOT match the certificate you previously trusted for this server " +
+        `(expected ${safeFingerprint(pinned.fingerprint)}, got ${safeFingerprint(certInfo.fingerprint)}). ` +
         'This can mean a man-in-the-middle attack. Only re-trust if you have verified the new fingerprint with your server.',
       certificate: { ...certInfo, expectedFingerprint: pinned.fingerprint },
     };
@@ -430,7 +475,7 @@ function evaluateCertificate(tlsSocket, host, port, storePath) {
     ok: false,
     code: 'CERT_UNTRUSTED',
     message:
-      `The server's TLS certificate is not signed by a trusted certificate authority (${authError}). ` +
+      "The server's TLS certificate is not signed by a trusted certificate authority. " +
       'Self-signed certificates are common on Electrum servers — verify the fingerprint with your server before trusting it.',
     certificate: certInfo,
   };
@@ -451,7 +496,8 @@ function createElectrumConnection(host, port, useSSL, timeout = 30000, options =
     };
 
     (async () => {
-      console.log(`[Electrum Pool] Creating new connection to ${cleanedHost}:${port} (transport: ${transport}, SSL: ${!!useSSL})`);
+      // Never log the user-supplied host:port — private endpoints stay out of logs.
+      console.log(`[Electrum Pool] Creating new connection (transport: ${transport}, SSL: ${!!useSSL})`);
 
       let socket;
       try {
@@ -480,16 +526,18 @@ function createElectrumConnection(host, port, useSSL, timeout = 30000, options =
       const tlsSocket = tls.connect(tlsOptions, () => {
         const decision = evaluateCertificate(tlsSocket, cleanedHost, port, trustStorePath);
         if (!decision.ok) {
-          console.log(`[Electrum Pool] TLS rejected for ${cleanedHost}:${port}: ${decision.code} - ${decision.message}`);
+          console.log(`[Electrum Pool] TLS rejected: ${decision.code}`);
           try { tlsSocket.destroy(); } catch (e) {}
           const err = new Error(decision.message);
           err.code = decision.code;
           err.certificate = decision.certificate;
+          // Curated main-process text (trust-decision UX) — safe for IPC.
+          err.safeForIpc = true;
           fail(err);
           return;
         }
         if (decision.certificate?.trust === 'pinned') {
-          console.log(`[Electrum Pool] TLS accepted via pinned certificate for ${cleanedHost}:${port}`);
+          console.log('[Electrum Pool] TLS accepted via pinned certificate');
         }
         tlsSocket.electrumTransport = transport;
         tlsSocket.electrumCertificate = decision.certificate;
@@ -526,7 +574,7 @@ async function getPooledConnection(host, port, useSSL, timeout = 30000, options 
   if (electrumPool.connections.has(key)) {
     const conn = electrumPool.connections.get(key);
     if (conn.healthy && conn.socket && !conn.socket.destroyed) {
-      console.log(`[Electrum Pool] Reusing connection: ${key}`);
+      console.log(`[Electrum Pool] Reusing connection: ${describeKey(key)}`);
       conn.lastUsed = Date.now();
       return { key, pooled: true };
     } else {
@@ -537,7 +585,7 @@ async function getPooledConnection(host, port, useSSL, timeout = 30000, options 
   }
   
   // Create new connection
-  console.log(`[Electrum Pool] Creating new connection: ${key}`);
+  console.log(`[Electrum Pool] Creating new connection: ${describeKey(key)}`);
   const socket = await createElectrumConnection(cleanedHost, port, useSSL, timeout, options);
 
   // Store in pool with multiplexed handler
@@ -578,6 +626,62 @@ async function ensureVersionHandshake(key, timeout = 15000) {
   // Already sent version, just ping to verify connection is alive
   await pooledRequest(key, 'server.ping', [], timeout);
   return conn.cachedVersion || ['unknown', '1.4'];
+}
+
+// Convert an internal error into a string safe to send to the renderer.
+// Server-originated JSON-RPC error text is useful ("height out of range") but
+// remote-controlled, so it is constrained before crossing the IPC boundary:
+// only a conservative character set survives (no '/', ':', '@', '\\' — the
+// building blocks of URLs, paths, and host:port strings) and length is capped.
+// Everything else (socket/DNS/timeout/system errors, whose raw messages embed
+// host:port and other local detail) is reduced to a stable generic message
+// with actionable hints preserved.
+const SERVER_ERROR_MAX_LENGTH = 200;
+const SERVER_ERROR_MAX_TOKENS = 40;
+const REDACTED = '[redacted]';
+// Whole whitespace-delimited tokens are judged BEFORE any separator stripping,
+// so URL/host/path material can never be laundered into plain words. Anything
+// containing separators (/, \, :, @, ., [, ]), any URL scheme word, any
+// localhost/IPv6-looking token, or anything suspiciously long is dropped
+// wholesale; surviving tokens are reduced to a conservative character set.
+function sanitizeServerErrorText(text) {
+  const tokens = String(text)
+    .split(/\s+/)
+    .slice(0, SERVER_ERROR_MAX_TOKENS)
+    .map((raw) => {
+      // Trailing sentence punctuation is not endpoint material.
+      const tok = raw.replace(/[.,;:!?)]+$/, '').replace(/^[("]+/, '');
+      if (tok.length === 0) return '';
+      if (tok.length > 30) return REDACTED;
+      if (/[\/\\:@\[\]=%.]/.test(tok)) return REDACTED;
+      if (/^(localhost|https?|wss?|ftp|socks\d?|onion)$/i.test(tok)) return REDACTED;
+      if (/^(?:[0-9A-Fa-f]{1,4}:){2,}/.test(raw)) return REDACTED;
+      const cleaned = tok.replace(/[^A-Za-z0-9,()'"_-]+/g, '');
+      return cleaned.length === tok.length ? cleaned : REDACTED;
+    })
+    .filter((t) => t.length > 0);
+  // Collapse runs of redaction markers.
+  const collapsed = [];
+  for (const t of tokens) {
+    if (t === REDACTED && collapsed[collapsed.length - 1] === REDACTED) continue;
+    collapsed.push(t);
+  }
+  const cleaned = collapsed.join(' ').trim().slice(0, SERVER_ERROR_MAX_LENGTH);
+  if (cleaned.length === 0 || cleaned === REDACTED) return null;
+  return cleaned;
+}
+
+function toIpcError(error, fallback) {
+  if (error && error.safeForIpc === true && typeof error.message === 'string') {
+    return error.message;
+  }
+  if (error && error.electrumServerError === true && typeof error.message === 'string') {
+    const cleaned = sanitizeServerErrorText(error.message);
+    if (cleaned) {
+      return `Electrum server error: ${cleaned}`;
+    }
+  }
+  return sanitizeIpcError(error, fallback);
 }
 
 function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
@@ -632,7 +736,7 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
       pendingTrustObservations.delete(key);
       return { success: true, pinned: entry };
     } catch (error) {
-      return { success: false, error: error.message };
+      return { success: false, error: toIpcError(error, 'Failed to trust the certificate') };
     }
   });
 
@@ -649,7 +753,7 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
       const pinned = trustStorePath ? getPinnedCertificate(trustStorePath, cleanedHost, port) : null;
       return { success: true, pinned };
     } catch (error) {
-      return { success: false, error: error.message, pinned: null };
+      return { success: false, error: toIpcError(error, 'Failed to read certificate trust state'), pinned: null };
     }
   });
 
@@ -725,6 +829,7 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         certificate: conn?.certificate || undefined,
       };
     } catch (error) {
+      logMainError('[KYUTXO] electrum-test failed', error);
       const latency = Date.now() - startTime;
       // If test fails, destroy the pooled connection so next attempt starts fresh
       const key = poolKey(cleanedHost, port, useSSL, options);
@@ -735,7 +840,7 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
       }
       return {
         success: false,
-        error: error.message,
+        error: toIpcError(error, 'Electrum connection test failed'),
         errorCode: error.code || undefined,
         certificate: error.certificate || undefined,
         latency,
@@ -762,9 +867,10 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         history: history || [],
       };
     } catch (error) {
+      logMainError('[KYUTXO] electrum-get-history failed', error);
       return {
         success: false,
-        error: error.message,
+        error: toIpcError(error, 'Failed to fetch address history from the Electrum server'),
         history: [],
       };
     }
@@ -789,9 +895,10 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         utxos: utxos || [],
       };
     } catch (error) {
+      logMainError('[KYUTXO] electrum-get-utxos failed', error);
       return {
         success: false,
-        error: error.message,
+        error: toIpcError(error, 'Failed to fetch address UTXOs from the Electrum server'),
         utxos: [],
       };
     }
@@ -815,9 +922,10 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         transaction: tx,
       };
     } catch (error) {
+      logMainError('[KYUTXO] electrum-get-transaction failed', error);
       return {
         success: false,
-        error: error.message,
+        error: toIpcError(error, 'Failed to fetch the transaction from the Electrum server'),
       };
     }
   });
@@ -847,9 +955,10 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
 
       return { success: true, blockHash };
     } catch (error) {
+      logMainError('[KYUTXO] electrum-get-block-hash failed', error);
       return {
         success: false,
-        error: error.message,
+        error: toIpcError(error, 'Failed to fetch the block header from the Electrum server'),
       };
     }
   });
@@ -899,7 +1008,7 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
             results[i] = {
               address,
               success: false,
-              error: err.message,
+              error: toIpcError(err, 'Address lookup failed'),
               history: [],
             };
           }
@@ -921,9 +1030,10 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         connectionReused: pooled,
       };
     } catch (error) {
+      logMainError('[KYUTXO] electrum-batch-get-history failed', error);
       return {
         success: false,
-        error: error.message,
+        error: toIpcError(error, 'Failed to batch-fetch address history from the Electrum server'),
         results: [],
         latency: Date.now() - startTime,
       };
@@ -968,7 +1078,7 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
             results[i] = {
               address,
               success: false,
-              error: err.message,
+              error: toIpcError(err, 'Address lookup failed'),
               utxos: [],
             };
           }
@@ -990,9 +1100,10 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         connectionReused: pooled,
       };
     } catch (error) {
+      logMainError('[KYUTXO] electrum-batch-get-utxos failed', error);
       return {
         success: false,
-        error: error.message,
+        error: toIpcError(error, 'Failed to batch-fetch address UTXOs from the Electrum server'),
         results: [],
         latency: Date.now() - startTime,
       };
@@ -1003,6 +1114,7 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
 module.exports = {
   registerElectrumHandlers,
   stopKeepalive,
+  sanitizeServerErrorText,
   // Exported for Node-level tests only (TLS trust decisions, pool keying,
   // and direct connection creation without going through IPC).
   _test: {
