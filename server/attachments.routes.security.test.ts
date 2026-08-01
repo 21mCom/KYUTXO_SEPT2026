@@ -285,4 +285,43 @@ describe("legitimate round-trip still works", () => {
     const del = await fetch(`${baseUrl}/api/attachments/${objectStoragePath}`, { method: "DELETE" });
     expect(del.status).toBe(200);
   });
+
+  it("an aborted download closes the file descriptor (no fd leak)", async () => {
+    // A file large enough that the stream cannot fit in socket buffers, so
+    // aborting the client genuinely interrupts the transfer mid-stream.
+    const bigDir = path.join(attachmentsDir, "bigdl");
+    fs.mkdirSync(bigDir, { recursive: true });
+    const bigPath = path.join(bigDir, "big.bin");
+    fs.writeFileSync(bigPath, Buffer.alloc(16 * 1024 * 1024, 7));
+
+    const fdsToFile = () => {
+      // Server runs in-process, so its fds are visible in /proc/self/fd.
+      const entries = fs.readdirSync("/proc/self/fd");
+      let count = 0;
+      for (const e of entries) {
+        try {
+          if (fs.readlinkSync(path.join("/proc/self/fd", e)) === bigPath) count++;
+        } catch {
+          // fd vanished between readdir and readlink
+        }
+      }
+      return count;
+    };
+
+    for (let i = 0; i < 3; i++) {
+      const res = await fetch(`${baseUrl}/api/attachments/download/bigdl/big.bin`);
+      expect(res.status).toBe(200);
+      const reader = res.body!.getReader();
+      await reader.read(); // receive one chunk, then abort mid-stream
+      await reader.cancel();
+    }
+
+    // The read streams (and their FileHandles) must be destroyed once the
+    // response closes; poll briefly since teardown is asynchronous.
+    const deadline = Date.now() + 5000;
+    while (fdsToFile() > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(fdsToFile()).toBe(0);
+  });
 });

@@ -86,4 +86,5 @@
 - [Vault/backup KDF parameters](kdf-parameters.md) — iteration count travels with the salt (absent = legacy 100k); thread params explicitly, defaults are CURRENT; KDF upgrade keeps the salt, legacy at-rest decrypt pinned to LEGACY.
 - [Loopback bind vs Replit waitForPort](replit-loopback-bind.md) — preview proxy reaches 127.0.0.1 but waitForPort cannot; bind 0.0.0.0 only when REPL_ID set, token middleware guards /api.
 - [Tor proxy server-side trust](tor-proxy-server-side-trust.md) — allowlist + SOCKS URL live server-side via pushed settings; per-request trust params removed, never reintroduce; dedup cache drops allowlist on server restart.
+- [Streaming download fd cleanup](stream-download-fd-cleanup.md) — stream files to HTTP responses via pipeline (never .pipe); client aborts otherwise leak FileHandle fds; verify via /proc/self/fd.
 - [HTTP concurrency-limit tests](http-concurrency-limit-tests.md) — undici fetch pools ~10 conns/origin and hides server-side queue overflow; use node:http agent:false + slow-resolving upstream stubs.

@@ -4,6 +4,7 @@ import * as fs from 'fs/promises';
 import { constants as fsConstants } from 'fs';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
+import { pipeline } from 'stream/promises';
 
 // O_NOFOLLOW (Linux/macOS) makes the OPEN itself refuse a symlink at the final
 // path component, closing the check-then-open race for that component; it is
@@ -518,17 +519,37 @@ router.get('/download/:path(*)', async (req, res) => {
     // O_NOFOLLOW: the open itself refuses a symlink swapped in at the final
     // component after the containment check (no-op on Windows).
     const fh = await fs.open(realPath, fsConstants.O_RDONLY | NOFOLLOW);
-    let buffer: Buffer;
-    try {
-      buffer = await fh.readFile();
-    } finally {
-      await fh.close();
-    }
     const filename = path.basename(realPath);
-    
-    res.set('Content-Type', 'application/octet-stream');
-    res.set('Content-Disposition', toContentDisposition(filename));
-    res.send(buffer);
+    try {
+      const { size } = await fh.stat();
+      res.set('Content-Type', 'application/octet-stream');
+      res.set('Content-Disposition', toContentDisposition(filename));
+      res.set('Content-Length', String(size));
+    } catch (error) {
+      await fh.close();
+      throw error;
+    }
+
+    // Stream from disk instead of buffering the whole file in memory: a
+    // 100 MiB attachment (or several concurrent downloads) must not
+    // materialize as Buffers on the server. pipeline (unlike .pipe) destroys
+    // the read stream — and via autoClose the FileHandle — when the response
+    // closes early (client abort/disconnect), so aborted downloads cannot
+    // leak file descriptors.
+    const stream = fh.createReadStream({ autoClose: true });
+    try {
+      await pipeline(stream, res);
+    } catch (error) {
+      // Client aborts surface as ERR_STREAM_PREMATURE_CLOSE — routine, and
+      // pipeline has already destroyed both ends; disk read errors mid-stream
+      // are logged, and destroying the response makes the client see a
+      // truncated transfer instead of a silent short file.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+        logServerError('Download stream error', error);
+      }
+      if (!res.writableEnded) res.destroy();
+    }
   } catch (error) {
     logServerError('Download error', error);
     res.status(500).json({ error: 'Download failed' });
