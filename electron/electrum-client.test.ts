@@ -605,6 +605,110 @@ describe("Electrum over Tor (SOCKS routing)", () => {
   });
 });
 
+describe("hostile IPC payloads are rejected before any socket opens", () => {
+  let server: net.Server;
+  let port: number;
+  let connections = 0;
+
+  beforeAll(async () => {
+    ({ server, port } = await startTcpElectrumServer());
+    server.on("connection", () => {
+      connections += 1;
+    });
+    connections = 0;
+  });
+
+  afterAll(async () => {
+    await closeServer(server);
+  });
+
+  async function expectRejected(channel: string, payload: unknown) {
+    const before = connections;
+    const result = await ipc.invoke(channel, payload);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Invalid Electrum request/);
+    // Give any (buggy) async connect attempt a beat to land.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(connections).toBe(before);
+    return result;
+  }
+
+  it("electrum-test rejects a host smuggling a port/path without connecting", async () => {
+    await expectRejected("electrum-test", {
+      host: `127.0.0.1:${port}/evil`,
+      port,
+      useSSL: false,
+      timeout: 5000,
+    });
+  });
+
+  it("electrum-test rejects an out-of-range port and a non-numeric port", async () => {
+    await expectRejected("electrum-test", {
+      host: "127.0.0.1",
+      port: 99999,
+      useSSL: false,
+    });
+    await expectRejected("electrum-test", {
+      host: "127.0.0.1",
+      port: String(port) as unknown as number,
+      useSSL: false,
+    });
+  });
+
+  it("electrum-test rejects a non-SOCKS torProxyUrl without touching the proxy or server", async () => {
+    await expectRejected("electrum-test", {
+      host: "127.0.0.1",
+      port,
+      useSSL: false,
+      useTor: true,
+      torProxyUrl: "http://127.0.0.1:9050",
+    });
+  });
+
+  it("electrum-get-history rejects a malformed address without connecting", async () => {
+    await expectRejected("electrum-get-history", {
+      host: "127.0.0.1",
+      port,
+      useSSL: false,
+      address: "<script>alert(1)</script>",
+    });
+  });
+
+  it("electrum-batch-get-utxos rejects hostile address arrays without connecting", async () => {
+    // Non-string entry inside the array.
+    const bad = await expectRejected("electrum-batch-get-utxos", {
+      host: "127.0.0.1",
+      port,
+      useSSL: false,
+      addresses: ["bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", { $evil: true }],
+    });
+    expect(bad.results).toEqual([]);
+
+    // Empty array is also refused (min 1).
+    await expectRejected("electrum-batch-get-utxos", {
+      host: "127.0.0.1",
+      port,
+      useSSL: false,
+      addresses: [],
+    });
+  });
+
+  it("electrum-batch-get-utxos rejects a missing payload entirely", async () => {
+    await expectRejected("electrum-batch-get-utxos", undefined);
+  });
+
+  it("valid traffic to the same server still succeeds afterwards", async () => {
+    const result = await ipc.invoke("electrum-test", {
+      host: "127.0.0.1",
+      port,
+      useSSL: false,
+      timeout: 5000,
+    });
+    expect(result.success).toBe(true);
+    expect(connections).toBeGreaterThan(0);
+  });
+});
+
 describe("electrum-cert-store persistence", () => {
   it("round-trips a trust decision and normalizes host case", () => {
     const filePath = certStore.certStorePath(dataDir);
