@@ -19,6 +19,8 @@ const {
   escapeHtml,
   torRequestSchema,
   torProxySettingsSchema,
+  electrumIpcSchemas,
+  validateElectrumIpc,
 } = requireCjs("./security-utils.cjs") as {
   EXTERNAL_OPEN_ALLOWED_HOSTS: string[];
   isExternalOpenAllowed: (url: unknown) => boolean;
@@ -31,6 +33,14 @@ const {
   torProxySettingsSchema: {
     safeParse: (input: unknown) => { success: boolean; data?: unknown };
   };
+  electrumIpcSchemas: Record<
+    string,
+    { safeParse: (input: unknown) => { success: boolean; data?: unknown } }
+  >;
+  validateElectrumIpc: (
+    schema: { safeParse: (input: unknown) => unknown },
+    rawArgs: unknown,
+  ) => { ok: true; data: unknown } | { ok: false; error: string };
 };
 
 describe("external-open allowlist", () => {
@@ -250,6 +260,131 @@ describe("tor-request input schema", () => {
     ["non-string method", { url: "https://mempool.space", method: 7 }],
   ])("rejects malformed input: %s", (_label, input) => {
     expect(torRequestSchema.safeParse(input).success).toBe(false);
+  });
+});
+
+describe("electrum IPC schemas", () => {
+  const VALID_CONN = {
+    host: "electrum.example.com",
+    port: 50002,
+    useSSL: true,
+    timeout: 15000,
+  };
+  const VALID_ADDRESS = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+  const VALID_TXID = "a".repeat(64);
+
+  it("accepts a minimal valid connection payload", () => {
+    expect(electrumIpcSchemas.test.safeParse({ host: "127.0.0.1", port: 50001 }).success).toBe(true);
+    expect(electrumIpcSchemas.test.safeParse(VALID_CONN).success).toBe(true);
+  });
+
+  it("accepts hosts with protocol prefixes/trailing slashes (cleaned downstream) and Tor options", () => {
+    expect(
+      electrumIpcSchemas.test.safeParse({
+        ...VALID_CONN,
+        host: "https://electrum.example.com/",
+        useTor: true,
+        torProxyUrl: "socks5h://127.0.0.1:9050",
+      }).success,
+    ).toBe(true);
+    // empty / null / undefined proxy URL means auto-detect
+    expect(electrumIpcSchemas.test.safeParse({ ...VALID_CONN, torProxyUrl: "" }).success).toBe(true);
+    expect(electrumIpcSchemas.test.safeParse({ ...VALID_CONN, torProxyUrl: null }).success).toBe(true);
+  });
+
+  it.each([
+    ["missing host", { port: 50001 }],
+    ["non-string host", { host: 42, port: 50001 }],
+    ["empty host", { host: "", port: 50001 }],
+    ["host with embedded port", { host: "example.com:50001", port: 50001 }],
+    ["host with path", { host: "example.com/evil", port: 50001 }],
+    ["host with whitespace", { host: "exa mple.com", port: 50001 }],
+    ["host with newline", { host: "example.com\nX", port: 50001 }],
+    ["missing port", { host: "example.com" }],
+    ["port 0", { host: "example.com", port: 0 }],
+    ["port > 65535", { host: "example.com", port: 70000 }],
+    ["non-integer port", { host: "example.com", port: 50001.5 }],
+    ["string port", { host: "example.com", port: "50001" }],
+    ["negative timeout", { host: "example.com", port: 50001, timeout: -1 }],
+    ["huge timeout", { host: "example.com", port: 50001, timeout: 10_000_000 }],
+    ["non-socks proxy URL", { host: "example.com", port: 50001, torProxyUrl: "http://127.0.0.1:9050" }],
+    ["scriptable proxy URL", { host: "example.com", port: 50001, torProxyUrl: "javascript:alert(1)" }],
+    ["malformed proxy URL", { host: "example.com", port: 50001, torProxyUrl: "not a url" }],
+    ["null args", null],
+    ["undefined args", undefined],
+    ["string args", "host"],
+  ])("rejects malformed connection payload: %s", (_label, input) => {
+    expect(electrumIpcSchemas.test.safeParse(input).success).toBe(false);
+  });
+
+  it("validates address shape on history/utxo handlers", () => {
+    for (const schema of [electrumIpcSchemas.getHistory, electrumIpcSchemas.getUtxos]) {
+      expect(schema.safeParse({ ...VALID_CONN, address: VALID_ADDRESS }).success).toBe(true);
+      expect(schema.safeParse({ ...VALID_CONN }).success).toBe(false); // missing
+      expect(schema.safeParse({ ...VALID_CONN, address: "" }).success).toBe(false);
+      expect(schema.safeParse({ ...VALID_CONN, address: "short" }).success).toBe(false);
+      expect(schema.safeParse({ ...VALID_CONN, address: "bc1q; rm -rf /tmp/x" }).success).toBe(false);
+      expect(schema.safeParse({ ...VALID_CONN, address: 42 }).success).toBe(false);
+    }
+  });
+
+  it("validates batch address arrays", () => {
+    for (const schema of [electrumIpcSchemas.batchGetHistory, electrumIpcSchemas.batchGetUtxos]) {
+      expect(schema.safeParse({ ...VALID_CONN, addresses: [VALID_ADDRESS] }).success).toBe(true);
+      expect(schema.safeParse({ ...VALID_CONN, addresses: [] }).success).toBe(false);
+      expect(schema.safeParse({ ...VALID_CONN, addresses: VALID_ADDRESS }).success).toBe(false);
+      expect(schema.safeParse({ ...VALID_CONN, addresses: [VALID_ADDRESS, "bad addr"] }).success).toBe(false);
+      expect(
+        schema.safeParse({ ...VALID_CONN, addresses: Array.from({ length: 10001 }, () => VALID_ADDRESS) })
+          .success,
+      ).toBe(false);
+    }
+  });
+
+  it("validates txid format on electrum-get-transaction", () => {
+    const schema = electrumIpcSchemas.getTransaction;
+    expect(schema.safeParse({ ...VALID_CONN, txid: VALID_TXID, verbose: true }).success).toBe(true);
+    expect(schema.safeParse({ ...VALID_CONN }).success).toBe(false);
+    expect(schema.safeParse({ ...VALID_CONN, txid: "xyz" }).success).toBe(false);
+    expect(schema.safeParse({ ...VALID_CONN, txid: VALID_TXID.slice(0, 63) }).success).toBe(false);
+    expect(schema.safeParse({ ...VALID_CONN, txid: `${VALID_TXID.slice(0, 63)}g` }).success).toBe(false);
+  });
+
+  it("validates block height bounds with the legacy error message", () => {
+    const schema = electrumIpcSchemas.getBlockHash;
+    expect(schema.safeParse({ ...VALID_CONN, height: 840000 }).success).toBe(true);
+    for (const height of [-1, 1.5, undefined, "840000"]) {
+      const parsed = validateElectrumIpc(schema, { ...VALID_CONN, height });
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) expect(parsed.error).toMatch(/Invalid block height/);
+    }
+  });
+
+  it("validates certificate trust payloads", () => {
+    const trust = electrumIpcSchemas.trustCertificate;
+    expect(
+      trust.safeParse({ host: "127.0.0.1", port: 50002, certificate: { fingerprint: "AA:BB" } }).success,
+    ).toBe(true);
+    expect(trust.safeParse({ host: "127.0.0.1", port: 50002 }).success).toBe(false);
+    expect(trust.safeParse({ host: "127.0.0.1", port: 50002, certificate: {} }).success).toBe(false);
+    expect(
+      trust.safeParse({ host: "127.0.0.1", port: 999999, certificate: { fingerprint: "AA" } }).success,
+    ).toBe(false);
+
+    const get = electrumIpcSchemas.getCertificateTrust;
+    expect(get.safeParse({ host: "127.0.0.1", port: 50002 }).success).toBe(true);
+    expect(get.safeParse({ host: "127.0.0.1" }).success).toBe(false);
+    expect(get.safeParse({ port: 50002 }).success).toBe(false);
+  });
+
+  it("validateElectrumIpc returns a compact error naming the bad field", () => {
+    const parsed = validateElectrumIpc(electrumIpcSchemas.test, { host: "example.com", port: 0 });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toMatch(/^Invalid Electrum request \(port\): /);
+    }
+    const ok = validateElectrumIpc(electrumIpcSchemas.test, { host: "example.com", port: 50001 });
+    expect(ok.ok).toBe(true);
   });
 });
 

@@ -10,6 +10,7 @@ const {
   getPinnedCertificate,
   trustCertificate,
 } = require('./electrum-cert-store.cjs');
+const { electrumIpcSchemas, validateElectrumIpc } = require('./security-utils.cjs');
 
 bitcoin.initEccLib(ecc);
 
@@ -589,11 +590,13 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   // the certificate the server actually presented during the refused
   // connection — and that record is only created for proven self-signed
   // leaves on the TOFU path.
-  ipcMain.handle('electrum-trust-certificate', async (event, { host, port, certificate }) => {
+  ipcMain.handle('electrum-trust-certificate', async (event, rawArgs) => {
     try {
-      if (!host || !port || !certificate?.fingerprint) {
-        return { success: false, error: 'host, port and certificate.fingerprint are required' };
+      const parsed = validateElectrumIpc(electrumIpcSchemas.trustCertificate, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
       }
+      const { host, port, certificate } = parsed.data;
       if (!trustStorePath) {
         return { success: false, error: 'No certificate trust store is configured' };
       }
@@ -634,11 +637,13 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
 
   // Report the currently pinned certificate (if any) for a server, so the UI
   // can show the active trust state.
-  ipcMain.handle('electrum-get-certificate-trust', async (event, { host, port }) => {
+  ipcMain.handle('electrum-get-certificate-trust', async (event, rawArgs) => {
     try {
-      if (!host || !port) {
-        return { success: false, error: 'host and port are required', pinned: null };
+      const parsed = validateElectrumIpc(electrumIpcSchemas.getCertificateTrust, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error, pinned: null };
       }
+      const { host, port } = parsed.data;
       const cleanedHost = cleanElectrumHost(host);
       const pinned = trustStorePath ? getPinnedCertificate(trustStorePath, cleanedHost, port) : null;
       return { success: true, pinned };
@@ -648,8 +653,13 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   });
 
   // Electrum connection test (creates fresh connection to test connectivity)
-  ipcMain.handle('electrum-test', async (event, { host, port, useSSL, timeout, useTor, torProxyUrl }) => {
+  ipcMain.handle('electrum-test', async (event, rawArgs) => {
     const startTime = Date.now();
+    const parsed = validateElectrumIpc(electrumIpcSchemas.test, rawArgs);
+    if (!parsed.ok) {
+      return { success: false, error: parsed.error, latency: Date.now() - startTime };
+    }
+    const { host, port, useSSL, timeout, useTor, torProxyUrl } = parsed.data;
     const cleanedHost = cleanElectrumHost(host);
     const options = { useTor: !!useTor, torProxyUrl };
 
@@ -700,8 +710,13 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   });
 
   // Get address history (transactions) via Electrum - uses connection pool
-  ipcMain.handle('electrum-get-history', async (event, { host, port, useSSL, address, timeout, useTor, torProxyUrl }) => {
+  ipcMain.handle('electrum-get-history', async (event, rawArgs) => {
     try {
+      const parsed = validateElectrumIpc(electrumIpcSchemas.getHistory, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error, history: [] };
+      }
+      const { host, port, useSSL, address, timeout, useTor, torProxyUrl } = parsed.data;
       const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
       
@@ -722,8 +737,13 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   });
 
   // Get address UTXOs via Electrum - uses connection pool
-  ipcMain.handle('electrum-get-utxos', async (event, { host, port, useSSL, address, timeout, useTor, torProxyUrl }) => {
+  ipcMain.handle('electrum-get-utxos', async (event, rawArgs) => {
     try {
+      const parsed = validateElectrumIpc(electrumIpcSchemas.getUtxos, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error, utxos: [] };
+      }
+      const { host, port, useSSL, address, timeout, useTor, torProxyUrl } = parsed.data;
       const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
       
@@ -744,8 +764,13 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   });
 
   // Get transaction details via Electrum - uses connection pool
-  ipcMain.handle('electrum-get-transaction', async (event, { host, port, useSSL, txid, verbose, timeout, useTor, torProxyUrl }) => {
+  ipcMain.handle('electrum-get-transaction', async (event, rawArgs) => {
     try {
+      const parsed = validateElectrumIpc(electrumIpcSchemas.getTransaction, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
+      }
+      const { host, port, useSSL, txid, verbose, timeout, useTor, torProxyUrl } = parsed.data;
       const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
       
@@ -767,11 +792,13 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   // blockchain.block.header returns the raw 80-byte header hex; the block hash
   // is the double-SHA256 of that header, byte-reversed. Computed here in Node
   // so the renderer only compares hex strings.
-  ipcMain.handle('electrum-get-block-hash', async (event, { host, port, useSSL, height, timeout, useTor, torProxyUrl }) => {
+  ipcMain.handle('electrum-get-block-hash', async (event, rawArgs) => {
     try {
-      if (!Number.isInteger(height) || height < 0) {
-        return { success: false, error: `Invalid block height: ${height}` };
+      const parsed = validateElectrumIpc(electrumIpcSchemas.getBlockHash, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
       }
+      const { host, port, useSSL, height, timeout, useTor, torProxyUrl } = parsed.data;
       const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
 
@@ -802,10 +829,15 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   // so public servers see no harder load than the existing phases.
   const BATCH_PIPELINE_WINDOW = 8;
 
-  ipcMain.handle('electrum-batch-get-history', async (event, { host, port, useSSL, addresses, timeout, useTor, torProxyUrl }) => {
+  ipcMain.handle('electrum-batch-get-history', async (event, rawArgs) => {
     const startTime = Date.now();
 
     try {
+      const parsed = validateElectrumIpc(electrumIpcSchemas.batchGetHistory, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error, results: [], latency: Date.now() - startTime };
+      }
+      const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl } = parsed.data;
       const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
 
@@ -869,10 +901,15 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   // multiplexed socket with the same bounded in-flight window, results are
   // indexed by input position, and per-address failures stay isolated so one
   // bad address only fails its own entry.
-  ipcMain.handle('electrum-batch-get-utxos', async (event, { host, port, useSSL, addresses, timeout, useTor, torProxyUrl }) => {
+  ipcMain.handle('electrum-batch-get-utxos', async (event, rawArgs) => {
     const startTime = Date.now();
 
     try {
+      const parsed = validateElectrumIpc(electrumIpcSchemas.batchGetUtxos, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error, results: [], latency: Date.now() - startTime };
+      }
+      const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl } = parsed.data;
       const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
 
