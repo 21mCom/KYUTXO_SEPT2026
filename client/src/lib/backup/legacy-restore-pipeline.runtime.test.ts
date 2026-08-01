@@ -33,6 +33,7 @@ import {
   encrypt,
   generateSalt,
   bufferToBase64,
+  LEGACY_PBKDF2_ITERATIONS,
 } from "@/lib/crypto";
 import {
   clearAllRecords,
@@ -115,7 +116,8 @@ async function makePlainZip(data: unknown): Promise<File> {
 
 async function makeEncryptedZip(data: unknown, password: string): Promise<File> {
   const salt = generateSalt();
-  const key = await deriveKey(password, salt);
+  // Legacy backups were only ever written at the pre-strengthening count.
+  const key = await deriveKey(password, salt, LEGACY_PBKDF2_ITERATIONS);
   const ciphertext = await encrypt(JSON.stringify(data), key);
   const zip = new JSZip();
   zip.file(

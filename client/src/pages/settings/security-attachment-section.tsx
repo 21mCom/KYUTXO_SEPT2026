@@ -24,8 +24,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { base64ToBuffer, verifyPassword, generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
-import { getVaultSettings, vaultDb, setAttachmentPathsMigrated } from "@/lib/vault";
+import { base64ToBuffer, verifyPassword, generateSalt, hashPassword, bufferToBase64, CURRENT_PBKDF2_ITERATIONS } from "@/lib/crypto";
+import { getVaultSettings, vaultDb, setAttachmentPathsMigrated, getVaultKdfIterations } from "@/lib/vault";
 import {
   migrateAttachmentPaths,
   auditAttachments,
@@ -95,7 +95,12 @@ export function SecurityAttachmentSection() {
       }
 
       const salt = base64ToBuffer(settings.salt);
-      const isValid = await verifyPassword(currentPassword, salt, settings.passwordHash);
+      const isValid = await verifyPassword(
+        currentPassword,
+        salt,
+        settings.passwordHash,
+        getVaultKdfIterations(settings),
+      );
 
       if (!isValid) {
         toast({
@@ -127,7 +132,12 @@ export function SecurityAttachmentSection() {
       const newHash = await hashPassword(newPassword, newSalt);
       const newSaltBase64 = bufferToBase64(newSalt);
 
-      await vaultDb.vault.update('main', { salt: newSaltBase64, passwordHash: newHash });
+      // A password change always re-derives at the CURRENT KDF parameters.
+      await vaultDb.vault.update('main', {
+        salt: newSaltBase64,
+        passwordHash: newHash,
+        kdfIterations: CURRENT_PBKDF2_ITERATIONS,
+      });
 
       toast({
         title: "Password Changed",

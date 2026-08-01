@@ -31,6 +31,7 @@ import {
   encrypt,
   generateSalt,
   bufferToBase64,
+  LEGACY_PBKDF2_ITERATIONS,
 } from "@/lib/crypto";
 
 // A hoisted toast spy so the mocked useToast hands back the same fn we assert on.
@@ -91,7 +92,8 @@ async function makeLegacyBackup(opts: {
   let backup: any;
   if (opts.password) {
     const salt = generateSalt();
-    const key = await deriveKey(opts.password, salt);
+    // Mirrors the legacy exporter — pre-strengthening iteration count only.
+    const key = await deriveKey(opts.password, salt, LEGACY_PBKDF2_ITERATIONS);
     backup = {
       exportDate: new Date("2024-01-01T00:00:00.000Z").toISOString(),
       encrypted: true,

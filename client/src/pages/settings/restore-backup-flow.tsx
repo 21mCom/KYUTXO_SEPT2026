@@ -36,7 +36,7 @@ import {
 } from "@/lib/backup/restore";
 import { BackupCancelledError } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
-import { isV3Manifest, parseInline } from "@/lib/backup/format";
+import { isV3Manifest, parseInline, getBackupKdfIterations } from "@/lib/backup/format";
 import {
   previewSettingsPreferences,
   type PortablePreferencePreview,
@@ -45,7 +45,7 @@ import { runLegacyJsonRestore } from "@/lib/backup/legacy-restore-pipeline";
 import { createRestoreAttachmentWriter } from "@/lib/backup/restore-attachment-writer";
 import { runPostRestoreTxidBackfill } from "@/lib/backup/post-restore-backfill";
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
-import { base64ToBuffer, deriveKey, decrypt } from "@/lib/crypto";
+import { base64ToBuffer, deriveKey, decrypt, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
 import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
 import { loadEntitySnapshotFromStorage } from "@/lib/data/entity-list-store";
 
@@ -180,7 +180,8 @@ export function RestoreBackupFlow() {
             return;
           }
           const salt = base64ToBuffer(manifestPeek.salt ?? "");
-          key = await deriveKey(restorePassword, salt);
+          // KDF parameters travel in the manifest; absent = legacy 100k backup.
+          key = await deriveKey(restorePassword, salt, getBackupKdfIterations(manifestPeek));
         }
 
         let inline: Record<string, unknown>;
@@ -262,7 +263,9 @@ export function RestoreBackupFlow() {
         }
         try {
           const salt = base64ToBuffer(backup.salt);
-          const backupKey = await deriveKey(restorePassword, salt);
+          // Legacy (pre-v3) backups were only ever written at the legacy
+          // iteration count and record no parameters.
+          const backupKey = await deriveKey(restorePassword, salt, LEGACY_PBKDF2_ITERATIONS);
           legacyData = JSON.parse(await decrypt(backup.data, backupKey));
         } catch {
           // Wrong password (or corrupted payload) surfaces here, BEFORE any

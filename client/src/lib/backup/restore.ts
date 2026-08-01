@@ -23,6 +23,7 @@ import {
   MANIFEST_FILENAME,
   ATTACHMENTS_DIR,
   CHECK_SENTINEL,
+  getBackupKdfIterations,
   type BackupManifest,
   type StreamedTable,
 } from "./format";
@@ -1198,7 +1199,9 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
             if (manifest.encrypted) {
               if (!opts.password) throw new Error("Password required for encrypted backup");
               const salt = base64ToBuffer(manifest.salt ?? "");
-              key = await deriveKey(opts.password, salt);
+              // The manifest records the KDF parameters the backup key was
+              // derived with; absent = pre-strengthening backup (legacy 100k).
+              key = await deriveKey(opts.password, salt, getBackupKdfIterations(manifest));
               // Verify BEFORE any destructive clear.
               let ok = false;
               try {

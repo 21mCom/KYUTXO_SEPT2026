@@ -20,7 +20,7 @@
  */
 
 import Dexie from 'dexie';
-import { deriveKey, encrypt, hashPassword, bufferToBase64 } from './crypto';
+import { deriveKey, encrypt, hashPassword, bufferToBase64, LEGACY_PBKDF2_ITERATIONS } from './crypto';
 
 /** The exact Dexie v25 schema as declared by release 1.1.24. */
 export const V25_STORES: { [table: string]: string } = {
@@ -161,10 +161,13 @@ export async function buildLegacyVaultAtV25(
   const saltRng = mulberry32(0xbeef);
   for (let i = 0; i < salt.length; i++) salt[i] = Math.floor(saltRng() * 256);
   const saltBase64 = bufferToBase64(salt);
-  const key = await deriveKey(options.password, salt);
+  // A LEGACY vault fixture: everything here (at-rest payloads + the vault
+  // settings hash) was only ever produced at the pre-strengthening iteration
+  // count, so pin LEGACY explicitly now that the crypto defaults moved.
+  const key = await deriveKey(options.password, salt, LEGACY_PBKDF2_ITERATIONS);
 
   if (options.writeVaultSettings) {
-    const passwordHash = await hashPassword(options.password, salt);
+    const passwordHash = await hashPassword(options.password, salt, LEGACY_PBKDF2_ITERATIONS);
     const vaultFixtureDb = new Dexie('kybtc-vault');
     vaultFixtureDb.version(1).stores({ vault: 'id' });
     await vaultFixtureDb.open();

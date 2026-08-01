@@ -1,11 +1,12 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { 
-  generateSalt, 
-  hashPassword, 
+import {
+  generateSalt,
+  hashPassword,
   verifyPassword,
   bufferToBase64,
   base64ToBuffer,
   deriveKey,
+  LEGACY_PBKDF2_ITERATIONS,
 } from '@/lib/crypto';
 import { 
   isVaultInitialized, 
@@ -26,6 +27,8 @@ import {
   setInputStringLowerRepaired,
   isSearchVisibilityRepaired,
   setSearchVisibilityRepaired,
+  getVaultKdfIterations,
+  upgradeVaultKdfIfNeeded,
 } from '@/lib/vault';
 import {
   repairInputStringLower,
@@ -202,7 +205,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const runLegacyDecryptMigration = useCallback(async (password: string, saltBase64: string) => {
     const salt = base64ToBuffer(saltBase64);
-    const encryptionKey = await deriveKey(password, salt);
+    // Legacy at-rest payloads were only ever encrypted with a key derived at
+    // the pre-strengthening iteration count — ALWAYS derive at LEGACY here,
+    // regardless of the vault's current (upgraded) KDF parameters.
+    const encryptionKey = await deriveKey(password, salt, LEGACY_PBKDF2_ITERATIONS);
 
     try {
       const alreadyDone = await isLegacyDecryptComplete();
@@ -533,11 +539,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const salt = base64ToBuffer(settings.salt);
-      const isValid = await verifyPassword(password, salt, settings.passwordHash);
+      // Verify with the KDF parameters the stored hash was derived with
+      // (absent on pre-strengthening vaults = legacy 100k).
+      const isValid = await verifyPassword(
+        password,
+        salt,
+        settings.passwordHash,
+        getVaultKdfIterations(settings),
+      );
 
       if (isValid) {
         setIsAuthenticated(true);
         runStartupMigrations(password, settings.salt);
+        // Transparent KDF upgrade: re-derive the stored hash at the current
+        // iteration count. Best-effort — a failure here must never block a
+        // valid login; the upgrade simply retries on the next unlock.
+        try {
+          await upgradeVaultKdfIfNeeded(password, settings);
+        } catch (error) {
+          console.error('KDF upgrade failed (will retry next unlock):', error);
+        }
         return true;
       }
 

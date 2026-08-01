@@ -8,7 +8,7 @@
 // progress via callbacks and errors via thrown exceptions.
 import JSZip from "jszip";
 import { isElectron, getElectronAPI } from "@/lib/electron";
-import { base64ToBuffer, deriveKey, decrypt } from "@/lib/crypto";
+import { base64ToBuffer, deriveKey, decrypt, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
 import { rearmSearchVisibilityRepair } from "@/lib/vault";
 import {
   restoreLegacyRecords,
@@ -165,9 +165,10 @@ export async function runLegacyJsonRestore(
       throw new Error("Password required for encrypted backup");
     }
 
-    // Properly decode the salt from base64
+    // Properly decode the salt from base64. Legacy (pre-v3) backups record no
+    // KDF parameters and were only ever written at the legacy iteration count.
     const salt = base64ToBuffer(backup.salt);
-    const backupKey = await deriveKey(password, salt);
+    const backupKey = await deriveKey(password, salt, LEGACY_PBKDF2_ITERATIONS);
 
     try {
       const decrypted = await decrypt(backup.data, backupKey);

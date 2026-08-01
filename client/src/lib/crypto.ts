@@ -1,9 +1,20 @@
 const SALT_LENGTH = 16;
 const IV_LENGTH = 12;
 const KEY_LENGTH = 256;
-const PBKDF2_ITERATIONS = 100000;
 
-export async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+// PBKDF2-HMAC-SHA-256 iteration counts. Vaults/backups created before the KDF
+// strengthening used 100k and never recorded the count anywhere — an absent
+// parameter ALWAYS means LEGACY. New derivations use CURRENT (OWASP guidance
+// for PBKDF2-HMAC-SHA-256). The count is stored alongside the salt (vault
+// settings row / backup manifest) so old entries stay decryptable.
+export const LEGACY_PBKDF2_ITERATIONS = 100000;
+export const CURRENT_PBKDF2_ITERATIONS = 600000;
+
+export async function deriveKey(
+  password: string,
+  salt: Uint8Array,
+  iterations: number = CURRENT_PBKDF2_ITERATIONS,
+): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const passwordBuffer = encoder.encode(password);
 
@@ -19,7 +30,7 @@ export async function deriveKey(password: string, salt: Uint8Array): Promise<Cry
     {
       name: 'PBKDF2',
       salt: salt,
-      iterations: PBKDF2_ITERATIONS,
+      iterations,
       hash: 'SHA-256',
     },
     baseKey,
@@ -98,7 +109,11 @@ export function base64ToBuffer(base64: string): Uint8Array {
   return bytes;
 }
 
-export async function hashPassword(password: string, salt: Uint8Array): Promise<string> {
+export async function hashPassword(
+  password: string,
+  salt: Uint8Array,
+  iterations: number = CURRENT_PBKDF2_ITERATIONS,
+): Promise<string> {
   const encoder = new TextEncoder();
   const passwordBuffer = encoder.encode(password);
 
@@ -114,7 +129,7 @@ export async function hashPassword(password: string, salt: Uint8Array): Promise<
     {
       name: 'PBKDF2',
       salt: salt,
-      iterations: PBKDF2_ITERATIONS,
+      iterations,
       hash: 'SHA-256',
     },
     baseKey,
@@ -124,8 +139,13 @@ export async function hashPassword(password: string, salt: Uint8Array): Promise<
   return bufferToBase64(new Uint8Array(hashBuffer));
 }
 
-export async function verifyPassword(password: string, salt: Uint8Array, storedHash: string): Promise<boolean> {
-  const hash = await hashPassword(password, salt);
+export async function verifyPassword(
+  password: string,
+  salt: Uint8Array,
+  storedHash: string,
+  iterations: number = CURRENT_PBKDF2_ITERATIONS,
+): Promise<boolean> {
+  const hash = await hashPassword(password, salt, iterations);
   if (hash.length !== storedHash.length) return false;
   let result = 0;
   for (let i = 0; i < hash.length; i++) {

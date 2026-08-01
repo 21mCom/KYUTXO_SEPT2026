@@ -22,7 +22,7 @@ import { updateSettings } from "@/lib/data/settings-crud";
 import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import { db } from "@/lib/database";
 import { base64ToBuffer, verifyPassword } from "@/lib/crypto";
-import { getVaultSettings } from "@/lib/vault";
+import { getVaultSettings, getVaultKdfIterations } from "@/lib/vault";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
@@ -56,7 +56,12 @@ export function ClearDatabaseFlow() {
       }
 
       const salt = base64ToBuffer(settings.salt);
-      const isValid = await verifyPassword(clearPassword, salt, settings.passwordHash);
+      const isValid = await verifyPassword(
+        clearPassword,
+        salt,
+        settings.passwordHash,
+        getVaultKdfIterations(settings),
+      );
 
       if (!isValid) {
         toast({

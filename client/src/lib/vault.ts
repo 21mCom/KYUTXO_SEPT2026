@@ -1,9 +1,19 @@
 import Dexie, { type Table } from 'dexie';
+import {
+  base64ToBuffer,
+  hashPassword,
+  CURRENT_PBKDF2_ITERATIONS,
+  LEGACY_PBKDF2_ITERATIONS,
+} from './crypto';
 
 export interface VaultSettings {
   id: string;
   salt: string;
   passwordHash: string;
+  // PBKDF2 iterations the stored passwordHash was derived with. Absent on
+  // vaults created before the KDF strengthening — those are ALWAYS legacy
+  // (100k). See getVaultKdfIterations.
+  kdfIterations?: number;
   createdAt: number;
   migrationComplete?: boolean;
   attachmentPathsMigrated?: boolean;
@@ -37,13 +47,45 @@ export async function getVaultSettings(): Promise<VaultSettings | undefined> {
   return vaultDb.vault.get('main');
 }
 
-export async function saveVaultSettings(salt: string, passwordHash: string): Promise<void> {
+export async function saveVaultSettings(
+  salt: string,
+  passwordHash: string,
+  kdfIterations: number = CURRENT_PBKDF2_ITERATIONS,
+): Promise<void> {
   await vaultDb.vault.put({
     id: 'main',
     salt,
     passwordHash,
+    kdfIterations,
     createdAt: Date.now(),
   });
+}
+
+// Iteration count the stored passwordHash was derived with. Vault rows written
+// before the KDF strengthening carry no kdfIterations field and are always
+// legacy (100k).
+export function getVaultKdfIterations(settings: VaultSettings): number {
+  return settings.kdfIterations ?? LEGACY_PBKDF2_ITERATIONS;
+}
+
+// Transparent KDF upgrade: after a successful unlock with legacy parameters,
+// re-derive the password hash at the current iteration count and re-store it.
+// The SALT IS KEPT — legacy at-rest payloads are decrypted with a key derived
+// from this salt at LEGACY iterations (see runLegacyDecryptMigration), so
+// rotating it would permanently orphan any not-yet-migrated locked data. Only
+// the hash parameters change.
+export async function upgradeVaultKdfIfNeeded(
+  password: string,
+  settings: VaultSettings,
+): Promise<boolean> {
+  if (getVaultKdfIterations(settings) >= CURRENT_PBKDF2_ITERATIONS) return false;
+  const salt = base64ToBuffer(settings.salt);
+  const passwordHash = await hashPassword(password, salt, CURRENT_PBKDF2_ITERATIONS);
+  await vaultDb.vault.update('main', {
+    passwordHash,
+    kdfIterations: CURRENT_PBKDF2_ITERATIONS,
+  });
+  return true;
 }
 
 export async function clearVault(): Promise<void> {

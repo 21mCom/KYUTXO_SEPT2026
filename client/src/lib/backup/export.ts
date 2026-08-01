@@ -23,7 +23,13 @@ import {
   type BackupCounts,
   type StreamedTable,
 } from "./format";
-import { deriveKey, generateSalt, bufferToBase64, encrypt } from "@/lib/crypto";
+import {
+  deriveKey,
+  generateSalt,
+  bufferToBase64,
+  encrypt,
+  CURRENT_PBKDF2_ITERATIONS,
+} from "@/lib/crypto";
 import { getRecordsAfterId, countRecords } from "@/lib/data/record-crud";
 import { getAttachmentsAfterId, countAttachments, sumAttachmentSizes } from "@/lib/data/attachments-crud";
 import {
@@ -282,6 +288,9 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     exportDate: new Date().toISOString(),
     encrypted: opts.encrypted,
     salt: salt ? bufferToBase64(salt) : undefined,
+    // Record the KDF parameters alongside the salt so restore can re-derive
+    // the key even after the app's defaults move again.
+    kdfIterations: key ? CURRENT_PBKDF2_ITERATIONS : undefined,
     check,
     counts,
     totalAttachmentBytes,

@@ -17,8 +17,9 @@ import {
   setLegacyDecryptComplete,
   resetLegacyDecryptProgress,
   addLegacyDecryptCompletedTable,
+  getVaultKdfIterations,
 } from "@/lib/vault";
-import { base64ToBuffer, verifyPassword, deriveKey } from "@/lib/crypto";
+import { base64ToBuffer, verifyPassword, deriveKey, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
 import {
   decryptLegacyRecords,
   countUnrecoveredLegacyRows,
@@ -81,13 +82,20 @@ export default function LegacyRecoveryPanel() {
         throw new Error("No vault settings found.");
       }
       const salt = base64ToBuffer(settings.salt);
-      const valid = await verifyPassword(password, salt, settings.passwordHash);
+      const valid = await verifyPassword(
+        password,
+        salt,
+        settings.passwordHash,
+        getVaultKdfIterations(settings),
+      );
       if (!valid) {
         setPhase("error");
         setErrorMessage("Incorrect password. The current password is the key that unlocks your data — recovery cannot run without it.");
         return;
       }
-      const key = await deriveKey(password, salt);
+      // Locked legacy payloads were only ever encrypted at the legacy iteration
+      // count — derive at LEGACY regardless of the vault's current parameters.
+      const key = await deriveKey(password, salt, LEGACY_PBKDF2_ITERATIONS);
 
       // Clear any wrongly-recorded completion so the decrypt pass revisits EVERY
       // table from scratch. A past bug could mark the migration complete after a

@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getVaultSettings, getLegacyDecryptCompletedTables } from "@/lib/vault";
-import { base64ToBuffer, verifyPassword, deriveKey } from "@/lib/crypto";
+import { getVaultSettings, getLegacyDecryptCompletedTables, getVaultKdfIterations } from "@/lib/vault";
+import { base64ToBuffer, verifyPassword, deriveKey, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
 import { auditLegacyPayloads, type LegacyAuditResult } from "@/lib/legacy-decrypt";
 
 type AuditPhase = "idle" | "running" | "done" | "error";
@@ -29,13 +29,19 @@ export default function MigrationAuditPanel() {
         throw new Error("No vault settings found.");
       }
       const salt = base64ToBuffer(settings.salt);
-      const valid = await verifyPassword(password, salt, settings.passwordHash);
+      const valid = await verifyPassword(
+        password,
+        salt,
+        settings.passwordHash,
+        getVaultKdfIterations(settings),
+      );
       if (!valid) {
         setPhase("error");
         setErrorMessage("Incorrect password.");
         return;
       }
-      const key = await deriveKey(password, salt);
+      // Legacy payloads were only ever encrypted at the legacy iteration count.
+      const key = await deriveKey(password, salt, LEGACY_PBKDF2_ITERATIONS);
       const completed = await getLegacyDecryptCompletedTables();
       const audit = await auditLegacyPayloads(key, { alreadyCompletedTables: completed });
       setResult(audit);

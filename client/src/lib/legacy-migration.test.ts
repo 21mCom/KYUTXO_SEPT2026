@@ -25,7 +25,7 @@ import { KYUTXODatabase, CURRENT_SCHEMA_VERSION } from "@/lib/database";
 import { buildLegacyRecordRows, buildLegacyAttachmentRows } from "@/lib/testSeedData";
 import { buildLegacyVaultAtV25, ENCRYPTED_AT_REST } from "@/lib/legacy-vault-fixture";
 import { subscribeDbUpgradeProgress, type DbUpgradeProgress } from "@/lib/db-upgrade-progress";
-import { deriveKey, decrypt } from "@/lib/crypto";
+import { deriveKey, decrypt, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
 
 const DB_NAME = "KYUTXODatabase";
 
@@ -194,7 +194,7 @@ describe("one-time migration path (legacy vault -> current schema)", () => {
       // (proves the upgrade preserved bytes AND the fixture matches the real
       // 1.1.24 key path — the login decrypt migration picks up from here).
       const salt = Uint8Array.from(atob(built.saltBase64), (c) => c.charCodeAt(0));
-      const key = await deriveKey(PASSWORD, salt);
+      const key = await deriveKey(PASSWORD, salt, LEGACY_PBKDF2_ITERATIONS);
       const sample = built.samples[0];
       const sampleRow = records[sample.recordIndex];
       const payload = (sampleRow as { _legacyEncryptedPayload?: string })._legacyEncryptedPayload!;

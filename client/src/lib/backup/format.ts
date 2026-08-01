@@ -17,11 +17,14 @@
 // record-dependent tables, so a single forward pass can relink everything.
 //
 // Encryption: AES-GCM per line/blob (never the whole vault as one string), key
-// derived from the password with PBKDF2 (see ../crypto). Each encrypted NDJSON
-// line is the base64 envelope returned by encrypt(); base64 contains no newline
-// so it is a safe single line. The inline tables are encrypted as one string.
+// derived from the password with PBKDF2 (see ../crypto). The PBKDF2 iteration
+// count is recorded in the manifest (kdfIterations); backups written before the
+// KDF strengthening carry no such field and are always legacy (100k). Each
+// encrypted NDJSON line is the base64 envelope returned by encrypt(); base64
+// contains no newline so it is a safe single line. The inline tables are
+// encrypted as one string.
 
-import { encrypt, decrypt } from "@/lib/crypto";
+import { encrypt, decrypt, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
 
 export const BACKUP_FORMAT_VERSION = 3;
 export const MANIFEST_FILENAME = "backup.json";
@@ -68,6 +71,10 @@ export interface BackupManifest {
   exportDate: string;
   encrypted: boolean;
   salt?: string; // base64, present iff encrypted
+  // PBKDF2 iterations the backup key was derived with, present iff encrypted.
+  // Absent on backups written before the KDF strengthening — always legacy
+  // (100k). See getBackupKdfIterations.
+  kdfIterations?: number;
   check?: string; // encrypt(CHECK_SENTINEL), present iff encrypted
   counts: BackupCounts;
   // Total bytes of all attachment FILES (summed from attachment metadata
@@ -121,6 +128,13 @@ export function isV3Manifest(obj: unknown): obj is BackupManifest {
     typeof obj === "object" &&
     (obj as BackupManifest).formatVersion === BACKUP_FORMAT_VERSION
   );
+}
+
+// Iteration count the backup's encryption key was derived with. Manifests
+// written before the KDF strengthening carry no kdfIterations field and are
+// always legacy (100k).
+export function getBackupKdfIterations(manifest: BackupManifest): number {
+  return manifest.kdfIterations ?? LEGACY_PBKDF2_ITERATIONS;
 }
 
 // ---- per-line / inline serialization -------------------------------------
