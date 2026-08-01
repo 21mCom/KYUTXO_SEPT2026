@@ -10,3 +10,6 @@ data/attachments/
 attached_assets/
 # Demo vault builder HTTP cache (real blockchain data, resumable)
 scripts/demo-vault/cache/
+
+# Transient canary written/deleted by scripts/check-db-noise-guard.js — never commit it.
+client/src/test/__dbNoiseGuardCanary__.test.ts
