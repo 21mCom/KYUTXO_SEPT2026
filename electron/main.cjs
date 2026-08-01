@@ -171,7 +171,7 @@ function createWindow() {
 // ============================================================================
 
 registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir, portableMode });
-registerElectrumHandlers(ipcMain);
+registerElectrumHandlers(ipcMain, { dataDir });
 registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow: () => mainWindow });
 
 // ============================================================================

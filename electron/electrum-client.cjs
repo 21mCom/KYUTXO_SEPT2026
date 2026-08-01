@@ -3,8 +3,20 @@ const tls = require('tls');
 const crypto = require('crypto');
 const bitcoin = require('bitcoinjs-lib');
 const ecc = require('@bitcoinerlab/secp256k1');
+const { SocksClient } = require('socks');
+const { detectWorkingTorProxy } = require('./tor-proxy.cjs');
+const {
+  certStorePath,
+  getPinnedCertificate,
+  trustCertificate,
+} = require('./electrum-cert-store.cjs');
 
 bitcoin.initEccLib(ecc);
+
+// Path of the persisted TOFU certificate trust store, configured by
+// registerElectrumHandlers. When unset, self-signed certificates can never be
+// trusted and only CA-verified connections succeed (fail closed).
+let trustStorePath = null;
 
 // Connection pool with health tracking and request multiplexing
 const electrumPool = {
@@ -209,46 +221,304 @@ function cleanElectrumHost(host) {
   return cleaned;
 }
 
-// Create a fresh Electrum connection
-function createElectrumConnection(host, port, useSSL, timeout = 30000) {
-  const cleanedHost = cleanElectrumHost(host);
-  
-  return new Promise((resolve, reject) => {
-    let socket;
-    const connectOptions = { host: cleanedHost, port };
-    
-    console.log(`[Electrum Pool] Creating new connection to ${cleanedHost}:${port}`);
-    
-    if (useSSL) {
-      socket = tls.connect({ ...connectOptions, rejectUnauthorized: false }, () => {
-        if (!socket.authorized) {
-          console.log('[Electrum Pool] TLS warning (self-signed cert accepted):', socket.authorizationError);
-        }
-        resolve(socket);
+// Build a raw TCP socket to the Electrum server, either directly or through
+// the configured Tor SOCKS proxy. The `socks` client always sends the
+// destination as a domain name (ATYP domain), so resolution happens at the
+// Tor exit — this is what lets .onion Electrum hosts work and keeps DNS from
+// leaking to the local resolver.
+async function createTcpSocket(cleanedHost, port, torOptions, timeout) {
+  if (!torOptions || !torOptions.useTor) {
+    return new Promise((resolve, reject) => {
+      const socket = net.createConnection({ host: cleanedHost, port }, () => resolve(socket));
+      socket.setTimeout(timeout);
+      socket.on('timeout', () => {
+        socket.destroy();
+        reject(new Error(`Connection timeout after ${timeout / 1000}s`));
       });
-    } else {
-      socket = net.createConnection(connectOptions, () => {
-        resolve(socket);
+      socket.on('error', (err) => {
+        reject(new Error(`Connection failed: ${err.message}`));
       });
+    });
+  }
+
+  // Resolve the proxy URL: use the configured one, or auto-detect a running
+  // Tor Browser / Tor service exactly like the HTTP Tor path does.
+  const proxyUrl = torOptions.torProxyUrl || (await detectWorkingTorProxy());
+  let parsed;
+  try {
+    parsed = new URL(proxyUrl);
+  } catch {
+    throw new Error(`Invalid Tor proxy URL: ${proxyUrl}`);
+  }
+  const proxyPort = parseInt(parsed.port || '9050', 10);
+
+  try {
+    const info = await SocksClient.createConnection({
+      proxy: {
+        host: parsed.hostname,
+        port: proxyPort,
+        type: 5,
+      },
+      command: 'connect',
+      destination: { host: cleanedHost, port },
+      timeout,
+    });
+    info.socket.setTimeout(timeout);
+    return info.socket;
+  } catch (err) {
+    throw new Error(
+      `Connection failed via Tor proxy ${proxyUrl}: ${err.message}. Make sure Tor is running.`,
+    );
+  }
+}
+
+// Flatten an X.509 name ({CN, O, OU, ...}) into a comparable string.
+function flattenX509Name(name) {
+  if (!name || typeof name !== 'object') return '';
+  return Object.keys(name).sort().map((k) => `${k}=${name[k]}`).join(',');
+}
+
+// Structural self-signed check: with a detailed peer certificate Node sets
+// issuerCertificate to the cert itself for self-signed leaves; fall back to
+// comparing subject/issuer names when the chain object is unavailable.
+function isStructurallySelfSigned(cert) {
+  if (!cert) return false;
+  if (cert.issuerCertificate && cert.issuerCertificate === cert) return true;
+  const subject = flattenX509Name(cert.subject);
+  return subject !== '' && subject === flattenX509Name(cert.issuer);
+}
+
+// Extract display metadata + SHA-256 fingerprint from a peer certificate.
+function describeCertificate(cert) {
+  if (!cert || !cert.raw || !cert.fingerprint256) return null;
+  return {
+    fingerprint: cert.fingerprint256,
+    subject: cert.subject && (cert.subject.CN || cert.subject.O) ? (cert.subject.CN || cert.subject.O) : undefined,
+    issuer: cert.issuer && (cert.issuer.CN || cert.issuer.O) ? (cert.issuer.CN || cert.issuer.O) : undefined,
+    validFrom: cert.valid_from,
+    validTo: cert.valid_to,
+    selfSigned: isStructurallySelfSigned(cert),
+  };
+}
+
+// The ONLY verification failure eligible for TOFU pinning. Everything else —
+// expired certs, hostname mismatches, untrusted/misconfigured CA chains — is
+// rejected strictly, so a user pin can never silently downgrade what should
+// have been CA verification. SELF_SIGNED_CERT_IN_CHAIN is deliberately NOT
+// eligible: it is produced for untrusted PRIVATE-CA chains (a CA-issued leaf
+// below a self-signed root), and those must stay strict.
+const SELF_SIGNED_AUTH_ERRORS = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+]);
+
+// Short-lived, main-process-only record of the certificate a server ACTUALLY
+// presented when the last connection attempt was refused as untrusted. The
+// trust IPC validates against this (never against renderer-supplied metadata)
+// so a forged renderer payload cannot pin an arbitrary fingerprint.
+// Key: `${host}:${port}` (host lowercased).
+const TRUST_OBSERVATION_TTL_MS = 5 * 60 * 1000;
+const pendingTrustObservations = new Map();
+
+function trustObservationKey(host, port) {
+  return `${String(host || '').toLowerCase()}:${port}`;
+}
+
+function recordTrustObservation(host, port, certInfo) {
+  if (!certInfo || !certInfo.fingerprint) return;
+  pendingTrustObservations.set(trustObservationKey(host, port), {
+    certificate: certInfo,
+    observedAt: Date.now(),
+  });
+  // Opportunistically prune expired entries so the map cannot grow unbounded.
+  const now = Date.now();
+  for (const [key, obs] of pendingTrustObservations) {
+    if (now - obs.observedAt > TRUST_OBSERVATION_TTL_MS) pendingTrustObservations.delete(key);
+  }
+}
+
+// Decide whether a completed TLS handshake may be used:
+//  - CA-verified (chain + hostname check via SNI)           -> accept
+//  - Self-signed + fingerprint matches persisted TOFU pin   -> accept
+//  - Self-signed + pin exists but fingerprint CHANGED       -> reject (MITM)
+//  - Self-signed + no pin yet                               -> reject, asking
+//    the user to verify + trust the fingerprint explicitly
+//  - ANY other verification failure (expired, hostname
+//    mismatch, untrusted CA, invalid chain)                 -> strict reject,
+//    even when a pin exists
+// Returns { ok, code?, message?, certificate? }.
+function evaluateCertificate(tlsSocket, host, port, storePath) {
+  // Detailed form so self-signed leaves self-reference via issuerCertificate.
+  const cert = tlsSocket.getPeerCertificate(true);
+  const certInfo = describeCertificate(cert);
+
+  if (tlsSocket.authorized) {
+    return { ok: true, certificate: { ...certInfo, trust: 'ca' } };
+  }
+
+  const authError = tlsSocket.authorizationError || 'certificate verification failed';
+
+  // Independent hostname identity check. Node reports a self-signed chain
+  // failure (DEPTH_ZERO_SELF_SIGNED_CERT) BEFORE hostname mismatches, so
+  // authorizationError alone can never surface a wrong-host certificate on
+  // the TOFU path. Identity failures are strict rejections — never pinnable.
+  if (cert && cert.raw) {
+    const identityError = tls.checkServerIdentity(host, cert);
+    if (identityError) {
+      return {
+        ok: false,
+        code: 'CERT_INVALID',
+        message:
+          `The server's TLS certificate is not valid for ${host} (${identityError.message}). ` +
+          'If you previously trusted this server, its certificate may have been replaced — this can mean a man-in-the-middle attack.',
+        certificate: certInfo || undefined,
+      };
     }
-    
-    socket.setTimeout(timeout);
-    
-    socket.on('timeout', () => {
-      socket.destroy();
-      reject(new Error(`Connection timeout after ${timeout/1000}s`));
-    });
-    
-    socket.on('error', (err) => {
-      reject(new Error(`Connection failed: ${err.message}`));
-    });
+  }
+
+  // TOFU is reserved for certificates that are PROVABLY self-signed leaves:
+  // the verification failure must be the depth-zero self-signed code AND the
+  // presented leaf must be structurally self-signed (self-referential issuer
+  // or subject === issuer), so a crafted/private-CA chain cannot borrow the
+  // self-signed failure code to become pinnable.
+  const isSelfSignedFailure =
+    SELF_SIGNED_AUTH_ERRORS.has(authError) && isStructurallySelfSigned(cert);
+
+  if (!isSelfSignedFailure) {
+    return {
+      ok: false,
+      code: 'CERT_INVALID',
+      message:
+        `The server's TLS certificate failed verification (${authError}) and is not a self-signed certificate, ` +
+        'so it cannot be trusted manually. Fix the certificate on the server (valid chain, matching hostname, not expired). ' +
+        'If you previously trusted this server, its certificate may have been replaced — this can mean a man-in-the-middle attack.',
+      certificate: certInfo || undefined,
+    };
+  }
+
+  if (!certInfo || !certInfo.fingerprint) {
+    return {
+      ok: false,
+      code: 'CERT_UNTRUSTED',
+      message: `The server's TLS certificate could not be verified (${authError}) and no certificate was presented to inspect.`,
+    };
+  }
+
+  const pinned = storePath ? getPinnedCertificate(storePath, host, port) : null;
+  if (pinned && pinned.fingerprint === certInfo.fingerprint.toUpperCase()) {
+    return { ok: true, certificate: { ...certInfo, trust: 'pinned' } };
+  }
+  if (pinned) {
+    // Record the observed (proven self-signed) leaf so a deliberate re-trust
+    // after server rotation can be validated main-process-side.
+    recordTrustObservation(host, port, certInfo);
+    return {
+      ok: false,
+      code: 'CERT_FINGERPRINT_CHANGED',
+      message:
+        `The server's TLS certificate does NOT match the certificate you previously trusted for ${host}:${port} ` +
+        `(expected ${pinned.fingerprint}, got ${certInfo.fingerprint}). ` +
+        'This can mean a man-in-the-middle attack. Only re-trust if you have verified the new fingerprint with your server.',
+      certificate: { ...certInfo, expectedFingerprint: pinned.fingerprint },
+    };
+  }
+  // Record the observed (proven self-signed) leaf; the trust IPC pins ONLY a
+  // fingerprint that matches this main-process observation.
+  recordTrustObservation(host, port, certInfo);
+  return {
+    ok: false,
+    code: 'CERT_UNTRUSTED',
+    message:
+      `The server's TLS certificate is not signed by a trusted certificate authority (${authError}). ` +
+      'Self-signed certificates are common on Electrum servers — verify the fingerprint with your server before trusting it.',
+    certificate: certInfo,
+  };
+}
+
+// Create a fresh Electrum connection. `options` carries transport + TLS
+// trust settings: { useTor, torProxyUrl, ca (test-only extra root) }.
+function createElectrumConnection(host, port, useSSL, timeout = 30000, options = {}) {
+  const cleanedHost = cleanElectrumHost(host);
+  const transport = options.useTor ? 'tor' : 'direct';
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+
+    (async () => {
+      console.log(`[Electrum Pool] Creating new connection to ${cleanedHost}:${port} (transport: ${transport}, SSL: ${!!useSSL})`);
+
+      let socket;
+      try {
+        socket = await createTcpSocket(cleanedHost, port, options, timeout);
+      } catch (err) {
+        fail(err);
+        return;
+      }
+
+      if (!useSSL) {
+        socket.electrumTransport = transport;
+        resolve(socket);
+        settled = true;
+        return;
+      }
+
+      const tlsOptions = {
+        socket,
+        servername: cleanedHost,
+        // Verification is performed explicitly in evaluateCertificate below
+        // (CA check first, then the persisted TOFU pin). Never silently accept.
+        rejectUnauthorized: false,
+      };
+      if (options.ca) tlsOptions.ca = options.ca;
+
+      const tlsSocket = tls.connect(tlsOptions, () => {
+        const decision = evaluateCertificate(tlsSocket, cleanedHost, port, trustStorePath);
+        if (!decision.ok) {
+          console.log(`[Electrum Pool] TLS rejected for ${cleanedHost}:${port}: ${decision.code} - ${decision.message}`);
+          try { tlsSocket.destroy(); } catch (e) {}
+          const err = new Error(decision.message);
+          err.code = decision.code;
+          err.certificate = decision.certificate;
+          fail(err);
+          return;
+        }
+        if (decision.certificate?.trust === 'pinned') {
+          console.log(`[Electrum Pool] TLS accepted via pinned certificate for ${cleanedHost}:${port}`);
+        }
+        tlsSocket.electrumTransport = transport;
+        tlsSocket.electrumCertificate = decision.certificate;
+        settled = true;
+        resolve(tlsSocket);
+      });
+
+      tlsSocket.setTimeout(timeout);
+      tlsSocket.on('timeout', () => {
+        tlsSocket.destroy();
+        fail(new Error(`Connection timeout after ${timeout / 1000}s`));
+      });
+      tlsSocket.on('error', (err) => {
+        fail(new Error(`Connection failed: ${err.message}`));
+      });
+    })();
   });
 }
 
+// The pool key must distinguish transport and TLS mode so a direct (or
+// unencrypted) connection is never reused for a request that asked for Tor
+// (or vice versa).
+function poolKey(cleanedHost, port, useSSL, options = {}) {
+  const transport = options.useTor ? `tor:${options.torProxyUrl || 'auto'}` : 'direct';
+  return `${cleanedHost}:${port}:${useSSL ? 'ssl' : 'tcp'}:${transport}`;
+}
+
 // Get or create a pooled connection with multiplexed request handling
-async function getPooledConnection(host, port, useSSL, timeout = 30000) {
+async function getPooledConnection(host, port, useSSL, timeout = 30000, options = {}) {
   const cleanedHost = cleanElectrumHost(host);
-  const key = `${cleanedHost}:${port}`;
+  const key = poolKey(cleanedHost, port, useSSL, options);
   
   // Check for existing healthy connection
   if (electrumPool.connections.has(key)) {
@@ -266,14 +536,16 @@ async function getPooledConnection(host, port, useSSL, timeout = 30000) {
   
   // Create new connection
   console.log(`[Electrum Pool] Creating new connection: ${key}`);
-  const socket = await createElectrumConnection(cleanedHost, port, useSSL, timeout);
-  
+  const socket = await createElectrumConnection(cleanedHost, port, useSSL, timeout, options);
+
   // Store in pool with multiplexed handler
   const conn = {
     socket,
     host: cleanedHost,
     port,
     useSSL,
+    transport: socket.electrumTransport || (options.useTor ? 'tor' : 'direct'),
+    certificate: socket.electrumCertificate || null,
     lastUsed: Date.now(),
     healthy: true,
     versionSent: false,
@@ -306,29 +578,98 @@ async function ensureVersionHandshake(key, timeout = 15000) {
   return conn.cachedVersion || ['unknown', '1.4'];
 }
 
-function registerElectrumHandlers(ipcMain) {
+function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
+  // Configure the persisted TOFU trust store. Without a dataDir there is no
+  // persistence, so self-signed certs can never be trusted (fail closed).
+  trustStorePath = dataDir ? certStorePath(dataDir) : null;
+
+  // Persist (or overwrite) a user-approved certificate pin for a server.
+  // SECURITY: renderer-supplied certificate metadata is NEVER trusted. The
+  // pin is written only when it matches a short-lived main-process record of
+  // the certificate the server actually presented during the refused
+  // connection — and that record is only created for proven self-signed
+  // leaves on the TOFU path.
+  ipcMain.handle('electrum-trust-certificate', async (event, { host, port, certificate }) => {
+    try {
+      if (!host || !port || !certificate?.fingerprint) {
+        return { success: false, error: 'host, port and certificate.fingerprint are required' };
+      }
+      if (!trustStorePath) {
+        return { success: false, error: 'No certificate trust store is configured' };
+      }
+      const cleanedHost = cleanElectrumHost(host);
+      const key = trustObservationKey(cleanedHost, port);
+      const observation = pendingTrustObservations.get(key);
+      if (!observation || Date.now() - observation.observedAt > TRUST_OBSERVATION_TTL_MS) {
+        pendingTrustObservations.delete(key);
+        return {
+          success: false,
+          error:
+            'No recent untrusted-certificate observation for this server. Run the connection test again and trust the certificate it actually presents.',
+        };
+      }
+      const observed = observation.certificate;
+      if (observed.fingerprint.toUpperCase() !== String(certificate.fingerprint).toUpperCase()) {
+        return {
+          success: false,
+          error:
+            'The fingerprint does not match the certificate the server presented during the connection test. Re-run the test.',
+        };
+      }
+      // observed.selfSigned is guaranteed: observations are recorded only on
+      // the TOFU path after the structural self-signed check.
+      const entry = trustCertificate(trustStorePath, cleanedHost, port, {
+        fingerprint: observed.fingerprint,
+        subject: observed.subject,
+        issuer: observed.issuer,
+        validFrom: observed.validFrom,
+        validTo: observed.validTo,
+      });
+      pendingTrustObservations.delete(key);
+      return { success: true, pinned: entry };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Report the currently pinned certificate (if any) for a server, so the UI
+  // can show the active trust state.
+  ipcMain.handle('electrum-get-certificate-trust', async (event, { host, port }) => {
+    try {
+      if (!host || !port) {
+        return { success: false, error: 'host and port are required', pinned: null };
+      }
+      const cleanedHost = cleanElectrumHost(host);
+      const pinned = trustStorePath ? getPinnedCertificate(trustStorePath, cleanedHost, port) : null;
+      return { success: true, pinned };
+    } catch (error) {
+      return { success: false, error: error.message, pinned: null };
+    }
+  });
+
   // Electrum connection test (creates fresh connection to test connectivity)
-  ipcMain.handle('electrum-test', async (event, { host, port, useSSL, timeout }) => {
+  ipcMain.handle('electrum-test', async (event, { host, port, useSSL, timeout, useTor, torProxyUrl }) => {
     const startTime = Date.now();
     const cleanedHost = cleanElectrumHost(host);
-    
+    const options = { useTor: !!useTor, torProxyUrl };
+
     try {
       // Get or create pooled connection
-      const { key, pooled } = await getPooledConnection(cleanedHost, port, useSSL, timeout || 15000);
-      
+      const { key, pooled } = await getPooledConnection(cleanedHost, port, useSSL, timeout || 15000, options);
+
       // Send server.version only on fresh connections, ping on reused ones
       const version = await ensureVersionHandshake(key, timeout || 15000);
-      
+
       // Cache version for future reuse
       const conn = electrumPool.connections.get(key);
       if (conn) conn.cachedVersion = version;
-      
+
       // Get block height to verify full functionality
       const headerResult = await pooledRequest(key, 'blockchain.headers.subscribe', [], timeout || 15000);
       const blockHeight = headerResult?.height || headerResult?.block_height;
-      
+
       const latency = Date.now() - startTime;
-      
+
       return {
         success: true,
         serverVersion: Array.isArray(version) ? version.join(' ') : String(version),
@@ -336,11 +677,13 @@ function registerElectrumHandlers(ipcMain) {
         latency,
         message: `Connected to Electrum server (${Array.isArray(version) ? version[0] : version})`,
         connectionPooled: pooled,
+        transport: conn?.transport || (options.useTor ? 'tor' : 'direct'),
+        certificate: conn?.certificate || undefined,
       };
     } catch (error) {
       const latency = Date.now() - startTime;
       // If test fails, destroy the pooled connection so next attempt starts fresh
-      const key = `${cleanedHost}:${port}`;
+      const key = poolKey(cleanedHost, port, useSSL, options);
       const conn = electrumPool.connections.get(key);
       if (conn) {
         try { conn.socket.destroy(); } catch (e) {}
@@ -349,15 +692,17 @@ function registerElectrumHandlers(ipcMain) {
       return {
         success: false,
         error: error.message,
+        errorCode: error.code || undefined,
+        certificate: error.certificate || undefined,
         latency,
       };
     }
   });
 
   // Get address history (transactions) via Electrum - uses connection pool
-  ipcMain.handle('electrum-get-history', async (event, { host, port, useSSL, address, timeout }) => {
+  ipcMain.handle('electrum-get-history', async (event, { host, port, useSSL, address, timeout, useTor, torProxyUrl }) => {
     try {
-      const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000);
+      const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
       
       const scripthash = addressToScripthash(address);
@@ -377,9 +722,9 @@ function registerElectrumHandlers(ipcMain) {
   });
 
   // Get address UTXOs via Electrum - uses connection pool
-  ipcMain.handle('electrum-get-utxos', async (event, { host, port, useSSL, address, timeout }) => {
+  ipcMain.handle('electrum-get-utxos', async (event, { host, port, useSSL, address, timeout, useTor, torProxyUrl }) => {
     try {
-      const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000);
+      const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
       
       const scripthash = addressToScripthash(address);
@@ -399,9 +744,9 @@ function registerElectrumHandlers(ipcMain) {
   });
 
   // Get transaction details via Electrum - uses connection pool
-  ipcMain.handle('electrum-get-transaction', async (event, { host, port, useSSL, txid, verbose, timeout }) => {
+  ipcMain.handle('electrum-get-transaction', async (event, { host, port, useSSL, txid, verbose, timeout, useTor, torProxyUrl }) => {
     try {
-      const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000);
+      const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
       
       const tx = await pooledRequest(key, 'blockchain.transaction.get', [txid, verbose !== false], timeout || 30000);
@@ -422,12 +767,12 @@ function registerElectrumHandlers(ipcMain) {
   // blockchain.block.header returns the raw 80-byte header hex; the block hash
   // is the double-SHA256 of that header, byte-reversed. Computed here in Node
   // so the renderer only compares hex strings.
-  ipcMain.handle('electrum-get-block-hash', async (event, { host, port, useSSL, height, timeout }) => {
+  ipcMain.handle('electrum-get-block-hash', async (event, { host, port, useSSL, height, timeout, useTor, torProxyUrl }) => {
     try {
       if (!Number.isInteger(height) || height < 0) {
         return { success: false, error: `Invalid block height: ${height}` };
       }
-      const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000);
+      const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
 
       const headerHex = await pooledRequest(key, 'blockchain.block.header', [height], timeout || 30000);
@@ -457,11 +802,11 @@ function registerElectrumHandlers(ipcMain) {
   // so public servers see no harder load than the existing phases.
   const BATCH_PIPELINE_WINDOW = 8;
 
-  ipcMain.handle('electrum-batch-get-history', async (event, { host, port, useSSL, addresses, timeout }) => {
+  ipcMain.handle('electrum-batch-get-history', async (event, { host, port, useSSL, addresses, timeout, useTor, torProxyUrl }) => {
     const startTime = Date.now();
 
     try {
-      const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000);
+      const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
 
       console.log(`[Electrum Pool] Batch fetching ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
@@ -524,11 +869,11 @@ function registerElectrumHandlers(ipcMain) {
   // multiplexed socket with the same bounded in-flight window, results are
   // indexed by input position, and per-address failures stay isolated so one
   // bad address only fails its own entry.
-  ipcMain.handle('electrum-batch-get-utxos', async (event, { host, port, useSSL, addresses, timeout }) => {
+  ipcMain.handle('electrum-batch-get-utxos', async (event, { host, port, useSSL, addresses, timeout, useTor, torProxyUrl }) => {
     const startTime = Date.now();
 
     try {
-      const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000);
+      const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
       await ensureVersionHandshake(key, timeout || 15000);
 
       console.log(`[Electrum Pool] Batch fetching UTXOs for ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
@@ -584,4 +929,17 @@ function registerElectrumHandlers(ipcMain) {
   });
 }
 
-module.exports = { registerElectrumHandlers, stopKeepalive };
+module.exports = {
+  registerElectrumHandlers,
+  stopKeepalive,
+  // Exported for Node-level tests only (TLS trust decisions, pool keying,
+  // and direct connection creation without going through IPC).
+  _test: {
+    electrumPool,
+    poolKey,
+    evaluateCertificate,
+    createElectrumConnection,
+    cleanElectrumHost,
+    getTrustStorePath: () => trustStorePath,
+  },
+};

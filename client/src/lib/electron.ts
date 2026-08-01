@@ -12,7 +12,31 @@ export interface TorTestResult {
 }
 
 // Electrum protocol types
-export interface ElectrumTestParams {
+// Every Electrum call accepts optional Tor routing: when `useTor` is set the
+// socket is opened through the configured SOCKS proxy (or an auto-detected
+// Tor proxy when `torProxyUrl` is omitted), which is also what makes .onion
+// Electrum hosts reachable.
+export interface ElectrumTorParams {
+  useTor?: boolean;
+  torProxyUrl?: string;
+}
+
+export interface ElectrumCertificateInfo {
+  fingerprint: string;
+  subject?: string;
+  issuer?: string;
+  validFrom?: string;
+  validTo?: string;
+  selfSigned?: boolean;
+  // How the connection authenticated the server: 'ca' = verified against a
+  // certificate authority, 'pinned' = matched the user's trusted fingerprint.
+  trust?: 'ca' | 'pinned';
+  // Set on CERT_FINGERPRINT_CHANGED failures: the fingerprint the user
+  // previously trusted for this server.
+  expectedFingerprint?: string;
+}
+
+export interface ElectrumTestParams extends ElectrumTorParams {
   host: string;
   port: number;
   useSSL?: boolean;
@@ -26,9 +50,39 @@ export interface ElectrumTestResult {
   latency?: number;
   message?: string;
   error?: string;
+  // 'CERT_UNTRUSTED' (never seen this cert) or 'CERT_FINGERPRINT_CHANGED'
+  // (cert differs from the trusted pin — possible MITM) on TLS trust failures.
+  errorCode?: string;
+  // Transport the connection used ('direct' | 'tor') plus the certificate the
+  // server presented (on TLS connections, success or trust failure).
+  transport?: 'direct' | 'tor';
+  certificate?: ElectrumCertificateInfo;
 }
 
-export interface ElectrumHistoryParams {
+export interface ElectrumTrustCertificateParams {
+  host: string;
+  port: number;
+  certificate: ElectrumCertificateInfo;
+}
+
+export interface ElectrumTrustCertificateResult {
+  success: boolean;
+  pinned?: ElectrumCertificateInfo & { trustedAt?: number };
+  error?: string;
+}
+
+export interface ElectrumGetCertificateTrustParams {
+  host: string;
+  port: number;
+}
+
+export interface ElectrumGetCertificateTrustResult {
+  success: boolean;
+  pinned: (ElectrumCertificateInfo & { trustedAt?: number }) | null;
+  error?: string;
+}
+
+export interface ElectrumHistoryParams extends ElectrumTorParams {
   host: string;
   port: number;
   useSSL?: boolean;
@@ -48,7 +102,7 @@ export interface ElectrumHistoryResult {
   error?: string;
 }
 
-export interface ElectrumUtxoParams {
+export interface ElectrumUtxoParams extends ElectrumTorParams {
   host: string;
   port: number;
   useSSL?: boolean;
@@ -69,7 +123,7 @@ export interface ElectrumUtxoResult {
   error?: string;
 }
 
-export interface ElectrumTransactionParams {
+export interface ElectrumTransactionParams extends ElectrumTorParams {
   host: string;
   port: number;
   useSSL?: boolean;
@@ -84,7 +138,7 @@ export interface ElectrumTransactionResult {
   error?: string;
 }
 
-export interface ElectrumBlockHashParams {
+export interface ElectrumBlockHashParams extends ElectrumTorParams {
   host: string;
   port: number;
   useSSL?: boolean;
@@ -98,7 +152,7 @@ export interface ElectrumBlockHashResult {
   error?: string;
 }
 
-export interface ElectrumBatchHistoryParams {
+export interface ElectrumBatchHistoryParams extends ElectrumTorParams {
   host: string;
   port: number;
   useSSL?: boolean;
@@ -119,7 +173,7 @@ export interface ElectrumBatchHistoryResult {
   error?: string;
 }
 
-export interface ElectrumBatchUtxoParams {
+export interface ElectrumBatchUtxoParams extends ElectrumTorParams {
   host: string;
   port: number;
   useSSL?: boolean;
@@ -278,6 +332,8 @@ interface ElectronAPI {
   electrumGetBlockHash: (params: ElectrumBlockHashParams) => Promise<ElectrumBlockHashResult>;
   electrumBatchGetHistory: (params: ElectrumBatchHistoryParams) => Promise<ElectrumBatchHistoryResult>;
   electrumBatchGetUtxos: (params: ElectrumBatchUtxoParams) => Promise<ElectrumBatchUtxoResult>;
+  electrumTrustCertificate: (params: ElectrumTrustCertificateParams) => Promise<ElectrumTrustCertificateResult>;
+  electrumGetCertificateTrust: (params: ElectrumGetCertificateTrustParams) => Promise<ElectrumGetCertificateTrustResult>;
   platform: string;
   isElectron: boolean;
   // Native read-engine bridge (present only in the desktop build).

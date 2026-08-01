@@ -39,6 +39,8 @@ export class ElectrumProvider implements BlockchainProvider {
   private port: number;
   private useSSL: boolean;
   private timeout: number;
+  private useTor: boolean = false;
+  private torProxyUrl?: string;
   private transactionCache: Map<string, ApiTransaction> = new Map();
   private static readonly TX_FETCH_CONCURRENCY = 5;
   // Chain-tip cache backing getTipHeightForDerivation(). Refreshed by every
@@ -72,6 +74,7 @@ export class ElectrumProvider implements BlockchainProvider {
         useSSL: this.useSSL,
         height,
         timeout: this.timeout,
+        ...this.torParams(),
       });
       if (result.success && typeof result.blockHash === 'string' && result.blockHash.length > 0) {
         return result.blockHash;
@@ -82,7 +85,13 @@ export class ElectrumProvider implements BlockchainProvider {
     }
   }
 
-  constructor(host: string, port: number = 50001, useSSL: boolean = false, timeout: number = 30000) {
+  constructor(
+    host: string,
+    port: number = 50001,
+    useSSL: boolean = false,
+    timeout: number = 30000,
+    torOptions?: { useTor?: boolean; torProxyUrl?: string },
+  ) {
     if (!host || host.trim() === '') {
       throw new Error('Electrum host is required');
     }
@@ -90,8 +99,16 @@ export class ElectrumProvider implements BlockchainProvider {
     this.port = port;
     this.useSSL = useSSL;
     this.timeout = timeout;
-    this.name = `Electrum (${this.host}:${port})`;
-    console.log(`[ElectrumProvider] Initialized with ${this.host}:${port} (SSL: ${useSSL})`);
+    this.useTor = torOptions?.useTor ?? false;
+    this.torProxyUrl = torOptions?.torProxyUrl;
+    this.name = `Electrum (${this.host}:${port}${this.useTor ? ' via Tor' : ''})`;
+    console.log(`[ElectrumProvider] Initialized with ${this.host}:${port} (SSL: ${useSSL}, transport: ${this.useTor ? 'Tor' : 'direct'})`);
+  }
+
+  // Tor routing params spread into every IPC call so the main process opens
+  // the socket through the SOCKS proxy when Tor is enabled.
+  private torParams(): { useTor?: boolean; torProxyUrl?: string } {
+    return this.useTor ? { useTor: true, torProxyUrl: this.torProxyUrl } : {};
   }
 
   private ensureElectron(): void {
@@ -109,6 +126,7 @@ export class ElectrumProvider implements BlockchainProvider {
       port: this.port,
       useSSL: this.useSSL,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     
     if (!result.success || result.blockHeight === undefined) {
@@ -165,6 +183,7 @@ export class ElectrumProvider implements BlockchainProvider {
       useSSL: this.useSSL,
       address,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     
     if (!historyResult.success) {
@@ -196,6 +215,7 @@ export class ElectrumProvider implements BlockchainProvider {
               txid: item.tx_hash,
               verbose: true,
               timeout: this.timeout,
+              ...this.torParams(),
             });
             
             if (txResult.success && txResult.transaction) {
@@ -232,6 +252,7 @@ export class ElectrumProvider implements BlockchainProvider {
       useSSL: this.useSSL,
       address,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     if (!historyResult.success) {
       throw new Error(historyResult.error || 'Failed to get address history via Electrum');
@@ -254,6 +275,7 @@ export class ElectrumProvider implements BlockchainProvider {
       useSSL: this.useSSL,
       address,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     if (!historyResult.success) {
       throw new Error(historyResult.error || 'Failed to get address history via Electrum');
@@ -268,6 +290,7 @@ export class ElectrumProvider implements BlockchainProvider {
       useSSL: this.useSSL,
       address,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     if (!utxoResult.success) {
       throw new Error(utxoResult.error || 'Failed to get address UTXOs via Electrum');
@@ -295,6 +318,7 @@ export class ElectrumProvider implements BlockchainProvider {
       useSSL: this.useSSL,
       addresses,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     if (!result.success) {
       throw new Error(result.error || 'Batch history lookup failed');
@@ -325,6 +349,7 @@ export class ElectrumProvider implements BlockchainProvider {
       useSSL: this.useSSL,
       addresses,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     if (!result.success) {
       throw new Error(result.error || 'Batch UTXO lookup failed');
@@ -355,6 +380,7 @@ export class ElectrumProvider implements BlockchainProvider {
       useSSL: this.useSSL,
       address,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     if (!utxoResult.success) {
       throw new Error(utxoResult.error || 'Failed to get address UTXOs via Electrum');
@@ -402,6 +428,7 @@ export class ElectrumProvider implements BlockchainProvider {
       txid,
       verbose: true,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     
     if (!result.success || !result.transaction) {
@@ -553,6 +580,7 @@ export class ElectrumProvider implements BlockchainProvider {
       port: this.port,
       useSSL: this.useSSL,
       timeout: this.timeout,
+      ...this.torParams(),
     });
     
     return {

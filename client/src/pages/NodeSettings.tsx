@@ -16,7 +16,7 @@ import {
   Home,
   Zap
 } from "lucide-react";
-import { isElectron, getElectronAPI, ElectrumTestResult } from "@/lib/electron";
+import { isElectron, getElectronAPI, ElectrumTestResult, ElectrumCertificateInfo } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,16 @@ import { Separator } from "@/components/ui/separator";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -173,6 +183,15 @@ export default function NodeSettings() {
   
   const [isElectrumTesting, setIsElectrumTesting] = useState(false);
   const [electrumTestResult, setElectrumTestResult] = useState<ElectrumTestResult | null>(null);
+  // TLS trust prompt state: set when the server presents a certificate that is
+  // not CA-verified and not pinned yet (or whose fingerprint changed).
+  const [electrumTrustPrompt, setElectrumTrustPrompt] = useState<{
+    host: string;
+    port: number;
+    errorCode: string;
+    certificate: ElectrumCertificateInfo;
+  } | null>(null);
+  const [isTrustingCertificate, setIsTrustingCertificate] = useState(false);
   
   const [pendingChanges, setPendingChanges] = useState<Partial<NodeSettingsType>>({});
   const [newLocalHost, setNewLocalHost] = useState('');
@@ -471,10 +490,11 @@ export default function NodeSettings() {
     }
     
     console.log(`[NodeSettings] Testing Electrum connection to ${host}:${port}`);
-    
+
     setIsElectrumTesting(true);
     setElectrumTestResult(null);
-    
+    setElectrumTrustPrompt(null);
+
     try {
       const api = getElectronAPI();
       const result = await api.electrumTest({
@@ -482,14 +502,35 @@ export default function NodeSettings() {
         port,
         useSSL: currentSettings.electrumSSL ?? false,
         timeout: currentSettings.requestTimeout || 30000,
+        // Route through the configured Tor proxy when Tor is enabled (this is
+        // also what makes .onion Electrum hosts reachable).
+        useTor: currentSettings.useTor ?? false,
+        torProxyUrl: currentSettings.torProxyUrl,
       });
-      
+
       setElectrumTestResult(result);
-      
+
       if (result.success) {
         toast({
           title: "Electrum Connected",
-          description: `${result.serverVersion} - Block height: ${result.blockHeight?.toLocaleString()}`,
+          description: `${result.serverVersion} - Block height: ${result.blockHeight?.toLocaleString()} (${result.transport === 'tor' ? 'via Tor' : 'direct'})`,
+        });
+      } else if (
+        (result.errorCode === 'CERT_UNTRUSTED' || result.errorCode === 'CERT_FINGERPRINT_CHANGED') &&
+        result.certificate
+      ) {
+        // TLS trust decision required — show the fingerprint prompt instead
+        // of a plain error toast so the user can verify + pin the cert.
+        setElectrumTrustPrompt({
+          host,
+          port,
+          errorCode: result.errorCode,
+          certificate: result.certificate,
+        });
+        toast({
+          title: result.errorCode === 'CERT_FINGERPRINT_CHANGED' ? "Certificate Changed" : "Untrusted Certificate",
+          description: "Verify the certificate fingerprint below before connecting.",
+          variant: "destructive",
         });
       } else {
         toast({
@@ -514,6 +555,43 @@ export default function NodeSettings() {
     }
   };
   
+  // User confirmed the certificate fingerprint in the trust dialog — persist
+  // the pin in the main process and immediately retry the connection test.
+  const handleTrustElectrumCertificate = async () => {
+    if (!electrumTrustPrompt) return;
+    setIsTrustingCertificate(true);
+    try {
+      const api = getElectronAPI();
+      const result = await api.electrumTrustCertificate({
+        host: electrumTrustPrompt.host,
+        port: electrumTrustPrompt.port,
+        certificate: electrumTrustPrompt.certificate,
+      });
+      if (!result.success) {
+        toast({
+          title: "Trust Failed",
+          description: result.error || "Could not save the certificate trust decision",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({
+        title: "Certificate Trusted",
+        description: "The fingerprint was saved. Future connections must present the same certificate.",
+      });
+      setElectrumTrustPrompt(null);
+      await handleTestElectrum();
+    } catch (error) {
+      toast({
+        title: "Trust Failed",
+        description: error instanceof Error ? error.message : "Could not save the certificate trust decision",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTrustingCertificate(false);
+    }
+  };
+
   const hasPendingChanges = Object.keys(pendingChanges).length > 0;
   
   return (
@@ -915,19 +993,20 @@ export default function NodeSettings() {
               />
             </div>
             
-            <Alert>
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription className="text-sm">
-                Electrum connections do not support Tor routing. All Electrum connections are made directly over the internet. For maximum privacy, use an HTTP-based provider (Mempool/Esplora) with Tor enabled instead.
-              </AlertDescription>
-            </Alert>
-
-            {currentSettings.useTor && currentSettings.useElectrum && (
-              <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>Privacy Conflict</AlertTitle>
+            {currentSettings.useTor ? (
+              <Alert>
+                <Shield className="h-4 w-4" />
                 <AlertDescription className="text-sm">
-                  You have Tor enabled but are using Electrum, which bypasses Tor entirely. Your Electrum connections will reveal your IP address and DNS queries to the server. Either disable Electrum and use an HTTP provider with Tor, or accept the reduced privacy.
+                  Tor is enabled — Electrum connections route through your Tor SOCKS proxy
+                  {currentSettings.torProxyUrl ? ` (${currentSettings.torProxyUrl})` : ' (auto-detected)'}.
+                  Onion (.onion) Electrum hosts are supported.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert>
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription className="text-sm">
+                  Electrum connections are made directly over the internet — the server (and your ISP) can see your IP address. Enable Tor above to route Electrum through the Tor network instead.
                 </AlertDescription>
               </Alert>
             )}
@@ -1063,11 +1142,29 @@ export default function NodeSettings() {
                             {electrumTestResult.success ? 'Connection Successful' : 'Connection Failed'}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            {electrumTestResult.success 
+                            {electrumTestResult.success
                               ? `${electrumTestResult.serverVersion} - Block: ${electrumTestResult.blockHeight?.toLocaleString()} (${electrumTestResult.latency}ms)`
                               : electrumTestResult.error
                             }
                           </p>
+                          {electrumTestResult.success && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              <Badge variant="secondary" className="text-xs" data-testid="badge-electrum-transport">
+                                {electrumTestResult.transport === 'tor' ? 'Transport: Tor' : 'Transport: Direct'}
+                              </Badge>
+                              {electrumTestResult.certificate && (
+                                <Badge
+                                  variant={electrumTestResult.certificate.trust === 'ca' ? 'secondary' : 'outline'}
+                                  className="text-xs"
+                                  data-testid="badge-electrum-cert-trust"
+                                >
+                                  {electrumTestResult.certificate.trust === 'ca'
+                                    ? 'Certificate: CA verified'
+                                    : 'Certificate: trusted fingerprint'}
+                                </Badge>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1247,6 +1344,97 @@ export default function NodeSettings() {
           You have unsaved changes
         </p>
       )}
+
+      {/* Electrum TLS certificate trust prompt (TOFU) */}
+      <AlertDialog
+        open={electrumTrustPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open) setElectrumTrustPrompt(null);
+        }}
+      >
+        <AlertDialogContent data-testid="dialog-electrum-cert-trust">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              {electrumTrustPrompt?.errorCode === 'CERT_FINGERPRINT_CHANGED'
+                ? 'Server Certificate Changed'
+                : 'Untrusted Server Certificate'}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm">
+                {electrumTrustPrompt?.errorCode === 'CERT_FINGERPRINT_CHANGED' ? (
+                  <p className="text-destructive font-medium">
+                    The certificate presented by {electrumTrustPrompt?.host}:{electrumTrustPrompt?.port} does
+                    NOT match the one you previously trusted. This can mean a man-in-the-middle attack.
+                    Only re-trust if you have verified the new fingerprint with your server.
+                  </p>
+                ) : (
+                  <p>
+                    The certificate presented by {electrumTrustPrompt?.host}:{electrumTrustPrompt?.port} is
+                    not signed by a trusted certificate authority. Self-signed certificates are common on
+                    Electrum servers — verify the fingerprint with your server (e.g. in its settings or
+                    documentation) before trusting it.
+                  </p>
+                )}
+                <div className="rounded-md border p-3 space-y-1.5 font-mono text-xs break-all">
+                  <div>
+                    <span className="text-muted-foreground">SHA-256 fingerprint: </span>
+                    <span data-testid="text-electrum-cert-fingerprint">{electrumTrustPrompt?.certificate.fingerprint}</span>
+                  </div>
+                  {electrumTrustPrompt?.certificate.expectedFingerprint && (
+                    <div>
+                      <span className="text-muted-foreground">Previously trusted: </span>
+                      <span data-testid="text-electrum-cert-expected-fingerprint">{electrumTrustPrompt.certificate.expectedFingerprint}</span>
+                    </div>
+                  )}
+                  {electrumTrustPrompt?.certificate.subject && (
+                    <div>
+                      <span className="text-muted-foreground">Subject: </span>
+                      {electrumTrustPrompt.certificate.subject}
+                    </div>
+                  )}
+                  {electrumTrustPrompt?.certificate.issuer && (
+                    <div>
+                      <span className="text-muted-foreground">Issuer: </span>
+                      {electrumTrustPrompt.certificate.issuer}
+                    </div>
+                  )}
+                  {electrumTrustPrompt?.certificate.validTo && (
+                    <div>
+                      <span className="text-muted-foreground">Valid until: </span>
+                      {electrumTrustPrompt.certificate.validTo}
+                    </div>
+                  )}
+                </div>
+                <p className="text-muted-foreground">
+                  Trusting pins this fingerprint to the server. Future connections must present the same
+                  certificate — a different one will be rejected.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-electrum-cert-reject">Do Not Trust</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleTrustElectrumCertificate();
+              }}
+              disabled={isTrustingCertificate}
+              data-testid="button-electrum-cert-trust"
+            >
+              {isTrustingCertificate ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Trusting...
+                </>
+              ) : (
+                'Trust This Certificate'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       </div>
     </div>
   );

@@ -87,6 +87,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('electrum-batch-get-history', params),
   electrumBatchGetUtxos: (params) =>
     ipcRenderer.invoke('electrum-batch-get-utxos', params),
+  electrumTrustCertificate: (params) =>
+    ipcRenderer.invoke('electrum-trust-certificate', params),
+  electrumGetCertificateTrust: (params) =>
+    ipcRenderer.invoke('electrum-get-certificate-trust', params),
 
   // Native read-engine (better-sqlite3 worker_thread). Fixed channels only —
   // no arbitrary SQL or file paths cross the bridge.

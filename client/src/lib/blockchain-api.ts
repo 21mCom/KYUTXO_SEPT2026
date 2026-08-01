@@ -77,7 +77,10 @@ export function createProviderFromSettings(settings: NodeSettings): BlockchainPr
       settings.electrumHost,
       settings.electrumPort || 50001,
       settings.electrumSSL || false,
-      requestTimeout
+      requestTimeout,
+      // Route Electrum through the configured Tor SOCKS proxy when Tor is on
+      // (also enables .onion Electrum hosts).
+      { useTor, torProxyUrl }
     );
   }
   
