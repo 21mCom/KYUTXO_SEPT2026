@@ -95,6 +95,10 @@ args = "v3-merge-restore-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "attachment-hardening-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "note-rendering"
 
 [[workflows.workflow.tasks]]
@@ -1255,6 +1259,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-launch-token-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "attachment-hardening-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-attachment-hardening-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
