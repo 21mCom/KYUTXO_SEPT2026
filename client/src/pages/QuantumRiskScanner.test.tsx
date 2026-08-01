@@ -25,6 +25,28 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
+// jsdom gives the page scroll element a 0-height rect, so the real
+// @tanstack/react-virtual renders zero rows. Stub it to render every item
+// (matching the UTXOs test pattern) — virtualization itself is verified in a
+// real browser by scripts/check-quantum-scan-scale-browser.mjs.
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: (opts: { count: number; estimateSize: (i: number) => number }) => {
+    const items = Array.from({ length: opts.count }, (_, index) => ({
+      index,
+      key: index,
+      start: index * 56,
+      end: (index + 1) * 56,
+      size: opts.estimateSize(index),
+    }));
+    return {
+      getTotalSize: () => opts.count * 56,
+      getVirtualItems: () => items,
+      measureElement: () => {},
+    };
+  },
+}));
+
+
 import { Toaster } from "@/components/ui/toaster";
 import { db } from "@/lib/database";
 import { createRecord, clearAllRecords, getRecordsByType } from "@/lib/data/record-crud";

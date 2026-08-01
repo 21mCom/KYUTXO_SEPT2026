@@ -242,6 +242,87 @@ async function main() {
       detail: `status="${statusText}"`,
     });
 
+    // ── Virtualized results list stays responsive at 10k results ───────────
+    // The grouped results list is page-scroll virtualized: only the visible
+    // window (plus overscan) may mount, never all 10k rows.
+    await page.getByTestId('results-grouped').waitFor({ state: 'visible', timeout: 15_000 });
+    const mountedAfterScan = await page.locator('[data-testid^="result-"]').count();
+    steps.push({
+      name: 'only a virtualized window of result rows is mounted after the scan',
+      passed: mountedAfterScan > 0 && mountedAfterScan < 500,
+      detail: `mounted=${mountedAfterScan} of ${RECORD_COUNT} results`,
+    });
+
+    // Scrolling the page must stay responsive and mount later rows on demand.
+    const firstTopRow = await page
+      .locator('[data-testid^="result-"]')
+      .first()
+      .getAttribute('data-testid');
+    const scrollProbeStart = Date.now();
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="page-quantum-risk-scanner"]');
+      el.scrollTop = el.scrollHeight;
+    });
+    // rAF round-trip after the scroll = main thread is alive, not frozen.
+    await page.evaluate(
+      () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+    );
+    const scrollProbeMs = Date.now() - scrollProbeStart;
+    await page.waitForTimeout(300);
+    const bottomState = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('[data-testid^="result-"]'));
+      return {
+        mounted: rows.length,
+        firstTestId: rows[0]?.getAttribute('data-testid') ?? null,
+      };
+    });
+    steps.push({
+      name: 'scrolling to the bottom swaps the mounted window (still bounded) and stays responsive',
+      passed:
+        bottomState.mounted > 0 &&
+        bottomState.mounted < 500 &&
+        bottomState.firstTestId !== firstTopRow &&
+        scrollProbeMs < 3_000,
+      detail: `mounted=${bottomState.mounted}, firstRow ${firstTopRow} -> ${bottomState.firstTestId}, scroll+2xRAF=${scrollProbeMs}ms`,
+    });
+
+    // Group toggling still works: collapsing the (only) Critical group empties
+    // the mounted rows; re-opening brings a bounded window back.
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="page-quantum-risk-scanner"]');
+      el.scrollTop = 0;
+    });
+    await page.getByTestId('trigger-critical').click();
+    await page.waitForTimeout(300);
+    const collapsedCount = await page.locator('[data-testid^="result-"]').count();
+    await page.getByTestId('trigger-critical').click();
+    await page.waitForTimeout(300);
+    const reopenedCount = await page.locator('[data-testid^="result-"]').count();
+    steps.push({
+      name: 'collapsing the Critical group unmounts its rows; re-opening restores a bounded window',
+      passed: collapsedCount === 0 && reopenedCount > 0 && reopenedCount < 500,
+      detail: `collapsed=${collapsedCount}, reopened=${reopenedCount}`,
+    });
+
+    // Filtering still works over the full 10k result set.
+    const filterTarget = '02' + (RECORD_COUNT - 1).toString(16).padStart(64, '0');
+    await page.getByTestId('input-filter-address').fill(filterTarget);
+    const filterCountEl = page.getByTestId('text-filter-count');
+    let filterText = '';
+    const filterDeadline = Date.now() + 10_000;
+    while (Date.now() < filterDeadline) {
+      filterText = ((await filterCountEl.textContent().catch(() => '')) ?? '').trim();
+      if (filterText.startsWith('1 of ')) break;
+      await page.waitForTimeout(200);
+    }
+    const filteredRow = await page.locator('[data-testid^="result-"]').count();
+    await page.getByTestId('button-clear-filters').click();
+    steps.push({
+      name: 'address filter narrows the virtualized list to the matching row',
+      passed: filterText === `1 of ${RECORD_COUNT} shown` && filteredRow === 1,
+      detail: `filterCount="${filterText}", mounted=${filteredRow}`,
+    });
+
     // ── Verify the writes actually landed in Dexie ──────────────────────────
     const verify = await page.evaluate(async () => {
       const { db } = await import('/src/lib/database.ts');

@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Shield,
   ShieldAlert,
@@ -18,7 +19,6 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { beginBulkOperation, endBulkOperation, notifyDbChange } from "@/lib/database";
 import { createTag } from "@/lib/data/vocabulary-crud";
 import { bulkUpdateRecords, getRecordsByType } from "@/lib/data/record-crud";
@@ -334,6 +334,81 @@ export default function QuantumRiskScanner() {
     [results, levelFilters, normalizedFilter],
   );
 
+  // ── Page-scroll virtualization of the grouped results list ──────────────
+  // A 10k–100k scan used to mount every result row at once inside the
+  // per-level groups, freezing render and scroll. The grouped list is
+  // flattened into (header | row) items and virtualized off the page
+  // scroller, matching the AddressChecker / UTXOs pattern, so only the
+  // visible window (plus overscan) mounts.
+  const flatItems = useMemo(() => {
+    type FlatItem =
+      | { kind: "header"; level: (typeof RISK_LEVELS)[number]; count: number; open: boolean }
+      | {
+          kind: "row";
+          level: (typeof RISK_LEVELS)[number];
+          result: QuantumScanResult;
+          isLast: boolean;
+        };
+    const items: FlatItem[] = [];
+    for (const level of RISK_LEVELS) {
+      const levelResults = filteredResults.filter(r => r.riskLevel === level.key);
+      if (levelResults.length === 0) continue;
+      const open = openGroups[level.key];
+      items.push({ kind: "header", level, count: levelResults.length, open });
+      if (open) {
+        levelResults.forEach((result, i) => {
+          items.push({ kind: "row", level, result, isLast: i === levelResults.length - 1 });
+        });
+      }
+    }
+    return items;
+  }, [filteredResults, openGroups]);
+
+  // Page-level scroll element + list offset for the virtualizer: the results
+  // list does not own a scroll container, the whole page scrolls as one, so
+  // the virtualizer needs the list's offset (scrollMargin) inside the page
+  // scroll element.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+  const measureScrollMargin = useCallback(() => {
+    const scrollEl = scrollRef.current;
+    const listEl = listRef.current;
+    if (!scrollEl || !listEl) return;
+    const margin =
+      listEl.getBoundingClientRect().top -
+      scrollEl.getBoundingClientRect().top +
+      scrollEl.scrollTop;
+    // 1px guard prevents update loops from sub-pixel layout jitter.
+    setScrollMargin(prev => (Math.abs(prev - margin) > 1 ? margin : prev));
+  }, []);
+  useEffect(measureScrollMargin);
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measureScrollMargin);
+    ro.observe(scrollEl);
+    return () => ro.disconnect();
+  }, [measureScrollMargin]);
+
+  const HEADER_ESTIMATE = 84; // group header card (incl. inter-group gap)
+  const ROW_ESTIMATE = 57; // result row (two text lines + padding)
+  const rowVirtualizer = useVirtualizer({
+    count: flatItems.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => (flatItems[index]?.kind === "header" ? HEADER_ESTIMATE : ROW_ESTIMATE),
+    overscan: 20,
+    scrollMargin,
+    // Stable keys so toggling a group or changing filters (which shifts item
+    // indices) can't reuse a cached size from a different item kind.
+    getItemKey: (index) => {
+      const item = flatItems[index];
+      if (!item) return index;
+      return item.kind === "header" ? `h-${item.level.key}` : `r-${item.result.recordId}`;
+    },
+  });
+  const virtualItems = rowVirtualizer.getVirtualItems();
+
   const clearFilters = useCallback(() => {
     setFilterText("");
     setLevelFilters([]);
@@ -401,7 +476,7 @@ export default function QuantumRiskScanner() {
   })();
 
   return (
-    <div className="flex-1 overflow-auto p-6 space-y-6" data-testid="page-quantum-risk-scanner">
+    <div ref={scrollRef} className="flex-1 overflow-auto p-6 space-y-6" data-testid="page-quantum-risk-scanner">
       <div>
         <h1 className="text-2xl font-bold tracking-tight" data-testid="text-page-title">
           Quantum Risk Scanner
@@ -593,83 +668,99 @@ export default function QuantumRiskScanner() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-3" data-testid="results-grouped">
-              {RISK_LEVELS.map(level => {
-                const levelResults = filteredResults.filter(r => r.riskLevel === level.key);
-                if (levelResults.length === 0) return null;
-                const LevelIcon = level.icon;
-                const badgeProps = getRiskBadgeProps(level.key);
+            <div ref={listRef} data-testid="results-grouped">
+              {/* Top spacer: virtual item offsets include scrollMargin. */}
+              {virtualItems.length > 0 && virtualItems[0].start > scrollMargin && (
+                <div style={{ height: virtualItems[0].start - scrollMargin }} />
+              )}
+              {virtualItems.map(virtualItem => {
+                const item = flatItems[virtualItem.index];
+                if (!item) return null;
+                const badgeProps = getRiskBadgeProps(item.level.key);
 
+                if (item.kind === "header") {
+                  const LevelIcon = item.level.icon;
+                  return (
+                    <div key={virtualItem.key} className={virtualItem.index === 0 ? "" : "pt-3"}>
+                      <div
+                        className={`rounded-t-md border bg-card ${item.open ? "" : "rounded-b-md"}`}
+                        data-testid={`group-${item.level.key}`}
+                      >
+                        <button
+                          type="button"
+                          className="w-full"
+                          onClick={() =>
+                            setOpenGroups(prev => ({ ...prev, [item.level.key]: !item.open }))
+                          }
+                          data-testid={`trigger-${item.level.key}`}
+                        >
+                          <CardHeader className="flex flex-row items-center justify-between gap-2 cursor-pointer">
+                            <div className="flex items-center gap-2">
+                              <LevelIcon className="h-5 w-5" />
+                              <CardTitle className="text-base">{item.level.label}</CardTitle>
+                              <Badge {...badgeProps} data-testid={`group-count-${item.level.key}`}>
+                                {item.count}
+                              </Badge>
+                            </div>
+                            <ChevronDown
+                              className={`h-4 w-4 transition-transform duration-200 ${
+                                item.open ? "" : "-rotate-90"
+                              }`}
+                            />
+                          </CardHeader>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                const { result, isLast } = item;
                 return (
-                  <Collapsible
-                    key={level.key}
-                    open={openGroups[level.key]}
-                    onOpenChange={(open) =>
-                      setOpenGroups(prev => ({ ...prev, [level.key]: open }))
-                    }
+                  <div
+                    key={virtualItem.key}
+                    className={`border-x bg-card px-6 ${isLast ? "border-b rounded-b-md" : ""}`}
                   >
-                    <Card data-testid={`group-${level.key}`}>
-                      <CollapsibleTrigger className="w-full" data-testid={`trigger-${level.key}`}>
-                        <CardHeader className="flex flex-row items-center justify-between gap-2 cursor-pointer">
-                          <div className="flex items-center gap-2">
-                            <LevelIcon className="h-5 w-5" />
-                            <CardTitle className="text-base">{level.label}</CardTitle>
-                            <Badge {...badgeProps} data-testid={`group-count-${level.key}`}>
-                              {levelResults.length}
-                            </Badge>
-                          </div>
-                          <ChevronDown
-                            className={`h-4 w-4 transition-transform duration-200 ${
-                              openGroups[level.key] ? "" : "-rotate-90"
-                            }`}
-                          />
-                        </CardHeader>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        <CardContent className="pt-0">
-                          <div className="space-y-2">
-                            {levelResults.map(result => (
-                              <div
-                                key={result.recordId}
-                                className="flex items-center justify-between gap-4 py-2 border-b last:border-b-0"
-                                data-testid={`result-${result.recordId}`}
-                              >
-                                <div className="flex-1 min-w-0">
-                                  <span
-                                    className="text-sm font-mono truncate block"
-                                    data-testid={`address-${result.recordId}`}
-                                    title={result.address}
-                                  >
-                                    {result.address}
-                                  </span>
-                                  <span
-                                    className="text-xs text-muted-foreground uppercase"
-                                    data-testid={`script-type-${result.recordId}`}
-                                  >
-                                    {result.scriptType}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
-                                  {result.otherTags.slice(0, 3).map(tag => (
-                                    <Badge key={tag} variant="outline">
-                                      {tag}
-                                    </Badge>
-                                  ))}
-                                  {result.appliedTag && (
-                                    <Badge {...badgeProps} data-testid={`tag-applied-${result.recordId}`}>
-                                      {result.appliedTag}
-                                    </Badge>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </CardContent>
-                      </CollapsibleContent>
-                    </Card>
-                  </Collapsible>
+                    <div
+                      className={`flex items-center justify-between gap-4 py-2 ${isLast ? "" : "border-b"}`}
+                      data-testid={`result-${result.recordId}`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <span
+                          className="text-sm font-mono truncate block"
+                          data-testid={`address-${result.recordId}`}
+                          title={result.address}
+                        >
+                          {result.address}
+                        </span>
+                        <span
+                          className="text-xs text-muted-foreground uppercase"
+                          data-testid={`script-type-${result.recordId}`}
+                        >
+                          {result.scriptType}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+                        {result.otherTags.slice(0, 3).map(tag => (
+                          <Badge key={tag} variant="outline">
+                            {tag}
+                          </Badge>
+                        ))}
+                        {result.appliedTag && (
+                          <Badge {...badgeProps} data-testid={`tag-applied-${result.recordId}`}>
+                            {result.appliedTag}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 );
               })}
+              {/* Bottom spacer: getTotalSize() excludes scrollMargin. */}
+              {virtualItems.length > 0 && (() => {
+                const lastItem = virtualItems[virtualItems.length - 1];
+                const remaining = rowVirtualizer.getTotalSize() - (lastItem.end - scrollMargin);
+                return remaining > 0 ? <div style={{ height: remaining }} /> : null;
+              })()}
             </div>
           )}
         </>
