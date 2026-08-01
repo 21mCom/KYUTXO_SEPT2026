@@ -33,6 +33,7 @@ import {
 } from "./zip-stream";
 import { BackupCancelledError } from "./sink";
 import { deriveKey, decrypt, base64ToBuffer } from "@/lib/crypto";
+import { rearmSearchVisibilityRepair } from "@/lib/vault";
 import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import {
   bulkCreateRecords,
@@ -1477,6 +1478,16 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   // colliding paths). Best-effort — never affects the restored data, and a
   // failure here must not turn a successful restore into a failure.
   await sweepOrphanedOldFiles();
+
+  // Re-arm the once-per-vault startup search-visibility repair: restored rows
+  // (both replace and merge) can carry legacy/unknown importance tiers or
+  // stale inputStringLower search keys verbatim from old backups, so the next
+  // login must re-scan and repair. Best-effort — a failure to update the flag
+  // must never turn a successful restore into a failure (the Database Doctor
+  // repair buttons remain the manual fallback).
+  try {
+    await rearmSearchVisibilityRepair();
+  } catch {}
 
   opts.onProgress?.({ percent: 100, phase: "Restore complete" });
   return { manifest, counts };

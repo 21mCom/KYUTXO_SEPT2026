@@ -853,6 +853,64 @@ export async function repairAddressImportanceTiers(
   return { scanned, fixed, ok };
 }
 
+export interface SearchVisibilityIssues {
+  /** At least one row has a missing or unrecognized importance tier. */
+  tiersAffected: boolean;
+  /** At least one row's inputStringLower is out of sync with inputString. */
+  searchKeysAffected: boolean;
+}
+
+/**
+ * Detect whether either data class that makes old records unfindable in
+ * Records search is present: missing/invalid importance tiers (dropped by the
+ * Dexie anyOf tier narrowings) or a desynced `inputStringLower` search key.
+ * Uses the exact same predicates as the Database Doctor's health check and
+ * the corresponding repairs (repairAddressImportanceTiers /
+ * repairInputStringLower), so a positive detection is always repairable.
+ *
+ * Keyset-batched with yields (safe on huge vaults); short-circuits as soon as
+ * both classes are seen. Read-only.
+ */
+export async function detectSearchVisibilityIssues(
+  onProgress?: (scanned: number) => void,
+): Promise<SearchVisibilityIssues> {
+  const BATCH = 1000;
+  let lastId = 0;
+  let scanned = 0;
+  let tiersAffected = false;
+  let searchKeysAffected = false;
+
+  for (;;) {
+    const chunk = await db.records
+      .where('id')
+      .above(lastId)
+      .limit(BATCH)
+      .toArray();
+    if (chunk.length === 0) break;
+    lastId = chunk[chunk.length - 1].id!;
+    scanned += chunk.length;
+
+    for (const r of chunk) {
+      if (!tiersAffected && !isValidImportanceTier(r.addressImportance)) {
+        tiersAffected = true;
+      }
+      if (!searchKeysAffected) {
+        const expected = r.inputString ? r.inputString.toLowerCase() : '';
+        if (r.inputStringLower !== expected) searchKeysAffected = true;
+      }
+      if (tiersAffected && searchKeysAffected) break;
+    }
+
+    onProgress?.(scanned);
+    if (tiersAffected && searchKeysAffected) break;
+    if (chunk.length < BATCH) break;
+    // Yield between batches so a huge vault does not freeze the renderer.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  return { tiersAffected, searchKeysAffected };
+}
+
 export interface HiddenTierMatchCount {
   /** Number of hidden-tier rows matching the current filters (up to matchCap). */
   count: number;

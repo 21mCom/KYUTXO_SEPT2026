@@ -24,8 +24,15 @@ import {
   markFreshVaultMigrationsComplete,
   isInputStringLowerRepaired,
   setInputStringLowerRepaired,
+  isSearchVisibilityRepaired,
+  setSearchVisibilityRepaired,
 } from '@/lib/vault';
-import { repairInputStringLower, countRecords } from '@/lib/data/record-crud';
+import {
+  repairInputStringLower,
+  repairAddressImportanceTiers,
+  detectSearchVisibilityIssues,
+  countRecords,
+} from '@/lib/data/record-crud';
 import { countAttachments } from '@/lib/data/attachments-crud';
 import { countEvidenceAttachments } from '@/lib/data/evidence-crud';
 import { migrateAttachmentPaths } from '@/lib/attachments';
@@ -374,6 +381,81 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Background search-visibility repair (Task #1742): detects and fixes the two
+  // data classes that make old records unfindable in Records search —
+  // missing/invalid importance tiers and desynced inputStringLower search keys.
+  // Same repairs as the Database Doctor's manual buttons (shared
+  // deriveAddressImportance provenance rules), but run automatically once per
+  // vault generation. The flag is re-armed after backup restores, which can
+  // reintroduce both classes from old backups. Runs fully in the background
+  // (activity bus progress only — never blocks the UI); each repair is
+  // keyset-batched and re-runnable, so an interrupted pass simply retries on
+  // the next login (flag only set on full success).
+  const searchVisibilityRepairInFlightRef = useRef(false);
+  const runSearchVisibilityRepair = useCallback(async () => {
+    if (searchVisibilityRepairInFlightRef.current) return;
+    searchVisibilityRepairInFlightRef.current = true;
+    const bus = () => {
+      try { return getActivityBus(); } catch { return null; }
+    };
+    try {
+      if (await isSearchVisibilityRepaired()) return;
+
+      const issues = await detectSearchVisibilityIssues((scanned) => {
+        bus()?.publishTask({
+          id: 'search-visibility-repair',
+          label: 'Checking Record Search Health',
+          phase: `${scanned.toLocaleString()} records checked`,
+          current: scanned,
+          total: 0,
+        });
+      });
+
+      let allOk = true;
+      if (issues.tiersAffected) {
+        const result = await repairAddressImportanceTiers((scanned, fixed) => {
+          bus()?.publishTask({
+            id: 'search-visibility-repair',
+            label: 'Repairing Record Visibility',
+            phase: `Importance tiers — ${scanned.toLocaleString()} checked, ${fixed.toLocaleString()} fixed`,
+            current: scanned,
+            total: 0,
+          });
+        });
+        if (!result.ok) allOk = false;
+        else if (result.fixed > 0) {
+          console.log(`[SearchVisibilityRepair] Normalized ${result.fixed} importance tier(s)`);
+        }
+      }
+      if (issues.searchKeysAffected) {
+        const result = await repairInputStringLower((scanned, fixed) => {
+          bus()?.publishTask({
+            id: 'search-visibility-repair',
+            label: 'Repairing Record Visibility',
+            phase: `Search keys — ${scanned.toLocaleString()} checked, ${fixed.toLocaleString()} fixed`,
+            current: scanned,
+            total: 0,
+          });
+        });
+        if (!result.ok) allOk = false;
+        else if (result.fixed > 0) {
+          console.log(`[SearchVisibilityRepair] Rebuilt ${result.fixed} search key(s)`);
+        }
+      }
+
+      if (allOk) {
+        await setSearchVisibilityRepaired(true);
+      } else {
+        console.warn('[SearchVisibilityRepair] Incomplete — will retry next login');
+      }
+    } catch (err) {
+      console.error('[SearchVisibilityRepair] Failed:', err);
+    } finally {
+      searchVisibilityRepairInFlightRef.current = false;
+      try { getActivityBus().completeTask('search-visibility-repair'); } catch {}
+    }
+  }, []);
+
   const runStartupMigrations = useCallback(async (password: string, saltBase64: string) => {
     // Single-flight: if a migration is already running (e.g. it was started by a
     // previous login and the user logged out then back in), do not start a
@@ -394,7 +476,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsMigrating(false);
       setMigrationPhase(null);
     }
-  }, [runAttachmentPathMigration, runLegacyDecryptMigration, runInputStringLowerRepair]);
+    // Deliberately NOT awaited and launched only after the gated migrations
+    // finish (they hold the migration overlay up; this pass must never block
+    // the UI). Serialized behind them so it never contends with the legacy
+    // decrypt for IndexedDB transactions. Its own single-flight guard makes a
+    // quick logout/re-login safe.
+    void runSearchVisibilityRepair();
+  }, [runAttachmentPathMigration, runLegacyDecryptMigration, runInputStringLowerRepair, runSearchVisibilityRepair]);
 
   const setupPassword = useCallback(async (password: string) => {
     setIsLoading(true);

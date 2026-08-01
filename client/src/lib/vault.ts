@@ -12,6 +12,7 @@ export interface VaultSettings {
   legacyFileDecryptComplete?: boolean;
   legacyFileDecryptCheckpoint?: { tableIndex: number; lastId: number };
   inputStringLowerRepaired?: boolean;
+  searchVisibilityRepaired?: boolean;
 }
 
 class VaultDatabase extends Dexie {
@@ -134,6 +135,35 @@ export async function setInputStringLowerRepaired(repaired: boolean): Promise<vo
   }
 }
 
+/**
+ * Once-per-vault-generation flag for the startup search-visibility repair pass
+ * (invalid/missing importance tiers + desynced inputStringLower search keys —
+ * the two data classes that make old records unfindable in Records search).
+ * Set only when the pass fully succeeds; re-armed (set false) after any backup
+ * restore, because restores of old backups can reintroduce both classes.
+ */
+export async function isSearchVisibilityRepaired(): Promise<boolean> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.searchVisibilityRepaired ?? false;
+}
+
+export async function setSearchVisibilityRepaired(repaired: boolean): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', { searchVisibilityRepaired: repaired });
+  }
+}
+
+/**
+ * Re-arm the startup search-visibility repair so it runs again on the next
+ * login. Called after a backup restore completes (both v3 and legacy paths):
+ * restored rows can carry legacy/unknown importance tiers or stale search
+ * keys verbatim from old backups. No-ops safely when no vault row exists.
+ */
+export async function rearmSearchVisibilityRepair(): Promise<void> {
+  await setSearchVisibilityRepaired(false);
+}
+
 export async function isLegacyFileDecryptComplete(): Promise<boolean> {
   const settings = await vaultDb.vault.get('main');
   return settings?.legacyFileDecryptComplete ?? false;
@@ -176,6 +206,7 @@ export async function markFreshVaultMigrationsComplete(): Promise<void> {
       legacyDecryptComplete: true,
       legacyFileDecryptComplete: true,
       inputStringLowerRepaired: true,
+      searchVisibilityRepaired: true,
     });
   }
 }
@@ -195,6 +226,7 @@ export async function resetMigrationFlagsForLegacyFixture(): Promise<void> {
       legacyFileDecryptComplete: false,
       legacyFileDecryptCheckpoint: { tableIndex: 0, lastId: 0 },
       inputStringLowerRepaired: false,
+      searchVisibilityRepaired: false,
     });
   }
 }

@@ -9,6 +9,7 @@
 import JSZip from "jszip";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { base64ToBuffer, deriveKey, decrypt } from "@/lib/crypto";
+import { rearmSearchVisibilityRepair } from "@/lib/vault";
 import {
   restoreLegacyRecords,
   restoreLegacyAttachments,
@@ -553,6 +554,14 @@ export async function runLegacyJsonRestore(
     restoreMode === "merge"
       ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}${additionalDataMsg}.`
       : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}${additionalDataMsg}.`;
+
+  // Re-arm the once-per-vault startup search-visibility repair: legacy backups
+  // predate the tier vocabulary and the inputStringLower search key, so a
+  // legacy restore is the most likely path to reintroduce rows those repairs
+  // fix. Best-effort — must never turn a successful restore into a failure.
+  try {
+    await rearmSearchVisibilityRepair();
+  } catch {}
 
   return {
     baseMessage,
