@@ -193,6 +193,12 @@ export default function NodeSettings() {
     certificate: ElectrumCertificateInfo;
   } | null>(null);
   const [isTrustingCertificate, setIsTrustingCertificate] = useState(false);
+  // Pinned (TOFU-trusted) certificate for the configured Electrum server, so
+  // the user can review the active trust decision and revoke it.
+  const [pinnedCertificate, setPinnedCertificate] = useState<
+    (ElectrumCertificateInfo & { trustedAt?: number }) | null
+  >(null);
+  const [isRevokingCertificate, setIsRevokingCertificate] = useState(false);
   
   const [pendingChanges, setPendingChanges] = useState<Partial<NodeSettingsType>>({});
   const [newLocalHost, setNewLocalHost] = useState('');
@@ -584,6 +590,7 @@ export default function NodeSettings() {
         description: "The fingerprint was saved. Future connections must present the same certificate.",
       });
       setElectrumTrustPrompt(null);
+      setCertTrustRefresh((n) => n + 1);
       await handleTestElectrum();
     } catch (error) {
       toast({
@@ -593,6 +600,79 @@ export default function NodeSettings() {
       });
     } finally {
       setIsTrustingCertificate(false);
+    }
+  };
+
+  // Keep the pinned-certificate display in sync with the configured Electrum
+  // server. Re-runs after trust/revoke via the refresh counter.
+  const [certTrustRefresh, setCertTrustRefresh] = useState(0);
+  const electrumHostForTrust = (currentSettings.electrumHost || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '');
+  const electrumPortForTrust = currentSettings.electrumPort || 50001;
+  useEffect(() => {
+    if (!isElectron() || !electrumHostForTrust) {
+      setPinnedCertificate(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const api = getElectronAPI();
+        if (typeof api.electrumGetCertificateTrust !== 'function') return;
+        const result = await api.electrumGetCertificateTrust({
+          host: electrumHostForTrust,
+          port: electrumPortForTrust,
+        });
+        if (!cancelled) {
+          setPinnedCertificate(result.success ? result.pinned : null);
+        }
+      } catch {
+        if (!cancelled) setPinnedCertificate(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [electrumHostForTrust, electrumPortForTrust, certTrustRefresh]);
+
+  // Revoke the pinned certificate for the configured server. The next SSL
+  // connection re-prompts the TOFU trust dialog.
+  const handleRevokeElectrumCertificate = async () => {
+    if (!electrumHostForTrust) return;
+    setIsRevokingCertificate(true);
+    try {
+      const api = getElectronAPI();
+      const result = await api.electrumRevokeCertificate({
+        host: electrumHostForTrust,
+        port: electrumPortForTrust,
+      });
+      if (!result.success) {
+        toast({
+          title: "Revoke Failed",
+          description: result.error || "Could not remove the certificate trust",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({
+        title: "Trust Removed",
+        description: result.revoked
+          ? "The pinned certificate was removed. The next connection will ask you to verify the server's certificate again."
+          : "No pinned certificate was found for this server.",
+      });
+      setPinnedCertificate(null);
+      setElectrumTestResult(null);
+      setCertTrustRefresh((n) => n + 1);
+    } catch (error) {
+      toast({
+        title: "Revoke Failed",
+        description: error instanceof Error ? error.message : "Could not remove the certificate trust",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRevokingCertificate(false);
     }
   };
 
@@ -1121,6 +1201,55 @@ export default function NodeSettings() {
                       data-testid="switch-electrum-ssl"
                     />
                   </div>
+
+                  {/* Pinned (TOFU-trusted) certificate for this server */}
+                  {pinnedCertificate && (
+                    <div
+                      className="p-3 border rounded-lg space-y-2"
+                      data-testid="panel-electrum-pinned-cert"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Shield className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-sm font-medium">Trusted Certificate</p>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        This server's certificate fingerprint is pinned. Connections fail if the
+                        server ever presents a different certificate.
+                      </p>
+                      <div className="space-y-1 text-xs">
+                        <p className="font-mono break-all" data-testid="text-pinned-cert-fingerprint">
+                          {pinnedCertificate.fingerprint}
+                        </p>
+                        {pinnedCertificate.subject && (
+                          <p className="text-muted-foreground">Subject: {pinnedCertificate.subject}</p>
+                        )}
+                        {pinnedCertificate.trustedAt && (
+                          <p className="text-muted-foreground" data-testid="text-pinned-cert-trusted-at">
+                            Trusted on {new Date(pinnedCertificate.trustedAt).toLocaleDateString()}
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRevokeElectrumCertificate}
+                        disabled={isRevokingCertificate}
+                        data-testid="button-revoke-electrum-cert"
+                      >
+                        {isRevokingCertificate ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Removing...
+                          </>
+                        ) : (
+                          <>
+                            <X className="h-4 w-4 mr-2" />
+                            Remove trust
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )}
 
                   {/* Contextual tip based on current settings */}
                   {currentSettings.electrumServerType === 'fulcrum' && !(currentSettings.electrumSSL ?? false) && (

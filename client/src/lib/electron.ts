@@ -82,6 +82,10 @@ export interface ElectrumGetCertificateTrustResult {
   error?: string;
 }
 
+export interface ElectrumRevokeCertificateParams {
+  host: string;
+  port: number;
+}
 export interface ElectrumHistoryParams extends ElectrumTorParams {
   host: string;
   port: number;
@@ -339,6 +343,7 @@ interface ElectronAPI {
   electrumBatchGetUtxos: (params: ElectrumBatchUtxoParams) => Promise<ElectrumBatchUtxoResult>;
   electrumTrustCertificate: (params: ElectrumTrustCertificateParams) => Promise<ElectrumTrustCertificateResult>;
   electrumGetCertificateTrust: (params: ElectrumGetCertificateTrustParams) => Promise<ElectrumGetCertificateTrustResult>;
+  electrumRevokeCertificate: (params: ElectrumRevokeCertificateParams) => Promise<ElectrumRevokeCertificateResult>;
   platform: string;
   isElectron: boolean;
   // Native read-engine bridge (present only in the desktop build).
@@ -367,4 +372,11 @@ export function getElectronAPI(): ElectronAPI {
 // Safe check for Electron API availability
 export function getElectronAPISafe(): ElectronAPI | null {
   return isElectron() ? window.electronAPI! : null;
+}
+
+export interface ElectrumRevokeCertificateResult {
+  success: boolean;
+  // True when a pin existed and was removed; false when nothing was pinned.
+  revoked?: boolean;
+  error?: string;
 }

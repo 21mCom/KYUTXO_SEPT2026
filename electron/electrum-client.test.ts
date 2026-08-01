@@ -199,6 +199,7 @@ let certStore: {
   getPinnedCertificate: (filePath: string, host: string, port: number) => any;
   loadTrustStore: (filePath: string) => any;
   certStorePath: (dataDir: string) => string;
+  revokeCertificate: (filePath: string, host: string, port: number) => boolean;
 };
 let ipc: FakeIpcMain;
 let dataDir: string;
@@ -620,6 +621,57 @@ describe("electrum-cert-store persistence", () => {
     fs.writeFileSync(filePath, "{ not json !!");
     expect(certStore.loadTrustStore(filePath)).toEqual({ version: 1, certificates: {} });
     expect(certStore.getPinnedCertificate(filePath, "host", 1)).toBeNull();
+  });
+
+  it("electrum-revoke-certificate IPC removes the pin so the next lookup is empty", async () => {
+    const storePath = mod._test.getTrustStorePath()!;
+    certStore.trustCertificate(storePath, "revoke-ipc.example.com", 50002, {
+      fingerprint: "DE:AD:BE:EF",
+    });
+    const before = await ipc.invoke("electrum-get-certificate-trust", {
+      host: "revoke-ipc.example.com",
+      port: 50002,
+    });
+    expect(before.pinned?.fingerprint).toBe("DE:AD:BE:EF");
+
+    const revoke = await ipc.invoke("electrum-revoke-certificate", {
+      host: "Revoke-IPC.example.com",
+      port: 50002,
+    });
+    expect(revoke.success).toBe(true);
+    expect(revoke.revoked).toBe(true);
+
+    const after = await ipc.invoke("electrum-get-certificate-trust", {
+      host: "revoke-ipc.example.com",
+      port: 50002,
+    });
+    expect(after.pinned).toBeNull();
+
+    // Revoking again succeeds but reports there was nothing pinned.
+    const again = await ipc.invoke("electrum-revoke-certificate", {
+      host: "revoke-ipc.example.com",
+      port: 50002,
+    });
+    expect(again.success).toBe(true);
+    expect(again.revoked).toBe(false);
+  });
+
+  it("electrum-revoke-certificate rejects missing host/port", async () => {
+    const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/host and port/);
+  });
+
+  it("revokes a pinned certificate and reports whether one existed", () => {
+    const filePath = path.join(dataDir, "revoke-store.json");
+    certStore.trustCertificate(filePath, "Node.Example.com", 50002, {
+      fingerprint: "11:22:33",
+    });
+    expect(certStore.getPinnedCertificate(filePath, "node.example.com", 50002)).not.toBeNull();
+    expect(certStore.revokeCertificate(filePath, "NODE.example.com", 50002)).toBe(true);
+    expect(certStore.getPinnedCertificate(filePath, "node.example.com", 50002)).toBeNull();
+    // Revoking again is a no-op, not an error.
+    expect(certStore.revokeCertificate(filePath, "node.example.com", 50002)).toBe(false);
   });
 
   it("rejects trust writes without a fingerprint", () => {

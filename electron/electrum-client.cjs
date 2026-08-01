@@ -9,6 +9,7 @@ const {
   certStorePath,
   getPinnedCertificate,
   trustCertificate,
+  revokeCertificate,
 } = require('./electrum-cert-store.cjs');
 const { electrumIpcSchemas, validateElectrumIpc } = require('./security-utils.cjs');
 
@@ -649,6 +650,39 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
       return { success: true, pinned };
     } catch (error) {
       return { success: false, error: error.message, pinned: null };
+    }
+  });
+
+  // Revoke a previously pinned certificate for a server. The next SSL
+  // connection to that server goes back through CA verification and, for
+  // self-signed certs, the TOFU trust prompt. Any pooled connections to the
+  // host:port are closed so a live session can't outlast the revoked pin.
+  ipcMain.handle('electrum-revoke-certificate', async (event, { host, port }) => {
+    try {
+      if (!host || !port) {
+        return { success: false, error: 'host and port are required' };
+      }
+      if (!trustStorePath) {
+        return { success: false, error: 'No certificate trust store is configured' };
+      }
+      const cleanedHost = cleanElectrumHost(host);
+      const revoked = revokeCertificate(trustStorePath, cleanedHost, port);
+      // Drop pooled connections for this server (any transport/TLS mode) so
+      // the revoke takes effect immediately rather than on the next idle
+      // timeout.
+      const prefix = `${cleanedHost}:${port}:`;
+      for (const [key, conn] of electrumPool.connections.entries()) {
+        if (!key.startsWith(prefix)) continue;
+        for (const pending of conn.pendingMap.values()) {
+          pending.reject(new Error('Connection closed: certificate trust revoked'));
+        }
+        conn.pendingMap.clear();
+        try { conn.socket.destroy(); } catch (e) {}
+        electrumPool.connections.delete(key);
+      }
+      return { success: true, revoked };
+    } catch (error) {
+      return { success: false, error: error.message };
     }
   });
 

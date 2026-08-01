@@ -93,6 +93,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('electrum-trust-certificate', params),
   electrumGetCertificateTrust: (params) =>
     ipcRenderer.invoke('electrum-get-certificate-trust', params),
+  electrumRevokeCertificate: (params) =>
+    ipcRenderer.invoke('electrum-revoke-certificate', params),
 
   // Native read-engine (better-sqlite3 worker_thread). Fixed channels only —
   // no arbitrary SQL or file paths cross the bridge.

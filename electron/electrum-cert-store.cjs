@@ -88,10 +88,25 @@ function trustCertificate(filePath, host, port, certInfo) {
   return entry;
 }
 
+// Remove a pinned certificate for a host:port. Returns true when a pin
+// existed and was removed, false when there was nothing to revoke. After a
+// revoke the next connection to that server goes back through the TOFU
+// prompt (or plain CA verification).
+function revokeCertificate(filePath, host, port) {
+  if (!filePath) throw new Error('No certificate trust store configured');
+  const store = loadTrustStore(filePath);
+  const key = storeKey(host, port);
+  if (!store.certificates[key]) return false;
+  delete store.certificates[key];
+  saveTrustStore(filePath, store);
+  return true;
+}
+
 module.exports = {
   certStorePath,
   storeKey,
   loadTrustStore,
   getPinnedCertificate,
   trustCertificate,
+  revokeCertificate,
 };
