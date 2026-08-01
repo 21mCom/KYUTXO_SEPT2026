@@ -1,9 +1,12 @@
 import Dexie, { type Table } from 'dexie';
 import {
   base64ToBuffer,
-  hashPassword,
-  CURRENT_PBKDF2_ITERATIONS,
+  hashPasswordWithParams,
+  verifyPasswordWithParams,
+  isCurrentKdf,
+  CURRENT_KDF_PARAMS,
   LEGACY_PBKDF2_ITERATIONS,
+  type KdfParams,
 } from './crypto';
 
 export interface VaultSettings {
@@ -12,8 +15,12 @@ export interface VaultSettings {
   passwordHash: string;
   // PBKDF2 iterations the stored passwordHash was derived with. Absent on
   // vaults created before the KDF strengthening — those are ALWAYS legacy
-  // (100k). See getVaultKdfIterations.
+  // (100k). Superseded by `kdf` when present. See getVaultKdfParams.
   kdfIterations?: number;
+  // Full KDF record (algorithm + parameters) the stored passwordHash was
+  // derived with. Written by the Argon2id migration; takes precedence over
+  // kdfIterations. Absent rows resolve via kdfIterations / legacy PBKDF2.
+  kdf?: KdfParams;
   createdAt: number;
   migrationComplete?: boolean;
   attachmentPathsMigrated?: boolean;
@@ -50,40 +57,59 @@ export async function getVaultSettings(): Promise<VaultSettings | undefined> {
 export async function saveVaultSettings(
   salt: string,
   passwordHash: string,
-  kdfIterations: number = CURRENT_PBKDF2_ITERATIONS,
+  kdf: KdfParams = CURRENT_KDF_PARAMS,
 ): Promise<void> {
   await vaultDb.vault.put({
     id: 'main',
     salt,
     passwordHash,
-    kdfIterations,
+    kdf,
     createdAt: Date.now(),
   });
 }
 
-// Iteration count the stored passwordHash was derived with. Vault rows written
-// before the KDF strengthening carry no kdfIterations field and are always
-// legacy (100k).
-export function getVaultKdfIterations(settings: VaultSettings): number {
-  return settings.kdfIterations ?? LEGACY_PBKDF2_ITERATIONS;
+// KDF parameters the stored passwordHash was derived with. Precedence:
+// explicit `kdf` record (Argon2id era) > `kdfIterations` (PBKDF2 strengthening
+// era) > legacy PBKDF2 100k (pre-strengthening rows record nothing).
+export function getVaultKdfParams(settings: VaultSettings): KdfParams {
+  if (settings.kdf) return settings.kdf;
+  return {
+    algorithm: 'pbkdf2-sha256',
+    iterations: settings.kdfIterations ?? LEGACY_PBKDF2_ITERATIONS,
+  };
 }
 
-// Transparent KDF upgrade: after a successful unlock with legacy parameters,
-// re-derive the password hash at the current iteration count and re-store it.
+// Verify the vault password against the stored hash, using whatever KDF
+// parameters that hash was derived with.
+export async function verifyVaultPassword(
+  password: string,
+  settings: VaultSettings,
+): Promise<boolean> {
+  return verifyPasswordWithParams(
+    password,
+    base64ToBuffer(settings.salt),
+    settings.passwordHash,
+    getVaultKdfParams(settings),
+  );
+}
+
+// Transparent KDF upgrade: after a successful unlock with older parameters
+// (legacy/strengthened PBKDF2, or a weaker Argon2id record), re-derive the
+// password hash at the current parameters and re-store it.
 // The SALT IS KEPT — legacy at-rest payloads are decrypted with a key derived
-// from this salt at LEGACY iterations (see runLegacyDecryptMigration), so
-// rotating it would permanently orphan any not-yet-migrated locked data. Only
-// the hash parameters change.
+// from this salt at LEGACY PBKDF2 iterations (see runLegacyDecryptMigration),
+// so rotating it would permanently orphan any not-yet-migrated locked data.
+// Only the hash parameters change.
 export async function upgradeVaultKdfIfNeeded(
   password: string,
   settings: VaultSettings,
 ): Promise<boolean> {
-  if (getVaultKdfIterations(settings) >= CURRENT_PBKDF2_ITERATIONS) return false;
+  if (isCurrentKdf(getVaultKdfParams(settings))) return false;
   const salt = base64ToBuffer(settings.salt);
-  const passwordHash = await hashPassword(password, salt, CURRENT_PBKDF2_ITERATIONS);
+  const passwordHash = await hashPasswordWithParams(password, salt, CURRENT_KDF_PARAMS);
   await vaultDb.vault.update('main', {
     passwordHash,
-    kdfIterations: CURRENT_PBKDF2_ITERATIONS,
+    kdf: CURRENT_KDF_PARAMS,
   });
   return true;
 }

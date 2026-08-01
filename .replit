@@ -361,6 +361,14 @@ args = "dashboard-hidden-matches-node-check"
 task = "workflow.run"
 args = "legacy-restore-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "vault-kdf-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "argon2-kdf-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1285,6 +1293,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/backup/legacy-restore.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "vault-kdf-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/crypto.kdf.test.ts client/src/lib/vault.kdf.test.ts client/src/lib/backup/kdf-params.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "argon2-kdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-argon2-kdf-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

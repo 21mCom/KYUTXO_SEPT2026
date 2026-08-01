@@ -23,7 +23,7 @@ import {
   MANIFEST_FILENAME,
   ATTACHMENTS_DIR,
   CHECK_SENTINEL,
-  getBackupKdfIterations,
+  getBackupKdfParams,
   type BackupManifest,
   type StreamedTable,
 } from "./format";
@@ -33,7 +33,7 @@ import {
   collectBytesConsumer,
 } from "./zip-stream";
 import { BackupCancelledError } from "./sink";
-import { deriveKey, decrypt, base64ToBuffer } from "@/lib/crypto";
+import { deriveKeyWithParams, decrypt, base64ToBuffer } from "@/lib/crypto";
 import { rearmSearchVisibilityRepair } from "@/lib/vault";
 import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import {
@@ -1204,7 +1204,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               const salt = base64ToBuffer(manifest.salt ?? "");
               // The manifest records the KDF parameters the backup key was
               // derived with; absent = pre-strengthening backup (legacy 100k).
-              key = await deriveKey(opts.password, salt, getBackupKdfIterations(manifest));
+              key = await deriveKeyWithParams(opts.password, salt, getBackupKdfParams(manifest));
               // Verify BEFORE any destructive clear.
               let ok = false;
               try {

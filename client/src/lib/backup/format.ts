@@ -24,7 +24,7 @@
 // contains no newline so it is a safe single line. The inline tables are
 // encrypted as one string.
 
-import { encrypt, decrypt, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
+import { encrypt, decrypt, LEGACY_PBKDF2_ITERATIONS, type KdfParams } from "@/lib/crypto";
 
 export const BACKUP_FORMAT_VERSION = 3;
 export const MANIFEST_FILENAME = "backup.json";
@@ -71,10 +71,13 @@ export interface BackupManifest {
   exportDate: string;
   encrypted: boolean;
   salt?: string; // base64, present iff encrypted
-  // PBKDF2 iterations the backup key was derived with, present iff encrypted.
-  // Absent on backups written before the KDF strengthening — always legacy
-  // (100k). See getBackupKdfIterations.
+  // PBKDF2 iterations the backup key was derived with (strengthening-era
+  // backups). Absent on backups written before the KDF strengthening — always
+  // legacy (100k). Superseded by `kdf` when present. See getBackupKdfParams.
   kdfIterations?: number;
+  // Full KDF record (algorithm + parameters) the backup key was derived with.
+  // Written by Argon2id-era exports; takes precedence over kdfIterations.
+  kdf?: KdfParams;
   check?: string; // encrypt(CHECK_SENTINEL), present iff encrypted
   counts: BackupCounts;
   // Total bytes of all attachment FILES (summed from attachment metadata
@@ -132,9 +135,20 @@ export function isV3Manifest(obj: unknown): obj is BackupManifest {
 
 // Iteration count the backup's encryption key was derived with. Manifests
 // written before the KDF strengthening carry no kdfIterations field and are
-// always legacy (100k).
+// always legacy (100k). PBKDF2-era resolution only — prefer getBackupKdfParams.
 export function getBackupKdfIterations(manifest: BackupManifest): number {
   return manifest.kdfIterations ?? LEGACY_PBKDF2_ITERATIONS;
+}
+
+// KDF parameters the backup's encryption key was derived with. Precedence:
+// explicit `kdf` record (Argon2id era) > `kdfIterations` (PBKDF2 strengthening
+// era) > legacy PBKDF2 100k (pre-strengthening manifests record nothing).
+export function getBackupKdfParams(manifest: BackupManifest): KdfParams {
+  if (manifest.kdf) return manifest.kdf;
+  return {
+    algorithm: "pbkdf2-sha256",
+    iterations: getBackupKdfIterations(manifest),
+  };
 }
 
 // ---- per-line / inline serialization -------------------------------------

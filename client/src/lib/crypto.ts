@@ -1,14 +1,129 @@
+import { argon2id } from 'hash-wasm';
+
 const SALT_LENGTH = 16;
 const IV_LENGTH = 12;
 const KEY_LENGTH = 256;
 
 // PBKDF2-HMAC-SHA-256 iteration counts. Vaults/backups created before the KDF
 // strengthening used 100k and never recorded the count anywhere — an absent
-// parameter ALWAYS means LEGACY. New derivations use CURRENT (OWASP guidance
-// for PBKDF2-HMAC-SHA-256). The count is stored alongside the salt (vault
-// settings row / backup manifest) so old entries stay decryptable.
+// parameter ALWAYS means LEGACY. The 600k count was the strengthened PBKDF2
+// step (OWASP guidance) and remains readable; new derivations now use Argon2id
+// (see CURRENT_KDF_PARAMS). The parameters are stored alongside the salt
+// (vault settings row / backup manifest) so old entries stay decryptable.
 export const LEGACY_PBKDF2_ITERATIONS = 100000;
 export const CURRENT_PBKDF2_ITERATIONS = 600000;
+
+// ---- KDF parameter record --------------------------------------------------
+//
+// Every vault row / backup manifest records WHICH algorithm and parameters its
+// stored hash / encryption key was derived with. Resolution rules:
+//   - explicit `kdf` record        -> use it verbatim
+//   - only `kdfIterations`         -> PBKDF2 at that count (strengthening era)
+//   - neither                      -> PBKDF2 at LEGACY 100k (pre-strengthening)
+export type KdfParams =
+  | { algorithm: 'pbkdf2-sha256'; iterations: number }
+  | {
+      algorithm: 'argon2id';
+      /** Memory cost in KiB. */
+      memoryKiB: number;
+      /** Number of passes (Argon2 "time cost" / iterations). */
+      timeCost: number;
+      /** Lanes. hash-wasm computes them sequentially; keep low. */
+      parallelism: number;
+    };
+
+// Current defaults for NEW vaults/backups: Argon2id, 64 MiB, 3 passes, 1 lane.
+// Memory-hard, so GPU/ASIC brute force against an exported backup pays the
+// 64 MiB per-guess cost that PBKDF2 never imposed. 64 MiB stays comfortably
+// inside the renderer's memory headroom (a single transient buffer, freed
+// after derivation) and derives in ~0.3s on mid hardware / ~1-2s on low-end —
+// an intentional unlock-time cost. Exceeds OWASP's Argon2id minimum
+// (19 MiB / t=2 / p=1).
+export const CURRENT_KDF_PARAMS: KdfParams = {
+  algorithm: 'argon2id',
+  memoryKiB: 65536,
+  timeCost: 3,
+  parallelism: 1,
+};
+
+export function isCurrentKdf(params: KdfParams): boolean {
+  return (
+    params.algorithm === 'argon2id' &&
+    params.memoryKiB >= 65536 &&
+    params.timeCost >= 3
+  );
+}
+
+// Raw 32-byte Argon2id derivation (hash-wasm; wasm is inlined in the bundle so
+// there is no separate .wasm asset to locate in Vite dev or the packaged app).
+// Throws loudly on wasm failure — callers must never silently fall back to a
+// weaker KDF.
+async function argon2idBits(
+  password: string,
+  salt: Uint8Array,
+  params: Extract<KdfParams, { algorithm: 'argon2id' }>,
+): Promise<Uint8Array> {
+  return argon2id({
+    password,
+    salt,
+    memorySize: params.memoryKiB,
+    iterations: params.timeCost,
+    parallelism: params.parallelism,
+    hashLength: KEY_LENGTH / 8,
+    outputType: 'binary',
+  });
+}
+
+// Derive an AES-GCM encryption key with an explicit KDF parameter record.
+export async function deriveKeyWithParams(
+  password: string,
+  salt: Uint8Array,
+  params: KdfParams = CURRENT_KDF_PARAMS,
+): Promise<CryptoKey> {
+  if (params.algorithm === 'pbkdf2-sha256') {
+    return deriveKey(password, salt, params.iterations);
+  }
+  const bits = await argon2idBits(password, salt, params);
+  return crypto.subtle.importKey(
+    'raw',
+    bits,
+    { name: 'AES-GCM', length: KEY_LENGTH },
+    true,
+    ['encrypt', 'decrypt'],
+  );
+}
+
+// Hash a password for storage with an explicit KDF parameter record.
+export async function hashPasswordWithParams(
+  password: string,
+  salt: Uint8Array,
+  params: KdfParams = CURRENT_KDF_PARAMS,
+): Promise<string> {
+  if (params.algorithm === 'pbkdf2-sha256') {
+    return hashPassword(password, salt, params.iterations);
+  }
+  const bits = await argon2idBits(password, salt, params);
+  return bufferToBase64(bits);
+}
+
+export async function verifyPasswordWithParams(
+  password: string,
+  salt: Uint8Array,
+  storedHash: string,
+  params: KdfParams,
+): Promise<boolean> {
+  const hash = await hashPasswordWithParams(password, salt, params);
+  return constantTimeEquals(hash, storedHash);
+}
+
+function constantTimeEquals(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
 
 export async function deriveKey(
   password: string,
@@ -146,10 +261,5 @@ export async function verifyPassword(
   iterations: number = CURRENT_PBKDF2_ITERATIONS,
 ): Promise<boolean> {
   const hash = await hashPassword(password, salt, iterations);
-  if (hash.length !== storedHash.length) return false;
-  let result = 0;
-  for (let i = 0; i < hash.length; i++) {
-    result |= hash.charCodeAt(i) ^ storedHash.charCodeAt(i);
-  }
-  return result === 0;
+  return constantTimeEquals(hash, storedHash);
 }

@@ -325,7 +325,10 @@ app.whenReady().then(() => {
           ...details.responseHeaders,
           'Content-Security-Policy': [
             "default-src 'self'",
-            "script-src 'self'",
+            // 'wasm-unsafe-eval' permits WebAssembly compilation only (NOT JS
+            // eval). Required by the Argon2id KDF (hash-wasm) — without it the
+            // packaged app cannot derive vault/backup keys.
+            "script-src 'self' 'wasm-unsafe-eval'",
             "style-src 'self' 'unsafe-inline'",
             "font-src 'self' data:",
             "img-src 'self' data: blob:",

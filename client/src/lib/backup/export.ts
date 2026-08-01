@@ -24,11 +24,11 @@ import {
   type StreamedTable,
 } from "./format";
 import {
-  deriveKey,
+  deriveKeyWithParams,
   generateSalt,
   bufferToBase64,
   encrypt,
-  CURRENT_PBKDF2_ITERATIONS,
+  CURRENT_KDF_PARAMS,
 } from "@/lib/crypto";
 import { getRecordsAfterId, countRecords } from "@/lib/data/record-crud";
 import { getAttachmentsAfterId, countAttachments, sumAttachmentSizes } from "@/lib/data/attachments-crud";
@@ -191,7 +191,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
   if (opts.encrypted) {
     if (!opts.password) throw new Error("Password required for encrypted backup");
     salt = generateSalt();
-    key = await deriveKey(opts.password, salt);
+    key = await deriveKeyWithParams(opts.password, salt, CURRENT_KDF_PARAMS);
     check = await encrypt(CHECK_SENTINEL, key);
   }
 
@@ -290,7 +290,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     salt: salt ? bufferToBase64(salt) : undefined,
     // Record the KDF parameters alongside the salt so restore can re-derive
     // the key even after the app's defaults move again.
-    kdfIterations: key ? CURRENT_PBKDF2_ITERATIONS : undefined,
+    kdf: key ? CURRENT_KDF_PARAMS : undefined,
     check,
     counts,
     totalAttachmentBytes,

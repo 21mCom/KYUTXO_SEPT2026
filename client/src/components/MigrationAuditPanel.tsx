@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getVaultSettings, getLegacyDecryptCompletedTables, getVaultKdfIterations } from "@/lib/vault";
-import { base64ToBuffer, verifyPassword, deriveKey, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
+import { getVaultSettings, getLegacyDecryptCompletedTables, verifyVaultPassword } from "@/lib/vault";
+import { base64ToBuffer, deriveKey, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
 import { auditLegacyPayloads, type LegacyAuditResult } from "@/lib/legacy-decrypt";
 
 type AuditPhase = "idle" | "running" | "done" | "error";
@@ -29,12 +29,7 @@ export default function MigrationAuditPanel() {
         throw new Error("No vault settings found.");
       }
       const salt = base64ToBuffer(settings.salt);
-      const valid = await verifyPassword(
-        password,
-        salt,
-        settings.passwordHash,
-        getVaultKdfIterations(settings),
-      );
+      const valid = await verifyVaultPassword(password, settings);
       if (!valid) {
         setPhase("error");
         setErrorMessage("Incorrect password.");

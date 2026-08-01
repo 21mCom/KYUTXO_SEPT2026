@@ -83,7 +83,7 @@
 - [GitHub push & build pipeline](github-push-build-pipeline.md) — gitPush callback can silently no-op; verify via ls-remote + credential-helper push; PAT lacks Actions read; win CI npm spawns need shell:true.
 - [Electrum TOFU trust boundary](electrum-tofu-trust-boundary.md) — pin only proven self-signed leaves (not SELF_SIGNED_CERT_IN_CHAIN), independent checkServerIdentity, trust IPC validates against main-process observation never renderer metadata.
 - [Express always-on middleware order](express-always-on-middleware-order.md) — response-wide headers must be app.use'd BEFORE body parsers, or parser-rejected requests bypass them via error dispatch.
-- [Vault/backup KDF parameters](kdf-parameters.md) — iteration count travels with the salt (absent = legacy 100k); thread params explicitly, defaults are CURRENT; KDF upgrade keeps the salt, legacy at-rest decrypt pinned to LEGACY.
+- [Vault/backup KDF parameters](kdf-parameters.md) — KDF record (Argon2id current, PBKDF2 eras) travels with the salt (absent = legacy 100k); upgrade keeps the salt; packaged CSP needs 'wasm-unsafe-eval'.
 - [Attachment upload/oversize browser check](attachment-upload-browser-check.md) — build >cap File in-page via DataTransfer (413 propagates cleanly); Dashboard cards need grid view; replace restore re-ids rows.
 - [Loopback bind vs Replit waitForPort](replit-loopback-bind.md) — preview proxy reaches 127.0.0.1 but waitForPort cannot; bind 0.0.0.0 only when REPL_ID set, token middleware guards /api.
 - [Tor proxy server-side trust](tor-proxy-server-side-trust.md) — allowlist + SOCKS URL live server-side via pushed settings; per-request trust params removed, never reintroduce; dedup cache drops allowlist on server restart.

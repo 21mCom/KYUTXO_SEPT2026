@@ -24,8 +24,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { base64ToBuffer, verifyPassword, generateSalt, hashPassword, bufferToBase64, CURRENT_PBKDF2_ITERATIONS } from "@/lib/crypto";
-import { getVaultSettings, vaultDb, setAttachmentPathsMigrated, getVaultKdfIterations } from "@/lib/vault";
+import { generateSalt, hashPasswordWithParams, bufferToBase64, CURRENT_KDF_PARAMS } from "@/lib/crypto";
+import { getVaultSettings, vaultDb, setAttachmentPathsMigrated, verifyVaultPassword } from "@/lib/vault";
 import {
   migrateAttachmentPaths,
   auditAttachments,
@@ -94,13 +94,7 @@ export function SecurityAttachmentSection() {
         throw new Error("Vault settings not found");
       }
 
-      const salt = base64ToBuffer(settings.salt);
-      const isValid = await verifyPassword(
-        currentPassword,
-        salt,
-        settings.passwordHash,
-        getVaultKdfIterations(settings),
-      );
+      const isValid = await verifyVaultPassword(currentPassword, settings);
 
       if (!isValid) {
         toast({
@@ -129,14 +123,15 @@ export function SecurityAttachmentSection() {
       }
 
       const newSalt = generateSalt();
-      const newHash = await hashPassword(newPassword, newSalt);
+      const newHash = await hashPasswordWithParams(newPassword, newSalt, CURRENT_KDF_PARAMS);
       const newSaltBase64 = bufferToBase64(newSalt);
 
-      // A password change always re-derives at the CURRENT KDF parameters.
+      // A password change always re-derives at the CURRENT KDF parameters
+      // (Argon2id). The kdf record replaces any older kdfIterations value.
       await vaultDb.vault.update('main', {
         salt: newSaltBase64,
         passwordHash: newHash,
-        kdfIterations: CURRENT_PBKDF2_ITERATIONS,
+        kdf: CURRENT_KDF_PARAMS,
       });
 
       toast({

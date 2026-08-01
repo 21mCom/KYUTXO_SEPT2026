@@ -1,13 +1,16 @@
 // Tests for the vault KDF parameter record + the transparent unlock-time
-// upgrade:
+// upgrade (PBKDF2 eras -> Argon2id):
 //
-//   1. vault rows written before the strengthening carry no kdfIterations
-//      field and resolve to LEGACY (100k),
-//   2. saveVaultSettings records the CURRENT count for new vaults,
-//   3. upgradeVaultKdfIfNeeded re-derives the stored hash at CURRENT on a
-//      legacy vault — same salt, password still verifies at CURRENT, wrong
-//      password still fails, legacy parameters no longer verify,
-//   4. the upgrade is a no-op on an already-current vault (hash untouched).
+//   1. vault rows written before the strengthening carry no kdfIterations/kdf
+//      field and resolve to LEGACY PBKDF2 (100k); strengthening-era rows with
+//      only kdfIterations resolve to PBKDF2 at that count; an explicit kdf
+//      record wins,
+//   2. saveVaultSettings records the CURRENT Argon2id parameters for new vaults,
+//   3. upgradeVaultKdfIfNeeded re-derives the stored hash at CURRENT (Argon2id)
+//      on legacy AND strengthening-era PBKDF2 vaults — same salt, password
+//      still verifies via the stored-parameter resolver, wrong password fails,
+//      old parameters no longer verify,
+//   4. the upgrade is a no-op on an already-Argon2id vault (hash untouched).
 //
 // Uses the REAL vault Dexie database on fake-indexeddb.
 
@@ -19,24 +22,27 @@ import {
   vaultDb,
   saveVaultSettings,
   getVaultSettings,
-  getVaultKdfIterations,
+  getVaultKdfParams,
+  verifyVaultPassword,
   upgradeVaultKdfIfNeeded,
   type VaultSettings,
 } from "./vault";
 import {
   generateSalt,
   hashPassword,
-  verifyPassword,
+  hashPasswordWithParams,
+  verifyPasswordWithParams,
   bufferToBase64,
   base64ToBuffer,
   LEGACY_PBKDF2_ITERATIONS,
   CURRENT_PBKDF2_ITERATIONS,
+  CURRENT_KDF_PARAMS,
 } from "./crypto";
 
 const PASSWORD = "vault-unlock-password";
 
 // Writes a vault row exactly the way a pre-strengthening build did: 100k hash,
-// NO kdfIterations field.
+// NO kdfIterations / kdf field.
 async function seedLegacyVault(password: string): Promise<void> {
   const salt = generateSalt();
   const passwordHash = await hashPassword(password, salt, LEGACY_PBKDF2_ITERATIONS);
@@ -48,17 +54,34 @@ async function seedLegacyVault(password: string): Promise<void> {
   });
 }
 
+// Writes a vault row the way a strengthening-era (PBKDF2 600k) build did:
+// kdfIterations recorded, no kdf record.
+async function seedStrengthenedPbkdf2Vault(password: string): Promise<void> {
+  const salt = generateSalt();
+  const passwordHash = await hashPassword(password, salt, CURRENT_PBKDF2_ITERATIONS);
+  await vaultDb.vault.put({
+    id: "main",
+    salt: bufferToBase64(salt),
+    passwordHash,
+    kdfIterations: CURRENT_PBKDF2_ITERATIONS,
+    createdAt: Date.now(),
+  });
+}
+
 beforeEach(async () => {
   await vaultDb.vault.clear();
 });
 
-describe("getVaultKdfIterations", () => {
-  it("resolves an absent field to the legacy count", () => {
+describe("getVaultKdfParams", () => {
+  it("resolves an absent record to legacy PBKDF2", () => {
     const settings = { id: "main", salt: "s", passwordHash: "h", createdAt: 0 } as VaultSettings;
-    expect(getVaultKdfIterations(settings)).toBe(LEGACY_PBKDF2_ITERATIONS);
+    expect(getVaultKdfParams(settings)).toEqual({
+      algorithm: "pbkdf2-sha256",
+      iterations: LEGACY_PBKDF2_ITERATIONS,
+    });
   });
 
-  it("returns the recorded count when present", () => {
+  it("resolves kdfIterations-only rows to PBKDF2 at the recorded count", () => {
     const settings = {
       id: "main",
       salt: "s",
@@ -66,48 +89,98 @@ describe("getVaultKdfIterations", () => {
       kdfIterations: 600000,
       createdAt: 0,
     } as VaultSettings;
-    expect(getVaultKdfIterations(settings)).toBe(600000);
+    expect(getVaultKdfParams(settings)).toEqual({
+      algorithm: "pbkdf2-sha256",
+      iterations: 600000,
+    });
+  });
+
+  it("prefers an explicit kdf record over kdfIterations", () => {
+    const settings = {
+      id: "main",
+      salt: "s",
+      passwordHash: "h",
+      kdfIterations: 600000,
+      kdf: CURRENT_KDF_PARAMS,
+      createdAt: 0,
+    } as VaultSettings;
+    expect(getVaultKdfParams(settings)).toEqual(CURRENT_KDF_PARAMS);
   });
 });
 
 describe("saveVaultSettings", () => {
-  it("records the current iteration count for newly created vaults", async () => {
+  it("records the current Argon2id parameters for newly created vaults", async () => {
     await saveVaultSettings("c2FsdA==", "aGFzaA==");
     const settings = await getVaultSettings();
-    expect(settings?.kdfIterations).toBe(CURRENT_PBKDF2_ITERATIONS);
+    expect(settings?.kdf).toEqual(CURRENT_KDF_PARAMS);
+    expect(settings?.kdf?.algorithm).toBe("argon2id");
+  });
+});
+
+describe("verifyVaultPassword", () => {
+  it("verifies against each era's stored parameters", async () => {
+    // Legacy row.
+    await seedLegacyVault(PASSWORD);
+    expect(await verifyVaultPassword(PASSWORD, (await getVaultSettings())!)).toBe(true);
+    expect(await verifyVaultPassword("wrong", (await getVaultSettings())!)).toBe(false);
+
+    // Strengthened PBKDF2 row.
+    await vaultDb.vault.clear();
+    await seedStrengthenedPbkdf2Vault(PASSWORD);
+    expect(await verifyVaultPassword(PASSWORD, (await getVaultSettings())!)).toBe(true);
+    expect(await verifyVaultPassword("wrong", (await getVaultSettings())!)).toBe(false);
+
+    // Argon2id row.
+    await vaultDb.vault.clear();
+    const salt = generateSalt();
+    const hash = await hashPasswordWithParams(PASSWORD, salt, CURRENT_KDF_PARAMS);
+    await saveVaultSettings(bufferToBase64(salt), hash);
+    expect(await verifyVaultPassword(PASSWORD, (await getVaultSettings())!)).toBe(true);
+    expect(await verifyVaultPassword("wrong", (await getVaultSettings())!)).toBe(false);
   });
 });
 
 describe("upgradeVaultKdfIfNeeded", () => {
-  it("upgrades a legacy vault: same salt, new hash verifies only at CURRENT", async () => {
-    await seedLegacyVault(PASSWORD);
+  it.each([
+    ["legacy 100k", seedLegacyVault],
+    ["strengthened 600k", seedStrengthenedPbkdf2Vault],
+  ])("upgrades a %s PBKDF2 vault to Argon2id: same salt, new hash", async (_label, seed) => {
+    await seed(PASSWORD);
     const before = (await getVaultSettings())!;
-    expect(before.kdfIterations).toBeUndefined();
+    expect(before.kdf).toBeUndefined();
 
     const upgraded = await upgradeVaultKdfIfNeeded(PASSWORD, before);
     expect(upgraded).toBe(true);
 
     const after = (await getVaultSettings())!;
-    expect(after.kdfIterations).toBe(CURRENT_PBKDF2_ITERATIONS);
-    // Salt is preserved — legacy at-rest payloads key off salt + LEGACY.
+    expect(after.kdf).toEqual(CURRENT_KDF_PARAMS);
+    // Salt is preserved — legacy at-rest payloads key off salt + LEGACY PBKDF2.
     expect(after.salt).toBe(before.salt);
     expect(after.passwordHash).not.toBe(before.passwordHash);
 
     const salt = base64ToBuffer(after.salt);
-    // Password still unlocks — at the CURRENT parameters now...
-    expect(await verifyPassword(PASSWORD, salt, after.passwordHash, CURRENT_PBKDF2_ITERATIONS)).toBe(true);
-    // ...and via the stored-parameter resolver used by login.
+    // Password still unlocks via the stored-parameter resolver used by login...
+    expect(await verifyVaultPassword(PASSWORD, after)).toBe(true);
+    // ...wrong password still fails...
+    expect(await verifyVaultPassword("wrong", after)).toBe(false);
+    // ...and the old PBKDF2 parameters no longer match the stored hash.
     expect(
-      await verifyPassword(PASSWORD, salt, after.passwordHash, getVaultKdfIterations(after)),
-    ).toBe(true);
-    // Wrong password still fails; legacy parameters no longer match the hash.
-    expect(await verifyPassword("wrong", salt, after.passwordHash, CURRENT_PBKDF2_ITERATIONS)).toBe(false);
-    expect(await verifyPassword(PASSWORD, salt, after.passwordHash, LEGACY_PBKDF2_ITERATIONS)).toBe(false);
+      await verifyPasswordWithParams(PASSWORD, salt, after.passwordHash, {
+        algorithm: "pbkdf2-sha256",
+        iterations: LEGACY_PBKDF2_ITERATIONS,
+      }),
+    ).toBe(false);
+    expect(
+      await verifyPasswordWithParams(PASSWORD, salt, after.passwordHash, {
+        algorithm: "pbkdf2-sha256",
+        iterations: CURRENT_PBKDF2_ITERATIONS,
+      }),
+    ).toBe(false);
   });
 
-  it("is a no-op on an already-current vault", async () => {
+  it("is a no-op on an already-Argon2id vault", async () => {
     const salt = generateSalt();
-    const passwordHash = await hashPassword(PASSWORD, salt);
+    const passwordHash = await hashPasswordWithParams(PASSWORD, salt, CURRENT_KDF_PARAMS);
     await saveVaultSettings(bufferToBase64(salt), passwordHash);
     const before = (await getVaultSettings())!;
 
@@ -116,6 +189,6 @@ describe("upgradeVaultKdfIfNeeded", () => {
 
     const after = (await getVaultSettings())!;
     expect(after.passwordHash).toBe(before.passwordHash);
-    expect(after.kdfIterations).toBe(CURRENT_PBKDF2_ITERATIONS);
+    expect(after.kdf).toEqual(CURRENT_KDF_PARAMS);
   });
 });

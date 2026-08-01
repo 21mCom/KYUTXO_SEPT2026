@@ -36,7 +36,7 @@ import {
 } from "@/lib/backup/restore";
 import { BackupCancelledError } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
-import { isV3Manifest, parseInline, getBackupKdfIterations } from "@/lib/backup/format";
+import { isV3Manifest, parseInline, getBackupKdfParams } from "@/lib/backup/format";
 import {
   previewSettingsPreferences,
   type PortablePreferencePreview,
@@ -45,7 +45,7 @@ import { runLegacyJsonRestore } from "@/lib/backup/legacy-restore-pipeline";
 import { createRestoreAttachmentWriter } from "@/lib/backup/restore-attachment-writer";
 import { runPostRestoreTxidBackfill } from "@/lib/backup/post-restore-backfill";
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
-import { base64ToBuffer, deriveKey, decrypt, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
+import { base64ToBuffer, deriveKey, deriveKeyWithParams, decrypt, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
 import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
 import { loadEntitySnapshotFromStorage } from "@/lib/data/entity-list-store";
 
@@ -180,8 +180,8 @@ export function RestoreBackupFlow() {
             return;
           }
           const salt = base64ToBuffer(manifestPeek.salt ?? "");
-          // KDF parameters travel in the manifest; absent = legacy 100k backup.
-          key = await deriveKey(restorePassword, salt, getBackupKdfIterations(manifestPeek));
+          // KDF parameters travel in the manifest; absent = legacy 100k PBKDF2.
+          key = await deriveKeyWithParams(restorePassword, salt, getBackupKdfParams(manifestPeek));
         }
 
         let inline: Record<string, unknown>;

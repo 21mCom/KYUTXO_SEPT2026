@@ -17,9 +17,9 @@ import {
   setLegacyDecryptComplete,
   resetLegacyDecryptProgress,
   addLegacyDecryptCompletedTable,
-  getVaultKdfIterations,
+  verifyVaultPassword,
 } from "@/lib/vault";
-import { base64ToBuffer, verifyPassword, deriveKey, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
+import { base64ToBuffer, deriveKey, LEGACY_PBKDF2_ITERATIONS } from "@/lib/crypto";
 import {
   decryptLegacyRecords,
   countUnrecoveredLegacyRows,
@@ -82,12 +82,7 @@ export default function LegacyRecoveryPanel() {
         throw new Error("No vault settings found.");
       }
       const salt = base64ToBuffer(settings.salt);
-      const valid = await verifyPassword(
-        password,
-        salt,
-        settings.passwordHash,
-        getVaultKdfIterations(settings),
-      );
+      const valid = await verifyVaultPassword(password, settings);
       if (!valid) {
         setPhase("error");
         setErrorMessage("Incorrect password. The current password is the key that unlocks your data — recovery cannot run without it.");

@@ -1,12 +1,12 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import {
   generateSalt,
-  hashPassword,
-  verifyPassword,
+  hashPasswordWithParams,
   bufferToBase64,
   base64ToBuffer,
   deriveKey,
   LEGACY_PBKDF2_ITERATIONS,
+  CURRENT_KDF_PARAMS,
 } from '@/lib/crypto';
 import { 
   isVaultInitialized, 
@@ -27,7 +27,7 @@ import {
   setInputStringLowerRepaired,
   isSearchVisibilityRepaired,
   setSearchVisibilityRepaired,
-  getVaultKdfIterations,
+  verifyVaultPassword,
   upgradeVaultKdfIfNeeded,
 } from '@/lib/vault';
 import {
@@ -495,7 +495,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const salt = generateSalt();
       const saltBase64 = bufferToBase64(salt);
-      const hash = await hashPassword(password, salt);
+      const hash = await hashPasswordWithParams(password, salt, CURRENT_KDF_PARAMS);
 
       await saveVaultSettings(saltBase64, hash);
 
@@ -538,22 +538,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
-      const salt = base64ToBuffer(settings.salt);
       // Verify with the KDF parameters the stored hash was derived with
-      // (absent on pre-strengthening vaults = legacy 100k).
-      const isValid = await verifyPassword(
-        password,
-        salt,
-        settings.passwordHash,
-        getVaultKdfIterations(settings),
-      );
+      // (absent on pre-strengthening vaults = legacy 100k PBKDF2).
+      const isValid = await verifyVaultPassword(password, settings);
 
       if (isValid) {
         setIsAuthenticated(true);
         runStartupMigrations(password, settings.salt);
         // Transparent KDF upgrade: re-derive the stored hash at the current
-        // iteration count. Best-effort — a failure here must never block a
-        // valid login; the upgrade simply retries on the next unlock.
+        // parameters (Argon2id). Best-effort — a failure here must never block
+        // a valid login; the upgrade simply retries on the next unlock.
         try {
           await upgradeVaultKdfIfNeeded(password, settings);
         } catch (error) {
