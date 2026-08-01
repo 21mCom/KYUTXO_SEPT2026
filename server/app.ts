@@ -109,11 +109,18 @@ export default async function runApp(
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || '5000', 10);
+  // Loopback-only by default: the API exposes vault attachment
+  // read/write/delete and the Tor proxy, so it must never be reachable from
+  // other machines on the LAN. Replit's preview/port forwarding requires a
+  // 0.0.0.0 bind — the container is not the user's LAN, and /api is still
+  // guarded by the per-launch token middleware. reusePort is intentionally
+  // off — SO_REUSEPORT would let another local process bind the same port
+  // and siphon half of the app's traffic.
+  const host = process.env.HOST || (process.env.REPL_ID ? "0.0.0.0" : "127.0.0.1");
   server.listen({
     port,
-    host: "0.0.0.0",
-    reusePort: true,
+    host,
   }, () => {
-    log(`serving on port ${port}`);
+    log(`serving on ${host}:${port}`);
   });
 }

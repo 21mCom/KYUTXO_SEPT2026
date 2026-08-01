@@ -8,13 +8,21 @@ import { createServer as createViteServer, createLogger } from "vite";
 
 import viteConfig from "../vite.config";
 import runApp from "./app";
+import { injectLaunchToken } from "./launch-token";
 
 export async function setupVite(app: Express, server: Server) {
   const viteLogger = createLogger();
+  // Scope the Host allowlist to loopback. Replit's preview proxy connects
+  // from its own *.replit.dev hostname, so that suffix is allow-listed too
+  // when running inside a Replit environment.
+  const allowedHosts = ["localhost", "127.0.0.1"];
+  if (process.env.REPL_ID) {
+    allowedHosts.push(".replit.dev");
+  }
   const serverOptions = {
     middlewareMode: true,
     hmr: { server },
-    allowedHosts: true as const,
+    allowedHosts,
   };
 
   const vite = await createViteServer({
@@ -49,6 +57,8 @@ export async function setupVite(app: Express, server: Server) {
         `src="/src/main.tsx"`,
         `src="/src/main.tsx?v=${nanoid()}"`,
       );
+      // Authenticate the served page to the local API (see launch-token.ts).
+      template = injectLaunchToken(template);
       const page = await vite.transformIndexHtml(url, template);
       res.status(200).set({ "Content-Type": "text/html" }).end(page);
     } catch (e) {

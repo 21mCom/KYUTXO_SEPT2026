@@ -333,6 +333,10 @@ args = "search-visibility-repair-browser-check"
 task = "workflow.run"
 args = "server-response-hygiene-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "launch-token-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1180,6 +1184,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run server/response-hygiene.test.ts server/attachments.security.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "launch-token-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run server/launch-token.test.ts server/attachments.security.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

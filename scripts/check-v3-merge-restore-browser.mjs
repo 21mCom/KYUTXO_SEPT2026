@@ -147,25 +147,37 @@ async function unlockIfNeeded(page) {
   await dismissMigrationOverlayIfPresent(page);
 }
 
+// The API requires the per-launch token (server/launch-token.ts); the page
+// gets it via an injected <meta> tag. Node-side helpers scrape the same tag.
+let launchTokenHeaders = null;
+async function apiAuthHeaders() {
+  if (!launchTokenHeaders) {
+    const html = await (await fetch(BASE_URL)).text();
+    const token = html.match(/name="kyutxo-launch-token" content="([^"]*)"/)?.[1];
+    launchTokenHeaders = token ? { 'x-kyutxo-launch-token': token } : {};
+  }
+  return launchTokenHeaders;
+}
+
 // Attachments API helpers (Node side — same endpoints the web writer uses).
 async function apiDeleteFile(relPath) {
-  await fetch(`${BASE_URL}api/attachments/${relPath}`, { method: 'DELETE' }).catch(() => {});
+  await fetch(`${BASE_URL}api/attachments/${relPath}`, { method: 'DELETE', headers: await apiAuthHeaders() }).catch(() => {});
 }
 async function apiWriteFile(relPath, bytes) {
   const form = new FormData();
   form.append('file', new Blob([new Uint8Array(bytes)]));
   form.append('relativePath', relPath);
-  const res = await fetch(`${BASE_URL}api/attachments/write`, { method: 'POST', body: form });
+  const res = await fetch(`${BASE_URL}api/attachments/write`, { method: 'POST', body: form, headers: await apiAuthHeaders() });
   if (!res.ok) throw new Error(`write ${relPath} failed: ${res.status}`);
 }
 async function apiListFiles() {
-  const res = await fetch(`${BASE_URL}api/attachments/list-all`);
+  const res = await fetch(`${BASE_URL}api/attachments/list-all`, { headers: await apiAuthHeaders() });
   if (!res.ok) throw new Error(`list-all failed: ${res.status}`);
   const data = await res.json();
   return (data.files ?? []).map((f) => String(f).replace(/\\/g, '/'));
 }
 async function apiReadFile(relPath) {
-  const res = await fetch(`${BASE_URL}api/attachments/download/${relPath}`);
+  const res = await fetch(`${BASE_URL}api/attachments/download/${relPath}`, { headers: await apiAuthHeaders() });
   if (!res.ok) return null;
   return new Uint8Array(await res.arrayBuffer());
 }
