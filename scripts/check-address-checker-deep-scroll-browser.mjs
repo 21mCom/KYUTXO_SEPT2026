@@ -418,6 +418,140 @@ async function main() {
       if (!covered || u.indexHoles !== 0 || u.maxGap > 1.5) upFailures++;
     }
     step('upward deep-scroll keeps viewport covered and contiguous', upFailures === 0, `failures=${upFailures}/5 steps`);
+
+    // ── Task 1786: toggling "Hide 0-transaction addresses" after a deep ──
+    // scroll must not scramble cached row heights. Hiding shifts virtualizer
+    // item indices; getItemKey keys measurements by ORIGINAL row index, so a
+    // regression (keying by index) would reapply a tall row's cached height
+    // to a different row — visible as tiling gaps/overlaps, a wrong-height
+    // row, or a skewed bottom offset.
+    //
+    // Shim rules are independent: zero-tx rows are charCodeAt(len-1)%3===0,
+    // tall (funded) rows are charCodeAt(len-2)%4===0 — so hiding removes a
+    // mix of tall and short rows and every surviving index shifts.
+    const expectedHidden = addresses.filter((a) => a.charCodeAt(a.length - 1) % 3 === 0).length;
+    const shownAfterHide = N - expectedHidden;
+
+    // Park mid-deep (~40% of the ORIGINAL scroll height) so plenty of rows
+    // above/below are measured, and the position stays valid after ~1/3 of
+    // rows are removed (no scrollTop clamping to muddy the stability assert).
+    let full = await inspect();
+    await scrollTo(Math.floor(full.scrollHeight * 0.4));
+    const preToggle = await inspect();
+
+    // Toggle via a direct DOM click: Playwright's locator click would first
+    // scroll the checkbox (near the page top) into view, destroying the deep
+    // scroll position this assertion is about.
+    const toggleHideZeroTx = () =>
+      page.evaluate(() => document.querySelector('[data-testid="checkbox-hide-zero-tx"]').click());
+    await toggleHideZeroTx();
+    await page.getByTestId('text-hidden-count').waitFor({ state: 'attached', timeout: 10_000 });
+    await page.waitForTimeout(500);
+
+    const hiddenText = await page.getByTestId('text-hidden-count').textContent();
+    step(
+      'hide toggle removed exactly the 0-tx rows',
+      hiddenText !== null && hiddenText.replace(/[^0-9]/g, '') === String(expectedHidden),
+      `hidden-count="${hiddenText?.trim()}" expected=${expectedHidden}`,
+    );
+
+    const afterHide = await inspect();
+    // Tolerance: removing rows above the viewport triggers a small (~few px)
+    // measurement-driven correction; a key-scramble regression skews offsets
+    // by whole row heights (50-120px+), far outside this bound.
+    step(
+      'scrollTop stable across hide toggle (no scrollbar jump)',
+      Math.abs(afterHide.scrollTop - preToggle.scrollTop) <= 8,
+      `scrollTop ${preToggle.scrollTop?.toFixed(1)} → ${afterHide.scrollTop?.toFixed(1)}`,
+    );
+    step(
+      'rows tile contiguously after hiding (no gaps/overlaps/index holes)',
+      afterHide.indexHoles === 0 && afterHide.maxGap <= 1.5,
+      `indexHoles=${afterHide.indexHoles} maxGap=${afterHide.maxGap?.toFixed(2)}px over ${afterHide.rowCount} rows`,
+    );
+    step(
+      'viewport fully covered after hiding (no blank window)',
+      afterHide.firstTop <= afterHide.viewTop + 1 && afterHide.lastBottom >= afterHide.viewBottom - 1,
+      `firstTop=${afterHide.firstTop?.toFixed(1)} viewTop=${afterHide.viewTop?.toFixed(1)} lastBottom=${afterHide.lastBottom?.toFixed(1)} viewBottom=${afterHide.viewBottom?.toFixed(1)}`,
+    );
+
+    // Per-row height/identity check: after the index shift, every rendered
+    // row's DOM height must match ITS OWN identity (tall iff funded) — and
+    // since tiling is contiguous (asserted above), the virtualizer's cached
+    // sizes agree with those correct DOM heights. A key-by-index regression
+    // would instead misplace offsets and break the tiling/flush asserts.
+    const heightCheck = await page.evaluate(({ pad, est }) => {
+      const rows = Array.from(document.querySelectorAll('tbody tr[data-index]'));
+      let tallOk = 0, shortOk = 0, mismatches = [];
+      for (const el of rows) {
+        const h = el.getBoundingClientRect().height;
+        const funded = el.getAttribute('data-funded') === 'true';
+        if (funded) {
+          if (h >= est + pad) tallOk++;
+          else mismatches.push({ funded, h });
+        } else {
+          if (h < est + pad) shortOk++;
+          else mismatches.push({ funded, h });
+        }
+      }
+      return { total: rows.length, tallOk, shortOk, mismatches: mismatches.slice(0, 5) };
+    }, { pad: TALL_PAD, est: ROW_ESTIMATE });
+    step(
+      'after hiding, every rendered row height matches its own identity (tall iff funded)',
+      heightCheck.mismatches.length === 0 && heightCheck.total > 0,
+      `rows=${heightCheck.total} tallOk=${heightCheck.tallOk} shortOk=${heightCheck.shortOk} mismatches=${JSON.stringify(heightCheck.mismatches)}`,
+    );
+
+    // Bottom of the filtered list: last displayed row flush with list end.
+    await scrollTo(10 ** 9);
+    await page.waitForTimeout(400);
+    const hiddenBottom = await inspect();
+    step(
+      'at max scroll (hidden) the last displayed row is rendered',
+      hiddenBottom.lastIndex === shownAfterHide - 1,
+      `lastIndex=${hiddenBottom.lastIndex} expected=${shownAfterHide - 1}`,
+    );
+    step(
+      'last row flush with table bottom after hiding (no phantom gap)',
+      Math.abs(hiddenBottom.lastBottom - hiddenBottom.tableBottom) <= 2,
+      `lastBottom=${hiddenBottom.lastBottom?.toFixed(1)} tableBottom=${hiddenBottom.tableBottom?.toFixed(1)}`,
+    );
+    step(
+      'rows tile contiguously at the filtered bottom',
+      hiddenBottom.indexHoles === 0 && hiddenBottom.maxGap <= 1.5,
+      `indexHoles=${hiddenBottom.indexHoles} maxGap=${hiddenBottom.maxGap?.toFixed(2)}px over ${hiddenBottom.rowCount} rows`,
+    );
+    const hiddenRestTop = hiddenBottom.scrollTop;
+    await page.waitForTimeout(900);
+    const hiddenRest = await inspect();
+    step(
+      'scrollTop stable at rest at the filtered bottom',
+      Math.abs(hiddenRest.scrollTop - hiddenRestTop) <= 1,
+      `scrollTop ${hiddenRestTop?.toFixed(1)} → ${hiddenRest.scrollTop?.toFixed(1)}`,
+    );
+
+    // ── Toggle back off: indices shift again, full list must re-tile ────
+    await toggleHideZeroTx();
+    await page.waitForTimeout(500);
+    const afterUnhide = await inspect();
+    step(
+      'rows tile contiguously after unhiding',
+      afterUnhide.indexHoles === 0 && afterUnhide.maxGap <= 1.5,
+      `indexHoles=${afterUnhide.indexHoles} maxGap=${afterUnhide.maxGap?.toFixed(2)}px over ${afterUnhide.rowCount} rows`,
+    );
+    step(
+      'viewport fully covered after unhiding',
+      afterUnhide.firstTop <= afterUnhide.viewTop + 1 && afterUnhide.lastBottom >= afterUnhide.viewBottom - 1,
+      `firstTop=${afterUnhide.firstTop?.toFixed(1)} viewTop=${afterUnhide.viewTop?.toFixed(1)} lastBottom=${afterUnhide.lastBottom?.toFixed(1)} viewBottom=${afterUnhide.viewBottom?.toFixed(1)}`,
+    );
+    await scrollTo(10 ** 9);
+    await page.waitForTimeout(400);
+    const fullBottom = await inspect();
+    step(
+      'after unhiding, max scroll renders the true last row (index N-1) flush with the bottom',
+      fullBottom.lastIndex === N - 1 && Math.abs(fullBottom.lastBottom - fullBottom.tableBottom) <= 2,
+      `lastIndex=${fullBottom.lastIndex} expected=${N - 1} lastBottom=${fullBottom.lastBottom?.toFixed(1)} tableBottom=${fullBottom.tableBottom?.toFixed(1)}`,
+    );
   } finally {
     await browser.close().catch(() => {});
     if (devProc) {
