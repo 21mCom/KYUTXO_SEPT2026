@@ -212,6 +212,7 @@ export default function DustedPage() {
   );
   const [flagBusyAddress, setFlagBusyAddress] = useState<string | null>(null);
   const [markingAll, setMarkingAll] = useState(false);
+  const [unmarkingAll, setUnmarkingAll] = useState(false);
   const [cleaningStale, setCleaningStale] = useState(false);
   const [flagBusyOutpoint, setFlagBusyOutpoint] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
@@ -286,6 +287,25 @@ export default function DustedPage() {
     return out;
   }, [results, flaggedOutpoints]);
 
+  // ── Bulk "unmark all" ─────────────────────────────────────────────────────
+  //
+  // Every unspent dust output from the current scan that IS currently flagged.
+  // The bulk unmark button appears whenever the scan has any flags to clear —
+  // including partially flagged scans, where it renders alongside Mark all.
+  const unmarkableOutpoints = useMemo(() => {
+    if (!results) return [];
+    const out: string[] = [];
+    for (const row of results) {
+      for (const o of row.unspentOutputs) {
+        const outpoint = toOutpoint(o.txid, o.vout);
+        if (flaggedOutpoints.has(outpoint)) {
+          out.push(outpoint);
+        }
+      }
+    }
+    return out;
+  }, [results, flaggedOutpoints]);
+
   const handleMarkAllAsDust = useCallback(async () => {
     if (markingAll || markableOutputs.length === 0) return;
     setMarkingAll(true);
@@ -314,6 +334,35 @@ export default function DustedPage() {
       setMarkingAll(false);
     }
   }, [markingAll, markableOutputs, toast]);
+
+  const handleUnmarkAll = useCallback(async () => {
+    if (unmarkingAll || unmarkableOutpoints.length === 0) return;
+    setUnmarkingAll(true);
+    try {
+      let removed = 0;
+      // Chunk the CRUD calls (and yield between chunks) so the anyOf deletes
+      // never block the UI on huge scans — mirrors the mark-all path.
+      for (let i = 0; i < unmarkableOutpoints.length; i += MARK_ALL_CHUNK) {
+        removed += await unmarkDustOutpoints(unmarkableOutpoints.slice(i, i + MARK_ALL_CHUNK));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      toast({
+        title: "Dust flags removed",
+        description:
+          removed > 0
+            ? `${removed.toLocaleString()} dust flag${removed !== 1 ? "s" : ""} removed across all scanned addresses.`
+            : "No dust flags were left to remove.",
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to remove dust flags",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setUnmarkingAll(false);
+    }
+  }, [unmarkingAll, unmarkableOutpoints, toast]);
 
   const handleMarkAsDust = useCallback(
     async (row: DustingResult) => {
@@ -751,6 +800,22 @@ export default function DustedPage() {
                     <Flag className="h-3 w-3 mr-1" />
                   )}
                   Mark all as dust ({markableOutputs.length.toLocaleString()})
+                </Button>
+              )}
+              {unmarkableOutpoints.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={unmarkingAll}
+                  onClick={handleUnmarkAll}
+                  data-testid="button-unmark-all-dust"
+                >
+                  {unmarkingAll ? (
+                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                  ) : (
+                    <FlagOff className="h-3 w-3 mr-1" />
+                  )}
+                  Unmark all ({unmarkableOutpoints.length.toLocaleString()})
                 </Button>
               )}
             </div>
