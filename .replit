@@ -323,6 +323,10 @@ args = "address-checker-5k-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "address-checker-deep-scroll-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dependency-audit"
 
 [[workflows.workflow.tasks]]
@@ -1360,6 +1364,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-wallet-overview-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-deep-scroll-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-deep-scroll-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

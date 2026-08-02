@@ -13,3 +13,5 @@ When a virtualized list stops owning its scroll container and the page-level ele
 - Scroll-reset-on-filter-change (`scrollTo(0,0)`) now returns to the page top — desired for whole-page scroll.
 
 **Verification gotchas (real browser):** at scroll-top the first rows may legitimately sit below the fold (title/summary/filters fill the viewport) — assert windowing (`rendered < total`), not row visibility. A single programmatic jump to `scrollHeight` lands short because dynamic row measurement shifts totals; jump twice before asserting the position stuck. jsdom suites that stub the virtualizer and pass `scrollRef={{current:null}}` keep passing — the margin effect no-ops on null.
+
+**Deep-scroll accuracy with dynamic row heights:** the virtualizer only measures VISITED rows — getTotalSize()/scrollHeight keep the estimate for never-rendered rows, so global scrollHeight assertions are meaningless. Assert offset accuracy locally: contiguous tiling of rendered rows (no gaps/overlaps/index holes), last row flush with container bottom at max scroll, and anchor-row displacement of exactly one viewport per scroll step.
