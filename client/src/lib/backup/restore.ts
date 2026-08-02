@@ -111,6 +111,13 @@ import {
   type RestoreMode,
 } from "./legacy-restore";
 import { lineageIdentity } from "./legacy-restore-misc";
+import {
+  recordMergeIdentity,
+  attachmentMergeKey,
+  syncStateMergeAddress,
+  segmentMergeId,
+  snapshotMergeId,
+} from "./merge-keys";
 
 // Thrown when a restore is cancelled AFTER the destructive clear but the vault
 // could NOT be reset to a clean state. The vault is then in an unknown partial
@@ -757,11 +764,8 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         // Only hit the DB for identities not already known from earlier
         // batches (live rows queried before, or rows this merge created).
         const unknown = rows
-          .map((r) => r.inputString)
-          .filter(
-            (s): s is string =>
-              typeof s === "string" && s !== "" && !mergedRecordIdByInputString.has(s),
-          );
+          .map(recordMergeIdentity)
+          .filter((s) => s !== "" && !mergedRecordIdByInputString.has(s));
         if (unknown.length) {
           const found = await getRecordsByInputStrings(unknown);
           for (const r of found) {
@@ -776,7 +780,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         // (records.inputString is indexed but NOT unique — nothing else stops it).
         const pendingIndexByInput = new Map<string, number>();
         for (const r of rows) {
-          const s = typeof r.inputString === "string" ? r.inputString : "";
+          const s = recordMergeIdentity(r);
           const existingId = s ? mergedRecordIdByInputString.get(s) : undefined;
           if (existingId !== undefined) {
             if (typeof r.id === "number") idMap.set(r.id, existingId);
@@ -835,9 +839,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       if (isMerge && existingAttachmentKeys === null) {
         existingAttachmentKeys = new Set<string>();
         for (const att of await getAllAttachments()) {
-          existingAttachmentKeys.add(
-            att.objectStoragePath || `${att.recordId}:${att.filename}`,
-          );
+          existingAttachmentKeys.add(attachmentMergeKey(att, att.recordId));
         }
       }
       const out: CreateAttachmentData[] = [];
@@ -856,7 +858,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
           continue;
         }
         if (isMerge) {
-          const attKey = d.objectStoragePath || `${recordId}:${d.filename}`;
+          const attKey = attachmentMergeKey(d, recordId);
           if (existingAttachmentKeys!.has(attKey)) continue;
           existingAttachmentKeys!.add(attKey);
         }
@@ -965,8 +967,9 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       let incoming = rows;
       if (isMerge) {
         incoming = rows.filter((s) => {
-          if (!s.address || existingSyncAddresses!.has(s.address)) return false;
-          existingSyncAddresses!.add(s.address);
+          const address = syncStateMergeAddress(s);
+          if (!address || existingSyncAddresses!.has(address)) return false;
+          existingSyncAddresses!.add(address);
           return true;
         });
       }
@@ -1070,9 +1073,9 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       let incoming = rows;
       if (isMerge) {
         incoming = rows.filter((d) => {
-          const segmentId = d.segmentId;
-          if (typeof segmentId === "string" && existingSegmentIds!.has(segmentId)) return false;
-          if (typeof segmentId === "string") existingSegmentIds!.add(segmentId);
+          const segmentId = segmentMergeId(d);
+          if (segmentId !== null && existingSegmentIds!.has(segmentId)) return false;
+          if (segmentId !== null) existingSegmentIds!.add(segmentId);
           return true;
         });
       }
@@ -1093,9 +1096,9 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       let incoming = rows;
       if (isMerge) {
         incoming = rows.filter((d) => {
-          const snapshotId = d.snapshotId;
-          if (typeof snapshotId === "string" && existingSnapshotIds!.has(snapshotId)) return false;
-          if (typeof snapshotId === "string") existingSnapshotIds!.add(snapshotId);
+          const snapshotId = snapshotMergeId(d);
+          if (snapshotId !== null && existingSnapshotIds!.has(snapshotId)) return false;
+          if (snapshotId !== null) existingSnapshotIds!.add(snapshotId);
           return true;
         });
       }

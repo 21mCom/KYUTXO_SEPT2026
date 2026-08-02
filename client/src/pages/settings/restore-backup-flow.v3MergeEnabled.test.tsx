@@ -27,6 +27,11 @@ vi.mock("@/lib/backup/restore", () => ({
   AttachmentWriteError: class AttachmentWriteError extends Error {},
 }));
 
+const analyzeV3Backup = vi.fn();
+vi.mock("@/lib/backup/analyze", () => ({
+  analyzeV3Backup: (...args: unknown[]) => analyzeV3Backup(...args),
+}));
+
 vi.mock("@/lib/backup/restore-attachment-writer", () => ({
   createRestoreAttachmentWriter: () => ({ write: async () => {} }),
 }));
@@ -90,6 +95,26 @@ function makeV3ZipFile(): File {
   return new File([new Uint8Array([0x50, 0x4b])], "v3-backup.zip", {
     type: "application/zip",
   });
+}
+
+// A merge-analysis result shape the REAL dialog renders: per-table counts plus
+// the addable-records CSV report (parts/rowCount).
+function makeAnalysisResult(rowCount: number) {
+  const zero = { total: 0, added: 0, alreadyPresent: 0 };
+  return {
+    manifest: V3_MANIFEST,
+    tables: {
+      records: { total: 5, added: rowCount, alreadyPresent: 1, discoveryOnlySkipped: 1 },
+      attachments: { ...zero, orphanedSkipped: 0 },
+      transactionParticipants: { ...zero },
+      addressSyncState: { ...zero },
+      blockchainTransactions: { total: 2, added: 2, alreadyPresent: 0 },
+      utxoLineage: { ...zero },
+      custodySegments: { ...zero },
+      lineageSnapshots: { ...zero },
+    },
+    report: { parts: ["Type,Identifier,Label\r\n"], rowCount },
+  };
 }
 
 async function openDialogAndSelectFile(file: File): Promise<void> {
@@ -172,5 +197,84 @@ describe("restore dialog merge option for v3 backups", () => {
 
     await continueAndRestore();
     expect(restoreV3Backup.mock.calls[0][0]).toMatchObject({ restoreMode: "replace" });
+  });
+});
+
+describe("merge analysis (read-only preview)", () => {
+  beforeEach(() => {
+    // Self-sufficient setup: never rely on mock state from the sibling
+    // describe (call counts must not accumulate across its tests).
+    vi.clearAllMocks();
+    peekManifest.mockResolvedValue(V3_MANIFEST);
+    restoreV3Backup.mockResolvedValue(RESTORE_RESULT);
+    analyzeV3Backup.mockResolvedValue(makeAnalysisResult(3));
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("offers Analyze for v3 backups and renders per-table results + CSV download", async () => {
+    render(<RestoreBackupFlow />);
+    await openDialogAndSelectFile(makeV3ZipFile());
+
+    expect(screen.getByTestId("merge-analysis-section")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("button-analyze-merge"));
+
+    await waitFor(() => {
+      expect(analyzeV3Backup).toHaveBeenCalledTimes(1);
+    });
+    // Read-only pipeline: no attachment writer, and a cancel signal is wired.
+    expect(analyzeV3Backup.mock.calls[0][0]).toMatchObject({
+      source: expect.anything(),
+      signal: expect.anything(),
+    });
+    expect(analyzeV3Backup.mock.calls[0][0].attachmentWriter).toBeUndefined();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("analysis-results")).toBeTruthy();
+    });
+    const recordsRow = screen.getByTestId("analysis-row-records");
+    expect(recordsRow.textContent).toContain("3 new");
+    expect(recordsRow.textContent).toContain("1 already present");
+    expect(recordsRow.textContent).toContain("1 discovery-only");
+    expect(screen.getByTestId("analysis-row-blockchainTransactions").textContent).toContain(
+      "2 new",
+    );
+    // Tables with no rows in the backup are not listed.
+    expect(screen.queryByTestId("analysis-row-attachments")).toBeNull();
+
+    const csvButton = screen.getByTestId("button-download-analysis-csv") as HTMLButtonElement;
+    expect(csvButton.disabled).toBe(false);
+    expect(csvButton.textContent).toContain("3 new records");
+  });
+
+  it("keeps the CSV download disabled when nothing would be added", async () => {
+    analyzeV3Backup.mockResolvedValue(makeAnalysisResult(0));
+    render(<RestoreBackupFlow />);
+    await openDialogAndSelectFile(makeV3ZipFile());
+
+    fireEvent.click(screen.getByTestId("button-analyze-merge"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("analysis-results")).toBeTruthy();
+    });
+    const csvButton = screen.getByTestId("button-download-analysis-csv") as HTMLButtonElement;
+    expect(csvButton.disabled).toBe(true);
+  });
+
+  it("surfaces analysis failures with the pre-flight messaging style", async () => {
+    analyzeV3Backup.mockRejectedValue(new Error("Invalid password or corrupted backup"));
+    render(<RestoreBackupFlow />);
+    await openDialogAndSelectFile(makeV3ZipFile());
+
+    fireEvent.click(screen.getByTestId("button-analyze-merge"));
+    await waitFor(() => {
+      expect(analyzeV3Backup).toHaveBeenCalledTimes(1);
+    });
+    // No results render; the dialog stays on the configure stage.
+    await waitFor(() => {
+      expect(screen.queryByTestId("analysis-results")).toBeNull();
+    });
+    expect(screen.queryByTestId("button-continue-restore")).toBeTruthy();
   });
 });

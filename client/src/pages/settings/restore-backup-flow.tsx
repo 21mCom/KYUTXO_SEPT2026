@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Loader2, Upload, Trash2, AlertTriangle } from "lucide-react";
+import { Loader2, Upload, Trash2, AlertTriangle, FileSearch, Download } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,8 +34,12 @@ import {
   AttachmentWriteError,
   type AttachmentFileWriter,
 } from "@/lib/backup/restore";
-import { BackupCancelledError } from "@/lib/backup/sink";
+import { BackupCancelledError, downloadBlob } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
+import {
+  analyzeV3Backup,
+  type MergeAnalysisResult,
+} from "@/lib/backup/analyze";
 import { isV3Manifest, parseInline, getBackupKdfParams } from "@/lib/backup/format";
 import {
   previewSettingsPreferences,
@@ -97,6 +101,16 @@ export function RestoreBackupFlow() {
   // Pre-flight disk-space info shown in the confirm stage (Electron + v3 only),
   // so the user sees the exact estimate before clicking "Restore Now."
   const [diskSpacePreview, setDiskSpacePreview] = useState<{ estimatedBytes: number; freeBytes: number } | null>(null);
+  // Read-only merge analysis ("what would a merge add?"): v3 backups only,
+  // never writes to the vault. `backupIsV3` gates the section (legacy backups
+  // keep their existing flow). Results are cleared whenever the file or
+  // password changes, since they were computed from those exact inputs.
+  const [backupIsV3, setBackupIsV3] = useState(false);
+  const [analysis, setAnalysis] = useState<MergeAnalysisResult | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [analysisMessage, setAnalysisMessage] = useState("");
+  const analysisAbortRef = useRef<AbortController | null>(null);
 
   // Handle file selection for restore
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -108,6 +122,8 @@ export function RestoreBackupFlow() {
     setRestoreStage("configure");
     setPrefPreview(null);
     setDiskSpacePreview(null);
+    setBackupIsV3(false);
+    setAnalysis(null);
 
     try {
       // v3 streaming backups: read ONLY the manifest (first ZIP entry) via the
@@ -120,6 +136,7 @@ export function RestoreBackupFlow() {
           date: manifestPeek.exportDate || "Unknown",
           recordCount: manifestPeek.counts?.records ?? 0,
         });
+        setBackupIsV3(true);
         return;
       }
 
@@ -149,6 +166,61 @@ export function RestoreBackupFlow() {
       });
       setRestoreFile(null);
     }
+  };
+
+  // Read-only merge analysis: streams the backup and classifies every row
+  // against the live vault using merge restore's natural keys, WITHOUT writing
+  // anything. Wrong-password/corrupt backups fail here non-destructively with
+  // the same message style as the restore pre-flight.
+  const handleAnalyze = async () => {
+    if (!restoreFile) return;
+    setIsAnalyzing(true);
+    setAnalysis(null);
+    setAnalysisProgress(0);
+    setAnalysisMessage("Reading backup file...");
+    const controller = new AbortController();
+    analysisAbortRef.current = controller;
+    try {
+      const result = await analyzeV3Backup({
+        source: blobChunks(restoreFile),
+        password: restorePassword || undefined,
+        signal: controller.signal,
+        onProgress: (p) => {
+          setAnalysisProgress(p.percent);
+          setAnalysisMessage(p.phase);
+        },
+      });
+      setAnalysis(result);
+    } catch (error) {
+      if (error instanceof BackupCancelledError) {
+        toast({
+          title: "Analysis Cancelled",
+          description: "No changes were made — analyzing a backup is read-only.",
+        });
+      } else {
+        console.error("Backup analysis failed:", error);
+        toast({
+          variant: "destructive",
+          title: "Could not analyze backup",
+          description: "The password may be incorrect, or the backup is corrupted.",
+        });
+      }
+    } finally {
+      setIsAnalyzing(false);
+      setAnalysisProgress(0);
+      setAnalysisMessage("");
+      analysisAbortRef.current = null;
+    }
+  };
+
+  // Browser download of the addable-records CSV report built during analysis.
+  const handleDownloadAnalysisCsv = () => {
+    if (!analysis || analysis.report.rowCount === 0) return;
+    const date = new Date().toISOString().slice(0, 10);
+    downloadBlob(
+      new Blob(analysis.report.parts, { type: "text/csv" }),
+      `kyutxo-merge-analysis-${date}.csv`,
+    );
   };
 
   // First stage of restoring a v3 backup: read (without touching the vault)
@@ -858,7 +930,7 @@ export function RestoreBackupFlow() {
 
       {/* Restore Dialog */}
       <Dialog open={restoreDialogOpen} onOpenChange={(open) => {
-        if (!open && !isRestoring) {
+        if (!open && !isRestoring && !isAnalyzing) {
           setRestoreDialogOpen(false);
           setRestoreFile(null);
           setRestorePassword("");
@@ -868,6 +940,8 @@ export function RestoreBackupFlow() {
           setRestoreStage("configure");
           setPrefPreview(null);
           setDiskSpacePreview(null);
+          setBackupIsV3(false);
+          setAnalysis(null);
         }
       }}>
         <DialogContent className="sm:max-w-lg">
@@ -906,11 +980,13 @@ export function RestoreBackupFlow() {
                     onClick={() => {
                       setRestoreFile(null);
                       setBackupInfo(null);
+                      setBackupIsV3(false);
+                      setAnalysis(null);
                       if (fileInputRef.current) {
                         fileInputRef.current.value = "";
                       }
                     }}
-                    disabled={isRestoring}
+                    disabled={isRestoring || isAnalyzing}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -948,7 +1024,11 @@ export function RestoreBackupFlow() {
                   id="restore-password"
                   type="password"
                   value={restorePassword}
-                  onChange={(e) => setRestorePassword(e.target.value)}
+                  onChange={(e) => {
+                    setRestorePassword(e.target.value);
+                    // Analysis results were computed from the previous password.
+                    setAnalysis(null);
+                  }}
                   placeholder="Enter the password used to encrypt this backup"
                   disabled={isRestoring}
                   data-testid="input-restore-password"
@@ -991,6 +1071,123 @@ export function RestoreBackupFlow() {
                 </div>
               </RadioGroup>
             </div>
+
+            {/* Read-only merge preview: what would merging this backup add?
+                v3 backups only; never writes to the vault. */}
+            {backupIsV3 && restoreFile && !isRestoring && (
+              <div className="space-y-3 rounded-lg border p-3" data-testid="merge-analysis-section">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-sm font-medium">Merge preview</Label>
+                    <p className="text-xs text-muted-foreground">
+                      See what merging this backup would add before you commit —
+                      the analysis is read-only and changes nothing.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAnalyze}
+                    disabled={isAnalyzing || (backupInfo?.encrypted && !restorePassword)}
+                    data-testid="button-analyze-merge"
+                  >
+                    {isAnalyzing ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <FileSearch className="h-4 w-4 mr-2" />
+                    )}
+                    Analyze
+                  </Button>
+                </div>
+
+                {isAnalyzing && (
+                  <div className="space-y-2" data-testid="analysis-progress">
+                    <div className="flex items-center justify-between text-sm">
+                      <span data-testid="text-analysis-phase">{analysisMessage}</span>
+                      <span>{analysisProgress}%</span>
+                    </div>
+                    <Progress value={analysisProgress} />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => analysisAbortRef.current?.abort()}
+                      data-testid="button-cancel-analysis"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+
+                {analysis && !isAnalyzing && (
+                  <div className="space-y-2" data-testid="analysis-results">
+                    <div className="rounded-lg border bg-muted/40 divide-y">
+                      {(
+                        [
+                          ["records", "Records"],
+                          ["blockchainTransactions", "Transactions"],
+                          ["transactionParticipants", "Participants"],
+                          ["addressSyncState", "Address sync state"],
+                          ["attachments", "Attachments"],
+                          ["utxoLineage", "UTXO lineage"],
+                          ["custodySegments", "Custody segments"],
+                          ["lineageSnapshots", "Lineage snapshots"],
+                        ] as const
+                      )
+                        .filter(([key]) => analysis.tables[key].total > 0)
+                        .map(([key, label]) => {
+                          const t = analysis.tables[key];
+                          return (
+                            <div
+                              key={key}
+                              className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                              data-testid={`analysis-row-${key}`}
+                            >
+                              <span className="text-muted-foreground">{label}</span>
+                              <span className="font-medium text-right">
+                                {t.added} new
+                                {t.alreadyPresent > 0 && (
+                                  <span className="text-muted-foreground font-normal">
+                                    {" "}· {t.alreadyPresent} already present
+                                  </span>
+                                )}
+                                {key === "records" &&
+                                  analysis.tables.records.discoveryOnlySkipped > 0 && (
+                                    <span className="text-muted-foreground font-normal">
+                                      {" "}· {analysis.tables.records.discoveryOnlySkipped} discovery-only
+                                    </span>
+                                  )}
+                                {key === "attachments" &&
+                                  analysis.tables.attachments.orphanedSkipped > 0 && (
+                                    <span className="text-muted-foreground font-normal">
+                                      {" "}· {analysis.tables.attachments.orphanedSkipped} orphaned
+                                    </span>
+                                  )}
+                              </span>
+                            </div>
+                          );
+                        })}
+                    </div>
+                    {analysis.tables.records.discoveryOnlySkipped > 0 && (
+                      <p className="text-xs text-muted-foreground" data-testid="text-analysis-discovery-note">
+                        Discovery-only records (no labels, notes, or other metadata)
+                        are left out — a normal sync re-finds them automatically.
+                      </p>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleDownloadAnalysisCsv}
+                      disabled={analysis.report.rowCount === 0}
+                      data-testid="button-download-analysis-csv"
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Download report (CSV)
+                      {analysis.report.rowCount > 0 ? ` — ${analysis.report.rowCount} new record${analysis.report.rowCount !== 1 ? "s" : ""}` : ""}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
             </>
             )}
 
@@ -1106,6 +1303,8 @@ export function RestoreBackupFlow() {
                   setRestoreStage("configure");
                   setPrefPreview(null);
                   setDiskSpacePreview(null);
+                  setBackupIsV3(false);
+                  setAnalysis(null);
                 }}>
                   Cancel
                 </Button>

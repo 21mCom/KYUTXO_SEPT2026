@@ -183,6 +183,10 @@ args = "restore-mode-guard-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "merge-analysis-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "edit-attachments-toast-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1420,6 +1424,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-wallet-import-reattribution-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "merge-analysis-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/backup/merge-analysis.runtime.test.ts client/src/lib/backup/v3-merge-restore.runtime.test.ts client/src/pages/settings/restore-backup-flow.v3MergeEnabled.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
