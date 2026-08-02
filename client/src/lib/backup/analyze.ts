@@ -74,6 +74,13 @@ import {
 import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
 import { getAllDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { getRecordOriginsByRecordIds } from "@/lib/data/record-origins-crud";
+import { getAllEvidence, evidenceIdentity } from "@/lib/data/evidence-crud";
+import {
+  getPriceDataByDateCurrencyAssetKeys,
+  priceDedupKey,
+} from "@/lib/data/price-data-crud";
+import { getAllDustFlags, toOutpoint } from "@/lib/data/dust-flags-crud";
+import { getAllSavedPsbts } from "@/lib/data/saved-psbts-crud";
 import { isPrunableRecordShape } from "./compact";
 import { CSV_EXPORT_HEADER, recordToCsvRow, type CsvExportableRecord } from "@/lib/csv-export";
 import type { Record as VaultRecord, TransactionParticipant } from "@/lib/db-types";
@@ -131,6 +138,14 @@ export interface InlineMetadataAnalysis {
   customFields: MergeTableAnalysis;
   derivationTemplates: MergeTableAnalysis;
   recordOrigins: RecordOriginsAnalysis;
+  // Other inline data tables a merge also restores, classified with the same
+  // natural keys the shared restore helpers de-dupe by (evidence:
+  // evidenceIdentity — attachment rows follow their document; priceData:
+  // [date+currency+asset]; dustFlags: outpoint; savedPsbts: psbtBase64).
+  evidence: MergeTableAnalysis;
+  priceData: MergeTableAnalysis;
+  dustFlags: MergeTableAnalysis;
+  savedPsbts: MergeTableAnalysis;
 }
 
 export interface MergeAnalysisResult {
@@ -629,6 +644,119 @@ async function analyzeInlineMetadata(
     }
   }
 
+  // Evidence documents de-dupe by evidenceIdentity (restoreEvidenceRows).
+  // Their attachment rows follow the document (skipped documents skip their
+  // attachments too), so documents are the unit users compare — attachment
+  // rows are not counted separately.
+  const evidence = blank();
+  {
+    const rows = arr("evidence");
+    if (rows.length) {
+      throwIfAborted();
+      const seen = new Set<string>();
+      for (const ev of await getAllEvidence()) seen.add(evidenceIdentity(ev));
+      for (const row of rows) {
+        evidence.total += 1;
+        const k = evidenceIdentity(row ?? {});
+        if (seen.has(k)) {
+          evidence.alreadyPresent += 1;
+          continue;
+        }
+        seen.add(k);
+        evidence.added += 1;
+      }
+    }
+  }
+
+  // Daily price rows de-dupe by [date+currency+asset] (restorePriceDataRows).
+  // Rows with a malformed key (non-string components) are always inserted by
+  // the restore helper, so they count as added here too.
+  const priceData = blank();
+  {
+    const rows = arr("priceData");
+    if (rows.length) {
+      throwIfAborted();
+      const keys: [string, string, string][] = [];
+      for (const pd of rows) {
+        if (
+          pd &&
+          typeof pd.date === "string" &&
+          typeof pd.currency === "string" &&
+          typeof pd.asset === "string"
+        ) {
+          keys.push([pd.date, pd.currency, pd.asset]);
+        }
+      }
+      const seen = new Set<string>();
+      for (const e of await getPriceDataByDateCurrencyAssetKeys(keys)) {
+        seen.add(priceDedupKey(e.date, e.currency, e.asset));
+      }
+      for (const row of rows) {
+        priceData.total += 1;
+        const k = priceDedupKey(row?.date, row?.currency, row?.asset);
+        if (seen.has(k)) {
+          priceData.alreadyPresent += 1;
+          continue;
+        }
+        seen.add(k);
+        priceData.added += 1;
+      }
+    }
+  }
+
+  // Dust flags de-dupe by their unique outpoint (restoreDustFlagRows), which
+  // also derives txid:vout when the outpoint field is absent. Rows with no
+  // derivable outpoint are dropped by the restore, so they count as
+  // alreadyPresent (a merge inserts nothing for them).
+  const dustFlags = blank();
+  {
+    const rows = arr("dustFlags");
+    if (rows.length) {
+      throwIfAborted();
+      const seen = new Set<string>();
+      for (const f of await getAllDustFlags()) seen.add(f.outpoint);
+      for (const row of rows) {
+        dustFlags.total += 1;
+        let outpoint: string | undefined =
+          typeof row?.outpoint === "string" && row.outpoint.length > 0
+            ? row.outpoint
+            : undefined;
+        if (!outpoint && typeof row?.txid === "string" && typeof row?.vout === "number") {
+          outpoint = toOutpoint(row.txid, row.vout);
+        }
+        if (!outpoint || seen.has(outpoint)) {
+          dustFlags.alreadyPresent += 1;
+          continue;
+        }
+        seen.add(outpoint);
+        dustFlags.added += 1;
+      }
+    }
+  }
+
+  // Saved PSBTs de-dupe by their PSBT bytes (restoreSavedPsbtRows). Rows with
+  // no usable psbtBase64 are dropped by the restore, so they count as
+  // alreadyPresent (a merge inserts nothing for them).
+  const savedPsbts = blank();
+  {
+    const rows = arr("savedPsbts");
+    if (rows.length) {
+      throwIfAborted();
+      const seen = new Set<string>();
+      for (const p of await getAllSavedPsbts()) seen.add(p.psbtBase64);
+      for (const row of rows) {
+        savedPsbts.total += 1;
+        const b64 = typeof row?.psbtBase64 === "string" ? row.psbtBase64 : "";
+        if (!b64 || seen.has(b64)) {
+          savedPsbts.alreadyPresent += 1;
+          continue;
+        }
+        seen.add(b64);
+        savedPsbts.added += 1;
+      }
+    }
+  }
+
   return {
     tags: await vocab("tags", getTags),
     categories: await vocab("categories", getCategories),
@@ -639,5 +767,9 @@ async function analyzeInlineMetadata(
     customFields,
     derivationTemplates,
     recordOrigins,
+    evidence,
+    priceData,
+    dustFlags,
+    savedPsbts,
   };
 }

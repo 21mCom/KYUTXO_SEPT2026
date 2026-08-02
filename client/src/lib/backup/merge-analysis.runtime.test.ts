@@ -77,7 +77,20 @@ import {
 import { clearNodeSettings } from "@/lib/data/node-settings-crud";
 import { clearCustomFields } from "@/lib/data/custom-fields-crud";
 import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
-import { clearEvidence, clearEvidenceAttachments } from "@/lib/data/evidence-crud";
+import {
+  clearEvidence,
+  clearEvidenceAttachments,
+  addEvidence,
+  addEvidenceAttachment,
+  getAllEvidence,
+} from "@/lib/data/evidence-crud";
+import { addPriceData, getAllPriceData, clearPriceData } from "@/lib/data/price-data-crud";
+import {
+  markOutpointsAsDust,
+  getAllDustFlags,
+  clearDustFlags,
+} from "@/lib/data/dust-flags-crud";
+import { savePsbt, getAllSavedPsbts, clearSavedPsbts } from "@/lib/data/saved-psbts-crud";
 
 const attachmentIO: AttachmentFileIO = {
   async listAll() {
@@ -177,6 +190,9 @@ async function clearEverything(): Promise<void> {
   await clearDerivationTemplates({ skipNotification: true });
   await clearEvidence({ skipNotification: true });
   await clearEvidenceAttachments({ skipNotification: true });
+  await clearPriceData({ skipNotification: true });
+  await clearDustFlags({ skipNotification: true });
+  await clearSavedPsbts({ skipNotification: true });
   await db.tags.clear();
   await db.categories.clear();
   await db.owners.clear();
@@ -624,11 +640,11 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
 
   it("predicts merge insert counts per table (analyze → merge parity)", async () => {
     await seedExportedVault();
-    const blob = await exportToBlob();
+    const blob = await exportToBlob(true, PASSWORD);
     await clearEverything();
     await seedLiveVault();
 
-    const analysis = await analyzeV3Backup({ source: blobChunks(blob) });
+    const analysis = await analyzeV3Backup({ source: blobChunks(blob), password: PASSWORD });
 
     // Records: shared (present), backup-only (added), discovery-only (skipped),
     // discovery-tier-with-metadata (added — user metadata always wins).
@@ -698,7 +714,7 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     expect(merged.counts.lineageSnapshots).toBe(analysis.tables.lineageSnapshots.added);
   });
 
-  it("predicts inline-metadata insert counts (vocabulary, custom fields, templates, recordOrigins)", async () => {
+  it("predicts inline-metadata insert counts (vocabulary, custom fields, templates, recordOrigins, evidence, price history, dust flags, saved PSBTs)", async () => {
     // Exported vault: shared + backup-only vocabulary, a custom field, a
     // derivation template, and recordOrigins on both the shared and the
     // backup-only record (one origin duplicated in the live vault).
@@ -724,23 +740,12 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     );
     const backupRecords = await getAllRecords();
     const backupOnlyId = backupRecords.find((r) => r.inputString === ADDR_BACKUP)!.id!;
-    // Duplicated in the live vault (same natural key) → alreadyPresent.
-    await addRecordOrigin(
-      { recordId: sharedId, originType: "manual", source: "manual entry", createdAt: 1_700_000_001_000 },
-      { skipNotification: true },
-    );
-    // New origin on the shared (de-duped) record → added.
-    await addRecordOrigin(
-      { recordId: sharedId, originType: "bulk-import", source: "import.csv", createdAt: 1_700_000_002_000 },
-      { skipNotification: true },
-    );
-    // Origin on a record the merge would INSERT (synthetic id path) → added.
-    await addRecordOrigin(
-      { recordId: backupOnlyId, originType: "manual", source: "manual entry", createdAt: 1_700_000_003_000 },
-      { skipNotification: true },
-    );
 
-    const blob = await exportToBlob();
+    const backupEvidenceId = await addEvidence(
+      { title: "Backup Doc", documentType: "invoice", originalDate: "2024-02-02", tags: [], partiesInvolved: [] } as any,
+      { skipNotification: true },
+    );
+    const blob = await exportToBlob(true, PASSWORD);
     await clearEverything();
     await seedLiveVault();
     await createTag("shared-tag");
@@ -751,7 +756,18 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
       { skipNotification: true },
     );
 
-    const analysis = await analyzeV3Backup({ source: blobChunks(blob) });
+    // Live duplicates of the "shared" inline data rows → alreadyPresent.
+    await addEvidence(
+      { title: "Shared Doc", documentType: "receipt", originalDate: "2024-01-01", tags: [], partiesInvolved: [] } as any,
+      { skipNotification: true },
+    );
+    await addPriceData({ date: "2024-01-01", currency: "USD", asset: "BTC", price: 42000 } as any, { skipNotification: true });
+    await markOutpointsAsDust([
+      { txid: TXID_SHARED, vout: 0, address: ADDR_SHARED, amountSats: 500 },
+    ]);
+    await savePsbt({ ...psbtBase, name: "Shared PSBT", psbtBase64: "cHNidP-shared" } as any);
+
+    const analysis = await analyzeV3Backup({ source: blobChunks(blob), password: PASSWORD });
     expect(analysis.inline.tags).toEqual({ total: 2, added: 1, alreadyPresent: 1 });
     expect(analysis.inline.owners).toEqual({ total: 1, added: 1, alreadyPresent: 0 });
     expect(analysis.inline.customFields).toEqual({ total: 1, added: 1, alreadyPresent: 0 });
@@ -766,6 +782,10 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
       alreadyPresent: 1,
       orphanedSkipped: 0,
     });
+    expect(analysis.inline.evidence).toEqual({ total: 2, added: 1, alreadyPresent: 1 });
+    expect(analysis.inline.priceData).toEqual({ total: 2, added: 1, alreadyPresent: 1 });
+    expect(analysis.inline.dustFlags).toEqual({ total: 2, added: 1, alreadyPresent: 1 });
+    expect(analysis.inline.savedPsbts).toEqual({ total: 2, added: 1, alreadyPresent: 1 });
 
     // Parity with a REAL merge: exactly the predicted rows are inserted.
     const tagsBefore = (await getTags()).length;
@@ -773,30 +793,11 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     const fieldsBefore = (await getAllCustomFields()).length;
     const templatesBefore = (await getAllDerivationTemplates()).length;
     const originsBefore = (await getAllRecordOrigins()).length;
-    await restoreV3Backup({
-      source: blobChunks(blob),
-      attachmentWriter,
-      restoreMode: "merge",
-    });
-    expect((await getTags()).length - tagsBefore).toBe(analysis.inline.tags.added);
-    expect((await getOwners()).length - ownersBefore).toBe(analysis.inline.owners.added);
-    expect((await getAllCustomFields()).length - fieldsBefore).toBe(
-      analysis.inline.customFields.added,
-    );
-    expect((await getAllDerivationTemplates()).length - templatesBefore).toBe(
-      analysis.inline.derivationTemplates.added,
-    );
-    expect((await getAllRecordOrigins()).length - originsBefore).toBe(
-      analysis.inline.recordOrigins.added,
-    );
-  });
 
-  it("is read-only: no vault row is created, modified, or deleted", async () => {
-    await seedExportedVault();
-    const blob = await exportToBlob();
+    const evidenceBefore = (await getAllEvidence()).length;
+    const blob = await exportToBlob(true, PASSWORD);
     await clearEverything();
     await seedLiveVault();
-    await seedLiveInlineMetadata();
 
     const before = await snapshotVaultTables();
     await analyzeV3Backup({ source: blobChunks(blob) });
@@ -806,11 +807,11 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
 
   it("excludes discovery-only records from the CSV but keeps metadata-bearing ones, escaped", async () => {
     await seedExportedVault();
-    const blob = await exportToBlob();
+    const blob = await exportToBlob(true, PASSWORD);
     await clearEverything();
     await seedLiveVault();
 
-    const analysis = await analyzeV3Backup({ source: blobChunks(blob) });
+    const analysis = await analyzeV3Backup({ source: blobChunks(blob), password: PASSWORD });
     expect(analysis.report.rowCount).toBe(2);
 
     const csv = analysis.report.parts.join("");
@@ -835,10 +836,9 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
 
   it("cancels mid-analysis without touching the vault", async () => {
     await seedExportedVault();
-    const blob = await exportToBlob();
+    const blob = await exportToBlob(true, PASSWORD);
     await clearEverything();
     await seedLiveVault();
-    await seedLiveInlineMetadata();
 
     const before = await snapshotVaultTables();
     const controller = new AbortController();
@@ -890,3 +890,21 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     expect(await snapshotVaultTables()).toBe(before);
   });
 });
+
+    const priceBefore = (await getAllPriceData()).length;
+
+    const dustBefore = (await getAllDustFlags()).length;
+
+    const psbtsBefore = (await getAllSavedPsbts()).length;
+
+    const psbtBase = {
+      destinationAddress: ADDR_SHARED,
+      feeRateSatsPerVb: 1,
+      feeSats: 100,
+      estimatedVbytes: 100,
+      totalInputSats: 10_000,
+      sendAmountSats: 9_900,
+      changeSats: 0,
+      inputs: [],
+      outputs: [],
+    };

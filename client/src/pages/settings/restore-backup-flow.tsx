@@ -1177,6 +1177,10 @@ export function RestoreBackupFlow() {
                           ["customFields", "Custom fields"],
                           ["derivationTemplates", "Derivation templates"],
                           ["recordOrigins", "Source history"],
+                          ["evidence", "Evidence documents"],
+                          ["priceData", "Price history"],
+                          ["dustFlags", "Dust flags"],
+                          ["savedPsbts", "Saved PSBTs"],
                         ] as const
                       )
                         .filter(([key]) => analysis.inline[key].total > 0)

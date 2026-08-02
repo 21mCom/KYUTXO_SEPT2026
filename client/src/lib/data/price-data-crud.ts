@@ -105,7 +105,9 @@ export type PriceRestoreMode = 'merge' | 'replace';
 // Build the de-dup key for the non-unique [date+currency+asset] index. The NUL
 // separator can never appear in any of the three string components, so distinct
 // triples can never collide on the same key.
-function priceDedupKey(date: unknown, currency: unknown, asset: unknown): string {
+// Exported so the read-only merge analysis (backup/analyze.ts) classifies
+// price rows with the EXACT key this restore de-dupes by.
+export function priceDedupKey(date: unknown, currency: unknown, asset: unknown): string {
   return `${date}\u0000${currency}\u0000${asset}`;
 }
 
