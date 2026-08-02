@@ -558,7 +558,9 @@ async function exportToBlob(encrypted = false, password?: string): Promise<Blob>
   return blob;
 }
 
-// JSON snapshot of every streamed table, for the read-only guarantee.
+// JSON snapshot of every streamed table PLUS the inline-metadata tables the
+// analysis reads (vocabulary, custom fields, derivation templates,
+// recordOrigins), for the read-only guarantee.
 async function snapshotVaultTables(): Promise<string> {
   return JSON.stringify({
     records: await getAllRecords(),
@@ -569,7 +571,50 @@ async function snapshotVaultTables(): Promise<string> {
     lineage: await getAllUtxoLineage(),
     segments: await getAllCustodySegments(),
     snapshots: await getAllLineageSnapshots(),
+    tags: await db.tags.toArray(),
+    categories: await db.categories.toArray(),
+    owners: await db.owners.toArray(),
+    walletNames: await db.walletNames.toArray(),
+    seedNames: await db.seedNames.toArray(),
+    walletSoftware: await db.walletSoftware.toArray(),
+    customFields: await getAllCustomFields(),
+    derivationTemplates: await getAllDerivationTemplates(),
+    recordOrigins: await getAllRecordOrigins(),
   });
+}
+
+// Seed the inline-metadata tables in the LIVE vault so the read-only /
+// cancellation snapshots would catch a regression that writes to them during
+// inline classification (not just when they start empty).
+async function seedLiveInlineMetadata(): Promise<void> {
+  await createTag("live-tag");
+  await createOwner("Live Owner");
+  await db.categories.add({ name: "live-category", createdAt: 1_700_000_000_000 } as any);
+  await db.walletNames.add({ name: "Live Wallet", createdAt: 1_700_000_000_000 } as any);
+  await db.seedNames.add({ name: "Live Seed", createdAt: 1_700_000_000_000 } as any);
+  await db.walletSoftware.add({ name: "Live Software", createdAt: 1_700_000_000_000 } as any);
+  await addCustomField(
+    { name: "Live Field", slug: "live-field", createdAt: 1_700_000_000_000 } as any,
+    { skipNotification: true },
+  );
+  await addDerivationTemplate(
+    {
+      fingerprint: "cafebabe",
+      scriptType: "P2WPKH",
+      derivationPath: "m/84'/0'/1'",
+      gapLimit: 20,
+      network: "mainnet",
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_000_000,
+    } as any,
+    { skipNotification: true },
+  );
+  const liveRecords = await getAllRecords();
+  const liveSharedId = liveRecords.find((r) => r.inputString === ADDR_SHARED)!.id!;
+  await addRecordOrigin(
+    { recordId: liveSharedId, originType: "manual", source: "manual entry", createdAt: 1_700_000_001_000 },
+    { skipNotification: true },
+  );
 }
 
 describe("analyzeV3Backup (read-only merge analysis)", () => {
@@ -751,6 +796,7 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     const blob = await exportToBlob();
     await clearEverything();
     await seedLiveVault();
+    await seedLiveInlineMetadata();
 
     const before = await snapshotVaultTables();
     await analyzeV3Backup({ source: blobChunks(blob) });
@@ -792,6 +838,7 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     const blob = await exportToBlob();
     await clearEverything();
     await seedLiveVault();
+    await seedLiveInlineMetadata();
 
     const before = await snapshotVaultTables();
     const controller = new AbortController();
