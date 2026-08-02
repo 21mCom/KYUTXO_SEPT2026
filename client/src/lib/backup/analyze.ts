@@ -36,30 +36,8 @@ import {
 import { readZipStream, lineConsumer, collectBytesConsumer } from "./zip-stream";
 import { BackupCancelledError } from "./sink";
 import { deriveKeyWithParams, decrypt, base64ToBuffer } from "@/lib/crypto";
-import { getRecordsByInputStrings } from "@/lib/data/record-crud";
-import { getAllAttachments } from "@/lib/data/attachments-crud";
+import { MergeClassifier } from "./merge-classify";
 import {
-  getTransactionsByTxids,
-  getParticipantsByTxids,
-} from "@/lib/data/transaction-crud";
-import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
-import {
-  getAllUtxoLineage,
-  getExistingSegmentIds,
-  getExistingSnapshotIds,
-} from "@/lib/data/lineage-crud";
-import {
-  participantKey,
-  participantMatchKey,
-  mergeDuplicateTransactionsByTxid,
-} from "./legacy-restore";
-import { lineageIdentity } from "./legacy-restore-misc";
-import {
-  recordMergeIdentity,
-  attachmentMergeKey,
-  syncStateMergeAddress,
-  segmentMergeId,
-  snapshotMergeId,
   recordOriginMergeKey,
   derivationTemplateIdentity,
 } from "./merge-keys";
@@ -83,7 +61,7 @@ import { getAllDustFlags, toOutpoint } from "@/lib/data/dust-flags-crud";
 import { getAllSavedPsbts } from "@/lib/data/saved-psbts-crud";
 import { isPrunableRecordShape } from "./compact";
 import { CSV_EXPORT_HEADER, recordToCsvRow, type CsvExportableRecord } from "@/lib/csv-export";
-import type { Record as VaultRecord, TransactionParticipant } from "@/lib/db-types";
+import type { Record as VaultRecord } from "@/lib/db-types";
 import type { RestoreProgress } from "./restore";
 
 export interface AnalyzeOptions {
@@ -202,20 +180,13 @@ export async function analyzeV3Backup(opts: AnalyzeOptions): Promise<MergeAnalys
   // (the attachment `recordId:filename` fallback) classify exactly like merge.
   const idMap = new Map<number, number>();
   let nextSyntheticId = -1;
-  // inputString → live id (de-dupe) or synthetic id (first occurrence this
-  // stream) — the read-only mirror of merge's mergedRecordIdByInputString.
-  const resolvedIdByInputString = new Map<string, number>();
 
-  // Live merge-key sets, loaded lazily on the first batch of each table (same
-  // laziness as merge: a backup without that table pays no query cost).
-  let existingAttachmentKeys: Set<string> | null = null;
-  let existingSyncAddresses: Set<string> | null = null;
-  let existingLineageKeys: Set<string> | null = null;
-  let existingSegmentIds: Set<string> | null = null;
-  let existingSnapshotIds: Set<string> | null = null;
-  // Participant exact-keys already counted as added this stream, so the
-  // incoming stream never double-counts itself across batches.
-  const addedParticipantKeys = new Set<string>();
+  // THE shared per-row merge classifier (see merge-classify.ts) — the exact
+  // implementation merge restore drives its writes from, so this analysis
+  // cannot drift from what a merge actually does. All merge de-dup state
+  // (lazy live natural-key sets, stream-added keys, the inputString → id map)
+  // lives inside it; this pass only counts its decisions.
+  const classifier = new MergeClassifier();
 
   const csvParts: string[] = [CSV_EXPORT_HEADER.join(",") + "\r\n"];
   let csvRowCount = 0;
@@ -246,35 +217,28 @@ export async function analyzeV3Backup(opts: AnalyzeOptions): Promise<MergeAnalys
   async function analyzeBatch(table: StreamedTable, rows: any[]): Promise<void> {
     throwIfAborted();
     if (table === "records") {
-      // Mirror merge's records branch: look up only identities not already
-      // resolved (live rows queried before, or first occurrences this stream).
-      const unknown = rows
-        .map(recordMergeIdentity)
-        .filter((s) => s !== "" && !resolvedIdByInputString.has(s));
-      if (unknown.length) {
-        const found = await getRecordsByInputStrings(unknown);
-        for (const r of found) {
-          if (typeof r.id === "number") {
-            resolvedIdByInputString.set(r.inputString, r.id);
-          }
-        }
-      }
+      const { decisions, newIdentities } = await classifier.classifyRecords(rows);
+      // Assign a synthetic id to every row a merge would insert, and register
+      // them so later batches resolve repeats — the read-only counterpart of
+      // merge registering the real inserted ids.
+      const syntheticIds = newIdentities.map(() => nextSyntheticId--);
+      classifier.registerNewRecordIds(newIdentities, syntheticIds);
       const csvRows: string[] = [];
-      for (const r of rows) {
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const d = decisions[i];
         tables.records.total += 1;
-        const s = recordMergeIdentity(r);
-        const mapped = s ? resolvedIdByInputString.get(s) : undefined;
-        if (mapped !== undefined) {
+        if (d.kind !== "new") {
           // Live duplicate, or a repeat of an identity first seen earlier in
-          // the backup stream — a merge inserts nothing for either.
+          // the backup stream/batch — a merge inserts nothing for either.
           tables.records.alreadyPresent += 1;
-          if (typeof r.id === "number") idMap.set(r.id, mapped);
+          if (typeof r.id === "number") {
+            idMap.set(r.id, d.kind === "existing" ? d.id : syntheticIds[d.newIndex]);
+          }
           continue;
         }
         // First occurrence of an identity a merge would insert.
-        const syntheticId = nextSyntheticId--;
-        if (s) resolvedIdByInputString.set(s, syntheticId);
-        if (typeof r.id === "number") idMap.set(r.id, syntheticId);
+        if (typeof r.id === "number") idMap.set(r.id, syntheticIds[d.newIndex]);
         if (isPrunableRecordShape(r as VaultRecord)) {
           // Blockchain-discovery-only: sync re-finds these; not addable.
           tables.records.discoveryOnlySkipped += 1;
@@ -288,150 +252,77 @@ export async function analyzeV3Backup(opts: AnalyzeOptions): Promise<MergeAnalys
         csvRowCount += csvRows.length;
       }
     } else if (table === "attachments") {
-      if (existingAttachmentKeys === null) {
-        existingAttachmentKeys = new Set<string>();
-        for (const att of await getAllAttachments()) {
-          existingAttachmentKeys.add(attachmentMergeKey(att, att.recordId));
-        }
-      }
-      for (const a of rows) {
+      const decisions = await classifier.classifyAttachments(
+        rows,
+        (oldId) => (typeof oldId === "number" ? idMap.get(oldId) : undefined),
+        true,
+      );
+      for (const decision of decisions) {
         tables.attachments.total += 1;
-        const recordId = typeof a?.recordId === "number" ? idMap.get(a.recordId) : undefined;
-        if (recordId === undefined) {
+        if (decision.kind === "orphan") {
           // Orphan: owning record absent — a merge inserts no row (the file
           // bytes are routed to Needs Review instead).
           tables.attachments.orphanedSkipped += 1;
-          continue;
-        }
-        const attKey = attachmentMergeKey(a, recordId);
-        if (existingAttachmentKeys.has(attKey)) {
+        } else if (decision.kind === "duplicate") {
           tables.attachments.alreadyPresent += 1;
-          continue;
+        } else {
+          tables.attachments.added += 1;
         }
-        existingAttachmentKeys.add(attKey);
-        tables.attachments.added += 1;
       }
     } else if (table === "transactionParticipants") {
-      // Mirror merge: a live counterpart (outpoint for inputs / vout for
-      // outputs, exact key as fallback) is ENRICHED, not duplicated.
-      const batchTxids = Array.from(
-        new Set(
-          rows.map((p) => p.txid).filter((t): t is string => typeof t === "string" && t !== ""),
-        ),
-      );
-      const liveByMatchKey = new Map<string, TransactionParticipant>();
-      const liveByExactKey = new Map<string, TransactionParticipant>();
-      if (batchTxids.length) {
-        for (const lp of await getParticipantsByTxids(batchTxids)) {
-          if (!liveByExactKey.has(participantKey(lp))) {
-            liveByExactKey.set(participantKey(lp), lp);
-          }
-          const mk = participantMatchKey(lp);
-          if (mk && !liveByMatchKey.has(mk)) liveByMatchKey.set(mk, lp);
-        }
-      }
-      for (const p of rows) {
+      // A live counterpart (outpoint for inputs / vout for outputs, exact key
+      // as fallback) is ENRICHED by a merge, not duplicated — so both enrich
+      // and stream-duplicate decisions count as already present.
+      const decisions = await classifier.classifyParticipants(rows);
+      for (const decision of decisions) {
         tables.transactionParticipants.total += 1;
-        const mk = participantMatchKey(p);
-        const liveMatch =
-          (mk ? liveByMatchKey.get(mk) : undefined) ?? liveByExactKey.get(participantKey(p));
-        if (liveMatch) {
+        if (decision.kind === "insert") {
+          tables.transactionParticipants.added += 1;
+        } else {
           tables.transactionParticipants.alreadyPresent += 1;
-          continue;
         }
-        const k = participantKey(p);
-        if (addedParticipantKeys.has(k)) {
-          tables.transactionParticipants.alreadyPresent += 1;
-          continue;
-        }
-        addedParticipantKeys.add(k);
-        tables.transactionParticipants.added += 1;
       }
     } else if (table === "addressSyncState") {
-      if (existingSyncAddresses === null) {
-        existingSyncAddresses = new Set<string>();
-        for (const s of await getAllAddressSyncState()) {
-          existingSyncAddresses.add(s.address);
-        }
-      }
-      for (const s of rows) {
+      const inserts = await classifier.classifySyncState(rows);
+      for (const insert of inserts) {
         tables.addressSyncState.total += 1;
-        const address = syncStateMergeAddress(s);
-        if (!address || existingSyncAddresses.has(address)) {
-          tables.addressSyncState.alreadyPresent += 1;
-          continue;
-        }
-        existingSyncAddresses.add(address);
-        tables.addressSyncState.added += 1;
+        if (insert) tables.addressSyncState.added += 1;
+        else tables.addressSyncState.alreadyPresent += 1;
       }
     } else if (table === "blockchainTransactions") {
       // Same-txid repeats within the batch collapse into one row (merge
       // enriches rather than duplicating), then each survivor is matched
       // against the live vault by txid.
-      const deduped = mergeDuplicateTransactionsByTxid(rows);
+      const { deduped, decisions } = await classifier.classifyTransactions(rows, true);
       tables.blockchainTransactions.total += rows.length;
       tables.blockchainTransactions.alreadyPresent += rows.length - deduped.length;
-      const batchTxids = deduped
-        .map((t) => t.txid)
-        .filter((t): t is string => typeof t === "string" && t !== "");
-      const liveByTxid = new Map<string, unknown>();
-      if (batchTxids.length) {
-        for (const tx of await getTransactionsByTxids(batchTxids)) {
-          liveByTxid.set(tx.txid, tx);
-        }
-      }
-      for (const tx of deduped) {
-        const live = typeof tx.txid === "string" ? liveByTxid.get(tx.txid) : undefined;
-        if (live) {
+      for (const decision of decisions) {
+        if (decision.kind === "enrich") {
           tables.blockchainTransactions.alreadyPresent += 1;
         } else {
           tables.blockchainTransactions.added += 1;
         }
       }
     } else if (table === "utxoLineage") {
-      if (existingLineageKeys === null) {
-        existingLineageKeys = new Set<string>();
-        for (const l of await getAllUtxoLineage()) {
-          existingLineageKeys.add(lineageIdentity(l));
-        }
-      }
-      for (const d of rows) {
+      const inserts = await classifier.classifyLineage(rows);
+      for (const insert of inserts) {
         tables.utxoLineage.total += 1;
-        const k = lineageIdentity(d);
-        if (existingLineageKeys.has(k)) {
-          tables.utxoLineage.alreadyPresent += 1;
-          continue;
-        }
-        existingLineageKeys.add(k);
-        tables.utxoLineage.added += 1;
+        if (insert) tables.utxoLineage.added += 1;
+        else tables.utxoLineage.alreadyPresent += 1;
       }
     } else if (table === "custodySegments") {
-      if (existingSegmentIds === null) {
-        existingSegmentIds = await getExistingSegmentIds();
-      }
-      for (const d of rows) {
+      const inserts = await classifier.classifySegments(rows);
+      for (const insert of inserts) {
         tables.custodySegments.total += 1;
-        const segmentId = segmentMergeId(d);
-        if (segmentId !== null && existingSegmentIds.has(segmentId)) {
-          tables.custodySegments.alreadyPresent += 1;
-          continue;
-        }
-        if (segmentId !== null) existingSegmentIds.add(segmentId);
-        tables.custodySegments.added += 1;
+        if (insert) tables.custodySegments.added += 1;
+        else tables.custodySegments.alreadyPresent += 1;
       }
     } else if (table === "lineageSnapshots") {
-      if (existingSnapshotIds === null) {
-        existingSnapshotIds = await getExistingSnapshotIds();
-      }
-      for (const d of rows) {
+      const inserts = await classifier.classifySnapshots(rows);
+      for (const insert of inserts) {
         tables.lineageSnapshots.total += 1;
-        const snapshotId = snapshotMergeId(d);
-        if (snapshotId !== null && existingSnapshotIds.has(snapshotId)) {
-          tables.lineageSnapshots.alreadyPresent += 1;
-          continue;
-        }
-        if (snapshotId !== null) existingSnapshotIds.add(snapshotId);
-        tables.lineageSnapshots.added += 1;
+        if (insert) tables.lineageSnapshots.added += 1;
+        else tables.lineageSnapshots.alreadyPresent += 1;
       }
     }
     processed += rows.length;
