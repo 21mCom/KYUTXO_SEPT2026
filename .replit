@@ -385,6 +385,10 @@ args = "vault-kdf-node-check"
 task = "workflow.run"
 args = "argon2-kdf-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "kdf-upgrade-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1375,6 +1379,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-address-checker-deep-scroll-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "kdf-upgrade-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-kdf-upgrade-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
