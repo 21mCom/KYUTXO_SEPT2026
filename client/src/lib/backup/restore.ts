@@ -117,6 +117,7 @@ import {
   syncStateMergeAddress,
   segmentMergeId,
   snapshotMergeId,
+  recordOriginMergeKey,
 } from "./merge-keys";
 
 // Thrown when a restore is cancelled AFTER the destructive clear but the vault
@@ -1136,13 +1137,8 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
 
     let toInsert = remapped;
     if (isMerge) {
-      const originKey = (o: {
-        recordId: number;
-        originType?: unknown;
-        source?: unknown;
-        createdAt?: unknown;
-      }): string =>
-        [o.recordId, o.originType ?? "", o.source ?? "", o.createdAt ?? ""].join("|");
+      // Natural key shared with the read-only merge analysis (merge-keys.ts).
+      const originKey = recordOriginMergeKey;
       const affectedRecordIds = Array.from(new Set(remapped.map((o) => o.recordId)));
       const seen = new Set<string>();
       for (const live of await getRecordOriginsByRecordIds(affectedRecordIds)) {

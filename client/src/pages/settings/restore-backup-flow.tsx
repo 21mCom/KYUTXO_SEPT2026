@@ -1166,6 +1166,46 @@ export function RestoreBackupFlow() {
                             </div>
                           );
                         })}
+                      {(
+                        [
+                          ["tags", "Tags"],
+                          ["owners", "Owners"],
+                          ["categories", "Categories"],
+                          ["walletNames", "Wallet names"],
+                          ["seedNames", "Seed names"],
+                          ["walletSoftware", "Wallet software"],
+                          ["customFields", "Custom fields"],
+                          ["derivationTemplates", "Derivation templates"],
+                          ["recordOrigins", "Source history"],
+                        ] as const
+                      )
+                        .filter(([key]) => analysis.inline[key].total > 0)
+                        .map(([key, label]) => {
+                          const t = analysis.inline[key];
+                          return (
+                            <div
+                              key={`inline-${key}`}
+                              className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                              data-testid={`analysis-row-inline-${key}`}
+                            >
+                              <span className="text-muted-foreground">{label}</span>
+                              <span className="font-medium text-right">
+                                {t.added} new
+                                {t.alreadyPresent > 0 && (
+                                  <span className="text-muted-foreground font-normal">
+                                    {" "}· {t.alreadyPresent} already present
+                                  </span>
+                                )}
+                                {key === "recordOrigins" &&
+                                  analysis.inline.recordOrigins.orphanedSkipped > 0 && (
+                                    <span className="text-muted-foreground font-normal">
+                                      {" "}· {analysis.inline.recordOrigins.orphanedSkipped} orphaned
+                                    </span>
+                                  )}
+                              </span>
+                            </div>
+                          );
+                        })}
                     </div>
                     {analysis.tables.records.discoveryOnlySkipped > 0 && (
                       <p className="text-xs text-muted-foreground" data-testid="text-analysis-discovery-note">

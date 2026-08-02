@@ -46,3 +46,35 @@ export function segmentMergeId(row: { segmentId?: unknown }): string | null {
 export function snapshotMergeId(row: { snapshotId?: unknown }): string | null {
   return typeof row.snapshotId === "string" ? row.snapshotId : null;
 }
+
+// A recordOrigin row's merge identity: live recordId + originType + source +
+// createdAt. Used by restorePendingRecordOrigins (restore.ts) to skip origins
+// already on the record (and duplicates within the incoming backup), and by
+// the analysis to predict exactly those skips. `recordId` must already be the
+// LIVE (or synthetic) record id the row links to, remapped by the caller.
+export function recordOriginMergeKey(o: {
+  recordId: number;
+  originType?: unknown;
+  source?: unknown;
+  createdAt?: unknown;
+}): string {
+  return [o.recordId, o.originType ?? "", o.source ?? "", o.createdAt ?? ""].join("|");
+}
+
+// A derivation template's merge identity — fingerprint + scriptType +
+// derivationPath + network, with the same defaults restoreInlineTables applies
+// on insert (so a backup row missing a field collides with the defaulted row a
+// previous merge inserted). Shared by restoreInlineTables and the analysis.
+export function derivationTemplateIdentity(t: {
+  fingerprint?: string;
+  scriptType?: string;
+  derivationPath?: string;
+  network?: string;
+}): string {
+  return [
+    t.fingerprint || "unknown",
+    t.scriptType || "P2WPKH",
+    t.derivationPath || "m/84'/0'/0'",
+    t.network || "mainnet",
+  ].join("|");
+}

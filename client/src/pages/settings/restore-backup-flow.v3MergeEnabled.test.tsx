@@ -113,6 +113,17 @@ function makeAnalysisResult(rowCount: number) {
       custodySegments: { ...zero },
       lineageSnapshots: { ...zero },
     },
+    inline: {
+      tags: { ...zero },
+      categories: { ...zero },
+      owners: { ...zero },
+      walletNames: { ...zero },
+      seedNames: { ...zero },
+      walletSoftware: { ...zero },
+      customFields: { ...zero },
+      derivationTemplates: { ...zero },
+      recordOrigins: { ...zero, orphanedSkipped: 0 },
+    },
     report: { parts: ["Type,Identifier,Label\r\n"], rowCount },
   };
 }

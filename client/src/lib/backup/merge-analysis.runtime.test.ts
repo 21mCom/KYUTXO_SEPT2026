@@ -63,7 +63,17 @@ import {
   clearCustodySegments,
   clearLineageSnapshots,
 } from "@/lib/data/lineage-crud";
-import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
+import {
+  addRecordOrigin,
+  getAllRecordOrigins,
+  clearRecordOrigins,
+} from "@/lib/data/record-origins-crud";
+import { createTag, createOwner, getTags, getOwners } from "@/lib/data/vocabulary-crud";
+import { addCustomField, getAllCustomFields } from "@/lib/data/custom-fields-crud";
+import {
+  addDerivationTemplate,
+  getAllDerivationTemplates,
+} from "@/lib/data/derivation-templates-crud";
 import { clearNodeSettings } from "@/lib/data/node-settings-crud";
 import { clearCustomFields } from "@/lib/data/custom-fields-crud";
 import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
@@ -641,6 +651,99 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     expect(merged.counts.utxoLineage).toBe(analysis.tables.utxoLineage.added);
     expect(merged.counts.custodySegments).toBe(analysis.tables.custodySegments.added);
     expect(merged.counts.lineageSnapshots).toBe(analysis.tables.lineageSnapshots.added);
+  });
+
+  it("predicts inline-metadata insert counts (vocabulary, custom fields, templates, recordOrigins)", async () => {
+    // Exported vault: shared + backup-only vocabulary, a custom field, a
+    // derivation template, and recordOrigins on both the shared and the
+    // backup-only record (one origin duplicated in the live vault).
+    const sharedId = await seedExportedVault();
+    await createTag("shared-tag");
+    await createTag("backup-only-tag");
+    await createOwner("Backup Owner");
+    await addCustomField(
+      { name: "Case Number", slug: "case-number", createdAt: 1_700_000_000_000 } as any,
+      { skipNotification: true },
+    );
+    await addDerivationTemplate(
+      {
+        fingerprint: "deadbeef",
+        scriptType: "P2WPKH",
+        derivationPath: "m/84'/0'/0'",
+        gapLimit: 20,
+        network: "mainnet",
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      } as any,
+      { skipNotification: true },
+    );
+    const backupRecords = await getAllRecords();
+    const backupOnlyId = backupRecords.find((r) => r.inputString === ADDR_BACKUP)!.id!;
+    // Duplicated in the live vault (same natural key) → alreadyPresent.
+    await addRecordOrigin(
+      { recordId: sharedId, originType: "manual", source: "manual entry", createdAt: 1_700_000_001_000 },
+      { skipNotification: true },
+    );
+    // New origin on the shared (de-duped) record → added.
+    await addRecordOrigin(
+      { recordId: sharedId, originType: "bulk-import", source: "import.csv", createdAt: 1_700_000_002_000 },
+      { skipNotification: true },
+    );
+    // Origin on a record the merge would INSERT (synthetic id path) → added.
+    await addRecordOrigin(
+      { recordId: backupOnlyId, originType: "manual", source: "manual entry", createdAt: 1_700_000_003_000 },
+      { skipNotification: true },
+    );
+
+    const blob = await exportToBlob();
+    await clearEverything();
+    await seedLiveVault();
+    await createTag("shared-tag");
+    const liveRecords = await getAllRecords();
+    const liveSharedId = liveRecords.find((r) => r.inputString === ADDR_SHARED)!.id!;
+    await addRecordOrigin(
+      { recordId: liveSharedId, originType: "manual", source: "manual entry", createdAt: 1_700_000_001_000 },
+      { skipNotification: true },
+    );
+
+    const analysis = await analyzeV3Backup({ source: blobChunks(blob) });
+    expect(analysis.inline.tags).toEqual({ total: 2, added: 1, alreadyPresent: 1 });
+    expect(analysis.inline.owners).toEqual({ total: 1, added: 1, alreadyPresent: 0 });
+    expect(analysis.inline.customFields).toEqual({ total: 1, added: 1, alreadyPresent: 0 });
+    expect(analysis.inline.derivationTemplates).toEqual({
+      total: 1,
+      added: 1,
+      alreadyPresent: 0,
+    });
+    expect(analysis.inline.recordOrigins).toEqual({
+      total: 3,
+      added: 2,
+      alreadyPresent: 1,
+      orphanedSkipped: 0,
+    });
+
+    // Parity with a REAL merge: exactly the predicted rows are inserted.
+    const tagsBefore = (await getTags()).length;
+    const ownersBefore = (await getOwners()).length;
+    const fieldsBefore = (await getAllCustomFields()).length;
+    const templatesBefore = (await getAllDerivationTemplates()).length;
+    const originsBefore = (await getAllRecordOrigins()).length;
+    await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter,
+      restoreMode: "merge",
+    });
+    expect((await getTags()).length - tagsBefore).toBe(analysis.inline.tags.added);
+    expect((await getOwners()).length - ownersBefore).toBe(analysis.inline.owners.added);
+    expect((await getAllCustomFields()).length - fieldsBefore).toBe(
+      analysis.inline.customFields.added,
+    );
+    expect((await getAllDerivationTemplates()).length - templatesBefore).toBe(
+      analysis.inline.derivationTemplates.added,
+    );
+    expect((await getAllRecordOrigins()).length - originsBefore).toBe(
+      analysis.inline.recordOrigins.added,
+    );
   });
 
   it("is read-only: no vault row is created, modified, or deleted", async () => {

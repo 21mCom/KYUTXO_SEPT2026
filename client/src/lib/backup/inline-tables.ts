@@ -87,6 +87,7 @@ import {
   getExistingSnapshotIds,
 } from "@/lib/data/lineage-crud";
 import { lineageIdentity, type RestoreMode } from "./legacy-restore-misc";
+import { derivationTemplateIdentity } from "./merge-keys";
 import { FUND_TRAIL_LAYOUT_OPTIONS } from "@/components/fund-trail/view-data";
 import {
   formatQuantumTagLevels,
@@ -542,20 +543,10 @@ export async function restoreInlineTables(
   }
 
   // Merge mode: derivation templates have no unique index, so de-dupe by their
-  // natural identity — fingerprint + scriptType + derivationPath + network —
-  // covering both existing rows and duplicates within the incoming backup.
-  const templateIdentity = (t: {
-    fingerprint?: string;
-    scriptType?: string;
-    derivationPath?: string;
-    network?: string;
-  }): string =>
-    [
-      t.fingerprint || "unknown",
-      t.scriptType || "P2WPKH",
-      t.derivationPath || "m/84'/0'/0'",
-      t.network || "mainnet",
-    ].join("|");
+  // natural identity (derivationTemplateIdentity, shared with the read-only
+  // merge analysis) — covering both existing rows and duplicates within the
+  // incoming backup.
+  const templateIdentity = derivationTemplateIdentity;
   const existingTemplateKeys = new Set<string>();
   if (restoreMode === "merge") {
     for (const t of await getAllDerivationTemplates()) {

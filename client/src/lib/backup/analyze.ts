@@ -24,6 +24,7 @@
 import {
   isStreamedTablePath,
   parseBatchLine,
+  parseInline,
   isV3Manifest,
   MANIFEST_FILENAME,
   ATTACHMENTS_DIR,
@@ -59,7 +60,20 @@ import {
   syncStateMergeAddress,
   segmentMergeId,
   snapshotMergeId,
+  recordOriginMergeKey,
+  derivationTemplateIdentity,
 } from "./merge-keys";
+import {
+  getTags,
+  getCategories,
+  getOwners,
+  getWalletNames,
+  getSeedNames,
+  getWalletSoftware,
+} from "@/lib/data/vocabulary-crud";
+import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
+import { getAllDerivationTemplates } from "@/lib/data/derivation-templates-crud";
+import { getRecordOriginsByRecordIds } from "@/lib/data/record-origins-crud";
 import { isPrunableRecordShape } from "./compact";
 import { CSV_EXPORT_HEADER, recordToCsvRow, type CsvExportableRecord } from "@/lib/csv-export";
 import type { Record as VaultRecord, TransactionParticipant } from "@/lib/db-types";
@@ -96,6 +110,29 @@ export interface AttachmentsTableAnalysis extends MergeTableAnalysis {
   orphanedSkipped: number;
 }
 
+export interface RecordOriginsAnalysis extends MergeTableAnalysis {
+  // Origin rows whose owning record is absent from both the vault and the
+  // backup — a merge drops them (an origin without its record is meaningless).
+  orphanedSkipped: number;
+}
+
+// New/already-present counts for the small inline-metadata tables a merge also
+// restores from the manifest, classified with the SAME natural keys
+// restoreInlineTables / restorePendingRecordOrigins de-dupe by (vocabulary:
+// name; custom fields: slug; derivation templates: derivationTemplateIdentity;
+// recordOrigins: recordOriginMergeKey after id remap).
+export interface InlineMetadataAnalysis {
+  tags: MergeTableAnalysis;
+  categories: MergeTableAnalysis;
+  owners: MergeTableAnalysis;
+  walletNames: MergeTableAnalysis;
+  seedNames: MergeTableAnalysis;
+  walletSoftware: MergeTableAnalysis;
+  customFields: MergeTableAnalysis;
+  derivationTemplates: MergeTableAnalysis;
+  recordOrigins: RecordOriginsAnalysis;
+}
+
 export interface MergeAnalysisResult {
   manifest: BackupManifest;
   tables: {
@@ -108,6 +145,10 @@ export interface MergeAnalysisResult {
     custodySegments: MergeTableAnalysis;
     lineageSnapshots: MergeTableAnalysis;
   };
+  // Inline-metadata counts (vocabulary, custom fields, derivation templates,
+  // recordOrigins source history) — what a merge would additionally restore
+  // from the manifest, beyond the streamed tables above.
+  inline: InlineMetadataAnalysis;
   report: {
     // CSV chunks in key order: parts[0] is the header row. Pass straight to
     // `new Blob(parts, { type: "text/csv" })`.
@@ -444,6 +485,159 @@ export async function analyzeV3Backup(opts: AnalyzeOptions): Promise<MergeAnalys
   throwIfAborted();
   if (!manifest) throw new Error("Invalid backup: missing manifest");
 
+  // Inline-metadata classification runs AFTER the stream: recordOrigins
+  // reference records by backup id, and the old→(live|synthetic) id map is
+  // only complete once the records NDJSON has been processed — the same
+  // ordering restore.ts uses for restorePendingRecordOrigins.
+  const inline = await analyzeInlineMetadata(manifest, key, idMap, throwIfAborted);
+
   opts.onProgress?.({ percent: 100, phase: "Analysis complete" });
-  return { manifest, tables, report: { parts: csvParts, rowCount: csvRowCount } };
+  return { manifest, tables, inline, report: { parts: csvParts, rowCount: csvRowCount } };
+}
+
+// Classifies the manifest's inline metadata (vocabulary, custom fields,
+// derivation templates, recordOrigins) against the live vault, read-only,
+// using the exact natural keys the merge restore de-dupes by:
+//   - vocabulary: `name` (blank names and repeats within the backup are
+//     skipped by restoreInlineTables, so they count as alreadyPresent);
+//   - custom fields: unique `slug` (a blank slug is always inserted);
+//   - derivation templates: derivationTemplateIdentity (shared helper);
+//   - recordOrigins: recordOriginMergeKey over the remapped record id —
+//     rows whose owning record is absent from vault AND backup are dropped
+//     by a merge and reported as orphanedSkipped.
+async function analyzeInlineMetadata(
+  manifest: BackupManifest,
+  key: CryptoKey | null,
+  idMap: Map<number, number>,
+  throwIfAborted: () => void,
+): Promise<InlineMetadataAnalysis> {
+  const data = await parseInline(manifest, key);
+  const arr = (k: string): any[] => (Array.isArray(data[k]) ? (data[k] as any[]) : []);
+  const blank = (): MergeTableAnalysis => ({ total: 0, added: 0, alreadyPresent: 0 });
+
+  // Mirror of restoreInlineTables' vocabSeen/vocabSkip in merge mode. The live
+  // names are loaded only when the backup actually carries rows for the table.
+  const vocab = async (
+    tableKey: string,
+    existing: () => Promise<Array<{ name: string }>>,
+  ): Promise<MergeTableAnalysis> => {
+    const t = blank();
+    const rows = arr(tableKey);
+    if (rows.length === 0) return t;
+    throwIfAborted();
+    const seen = new Set<string>();
+    for (const v of await existing()) seen.add(v.name);
+    for (const row of rows) {
+      t.total += 1;
+      const name = (row?.name as string) || "";
+      if (!name || seen.has(name)) {
+        t.alreadyPresent += 1;
+        continue;
+      }
+      seen.add(name);
+      t.added += 1;
+    }
+    return t;
+  };
+
+  const customFields = blank();
+  {
+    const rows = arr("customFields");
+    if (rows.length) {
+      throwIfAborted();
+      const seenSlugs = new Set<string>();
+      for (const f of await getAllCustomFields()) seenSlugs.add(f.slug);
+      for (const row of rows) {
+        customFields.total += 1;
+        const slug = typeof row?.slug === "string" ? row.slug : "";
+        if (slug && seenSlugs.has(slug)) {
+          customFields.alreadyPresent += 1;
+          continue;
+        }
+        if (slug) seenSlugs.add(slug);
+        customFields.added += 1;
+      }
+    }
+  }
+
+  const derivationTemplates = blank();
+  {
+    const rows = arr("derivationTemplates");
+    if (rows.length) {
+      throwIfAborted();
+      const seenKeys = new Set<string>();
+      for (const t of await getAllDerivationTemplates()) {
+        seenKeys.add(derivationTemplateIdentity(t));
+      }
+      for (const row of rows) {
+        derivationTemplates.total += 1;
+        const k = derivationTemplateIdentity(row ?? {});
+        if (seenKeys.has(k)) {
+          derivationTemplates.alreadyPresent += 1;
+          continue;
+        }
+        seenKeys.add(k);
+        derivationTemplates.added += 1;
+      }
+    }
+  }
+
+  const recordOrigins: RecordOriginsAnalysis = { ...blank(), orphanedSkipped: 0 };
+  {
+    const rows = arr("recordOrigins");
+    if (rows.length) {
+      throwIfAborted();
+      // Remap backup record ids exactly like restorePendingRecordOrigins:
+      // live ids for de-duped records, synthetic negative ids for records the
+      // merge would insert (their origins can only collide within the backup).
+      const remapped: Array<{ key: string }> = [];
+      for (const o of rows) {
+        recordOrigins.total += 1;
+        const backupId = o && typeof o === "object" ? (o as any).recordId : undefined;
+        const mapped = typeof backupId === "number" ? idMap.get(backupId) : undefined;
+        if (mapped === undefined) {
+          recordOrigins.orphanedSkipped += 1;
+          continue;
+        }
+        remapped.push({ key: recordOriginMergeKey({ ...(o as any), recordId: mapped }) });
+      }
+      if (remapped.length) {
+        // Only positive (live) record ids can have live origins; synthetic
+        // negative ids simply return no rows from the query, like merge.
+        const liveIds = Array.from(
+          new Set(
+            rows
+              .map((o: any) => (typeof o?.recordId === "number" ? idMap.get(o.recordId) : undefined))
+              .filter((id): id is number => typeof id === "number" && id > 0),
+          ),
+        );
+        const seen = new Set<string>();
+        if (liveIds.length) {
+          for (const live of await getRecordOriginsByRecordIds(liveIds)) {
+            seen.add(recordOriginMergeKey(live));
+          }
+        }
+        for (const r of remapped) {
+          if (seen.has(r.key)) {
+            recordOrigins.alreadyPresent += 1;
+            continue;
+          }
+          seen.add(r.key);
+          recordOrigins.added += 1;
+        }
+      }
+    }
+  }
+
+  return {
+    tags: await vocab("tags", getTags),
+    categories: await vocab("categories", getCategories),
+    owners: await vocab("owners", getOwners),
+    walletNames: await vocab("walletNames", getWalletNames),
+    seedNames: await vocab("seedNames", getSeedNames),
+    walletSoftware: await vocab("walletSoftware", getWalletSoftware),
+    customFields,
+    derivationTemplates,
+    recordOrigins,
+  };
 }
