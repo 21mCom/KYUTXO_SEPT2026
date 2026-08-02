@@ -128,6 +128,64 @@ describe("analyzeDeriverInput", () => {
     expect(result.scriptTypeLabel).toMatch(/P2WSH/i);
   });
 
+  it("extracts and classifies the descriptor from pasted BSMS file content", () => {
+    const bsms = [
+      "BSMS 1.0",
+      `wsh(sortedmulti(2,[aaaaaaaa/48'/0'/0'/2']${TR_XPUB}/**,[bbbbbbbb/48'/0'/0'/2']${BIP84_AS_XPUB}/**))`,
+      "/0/*,/1/*",
+      "bc1qxr9dzr64gjsestfz7ll985694rmxsanpq93pnkg3sgv40rnkkyzscf20fs",
+    ].join("\r\n") + "\r\n\r\n";
+    const result = analyzeDeriverInput(bsms);
+    expect(result.ok).toBe(true);
+    expect(result.source).toBe("bsms");
+    expect(result.kind).toBe("multisig-descriptor");
+    expect(result.threshold).toBe(2);
+    expect(result.keyCount).toBe(2);
+    expect(result.chainType).toBe("dual-chain");
+    expect(result.firstAddress).toBe(
+      "bc1qxr9dzr64gjsestfz7ll985694rmxsanpq93pnkg3sgv40rnkkyzscf20fs",
+    );
+  });
+
+  it("surfaces a BSMS-tagged error for a corrupt BSMS file", () => {
+    const result = analyzeDeriverInput("BSMS 1.0\nnot-a-descriptor\n");
+    expect(result.ok).toBe(false);
+    expect(result.source).toBe("bsms");
+    expect(result.error).toMatch(/descriptor/i);
+  });
+
+  it("extracts and classifies the descriptor from a Sparrow JSON export", () => {
+    const json = JSON.stringify({
+      label: "Family Vault",
+      descriptor: `wsh(sortedmulti(2,[aaaaaaaa/48'/0'/0'/2']${TR_XPUB}/0/*,[bbbbbbbb/48'/0'/0'/2']${BIP84_AS_XPUB}/0/*))`,
+    });
+    const result = analyzeDeriverInput(json);
+    expect(result.ok).toBe(true);
+    expect(result.source).toBe("sparrow");
+    expect(result.kind).toBe("multisig-descriptor");
+    expect(result.walletLabel).toBe("Family Vault");
+    expect(result.chainType).toBe("receive-only");
+  });
+
+  it("classifies a single-sig descriptor inside a Sparrow export", () => {
+    const json = JSON.stringify({
+      label: "Hot Wallet",
+      descriptor: `wpkh([73c5da0a/84'/0'/0']${BIP84_ZPUB}/<0;1>/*)`,
+    });
+    const result = analyzeDeriverInput(json);
+    expect(result.ok).toBe(true);
+    expect(result.source).toBe("sparrow");
+    expect(result.kind).toBe("single-sig-descriptor");
+    expect(result.walletLabel).toBe("Hot Wallet");
+  });
+
+  it("surfaces a Sparrow-tagged error for JSON without a descriptor", () => {
+    const result = analyzeDeriverInput('{"label":"nothing useful"}');
+    expect(result.ok).toBe(false);
+    expect(result.source).toBe("sparrow");
+    expect(result.error).toMatch(/descriptor/i);
+  });
+
   it("rejects a descriptor with an invalid inner key", () => {
     const result = analyzeDeriverInput("wpkh(xpubINVALIDKEY/<0;1>/*)");
     expect(result.ok).toBe(false);
@@ -194,6 +252,39 @@ describe("deriveDeriverAddresses", () => {
     const rows = await deriveDeriverAddresses(analysis, 1, false);
     expect(rows[0].address).toBe(TR_FIRST_RECEIVE);
     expect(rows[0].chain).toBe("receive");
+  });
+
+  it("derives multisig addresses end-to-end from pasted BSMS content", async () => {
+    const bsms = [
+      "BSMS 1.0",
+      `wsh(sortedmulti(2,[aaaaaaaa/48'/0'/0'/2']${TR_XPUB}/**,[bbbbbbbb/48'/0'/0'/2']${BIP84_AS_XPUB}/**))`,
+      "/0/*,/1/*",
+      "bc1qxr9dzr64gjsestfz7ll985694rmxsanpq93pnkg3sgv40rnkkyzscf20fs",
+    ].join("\n");
+    const analysis = analyzeDeriverInput(bsms);
+    expect(analysis.ok).toBe(true);
+    const rows = await deriveDeriverAddresses(analysis, 3, false);
+    expect(rows).toHaveLength(3);
+    expect(rows.every(r => r.address.startsWith("bc1q"))).toBe(true);
+    // Same keys pasted as a raw descriptor must derive identical addresses.
+    const raw = analyzeDeriverInput(
+      `wsh(sortedmulti(2,[aaaaaaaa/48'/0'/0'/2']${TR_XPUB}/<0;1>/*,[bbbbbbbb/48'/0'/0'/2']${BIP84_AS_XPUB}/<0;1>/*))`,
+    );
+    const rawRows = await deriveDeriverAddresses(raw, 3, false);
+    expect(rows.map(r => r.address)).toEqual(rawRows.map(r => r.address));
+  });
+
+  it("derives multisig addresses end-to-end from a Sparrow JSON export", async () => {
+    const json = JSON.stringify({
+      label: "Family Vault",
+      descriptor: `wsh(sortedmulti(2,[aaaaaaaa/48'/0'/0'/2']${TR_XPUB}/<0;1>/*,[bbbbbbbb/48'/0'/0'/2']${BIP84_AS_XPUB}/<0;1>/*))`,
+    });
+    const analysis = analyzeDeriverInput(json);
+    expect(analysis.ok).toBe(true);
+    const rows = await deriveDeriverAddresses(analysis, 2, true);
+    expect(rows).toHaveLength(4);
+    expect(rows.filter(r => r.chain === "change")).toHaveLength(2);
+    expect(rows.every(r => r.address.startsWith("bc1q"))).toBe(true);
   });
 
   it("derives multisig addresses from a wsh sortedmulti descriptor", async () => {

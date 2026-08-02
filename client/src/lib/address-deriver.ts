@@ -26,6 +26,8 @@ import {
   type DescriptorChainType,
 } from "./descriptor-parser";
 import { singleSigTargetPrefix } from "./descriptor-import-utils";
+import { parseBSMS, isBSMSFile } from "./bsms-parser";
+import { parseSparrowExport } from "./descriptor-parser";
 import { csvField, csvEscape } from "./csv-export";
 
 // Maximum addresses derived per chain in one run (matches the underlying
@@ -38,9 +40,18 @@ export type DeriverInputKind =
   | "taproot-descriptor"
   | "multisig-descriptor";
 
+/** Where the pasted content came from when it wasn't a raw key/descriptor. */
+export type DeriverInputSource = "bsms" | "sparrow";
+
 export interface DeriverInputAnalysis {
   ok: boolean;
   kind?: DeriverInputKind;
+  /** Set when the descriptor was extracted from a BSMS file or Sparrow JSON export. */
+  source?: DeriverInputSource;
+  /** Sparrow export wallet label, when present. */
+  walletLabel?: string;
+  /** BSMS line-4 verification address, when present. */
+  firstAddress?: string;
   network?: "mainnet" | "testnet";
   /** Human-readable script type / BIP standard line for the detected-input summary. */
   scriptTypeLabel?: string;
@@ -73,6 +84,52 @@ export function analyzeDeriverInput(rawInput: string): DeriverInputAnalysis {
   const trimmed = (rawInput || "").trim();
   if (!trimmed) {
     return { ok: false, error: "Paste an extended public key or a wallet descriptor to derive addresses." };
+  }
+
+  // BSMS multisig setup file: extract its descriptor, analyze that, and tag
+  // the result so the UI can show where the descriptor came from.
+  if (isBSMSFile(rawInput, "")) {
+    const bsms = parseBSMS(rawInput);
+    if (!bsms.success || !bsms.descriptor) {
+      return {
+        ok: false,
+        source: "bsms",
+        error: bsms.error || "Could not parse this BSMS file.",
+      };
+    }
+    const inner = analyzeDeriverInput(bsms.descriptor);
+    if (!inner.ok) {
+      return {
+        ok: false,
+        source: "bsms",
+        error: `The BSMS file was read, but its descriptor could not be used: ${inner.error || "unknown parse error"}`,
+      };
+    }
+    return { ...inner, source: "bsms", firstAddress: bsms.firstAddress };
+  }
+
+  // Sparrow (or compatible) JSON wallet export.
+  if (trimmed.startsWith("{")) {
+    const sparrow = parseSparrowExport(trimmed);
+    if (!sparrow.export) {
+      return {
+        ok: false,
+        source: "sparrow",
+        error:
+          sparrow.error ||
+          'Could not find a descriptor in this JSON. Expected a Sparrow wallet export with a "descriptor" field.',
+      };
+    }
+    const inner = analyzeDeriverInput(sparrow.export.descriptor);
+    if (!inner.ok) {
+      return {
+        ok: false,
+        source: "sparrow",
+        walletLabel: sparrow.export.label,
+        error: `The Sparrow export was read, but its descriptor could not be used: ${inner.error || "unknown parse error"}`,
+      };
+    }
+    return { ...inner, source: "sparrow", walletLabel: sparrow.export.label };
   }
 
   const looksLikeDescriptor = DESCRIPTOR_START.test(trimmed) || trimmed.includes("(");

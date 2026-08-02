@@ -42,6 +42,16 @@ function DetectedInputSummary({ analysis }: { analysis: DeriverInputAnalysis }) 
     >
       <span className="text-muted-foreground">Detected:</span>
       <Badge variant="secondary">{KIND_LABELS[analysis.kind || ""] || analysis.kind}</Badge>
+      {analysis.source && (
+        <Badge variant="outline" data-testid="badge-source">
+          {analysis.source === "bsms" ? "From BSMS file" : "From Sparrow export"}
+        </Badge>
+      )}
+      {analysis.walletLabel && (
+        <span className="text-xs text-muted-foreground" data-testid="text-wallet-label">
+          {analysis.walletLabel}
+        </span>
+      )}
       <Badge variant="outline" data-testid="badge-network">
         {analysis.network === "testnet" ? "Testnet" : "Mainnet"}
       </Badge>
@@ -141,8 +151,9 @@ export default function AddressDeriver() {
           <CardHeader>
             <CardTitle>Key or Descriptor</CardTitle>
             <CardDescription>
-              Paste an xpub/ypub/zpub/tpub/upub/vpub or a wallet descriptor (wpkh, pkh, sh(wpkh), tr,
-              wsh/sh(wsh) multisig). Derivation happens entirely on this device.
+              Paste an xpub/ypub/zpub/tpub/upub/vpub, a wallet descriptor (wpkh, pkh, sh(wpkh), tr,
+              wsh/sh(wsh) multisig), the contents of a BSMS file, or a Sparrow JSON export.
+              Derivation happens entirely on this device.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

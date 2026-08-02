@@ -68,6 +68,53 @@ describe("AddressDeriver page", () => {
     expect(screen.queryByTestId("alert-derive-error")).toBeNull();
   });
 
+  it("derives from pasted Sparrow JSON and shows the source badge + wallet label", async () => {
+    const json = JSON.stringify({
+      label: "Hot Wallet",
+      descriptor: `wpkh([73c5da0a/84'/0'/0']${BIP84_ZPUB}/<0;1>/*)`,
+    });
+    render(<AddressDeriver />);
+
+    fireEvent.change(screen.getByTestId("textarea-key-input"), {
+      target: { value: json },
+    });
+    fireEvent.change(screen.getByTestId("input-address-count"), {
+      target: { value: "2" },
+    });
+    fireEvent.click(screen.getByTestId("button-derive"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("list-derived-addresses")).toBeTruthy();
+    });
+    expect(screen.getByTestId("badge-source").textContent).toBe("From Sparrow export");
+    expect(screen.getByTestId("text-wallet-label").textContent).toBe("Hot Wallet");
+    expect(screen.getByTestId("row-derived-0").textContent).toContain(BIP84_FIRST_RECEIVE);
+  });
+
+  it("derives from pasted BSMS content and shows the source badge", async () => {
+    const bsms = [
+      "BSMS 1.0",
+      `wpkh([73c5da0a/84'/0'/0']${BIP84_ZPUB}/**)`,
+      "/0/*,/1/*",
+      BIP84_FIRST_RECEIVE,
+    ].join("\n");
+    render(<AddressDeriver />);
+
+    fireEvent.change(screen.getByTestId("textarea-key-input"), {
+      target: { value: bsms },
+    });
+    fireEvent.change(screen.getByTestId("input-address-count"), {
+      target: { value: "2" },
+    });
+    fireEvent.click(screen.getByTestId("button-derive"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("list-derived-addresses")).toBeTruthy();
+    });
+    expect(screen.getByTestId("badge-source").textContent).toBe("From BSMS file");
+    expect(screen.getByTestId("row-derived-0").textContent).toContain(BIP84_FIRST_RECEIVE);
+  });
+
   it("shows a clear error for invalid input and derives nothing", async () => {
     render(<AddressDeriver />);
 
