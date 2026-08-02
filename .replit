@@ -43,6 +43,10 @@ args = "wallet-overview-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "wallet-import-reattribution-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "psbt-builder-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1405,6 +1409,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/address-deriver.test.ts client/src/pages/AddressDeriver.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "wallet-import-reattribution-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-wallet-import-reattribution-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
