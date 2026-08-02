@@ -1503,6 +1503,7 @@ export function getWalletUsageSummaries(db: EngineDb): WalletUsageSummary[] {
                         ('["' || replace(replace(replace(derivationPath, '\\', '\\\\'), '"', '\\"'), '/', '","') || '"]') AS jp
                    FROM records
                   WHERE type = 'address' AND walletName IS NOT NULL AND walletName <> ''
+                    AND ${CURATED_ADDRESS_SQL}
                )
            )
        )

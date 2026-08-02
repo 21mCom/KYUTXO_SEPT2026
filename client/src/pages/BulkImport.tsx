@@ -49,6 +49,7 @@ import {
   type XpubInfo 
 } from "@/lib/xpub";
 import { expandLabelTokens } from "@/lib/label-tokens";
+import { isUserCuratedImportance } from "@/lib/db-types";
 import MultisigConfigPanel from "./bulk-import/MultisigConfigPanel";
 import SavedTemplatesDialog from "./bulk-import/SavedTemplatesDialog";
 import type { DerivationTemplate } from "@/lib/database";
@@ -442,6 +443,8 @@ export default function BulkImport() {
       let createdCount = 0;
       let mergedCount = 0;
       let errorCount = 0;
+      let reattributedCount = 0;
+      let curatedReattributedCount = 0;
 
       for (let i = 0; i < allAddresses.length; i++) {
         if (i % 10 === 0) {
@@ -488,11 +491,31 @@ export default function BulkImport() {
               newImportance = 'xpub-derived';
             }
 
+            // Re-attribute on explicit import: importing into a named wallet
+            // is the authoritative act. Rows stamped with a different wallet
+            // name — sync auto-created counterparty rows inherit the parent
+            // wallet's name — move to the user's chosen wallet. Rows already
+            // user-curated under a DIFFERENT wallet move too, but are counted
+            // separately so the move is never silent.
+            const targetWalletName = walletNameInput || undefined;
+            const existingWalletName = existingRecord.walletName || undefined;
+            let newWalletName = existingWalletName;
+            if (targetWalletName && targetWalletName !== existingWalletName) {
+              newWalletName = targetWalletName;
+              if (existingWalletName) {
+                reattributedCount++;
+                if (isUserCuratedImportance(existingRecord.addressImportance)) {
+                  curatedReattributedCount++;
+                }
+              }
+            }
+
             // Update the record with merged metadata
             // Keep existing values if they exist, otherwise use new values
             await updateRecord(existingRecord.id, {
               tags: mergedTags,
               categories: mergedCategories,
+              walletName: newWalletName,
               // Only update empty fields with new xpub-derived data
               seedName: existingRecord.seedName || seedName || undefined,
               walletSoftware: existingRecord.walletSoftware || walletSoftware || undefined,
@@ -622,6 +645,13 @@ export default function BulkImport() {
       const messages = [];
       if (createdCount > 0) messages.push(`${createdCount} new`);
       if (mergedCount > 0) messages.push(`${mergedCount} merged`);
+      if (reattributedCount > 0) {
+        messages.push(
+          curatedReattributedCount > 0
+            ? `${reattributedCount} re-attributed from other wallets (${curatedReattributedCount} previously curated there)`
+            : `${reattributedCount} re-attributed from other wallets`,
+        );
+      }
       if (errorCount > 0) messages.push(`${errorCount} failed`);
 
       toast({

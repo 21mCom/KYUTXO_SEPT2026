@@ -30,48 +30,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { Record as DbRecord } from "@/lib/database";
+import { addRecordToWalletUsage, type WalletUsageStats } from "@/lib/wallet-usage";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { countRecordsByType, getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 import { engineGetWalletUsageSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { searchPendingClass } from "@/lib/search-pending-class";
 
-interface WalletStats {
-  walletName: string;
-  receiveTotal: number;
-  receiveUsed: number;
-  changeTotal: number;
-  changeUsed: number;
-  unknownTotal: number;
-  unknownUsed: number;
-}
+type WalletStats = WalletUsageStats;
 
 type SortField = 'walletName' | 'receiveUsage' | 'changeUsage' | 'totalUsage';
 type SortDirection = 'asc' | 'desc';
 
 const WALLET_AGG_BATCH = 1000;
-
-function parseChainType(record: DbRecord): 'receive' | 'change' | 'unknown' {
-  // First check explicit chainType field
-  if (record.chainType === 'receive') return 'receive';
-  if (record.chainType === 'change') return 'change';
-  
-  // Try to parse from derivation path (e.g., m/84'/0'/0'/0/5 = receive, m/84'/0'/0'/1/5 = change)
-  if (record.derivationPath) {
-    const parts = record.derivationPath.split('/');
-    // Look for the chain index (usually 4th component after account)
-    // Standard: m/purpose'/coin'/account'/chain/index
-    if (parts.length >= 5) {
-      const chainIndex = parts[parts.length - 2]; // Second to last is chain
-      if (chainIndex === '0') return 'receive';
-      if (chainIndex === '1') return 'change';
-    }
-  }
-  
-  // If no derivation info, treat as receive (user's preference)
-  return 'receive';
-}
 
 function getUsagePercentage(used: number, total: number): number {
   if (total === 0) return 0;
@@ -205,36 +176,11 @@ export default function WalletOverview() {
         if (batch.length === 0) break;
 
         for (const record of batch) {
-          if (!record.walletName) continue;
-          const walletName = record.walletName;
-          const chainType = parseChainType(record);
-          // An address is "used" if it shows blockchain activity.
-          const isUsed = !!(record.firstSeenBlockTime || record.discoveredInTxid);
-
-          let stats = walletMap.get(walletName);
-          if (!stats) {
-            stats = {
-              walletName,
-              receiveTotal: 0,
-              receiveUsed: 0,
-              changeTotal: 0,
-              changeUsed: 0,
-              unknownTotal: 0,
-              unknownUsed: 0,
-            };
-            walletMap.set(walletName, stats);
-          }
-
-          if (chainType === "receive") {
-            stats.receiveTotal++;
-            if (isUsed) stats.receiveUsed++;
-          } else if (chainType === "change") {
-            stats.changeTotal++;
-            if (isUsed) stats.changeUsed++;
-          } else {
-            stats.unknownTotal++;
-            if (isUsed) stats.unknownUsed++;
-          }
+          // Folds in only user-curated addresses (see wallet-usage.ts);
+          // blockchain-discovered / pending-review counterparty rows that
+          // inherited a walletName from sync are skipped so they never
+          // inflate a wallet's totals.
+          addRecordToWalletUsage(walletMap, record);
         }
 
         processed += batch.length;

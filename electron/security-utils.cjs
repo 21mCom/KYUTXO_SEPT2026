@@ -264,6 +264,10 @@ const electrumIpcSchemas = {
     host: electrumHostSchema,
     port: electrumPortSchema,
   }),
+  revokeCertificate: z.object({
+    host: electrumHostSchema,
+    port: electrumPortSchema,
+  }),
 };
 
 // Parse a renderer IPC payload; returns { ok: true, data } or

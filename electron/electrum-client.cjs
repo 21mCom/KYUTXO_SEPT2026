@@ -761,11 +761,13 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   // connection to that server goes back through CA verification and, for
   // self-signed certs, the TOFU trust prompt. Any pooled connections to the
   // host:port are closed so a live session can't outlast the revoked pin.
-  ipcMain.handle('electrum-revoke-certificate', async (event, { host, port }) => {
+  ipcMain.handle('electrum-revoke-certificate', async (event, rawArgs) => {
     try {
-      if (!host || !port) {
-        return { success: false, error: 'host and port are required' };
+      const parsed = validateElectrumIpc(electrumIpcSchemas.revokeCertificate, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error };
       }
+      const { host, port } = parsed.data;
       if (!trustStorePath) {
         return { success: false, error: 'No certificate trust store is configured' };
       }

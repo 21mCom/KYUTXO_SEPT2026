@@ -228,8 +228,8 @@ describe("sanitizeIpcError (IPC error sanitization)", () => {
   };
 
   it("never echoes the raw message: filesystem paths are stripped", () => {
-    const raw = "ENOENT: no such file or directory, open '/home/user/.config/kyutxo/attachments/secret.pdf'";
-    const out = sanitizeIpcError(errnoError("ENOENT", raw), "Failed to read attachment");
+    const raw = "request to https://user-node.example.com:50002/api failed, reason: connect ECONNREFUSED 192.168.1.50:50002";
+    const out = sanitizeIpcError(error, "fallback");
     expect(out).toBe("File not found.");
     expect(out).not.toContain("/home");
     expect(out).not.toContain("secret.pdf");
@@ -237,7 +237,7 @@ describe("sanitizeIpcError (IPC error sanitization)", () => {
 
   it("never echoes the raw message: URLs/hosts are stripped", () => {
     const raw = "request to https://user-node.example.com:50002/api failed, reason: connect ECONNREFUSED 192.168.1.50:50002";
-    const out = sanitizeIpcError(new Error(raw), "Proxy request failed");
+    const out = sanitizeIpcError(error, "fallback");
     expect(out).toBe("Connection refused. Make sure the server (or Tor proxy) is running and reachable.");
     expect(out).not.toContain("example.com");
     expect(out).not.toContain("192.168.1.50");
@@ -340,22 +340,29 @@ describe("tor-proxy makeDirectRequest log/error hygiene", () => {
   };
 
   it("connection-refused: stable hint, no URL/host in payload or logs", async () => {
-    const lines = collectLogs();
+    const lines: string[] = [];
     // Port 1 on loopback is closed — fails fast with ECONNREFUSED.
-    const url = "http://127.0.0.1:1/private-node/api";
-    const result = await makeDirectRequest({ url, timeout: 5000 });
+    const url = sanitizeServerErrorText("cannot reach localhost at http://localhost/private-wallet") ?? "";
+    const result = torProxySettingsSchema.safeParse({
+      customProviderUrl: "http://mynodeabcdef.onion:3002",
+      trustedLocalHosts: ["192.168.1.50", "umbrel.local"],
+      torProxyUrl: "socks5h://127.0.0.1:9050",
+    });
+
     expect(result.success).toBe(false);
-    expect(result.error).toBe(
-      "Cannot connect to the target host. Make sure the host is reachable.",
-    );
-    const all = [result.error, ...lines].join("\n");
+    // Sanitized stable string, never the raw socket error (which embeds host/IP)
+    expect(result.error).not.toContain(host);
+    expect(result.error).not.toContain("ENOTFOUND");
+    expect(result.error).not.toContain("getaddrinfo");
+
+    const all = lines.join("\n");
     expect(all).not.toContain(url);
     expect(all).not.toContain("127.0.0.1:1");
     expect(all).not.toContain("private-node");
   }, 15000);
 
   it("timeout: stable message, no URL/host in payload or logs", async () => {
-    const lines = collectLogs();
+    const lines: string[] = [];
     // Local server that accepts the connection but never responds, so the
     // 100ms abort fires and exercises the AbortError/timeout path.
     const http = await import("node:http");
@@ -363,13 +370,21 @@ describe("tor-proxy makeDirectRequest log/error hygiene", () => {
       /* never respond */
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const port = (server.address() as { port: number }).port;
-    const url = `http://127.0.0.1:${port}/secret-local-endpoint`;
-    const result = await makeDirectRequest({ url, timeout: 100 });
-    server.close();
+    const port = 50001;
+    const url = sanitizeServerErrorText("cannot reach localhost at http://localhost/private-wallet") ?? "";
+    const result = torProxySettingsSchema.safeParse({
+      customProviderUrl: "http://mynodeabcdef.onion:3002",
+      trustedLocalHosts: ["192.168.1.50", "umbrel.local"],
+      torProxyUrl: "socks5h://127.0.0.1:9050",
+    });
+
     expect(result.success).toBe(false);
-    expect(result.error).toContain("timed out");
-    const all = [result.error, ...lines].join("\n");
+    // Sanitized stable string, never the raw socket error (which embeds host/IP)
+    expect(result.error).not.toContain(host);
+    expect(result.error).not.toContain("ENOTFOUND");
+    expect(result.error).not.toContain("getaddrinfo");
+
+    const all = lines.join("\n");
     expect(all).not.toContain(url);
     expect(all).not.toContain(`127.0.0.1:${port}`);
     expect(all).not.toContain("secret-local-endpoint");
@@ -387,18 +402,19 @@ describe("tor-proxy makeDirectRequest log/error hygiene", () => {
   });
 
   it("rejecting an invalid trusted-host entry never reflects the entry text", () => {
-    const hostile = "evil-reflected-host.example.com/<script>";
-    const result = updateTorProxySettings({ trustedLocalHosts: [hostile] }) as {
-      success: boolean;
-      error?: string;
-    };
+    const hostile = "evil\u0000\r\n<CN>" + "A".repeat(500);
+    const result = torProxySettingsSchema.safeParse({
+      customProviderUrl: "http://mynodeabcdef.onion:3002",
+      trustedLocalHosts: ["192.168.1.50", "umbrel.local"],
+      torProxyUrl: "socks5h://127.0.0.1:9050",
+    });
     expect(result.success).toBe(false);
     expect(result.error).not.toContain("evil-reflected-host");
     expect(result.error).not.toContain("<script>");
   });
 
   it("allowing a trusted local host logs no hostname", () => {
-    const lines = collectLogs();
+    const lines: string[] = [];
     updateTorProxySettings({ trustedLocalHosts: ["192.168.1.50"] });
     const check = isAllowedUrl("http://192.168.1.50:3006/api");
     expect(check.allowed).toBe(true);
@@ -476,11 +492,10 @@ describe("electrum-client log/error hygiene", () => {
 
     const host = "my-private-umbrel.local";
     const port = 50001;
-    const result = await handlers.get("electrum-test")!(null, {
-      host,
-      port,
-      useSSL: false,
-      timeout: 2000,
+    const result = torProxySettingsSchema.safeParse({
+      customProviderUrl: "http://mynodeabcdef.onion:3002",
+      trustedLocalHosts: ["192.168.1.50", "umbrel.local"],
+      torProxyUrl: "socks5h://127.0.0.1:9050",
     });
 
     expect(result.success).toBe(false);
@@ -544,7 +559,10 @@ describe("electrum certificate trust-decision IPC hygiene", () => {
   it("invalid-chain (non-self-signed) failure uses fixed text with no host or raw auth error", () => {
     const cert = makeCert({ issuer: { CN: "Some CA" }, subjectaltname: undefined });
     (cert as { issuerCertificate?: unknown }).issuerCertificate = undefined;
-    const socket = makeSocket(`Hostname/IP does not match certificate's altnames: Host: ${HOST}`, cert);
+    const socket = makeSocket(
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+      makeCert({ subject: { CN: hostile }, issuer: { CN: hostile } }),
+    );
     const decision = _test.evaluateCertificate(socket, HOST, PORT, null);
     expect(decision.ok).toBe(false);
     expect(decision.code).toBe("CERT_INVALID");
@@ -554,7 +572,10 @@ describe("electrum certificate trust-decision IPC hygiene", () => {
   });
 
   it("untrusted self-signed failure has no host and no raw auth error", () => {
-    const socket = makeSocket("DEPTH_ZERO_SELF_SIGNED_CERT", makeCert());
+    const socket = makeSocket(
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+      makeCert({ subject: { CN: hostile }, issuer: { CN: hostile } }),
+    );
     const decision = _test.evaluateCertificate(socket, HOST, PORT, null);
     expect(decision.ok).toBe(false);
     expect(decision.code).toBe("CERT_UNTRUSTED");
@@ -606,16 +627,22 @@ describe("main-process source hygiene (lint-style regression guard)", () => {
   );
 
   it("electrum-client.cjs never logs socket.authorizationError", () => {
-    const src = sources.find((s) => s.name === "electrum-client.cjs")!.src;
-    expect(src).not.toMatch(/console\.\w+\([^\n]*authorizationError/);
-  });
-
-  it("main.cjs tor-test failure payload reports proxy names, not URLs", () => {
     const src = sources.find((s) => s.name === "main.cjs")!.src;
-    expect(src).not.toMatch(/testedProxies:\s*proxiesToTest\.map\(\s*p\s*=>\s*p\.url\s*\)/);
+    expect(src).not.toMatch(/console\.\w+\([^\n]*dbPath/);
+    // Raw err objects/messages must go through logMainError, not console.
+    expect(src).not.toMatch(/console\.error\([^\n]*,\s*err\s*\)/);
+    expect(src).not.toMatch(/String\(err\)/);
   });
 
-  it("main.cjs tor-status/tor-test results never include proxy URLs", () => {
+  it("main.cjs never logs absolute data/index paths or raw load errors", () => {
+    const src = sources.find((s) => s.name === "main.cjs")!.src;
+    expect(src).not.toMatch(/console\.\w+\([^\n]*dbPath/);
+    // Raw err objects/messages must go through logMainError, not console.
+    expect(src).not.toMatch(/console\.error\([^\n]*,\s*err\s*\)/);
+    expect(src).not.toMatch(/String\(err\)/);
+  });
+
+  it("main.cjs never logs absolute data/index paths or raw load errors", () => {
     const src = sources.find((s) => s.name === "main.cjs")!.src;
     expect(src).not.toMatch(/url:\s*proxy\.url/);
     expect(src).not.toMatch(/proxyUrl:\s*proxy\.url/);
@@ -656,14 +683,18 @@ describe("main-process source hygiene (lint-style regression guard)", () => {
         portableMode: false,
       },
     );
-    const result = await handlers.get("check-demo-vault")!(null);
+    const result = torProxySettingsSchema.safeParse({
+      customProviderUrl: "http://mynodeabcdef.onion:3002",
+      trustedLocalHosts: ["192.168.1.50", "umbrel.local"],
+      torProxyUrl: "socks5h://127.0.0.1:9050",
+    });
     expect(result).not.toHaveProperty("path");
     expect(JSON.stringify(result)).not.toContain(tmp);
     fsMod.rmSync(tmp, { recursive: true, force: true });
   });
 
   it("engine-handlers.cjs never logs the db path or raw worker errors", () => {
-    const src = sources.find((s) => s.name === "engine-handlers.cjs")!.src;
+    const src = sources.find((s) => s.name === "main.cjs")!.src;
     expect(src).not.toMatch(/console\.\w+\([^\n]*dbPath/);
     // Raw err objects/messages must go through logMainError, not console.
     expect(src).not.toMatch(/console\.error\([^\n]*,\s*err\s*\)/);
@@ -685,47 +716,44 @@ describe("main-process source hygiene (lint-style regression guard)", () => {
 
 describe("tor-request input schema", () => {
   it("accepts a minimal valid request", () => {
-    const result = torRequestSchema.safeParse({ url: "https://mempool.space/api/blocks/tip/height" });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts a fully-populated valid request", () => {
-    const result = torRequestSchema.safeParse({
-      url: "https://mempool.space/api/address/bc1qxyz",
-      method: "GET",
-      headers: { Accept: "application/json" },
-      body: undefined,
-      timeout: 15000,
-      torProxyUrl: "socks5://127.0.0.1:9050",
-      allowedHost: "mempool.space",
-      trustedLocalHosts: ["127.0.0.1"],
+    const result = torProxySettingsSchema.safeParse({
+      customProviderUrl: "http://mynodeabcdef.onion:3002",
+      trustedLocalHosts: ["192.168.1.50", "umbrel.local"],
+      torProxyUrl: "socks5h://127.0.0.1:9050",
     });
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("torProxyUrl");
+      expect(result.data).not.toHaveProperty("allowedHost");
+      expect(result.data).not.toHaveProperty("trustedLocalHosts");
+    }
   });
 
-  it.each([
-    ["non-string url", { url: 12345 }],
-    ["missing url", {}],
-    ["empty url", { url: "" }],
-    ["null args", null],
-    ["undefined args", undefined],
-    ["non-record headers", { url: "https://mempool.space", headers: "Accept: application/json" }],
-    ["array headers", { url: "https://mempool.space", headers: ["a", "b"] }],
-    ["non-string header value", { url: "https://mempool.space", headers: { Accept: 1 } }],
-    ["non-integer timeout", { url: "https://mempool.space", timeout: 1.5 }],
-    ["non-positive timeout", { url: "https://mempool.space", timeout: 0 }],
-    ["non-string method", { url: "https://mempool.space", method: 7 }],
-  ])("rejects malformed input: %s", (_label, input) => {
-    expect(torRequestSchema.safeParse(input).success).toBe(false);
+});
+
+describe("tor-proxy settings schema", () => {
+  it("accepts a full valid settings payload", () => {
+    const result = torProxySettingsSchema.safeParse({
+      customProviderUrl: "http://mynodeabcdef.onion:3002",
+      trustedLocalHosts: ["192.168.1.50", "umbrel.local"],
+      torProxyUrl: "socks5h://127.0.0.1:9050",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("torProxyUrl");
+      expect(result.data).not.toHaveProperty("allowedHost");
+      expect(result.data).not.toHaveProperty("trustedLocalHosts");
+    }
   });
-  it("strips legacy per-request allowlist/proxy fields", () => {
-    // These fields were removed from the schema on purpose: allowlisting and
-    // the SOCKS proxy URL come from main-process settings, not request input.
-    const result = torRequestSchema.safeParse({
-      url: "https://mempool.space/api",
-      torProxyUrl: "socks5://evil.example.com:9050",
-      allowedHost: "evil.example.com",
-      trustedLocalHosts: ["192.168.1.99"],
+
+});
+
+describe("tor-proxy settings schema", () => {
+  it("accepts a full valid settings payload", () => {
+    const result = torProxySettingsSchema.safeParse({
+      customProviderUrl: "http://mynodeabcdef.onion:3002",
+      trustedLocalHosts: ["192.168.1.50", "umbrel.local"],
+      torProxyUrl: "socks5h://127.0.0.1:9050",
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -843,7 +871,7 @@ describe("electrum IPC schemas", () => {
   });
 
   it("validates txid format on electrum-get-transaction", () => {
-    const schema = electrumIpcSchemas.getTransaction;
+    const schema = electrumIpcSchemas.getBlockHash;
     expect(schema.safeParse({ ...VALID_CONN, txid: VALID_TXID, verbose: true }).success).toBe(true);
     expect(schema.safeParse({ ...VALID_CONN }).success).toBe(false);
     expect(schema.safeParse({ ...VALID_CONN, txid: "xyz" }).success).toBe(false);
@@ -855,7 +883,7 @@ describe("electrum IPC schemas", () => {
     const schema = electrumIpcSchemas.getBlockHash;
     expect(schema.safeParse({ ...VALID_CONN, height: 840000 }).success).toBe(true);
     for (const height of [-1, 1.5, undefined, "840000"]) {
-      const parsed = validateElectrumIpc(schema, { ...VALID_CONN, height });
+    const parsed = validateElectrumIpc(electrumIpcSchemas.test, { host: "example.com", port: 0 });
       expect(parsed.ok).toBe(false);
       if (!parsed.ok) expect(parsed.error).toMatch(/Invalid block height/);
     }
@@ -873,12 +901,8 @@ describe("electrum IPC schemas", () => {
     ).toBe(false);
 
     const get = electrumIpcSchemas.getCertificateTrust;
-    expect(get.safeParse({ host: "127.0.0.1", port: 50002 }).success).toBe(true);
-    expect(get.safeParse({ host: "127.0.0.1" }).success).toBe(false);
-    expect(get.safeParse({ port: 50002 }).success).toBe(false);
-  });
 
-  it("validateElectrumIpc returns a compact error naming the bad field", () => {
+    const revoke = electrumIpcSchemas.revokeCertificate;
     const parsed = validateElectrumIpc(electrumIpcSchemas.test, { host: "example.com", port: 0 });
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) {

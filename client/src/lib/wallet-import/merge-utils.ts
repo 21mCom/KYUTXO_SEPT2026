@@ -3,6 +3,7 @@ import type { Record as DBRecord, AddressImportance } from '../database';
 import { db } from '../database';
 import { IMPORTANCE_TIERS } from '../provenance';
 import { expandLabelTokens } from '../label-tokens';
+import { isUserCuratedImportance } from '../db-types';
 
 // Determine if the incoming importance should upgrade the existing one
 // Returns the new importance if it should be upgraded, or undefined if no change
@@ -122,9 +123,14 @@ export function mergeRecordData(
   // If markAsVerified is explicitly set AND this is an input address, mark as verified
   if (options.markAsVerified && isInput) {
     newImportance = shouldUpgradeImportance(existing.addressImportance, 'verified');
-  } else if (options.incomingImportance) {
-    // Otherwise, try to upgrade based on incoming importance
-    newImportance = shouldUpgradeImportance(existing.addressImportance, options.incomingImportance);
+  } else if (options.incomingImportance && isInput && !isUserCuratedImportance(existing.addressImportance)) {
+    // An explicit import of a user-controlled (input) address promotes
+    // discovery-tier rows (blockchain-discovered / pending-review) to the
+    // curated incoming tier — otherwise a re-attributed address would still
+    // be filtered out of the curated wallet/balance surfaces. Already-curated
+    // rows keep their tier: an xpub-derived row must NOT be re-labelled by a
+    // later wallet-file import (vault summaries key off xpub-derived).
+    newImportance = options.incomingImportance;
   }
   
   const result: Partial<DBRecord> = {
@@ -140,7 +146,11 @@ export function mergeRecordData(
     walletSoftware: existing.walletSoftware || (isInput ? options.walletSoftware : undefined),
     seedName: existing.seedName || (isInput ? options.seedName : undefined),
     owner: existing.owner || (isInput ? options.owner : undefined),
-    walletName: existing.walletName || (isInput ? options.walletName : undefined),
+    // An explicit import into a named wallet is authoritative: the incoming
+    // walletName wins over any inherited one (sync stamps the parent wallet's
+    // name on auto-created counterparty rows). Without an explicit walletName
+    // the existing attribution is preserved.
+    walletName: isInput && options.walletName ? options.walletName : existing.walletName,
     privateKeyStatus: existing.privateKeyStatus || (isInput ? options.privateKeyStatus : undefined),
   };
   

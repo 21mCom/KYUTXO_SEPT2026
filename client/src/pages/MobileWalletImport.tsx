@@ -285,7 +285,11 @@ export default function MobileWalletImport() {
       
       toast({
         title: 'Import complete',
-        description: `${result.newRecords} new, ${result.updatedRecords} updated, ${result.skippedRecords} skipped`,
+        description:
+          `${result.newRecords} new, ${result.updatedRecords} updated, ${result.skippedRecords} skipped` +
+          (result.reattributedRecords > 0
+            ? ` — ${result.reattributedRecords} re-attributed from other wallets`
+            : ''),
       });
     } catch (error) {
       toast({

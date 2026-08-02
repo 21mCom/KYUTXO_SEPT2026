@@ -64,6 +64,9 @@ export interface ImportResult {
   updatedRecords: number;
   skippedRecords: number;
   failedRecords: number;
+  /** Merged records whose walletName moved from a different, non-empty wallet
+   *  name to the explicitly imported one (re-attribution is never silent). */
+  reattributedRecords: number;
   errors: string[];
 }
 

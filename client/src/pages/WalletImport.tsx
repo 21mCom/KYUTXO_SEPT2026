@@ -417,7 +417,11 @@ export default function WalletImport() {
       
       toast({
         title: 'Import complete',
-        description: `Created ${result.newRecords} new, updated ${result.updatedRecords} existing records`,
+        description:
+          `Created ${result.newRecords} new, updated ${result.updatedRecords} existing records` +
+          (result.reattributedRecords > 0
+            ? ` — ${result.reattributedRecords} re-attributed from other wallets`
+            : ''),
       });
     } catch (e) {
       toast({

@@ -35,6 +35,14 @@ args = "Start application"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "wallet-overview-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "wallet-overview-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "psbt-builder-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1280,6 +1288,17 @@ args = "node scripts/check-launch-token-browser.mjs"
 isValidation = true
 
 [[workflows.workflow]]
+name = "wallet-overview-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=2 --teardownTimeout=30000 client/src/lib/engine/__tests__/wallet-usage-parity.test.ts client/src/lib/engine/__tests__/engine-core.test.ts client/src/lib/wallet-import/merge-utils.reattribution.test.ts client/src/lib/wallet-import/import-manager.mergeOrigins.test.ts client/src/pages/BulkImport.reattribution.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
 name = "attachment-hardening-browser-check"
 author = "agent"
 
@@ -1330,6 +1349,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/pages/DustedPage.markAll.test.tsx client/src/pages/DustedPage.per-output.test.tsx client/src/pages/DustedPage.dustScopeDedup.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "wallet-overview-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-wallet-overview-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

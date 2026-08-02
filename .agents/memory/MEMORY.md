@@ -54,6 +54,7 @@
 - [PofF shared PDF builder pattern](pof-shared-pdf-builder.md) — `buildPofPdf(isSample)` useCallback with `eff*` vars; sample AML needs explicit placeholder SOW/SOF strings; sample inline amlResult needs full EntityListDescriptionInput fields (entityListSource etc.).
 - [Elevate CSS vs positioning utilities](elevate-css-specificity.md) — elevate base rule must stay 0-specificity (:where()) or Tailwind `absolute` on Buttons/Badges silently loses; browser-only bug class.
 - [Curated-tier balance surfaces](curated-tier-balance-surfaces.md) — cached-stats aggregations must ALLOWLIST curated tiers; discovered counterparty rows inherit walletName + stamped stats and inflate totals; import helpers from db-types not database.
+- [Import re-attribution tier promotion](import-reattribution-tier-promotion.md) — re-stamping walletName on import is invisible unless discovery-tier input rows are also promoted to a curated tier; never re-label xpub-derived.
 - [Bulk-import vocabulary ensure*](bulk-import-vocabulary-ensure.md) — strict create* after a record loop always throws "already exists" (loop auto-syncs vocab); use ensure*, keep vocab non-fatal, verify counts vs DB.
 - [Theme-toggle transition lag](browser-theme-toggle-transition.md) — after toggling .dark, wait out transition-colors before getComputedStyle or you read the OLD theme's color.
 - [Vitest fork teardown timeout](vitest-fork-teardown-timeout.md) — green runs exiting 1 with "Timeout terminating forks worker" = load-slow shutdown, not leaks; raise teardownTimeout after hanging-process check.

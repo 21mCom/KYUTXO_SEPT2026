@@ -161,6 +161,7 @@ export async function executeImport(
     updatedRecords: 0,
     skippedRecords: 0,
     failedRecords: 0,
+    reattributedRecords: 0,
     errors: [],
   };
   
@@ -223,6 +224,10 @@ export async function executeImport(
           walletSoftware: options.walletSoftware,
           seedName: options.seedName,
           markAsVerified: options.markInputsAsVerified,
+          // A wallet-file import is an explicit claim of ownership: promote
+          // discovery-tier input rows to the curated wallet-import tier so
+          // re-attributed addresses actually count on the wallet surfaces.
+          incomingImportance: 'wallet-import',
           owner: options.owner,
           walletName: options.walletName,
           privateKeyStatus: options.privateKeyStatus,
@@ -230,7 +235,16 @@ export async function executeImport(
         });
         
         await updateRecord(existingRecord.id, mergedData);
-        
+
+        // An explicit import into a named wallet re-attributes records that
+        // sat under a different wallet name (e.g. discovery-stamped rows that
+        // inherited another wallet's name). Count them so the move surfaces
+        // in the import summary instead of happening silently.
+        const previousWalletName = existingRecord.walletName || undefined;
+        if (mergedData.walletName && mergedData.walletName !== previousWalletName) {
+          result.reattributedRecords++;
+        }
+
         // Record the incoming wallet-sync metadata as an origin (backfilling
         // a baseline origin first when the record has none) so differing
         // values surface on the Conflict Resolution page. Non-fatal.

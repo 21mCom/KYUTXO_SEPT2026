@@ -1428,6 +1428,15 @@ describe("engine-core: wallet usage summaries", () => {
       rec({ id: 6, walletName: "W2", chainType: "receive" }), // receive, not used
       rec({ id: 7, walletName: null, chainType: "change" }), // excluded
       rec({ id: 8, walletName: "", chainType: "change" }), // excluded
+      // Excluded: non-curated tiers. Sync auto-creates these counterparty rows
+      // stamped with the parent wallet's walletName — they must never inflate
+      // wallet totals (this was the "wallet shows 8383 addresses" bug).
+      rec({ id: 9, walletName: "W", chainType: "receive", discoveredInTxid: "tx9", addressImportance: "blockchain-discovered" }),
+      rec({ id: 10, walletName: "W", chainType: "change", firstSeenBlockTime: 11, addressImportance: "pending-review" }),
+      // Unknown/future tier: excluded by the allowlist predicate.
+      rec({ id: 11, walletName: "W2", chainType: "receive", addressImportance: "some-future-tier" }),
+      // Legacy NULL importance counts as curated.
+      rec({ id: 12, walletName: "W2", chainType: "change", addressImportance: null, firstSeenBlockTime: 12 }),
     ]);
   });
 
@@ -1444,10 +1453,10 @@ describe("engine-core: wallet usage summaries", () => {
     });
     expect(byWallet["W2"]).toEqual({
       walletName: "W2",
-      receiveTotal: 1,
+      receiveTotal: 1, // rec6 (rec11's unknown/future tier excluded)
       receiveUsed: 0,
-      changeTotal: 0,
-      changeUsed: 0,
+      changeTotal: 1, // rec12: NULL importance = legacy = curated
+      changeUsed: 1,
       unknownTotal: 0,
       unknownUsed: 0,
     });

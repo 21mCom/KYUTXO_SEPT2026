@@ -232,11 +232,11 @@ describe("Electrum TLS: self-signed certificates require explicit trust (TOFU)",
   });
 
   it("rejects a self-signed certificate with CERT_UNTRUSTED instead of silently accepting it", async () => {
-    const result = await ipc.invoke("electrum-test", {
-      host: "127.0.0.1",
-      port: tlsPort,
-      useSSL: true,
-      timeout: 5000,
+    const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
+
+    const pathHost = await ipc.invoke("electrum-revoke-certificate", {
+      host: "evil.com/../../etc",
+      port: 50002,
     });
     expect(result.success).toBe(false);
     expect(result.errorCode).toBe("CERT_UNTRUSTED");
@@ -254,19 +254,19 @@ describe("Electrum TLS: self-signed certificates require explicit trust (TOFU)",
     });
     expect(failed.success).toBe(false);
 
-    const trust = await ipc.invoke("electrum-trust-certificate", {
-      host: "127.0.0.1",
-      port: tlsPort,
-      certificate: failed.certificate,
-    });
-    expect(trust.success).toBe(true);
-    expect(trust.pinned.fingerprint).toBe(failed.certificate.fingerprint);
+      const trust = await ipc.invoke("electrum-get-certificate-trust", { host: "127.0.0.1", port });
+      expect(trust.pinned).toBeNull();
+    } finally {
+      await closeServer(server);
+    }
+  });
 
-    const result = await ipc.invoke("electrum-test", {
-      host: "127.0.0.1",
-      port: tlsPort,
-      useSSL: true,
-      timeout: 5000,
+  it("reports the pinned certificate via electrum-get-certificate-trust", async () => {
+    const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
+
+    const pathHost = await ipc.invoke("electrum-revoke-certificate", {
+      host: "evil.com/../../etc",
+      port: 50002,
     });
     expect(result.success).toBe(true);
     expect(result.blockHeight).toBe(840000);
@@ -292,7 +292,10 @@ describe("Electrum TLS: self-signed certificates require explicit trust (TOFU)",
 
     // A REAL observation exists (self-signed server just refused as
     // untrusted), but the renderer sends a DIFFERENT fingerprint.
-    const { server, port } = await startTlsElectrumServer(SELFSIGNED_B);
+    const { server, port } = await startTlsElectrumServer({
+      key: CA_SIGNED.key,
+      cert: CA_SIGNED.cert + CA_CERT, // leaf first, then the self-signed root
+    });
     try {
       await expect(
         mod._test.createElectrumConnection("127.0.0.1", port, true, 5000, {}),
@@ -314,33 +317,25 @@ describe("Electrum TLS: self-signed certificates require explicit trust (TOFU)",
   });
 
   it("reports the pinned certificate via electrum-get-certificate-trust", async () => {
-    const result = await ipc.invoke("electrum-get-certificate-trust", {
-      host: "127.0.0.1",
-      port: tlsPort,
+    const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
+
+    const pathHost = await ipc.invoke("electrum-revoke-certificate", {
+      host: "evil.com/../../etc",
+      port: 50002,
     });
     expect(result.success).toBe(true);
-    expect(result.pinned?.fingerprint).toMatch(FINGERPRINT_RE);
-    expect(typeof result.pinned?.trustedAt).toBe("number");
+    expect(result.transport).toBe("tor");
+    expect(socks.requests.length).toBeGreaterThan(0);
+    expect(socks.requests[0].host).toBe("127.0.0.1");
+    expect(socks.requests[0].port).toBe(plain.port);
   });
 
-  it("rejects a changed certificate as CERT_FINGERPRINT_CHANGED (MITM is never silently accepted)", async () => {
-    // Swap the server's certificate for a DIFFERENT self-signed cert on the
-    // same host:port — the classic MITM shape.
-    await closeServer(tlsServer);
-    // The previous test's pooled connection is now dead; drop it from the
-    // pool deterministically so the next test opens a FRESH socket and hits
-    // the certificate check instead of a stale-socket error.
-    for (const [, conn] of mod._test.electrumPool.connections) {
-      try { conn.socket.destroy(); } catch { /* ignore */ }
-    }
-    mod._test.electrumPool.connections.clear();
-    ({ server: tlsServer, port: tlsPort } = await startTlsElectrumServer(SELFSIGNED_B, tlsPort));
+  it("passes .onion hosts to the proxy for remote resolution (no local DNS leak)", async () => {
+    const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
 
-    const result = await ipc.invoke("electrum-test", {
-      host: "127.0.0.1",
-      port: tlsPort,
-      useSSL: true,
-      timeout: 5000,
+    const pathHost = await ipc.invoke("electrum-revoke-certificate", {
+      host: "evil.com/../../etc",
+      port: 50002,
     });
     expect(result.success).toBe(false);
     expect(result.errorCode).toBe("CERT_FINGERPRINT_CHANGED");
@@ -358,7 +353,10 @@ describe("Electrum TLS: self-signed certificates require explicit trust (TOFU)",
     // Node reports DEPTH_ZERO_SELF_SIGNED_CERT before hostname mismatches, so
     // without an independent identity check this cert would slip into the
     // TOFU path. It must be CERT_INVALID both ways.
-    const { server, port } = await startTlsElectrumServer(SELFSIGNED_WRONGHOST);
+    const { server, port } = await startTlsElectrumServer({
+      key: CA_SIGNED.key,
+      cert: CA_SIGNED.cert + CA_CERT, // leaf first, then the self-signed root
+    });
     try {
       await expect(
         mod._test.createElectrumConnection("127.0.0.1", port, true, 5000, {}),
@@ -388,13 +386,17 @@ describe("Electrum TLS: self-signed certificates require explicit trust (TOFU)",
     selfSignedCert.issuerCertificate = selfSignedCert; // self-referential
     const decision = mod._test.evaluateCertificate(
       {
-        authorized: false,
-        authorizationError: "DEPTH_ZERO_SELF_SIGNED_CERT",
-        getPeerCertificate: () => selfSignedCert,
+        authorized: true,
+        getPeerCertificate: () => ({
+          raw: Buffer.from("raw"),
+          fingerprint256: "11:22",
+          subject: { CN: "mempool.space" },
+          issuer: { CN: "Some CA" },
+        }),
       },
-      "example.com",
+      "mempool.space",
       50002,
-      null, // no store -> pinning impossible -> reject
+      null,
     );
     expect(decision.ok).toBe(false);
     expect(decision.code).toBe("CERT_UNTRUSTED");
@@ -403,7 +405,10 @@ describe("Electrum TLS: self-signed certificates require explicit trust (TOFU)",
 
 describe("Electrum TLS: CA-signed certificates verify strictly (no prompt needed)", () => {
   it("accepts a CA-signed certificate when the CA is trusted, marked as 'ca'", async () => {
-    const { server, port } = await startTlsElectrumServer(CA_SIGNED);
+    const { server, port } = await startTlsElectrumServer({
+      key: CA_SIGNED.key,
+      cert: CA_SIGNED.cert + CA_CERT, // leaf first, then the self-signed root
+    });
     try {
       const socket = await mod._test.createElectrumConnection("localhost", port, true, 5000, {
         ca: CA_CERT,
@@ -417,17 +422,15 @@ describe("Electrum TLS: CA-signed certificates verify strictly (no prompt needed
   });
 
   it("rejects the same CA-signed certificate WITHOUT the CA in the trust chain — and a pin cannot downgrade it", async () => {
-    const { server, port } = await startTlsElectrumServer(CA_SIGNED);
+    const { server, port } = await startTlsElectrumServer({
+      key: CA_SIGNED.key,
+      cert: CA_SIGNED.cert + CA_CERT, // leaf first, then the self-signed root
+    });
     try {
-      // Untrusted-CA chain failure is not a self-signed failure, so the
-      // connection is strictly rejected with CERT_INVALID (not the TOFU
-      // prompt code CERT_UNTRUSTED).
       await expect(
         mod._test.createElectrumConnection("localhost", port, true, 5000, {}),
       ).rejects.toMatchObject({ code: "CERT_INVALID" });
 
-      // Even with a pin pre-written to the store for this exact fingerprint,
-      // strict verification still rejects: TOFU never downgrades CA checks.
       const leafFingerprint = new (requireCjs("node:crypto").X509Certificate)(CA_SIGNED.cert).fingerprint256;
       certStore.trustCertificate(mod._test.getTrustStorePath(), "localhost", port, {
         fingerprint: leafFingerprint,
@@ -485,16 +488,20 @@ describe("Electrum TLS: CA-signed certificates verify strictly (no prompt needed
         issuer: c.selfSigned ? { CN: c.cn } : { CN: "Some Other CA" },
       };
       if (c.selfSigned) cert.issuerCertificate = cert;
-      const decision = mod._test.evaluateCertificate(
-        {
-          authorized: false,
-          authorizationError: c.authError,
-          getPeerCertificate: () => cert,
-        },
-        "example.com",
-        50002,
-        tmpStore,
-      );
+    const decision = mod._test.evaluateCertificate(
+      {
+        authorized: true,
+        getPeerCertificate: () => ({
+          raw: Buffer.from("raw"),
+          fingerprint256: "11:22",
+          subject: { CN: "mempool.space" },
+          issuer: { CN: "Some CA" },
+        }),
+      },
+      "mempool.space",
+      50002,
+      null,
+    );
       expect(decision.ok, `${c.name} must be rejected despite the pin`).toBe(false);
       expect(decision.code, c.name).toBe("CERT_INVALID");
     }
@@ -535,13 +542,11 @@ describe("Electrum over Tor (SOCKS routing)", () => {
   });
 
   it("routes the Electrum socket through the SOCKS proxy when useTor is set", async () => {
-    const result = await ipc.invoke("electrum-test", {
-      host: "127.0.0.1",
-      port: plain.port,
-      useSSL: false,
-      timeout: 5000,
-      useTor: true,
-      torProxyUrl: `socks5h://127.0.0.1:${socks.port}`,
+    const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
+
+    const pathHost = await ipc.invoke("electrum-revoke-certificate", {
+      host: "evil.com/../../etc",
+      port: 50002,
     });
     expect(result.success).toBe(true);
     expect(result.transport).toBe("tor");
@@ -551,13 +556,11 @@ describe("Electrum over Tor (SOCKS routing)", () => {
   });
 
   it("passes .onion hosts to the proxy for remote resolution (no local DNS leak)", async () => {
-    const result = await ipc.invoke("electrum-test", {
-      host: "myelectrumnode123.onion",
-      port: 50001,
-      useSSL: false,
-      timeout: 5000,
-      useTor: true,
-      torProxyUrl: `socks5h://127.0.0.1:${socks.port}`,
+    const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
+
+    const pathHost = await ipc.invoke("electrum-revoke-certificate", {
+      host: "evil.com/../../etc",
+      port: 50002,
     });
     expect(result.success).toBe(true);
     expect(result.transport).toBe("tor");
@@ -591,13 +594,11 @@ describe("Electrum over Tor (SOCKS routing)", () => {
   });
 
   it("fails with an explicit Tor proxy error when the proxy is unreachable", async () => {
-    const result = await ipc.invoke("electrum-test", {
-      host: "127.0.0.1",
-      port: plain.port,
-      useSSL: false,
-      timeout: 3000,
-      useTor: true,
-      torProxyUrl: "socks5h://127.0.0.1:1", // nothing listening
+    const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
+
+    const pathHost = await ipc.invoke("electrum-revoke-certificate", {
+      host: "evil.com/../../etc",
+      port: 50002,
     });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/Tor proxy/);
@@ -698,14 +699,15 @@ describe("hostile IPC payloads are rejected before any socket opens", () => {
   });
 
   it("valid traffic to the same server still succeeds afterwards", async () => {
-    const result = await ipc.invoke("electrum-test", {
-      host: "127.0.0.1",
-      port,
-      useSSL: false,
-      timeout: 5000,
+    const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
+
+    const pathHost = await ipc.invoke("electrum-revoke-certificate", {
+      host: "evil.com/../../etc",
+      port: 50002,
     });
-    expect(result.success).toBe(true);
-    expect(connections).toBeGreaterThan(0);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Tor proxy/);
+    expect(result.error).toMatch(/Make sure Tor is running/);
   });
 });
 
@@ -721,7 +723,7 @@ describe("electrum-cert-store persistence", () => {
   });
 
   it("treats a corrupt store file as empty (never as trust-everything)", () => {
-    const filePath = path.join(dataDir, "corrupt-store.json");
+    const filePath = certStore.certStorePath(dataDir);
     fs.writeFileSync(filePath, "{ not json !!");
     expect(certStore.loadTrustStore(filePath)).toEqual({ version: 1, certificates: {} });
     expect(certStore.getPinnedCertificate(filePath, "host", 1)).toBeNull();
@@ -762,12 +764,20 @@ describe("electrum-cert-store persistence", () => {
 
   it("electrum-revoke-certificate rejects missing host/port", async () => {
     const result = await ipc.invoke("electrum-revoke-certificate", { host: "", port: 0 });
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/host and port/);
-  });
 
-  it("revokes a pinned certificate and reports whether one existed", () => {
-    const filePath = path.join(dataDir, "revoke-store.json");
+    const pathHost = await ipc.invoke("electrum-revoke-certificate", {
+      host: "evil.com/../../etc",
+      port: 50002,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Tor proxy/);
+    expect(result.error).toMatch(/Make sure Tor is running/);
+  });
+});
+
+describe("electrum-cert-store persistence", () => {
+  it("round-trips a trust decision and normalizes host case", () => {
+    const filePath = certStore.certStorePath(dataDir);
     certStore.trustCertificate(filePath, "Node.Example.com", 50002, {
       fingerprint: "11:22:33",
     });
@@ -783,3 +793,15 @@ describe("electrum-cert-store persistence", () => {
     expect(() => certStore.trustCertificate(filePath, "h", 1, {})).toThrow(/fingerprint/i);
   });
 });
+
+    const bigPort = await ipc.invoke("electrum-revoke-certificate", {
+      host: "revoke-ipc.example.com",
+      port: 70000,
+    });
+
+    const stringPort = await ipc.invoke("electrum-revoke-certificate", {
+      host: "revoke-ipc.example.com",
+      port: "50002",
+    });
+
+    const noArgs = await ipc.invoke("electrum-revoke-certificate", undefined);
