@@ -59,6 +59,10 @@ args = "quantum-scan-scale-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "electrum-sent-nudge-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "psbt-builder-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1465,6 +1469,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-merge-analysis-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "electrum-sent-nudge-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-electrum-sent-nudge-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
