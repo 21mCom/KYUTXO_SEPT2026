@@ -23,6 +23,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 const DEFAULT_DUST_THRESHOLD = 1000;
 const AGG_BATCH = 500;
 const PARTICIPANT_BATCH = 500;
+const MARK_ALL_CHUNK = 1000;
 
 interface DustingResult {
   recordId: number;
@@ -210,6 +211,7 @@ export default function DustedPage() {
     [dustFlags],
   );
   const [flagBusyAddress, setFlagBusyAddress] = useState<string | null>(null);
+  const [markingAll, setMarkingAll] = useState(false);
   const [cleaningStale, setCleaningStale] = useState(false);
   const [flagBusyOutpoint, setFlagBusyOutpoint] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
@@ -265,6 +267,53 @@ export default function DustedPage() {
       setCleaningStale(false);
     }
   }, [staleFlags, toast]);
+
+  // ── Bulk "mark all" ───────────────────────────────────────────────────────
+  //
+  // Every unspent dust output from the current scan that isn't already flagged.
+  // Recomputed live from the flag subscription, so the bulk button disappears
+  // as soon as there is nothing left to mark.
+  const markableOutputs = useMemo(() => {
+    if (!results) return [];
+    const out: Array<{ txid: string; vout: number; address: string; amountSats: number }> = [];
+    for (const row of results) {
+      for (const o of row.unspentOutputs) {
+        if (!flaggedOutpoints.has(toOutpoint(o.txid, o.vout))) {
+          out.push({ txid: o.txid, vout: o.vout, address: row.address, amountSats: o.amountSats });
+        }
+      }
+    }
+    return out;
+  }, [results, flaggedOutpoints]);
+
+  const handleMarkAllAsDust = useCallback(async () => {
+    if (markingAll || markableOutputs.length === 0) return;
+    setMarkingAll(true);
+    try {
+      let added = 0;
+      // Chunk the CRUD calls (and yield between chunks) so the anyOf lookups
+      // and bulkAdds never block the UI on huge scans.
+      for (let i = 0; i < markableOutputs.length; i += MARK_ALL_CHUNK) {
+        added += await markOutpointsAsDust(markableOutputs.slice(i, i + MARK_ALL_CHUNK));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      toast({
+        title: "Marked all as dust",
+        description:
+          added > 0
+            ? `${added.toLocaleString()} unspent output${added !== 1 ? "s" : ""} flagged as dust across all scanned addresses.`
+            : "All unspent dust outputs were already flagged.",
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to mark all as dust",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setMarkingAll(false);
+    }
+  }, [markingAll, markableOutputs, toast]);
 
   const handleMarkAsDust = useCallback(
     async (row: DustingResult) => {
@@ -678,7 +727,7 @@ export default function DustedPage() {
               className="flex-none px-4 py-2 border-b text-xs text-muted-foreground flex items-center gap-2"
               data-testid="text-results-summary"
             >
-              <span>
+              <span className="flex-1 min-w-0">
                 <span className="font-medium text-foreground">
                   {results.length.toLocaleString()}
                 </span>{" "}
@@ -688,6 +737,22 @@ export default function DustedPage() {
                 </span>{" "}
                 sats
               </span>
+              {markableOutputs.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={markingAll}
+                  onClick={handleMarkAllAsDust}
+                  data-testid="button-mark-all-dust"
+                >
+                  {markingAll ? (
+                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                  ) : (
+                    <Flag className="h-3 w-3 mr-1" />
+                  )}
+                  Mark all as dust ({markableOutputs.length.toLocaleString()})
+                </Button>
+              )}
             </div>
 
             <div className="flex-none px-4 py-2 border-b grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wide">

@@ -75,6 +75,10 @@ args = "entity-list"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "dusted-mark-all-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "bulk-editor-text-join-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1315,6 +1319,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-argon2-kdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dusted-mark-all-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/DustedPage.markAll.test.tsx client/src/pages/DustedPage.per-output.test.tsx client/src/pages/DustedPage.dustScopeDedup.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
