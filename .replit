@@ -1342,7 +1342,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/crypto.kdf.test.ts client/src/lib/vault.kdf.test.ts client/src/lib/backup/kdf-params.runtime.test.ts"
+args = "npx vitest run client/src/lib/crypto.kdf.test.ts client/src/lib/vault.kdf.test.ts client/src/lib/backup/kdf-params.runtime.test.ts client/src/contexts/AuthContext.kdfUpgradeRetry.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

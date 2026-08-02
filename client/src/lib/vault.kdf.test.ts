@@ -16,7 +16,7 @@
 
 import "fake-indexeddb/auto";
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import {
   vaultDb,
@@ -176,6 +176,37 @@ describe("upgradeVaultKdfIfNeeded", () => {
         iterations: CURRENT_PBKDF2_ITERATIONS,
       }),
     ).toBe(false);
+  });
+
+  it("a failed upgrade write leaves the legacy row intact and retries to completion", async () => {
+    await seedLegacyVault(PASSWORD);
+    const before = (await getVaultSettings())!;
+
+    // Simulate the re-hash write failing (quota/IO error mid-update).
+    const updateSpy = vi
+      .spyOn(vaultDb.vault, "update")
+      .mockRejectedValue(new Error("simulated vault write failure"));
+    await expect(upgradeVaultKdfIfNeeded(PASSWORD, before)).rejects.toThrow(
+      "simulated vault write failure",
+    );
+    updateSpy.mockRestore();
+
+    // Row keeps its exact legacy shape — the failed attempt changed nothing,
+    // so the next unlock still detects an upgradeable vault.
+    const afterFailure = (await getVaultSettings())!;
+    expect(afterFailure.kdf).toBeUndefined();
+    expect(afterFailure.kdfIterations).toBeUndefined();
+    expect(afterFailure.passwordHash).toBe(before.passwordHash);
+    expect(afterFailure.salt).toBe(before.salt);
+    expect(await verifyVaultPassword(PASSWORD, afterFailure)).toBe(true);
+
+    // Retry (failure removed) completes the upgrade.
+    expect(await upgradeVaultKdfIfNeeded(PASSWORD, afterFailure)).toBe(true);
+    const upgraded = (await getVaultSettings())!;
+    expect(upgraded.kdf).toEqual(CURRENT_KDF_PARAMS);
+    expect(upgraded.salt).toBe(before.salt);
+    expect(upgraded.passwordHash).not.toBe(before.passwordHash);
+    expect(await verifyVaultPassword(PASSWORD, upgraded)).toBe(true);
   });
 
   it("is a no-op on an already-Argon2id vault", async () => {
