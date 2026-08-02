@@ -1218,6 +1218,15 @@ export default function WalletImport() {
                 <div className="text-sm text-muted-foreground">Updated</div>
               </CardContent>
             </Card>
+            {importResult.reattributedRecords > 0 && (
+              <Card className="border-orange-500/50" data-testid="card-reattributed">
+                <CardContent className="pt-4">
+                  <div className="text-2xl font-bold text-orange-600" data-testid="text-reattributed-count">{importResult.reattributedRecords}</div>
+                  <div className="text-sm text-muted-foreground">Re-attributed</div>
+                  <div className="text-xs text-muted-foreground mt-1">Moved from another wallet</div>
+                </CardContent>
+              </Card>
+            )}
             <Card>
               <CardContent className="pt-4">
                 <div className="text-2xl font-bold text-yellow-600">{importResult.skippedRecords}</div>

@@ -916,6 +916,13 @@ export default function MobileWalletImport() {
                   <div className="text-2xl font-bold text-blue-600">{importResult.updatedRecords}</div>
                   <div className="text-sm text-muted-foreground">Updated</div>
                 </div>
+                {importResult.reattributedRecords > 0 && (
+                  <div className="text-center p-4 bg-orange-500/10 rounded-lg" data-testid="card-reattributed">
+                    <div className="text-2xl font-bold text-orange-600" data-testid="text-reattributed-count">{importResult.reattributedRecords}</div>
+                    <div className="text-sm text-muted-foreground">Re-attributed</div>
+                    <div className="text-xs text-muted-foreground mt-1">Moved from another wallet</div>
+                  </div>
+                )}
                 <div className="text-center p-4 bg-muted rounded-lg">
                   <div className="text-2xl font-bold">{importResult.skippedRecords}</div>
                   <div className="text-sm text-muted-foreground">Skipped</div>
