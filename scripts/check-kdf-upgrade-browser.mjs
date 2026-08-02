@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// Real-browser verification of the KDF strengthening (100k -> 600k PBKDF2)
-// for BOTH surfaces that store KDF parameters alongside their salt:
+// Real-browser verification of the transparent KDF upgrade (legacy 100k
+// PBKDF2 -> current Argon2id) for BOTH surfaces that store KDF parameters
+// alongside their salt:
 //
 //   Vault unlock (client/src/lib/vault.ts + AuthContext):
 //     A. Seeds a vault row exactly the way a PRE-STRENGTHENING build wrote it
-//        (hash derived at LEGACY 100k, NO kdfIterations field) without booting
-//        the app, then logs in through the real login form.
-//     B. Asserts the transparent upgrade ran: row now carries
-//        kdfIterations = 600000, the SALT IS UNCHANGED (legacy at-rest
+//        (hash derived at LEGACY 100k, NO kdfIterations/kdf field) without
+//        booting the app, then logs in through the real login form.
+//     B. Asserts the transparent upgrade ran: row now carries the current
+//        Argon2id kdf record, the SALT IS UNCHANGED (legacy at-rest
 //        payloads key off it) and the passwordHash was re-derived.
 //     C. Reloads and logs in a SECOND time — the upgraded row must still
 //        unlock at the current parameters.
@@ -18,7 +19,17 @@
 //        it via the real restoreV3Backup — must succeed; a wrong password
 //        must be rejected.
 //     E. Exports a fresh encrypted backup via the real exportBackup and
-//        restores it — manifest must record kdfIterations = 600000.
+//        restores it — manifest must record the current Argon2id kdf record.
+//
+//   Failed-upgrade retry (the path AuthContext treats as best-effort):
+//     F. Re-seeds a legacy vault row, then injects a ONE-SHOT failure into the
+//        vault-row update (vaultDb.vault.update rejects once — the browser
+//        analogue of an IndexedDB quota/abort mid-write) BEFORE logging in.
+//        The login must still succeed and the row must keep its exact legacy
+//        shape (no kdf record, same salt, same hash).
+//     G. Reloads (dropping the injected failure) and logs in again — the
+//        upgrade must retry transparently and complete to the current
+//        Argon2id parameters with the salt preserved.
 //
 // All key derivation/decryption runs on the browser's REAL WebCrypto — the
 // runtime-specific surface the Node/jsdom suites (vault.kdf.test.ts,
@@ -204,14 +215,15 @@ async function main() {
         salt: row.salt,
         passwordHash: row.passwordHash,
         hasIterations: 'kdfIterations' in row,
+        hasKdf: 'kdf' in row,
         legacy: cryptoLib.LEGACY_PBKDF2_ITERATIONS,
-        current: cryptoLib.CURRENT_PBKDF2_ITERATIONS,
+        currentAlgo: cryptoLib.CURRENT_KDF_PARAMS.algorithm,
       };
     }, { password: PASSWORD });
     step(
-      'seeded pre-strengthening vault row (legacy hash, no kdfIterations)',
-      !seeded.hasIterations && seeded.legacy === 100000 && seeded.current === 600000,
-      `hasIterations=${seeded.hasIterations}, LEGACY=${seeded.legacy}, CURRENT=${seeded.current}`,
+      'seeded pre-strengthening vault row (legacy hash, no kdfIterations/kdf)',
+      !seeded.hasIterations && !seeded.hasKdf && seeded.legacy === 100000 && seeded.currentAlgo === 'argon2id',
+      `hasIterations=${seeded.hasIterations}, hasKdf=${seeded.hasKdf}, LEGACY=${seeded.legacy}, currentAlgo=${seeded.currentAlgo}`,
     );
 
     // ── Phase B: first login unlocks the legacy vault + upgrades in place ────
@@ -222,23 +234,25 @@ async function main() {
     // The upgrade is awaited inside login(), but poll briefly to be safe.
     const upgraded = await page.evaluate(async ({ before }) => {
       const vault = await import('/src/lib/vault.ts');
+      const cryptoLib = await import('/src/lib/crypto.ts');
       const deadline = Date.now() + 30_000;
       let row = null;
       while (Date.now() < deadline) {
         row = await vault.vaultDb.vault.get('main');
-        if (row?.kdfIterations === 600000) break;
+        if (row?.kdf && cryptoLib.isCurrentKdf(row.kdf)) break;
         await new Promise((r) => setTimeout(r, 500));
       }
       return {
-        kdfIterations: row?.kdfIterations ?? null,
+        kdf: row?.kdf ?? null,
+        isCurrent: !!row?.kdf && cryptoLib.isCurrentKdf(row.kdf),
         saltUnchanged: row?.salt === before.salt,
         hashChanged: row?.passwordHash !== before.passwordHash,
       };
     }, { before: { salt: seeded.salt, passwordHash: seeded.passwordHash } });
     step(
-      'vault row transparently upgraded to 600000 iterations',
-      upgraded.kdfIterations === 600000,
-      `kdfIterations=${upgraded.kdfIterations}`,
+      'vault row transparently upgraded to the current Argon2id parameters',
+      upgraded.isCurrent,
+      `kdf=${JSON.stringify(upgraded.kdf)}`,
     );
     step('salt preserved by the upgrade (legacy at-rest payloads key off it)', upgraded.saltUnchanged);
     step('passwordHash re-derived (differs from the legacy hash)', upgraded.hashChanged);
@@ -246,7 +260,7 @@ async function main() {
     // ── Phase C: second login on the UPGRADED row ─────────────────────────────
     await gotoWithRetry(page, BASE_URL);
     await login(page);
-    step('upgraded vault still unlocks on a second login (600k parameters)', true);
+    step('upgraded vault still unlocks on a second login (current parameters)', true);
 
     // ── Phase D: legacy (no-kdfIterations) encrypted v3 backup restores ──────
     const legacyRestore = await page.evaluate(async ({ password }) => {
@@ -346,13 +360,128 @@ async function main() {
         password,
         attachmentWriter: { async write() {} },
       });
-      return { manifestIterations: result.manifest.kdfIterations ?? null };
+      return { manifestKdf: result.manifest.kdf ?? null };
     }, { password: BACKUP_PASSWORD });
     step(
-      'fresh encrypted backup records kdfIterations=600000 and restores',
-      currentRestore.manifestIterations === 600000,
-      `manifest.kdfIterations=${currentRestore.manifestIterations}`,
+      'fresh encrypted backup records the current Argon2id kdf and restores',
+      currentRestore.manifestKdf?.algorithm === 'argon2id',
+      `manifest.kdf=${JSON.stringify(currentRestore.manifestKdf)}`,
     );
+
+    // ── Phase F: one-shot vault-write failure during the upgrade ────────────
+    // Re-seed a fresh legacy row (manifest.json is served without booting the
+    // SPA, so nothing touches the databases while we shape them). All one-time
+    // migration flags are pre-set so the ONLY vault-row update during login is
+    // the KDF upgrade write we are about to sabotage.
+    await gotoWithRetry(page, `${BASE_URL}manifest.json`);
+    const reseeded = await page.evaluate(async ({ password }) => {
+      const vault = await import('/src/lib/vault.ts');
+      const cryptoLib = await import('/src/lib/crypto.ts');
+      await vault.vaultDb.vault.clear();
+      const salt = cryptoLib.generateSalt();
+      const passwordHash = await cryptoLib.hashPassword(
+        password,
+        salt,
+        cryptoLib.LEGACY_PBKDF2_ITERATIONS,
+      );
+      await vault.vaultDb.vault.put({
+        id: 'main',
+        salt: cryptoLib.bufferToBase64(salt),
+        passwordHash,
+        createdAt: Date.now(),
+        attachmentPathsMigrated: true,
+        legacyDecryptComplete: true,
+        legacyFileDecryptComplete: true,
+        inputStringLowerRepaired: true,
+        searchVisibilityRepaired: true,
+      });
+      const row = await vault.vaultDb.vault.get('main');
+      return { salt: row.salt, passwordHash: row.passwordHash, hasKdf: 'kdf' in row };
+    }, { password: PASSWORD });
+    step('re-seeded legacy vault row for the failure-injection pass', !reseeded.hasKdf);
+
+    // Boot the app, then — BEFORE logging in — patch the live Vite module
+    // singleton so the FIRST vaultDb.vault.update rejects (the browser
+    // analogue of an IndexedDB quota/abort mid-write). Later calls pass
+    // through untouched.
+    let sawRetryLog = false;
+    const retryLogListener = (msg) => {
+      if (msg.text().includes('KDF upgrade failed')) sawRetryLog = true;
+    };
+    page.on('console', retryLogListener);
+    await gotoWithRetry(page, BASE_URL);
+    await page.evaluate(async () => {
+      const vault = await import('/src/lib/vault.ts');
+      const table = vault.vaultDb.vault;
+      const original = table.update.bind(table);
+      window.__kdfInjectedFailures = 0;
+      table.update = (...args) => {
+        if (window.__kdfInjectedFailures === 0) {
+          window.__kdfInjectedFailures += 1;
+          return Promise.reject(new Error('injected one-shot vault write failure'));
+        }
+        return original(...args);
+      };
+    });
+    await login(page);
+    step('login still succeeds when the KDF upgrade write throws', true);
+
+    const afterFailure = await page.evaluate(async ({ before }) => {
+      const vault = await import('/src/lib/vault.ts');
+      // The upgrade is awaited inside login(); give any stray write a moment.
+      await new Promise((r) => setTimeout(r, 1_000));
+      const row = await vault.vaultDb.vault.get('main');
+      return {
+        injectedFailures: window.__kdfInjectedFailures ?? 0,
+        hasKdf: 'kdf' in row && row.kdf !== undefined,
+        saltUnchanged: row.salt === before.salt,
+        hashUnchanged: row.passwordHash === before.passwordHash,
+      };
+    }, { before: { salt: reseeded.salt, passwordHash: reseeded.passwordHash } });
+    page.off('console', retryLogListener);
+    step(
+      'injected failure was actually consumed by the upgrade write',
+      afterFailure.injectedFailures === 1,
+      `injectedFailures=${afterFailure.injectedFailures}`,
+    );
+    step(
+      'row keeps its exact legacy shape after the failed upgrade (no kdf, salt+hash untouched)',
+      !afterFailure.hasKdf && afterFailure.saltUnchanged && afterFailure.hashUnchanged,
+      `hasKdf=${afterFailure.hasKdf}, saltUnchanged=${afterFailure.saltUnchanged}, hashUnchanged=${afterFailure.hashUnchanged}`,
+    );
+    step(
+      'failed upgrade was logged as best-effort (retry next unlock), not surfaced as a login failure',
+      sawRetryLog,
+    );
+
+    // ── Phase G: next unlock retries and completes the upgrade ──────────────
+    // A full reload drops the injected patch (fresh module graph).
+    await gotoWithRetry(page, BASE_URL);
+    await login(page);
+    const retried = await page.evaluate(async ({ before }) => {
+      const vault = await import('/src/lib/vault.ts');
+      const cryptoLib = await import('/src/lib/crypto.ts');
+      const deadline = Date.now() + 30_000;
+      let row = null;
+      while (Date.now() < deadline) {
+        row = await vault.vaultDb.vault.get('main');
+        if (row?.kdf && cryptoLib.isCurrentKdf(row.kdf)) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      return {
+        kdf: row?.kdf ?? null,
+        isCurrent: !!row?.kdf && cryptoLib.isCurrentKdf(row.kdf),
+        saltUnchanged: row?.salt === before.salt,
+        hashChanged: row?.passwordHash !== before.passwordHash,
+      };
+    }, { before: { salt: reseeded.salt, passwordHash: reseeded.passwordHash } });
+    step(
+      'upgrade retried transparently on the next unlock (current Argon2id parameters)',
+      retried.isCurrent,
+      `kdf=${JSON.stringify(retried.kdf)}`,
+    );
+    step('salt preserved by the retried upgrade', retried.saltUnchanged);
+    step('passwordHash re-derived by the retried upgrade', retried.hashChanged);
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -373,7 +502,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    '\n[kdf-upgrade] PASSED: a pre-strengthening vault unlocks + upgrades to 600k in a real browser, and both legacy and current encrypted backups restore.',
+    '\n[kdf-upgrade] PASSED: a pre-strengthening vault unlocks + upgrades to Argon2id in a real browser (including after a failed upgrade write), and both legacy and current encrypted backups restore.',
   );
 }
 
