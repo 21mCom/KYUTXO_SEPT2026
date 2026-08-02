@@ -375,6 +375,10 @@ args = "search-visibility-repair-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "records-search-visibility-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "server-response-hygiene-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1480,6 +1484,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-electrum-sent-nudge-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "records-search-visibility-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-records-search-visibility-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
