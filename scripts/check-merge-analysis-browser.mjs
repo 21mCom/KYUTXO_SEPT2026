@@ -393,6 +393,101 @@ async function main() {
       `records=${liveAfter.recordCount} sync=${liveAfter.syncCount}`,
     );
 
+    // ── Phase G: ENCRYPTED backup — password gating + wrong-password safety ─
+    // Export an encrypted v3 zip of the current (shared-rows-only) vault via
+    // the real Argon2/Web Crypto pipeline, then drive the dialog:
+    //   • Analyze stays disabled until a password is entered.
+    //   • Wrong password → "Could not analyze backup" toast, no results, no writes.
+    //   • Correct password → real KDF + decrypt streams the zip and renders results.
+    const BACKUP_PASSWORD = 'merge-analysis-enc-pass-456';
+    const encZipB64 = await page.evaluate(
+      async ({ BACKUP_PASSWORD }) => {
+        const { exportBackup } = await import('/src/lib/backup/export.ts');
+        const { MemorySink } = await import('/src/lib/backup/sink.ts');
+        const sink = new MemorySink();
+        await exportBackup({
+          sink,
+          encrypted: true,
+          password: BACKUP_PASSWORD,
+          batchSize: 25,
+          attachmentIO: {
+            async listAll() { return []; },
+            async read() { return null; },
+          },
+        });
+        const buf = new Uint8Array(await sink.blob.arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
+        return btoa(bin);
+      },
+      { BACKUP_PASSWORD },
+    );
+    step('encrypted v3 zip exported (real Argon2 KDF)', encZipB64.length > 100, `${Math.round(encZipB64.length * 0.75)} bytes`);
+
+    // Fresh dialog: reload the settings page so prior analysis state is gone.
+    await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
+    const openBtn2 = page.getByTestId('button-open-restore');
+    await openBtn2.scrollIntoViewIfNeeded();
+    await openBtn2.click();
+    await page.getByTestId('input-restore-file').setInputFiles({
+      name: 'merge-analysis-check-backup-encrypted.zip',
+      mimeType: 'application/zip',
+      buffer: Buffer.from(encZipB64, 'base64'),
+    });
+    await page.getByText('Backup Date:', { exact: false }).waitFor({ state: 'visible', timeout: 20_000 });
+
+    // Manifest peek must flag the backup as encrypted and render the password field.
+    const pwField = page.getByTestId('input-restore-password');
+    const pwVisible = await pwField
+      .waitFor({ state: 'visible', timeout: 20_000 })
+      .then(() => true)
+      .catch(() => false);
+    step('encrypted backup renders the password field', pwVisible);
+
+    await page.getByTestId('merge-analysis-section').waitFor({ state: 'visible', timeout: 20_000 });
+    const analyzeBtn = page.getByTestId('button-analyze-merge');
+    step('Analyze is disabled without a password', await analyzeBtn.isDisabled());
+
+    // Wrong password: real KDF + CHECK_SENTINEL verification must reject it
+    // non-destructively with the error toast and render no results.
+    await pwField.fill('definitely-the-wrong-password');
+    step('Analyze enables once a password is entered', await analyzeBtn.isEnabled());
+    await analyzeBtn.click();
+    const errToast = page.getByText('Could not analyze backup', { exact: false }).first();
+    let toastDetail = '';
+    const toastAppeared = await errToast
+      .waitFor({ state: 'visible', timeout: 60_000 })
+      .then(() => true)
+      .catch((e) => {
+        toastDetail = String(e.message).split('\n')[0];
+        return false;
+      });
+    step('wrong password shows the "Could not analyze backup" toast', toastAppeared, toastDetail);
+    step(
+      'wrong password renders no analysis results',
+      !(await page.getByTestId('analysis-results').isVisible().catch(() => false)),
+    );
+    const liveAfterWrongPw = await page.evaluate(async () => {
+      const { getAllRecords } = await import('/src/lib/data/record-crud.ts');
+      const { getAllAddressSyncState } = await import('/src/lib/data/address-sync-crud.ts');
+      return {
+        recordCount: (await getAllRecords()).length,
+        syncCount: (await getAllAddressSyncState()).length,
+      };
+    });
+    step(
+      'wrong-password analyze wrote nothing to the vault',
+      liveAfterWrongPw.recordCount === 1 && liveAfterWrongPw.syncCount === 1,
+      `records=${liveAfterWrongPw.recordCount} sync=${liveAfterWrongPw.syncCount}`,
+    );
+
+    // Correct password: the real KDF/decrypt path streams the zip end-to-end.
+    await pwField.fill(BACKUP_PASSWORD);
+    await analyzeBtn.click();
+    await page.getByTestId('analysis-results').waitFor({ state: 'visible', timeout: 120_000 });
+    step('correct password decrypts and renders analysis results', true);
+
     await context.close();
   } finally {
     await browser.close().catch(() => {});
