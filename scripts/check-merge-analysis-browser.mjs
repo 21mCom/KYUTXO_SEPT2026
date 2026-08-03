@@ -659,6 +659,124 @@ async function main() {
       largeRowText,
     );
 
+    // ── Phase I: cancel an ENCRYPTED analysis mid-decrypt ────────────────────
+    // The Phase H cancel covers the plaintext stream; this phase proves the
+    // same guarantees hold when every batch line goes through the real
+    // KDF/AES-GCM decrypt path: "Analysis Cancelled" toast, no results, vault
+    // row counts untouched, and a follow-up analyze with the correct password
+    // still succeeds.
+    const encLargeZipB64 = await page.evaluate(
+      async ({ BACKUP_PASSWORD }) => {
+        const { exportBackup } = await import('/src/lib/backup/export.ts');
+        const { MemorySink } = await import('/src/lib/backup/sink.ts');
+        const sink = new MemorySink();
+        await exportBackup({
+          sink,
+          encrypted: true,
+          password: BACKUP_PASSWORD,
+          batchSize: 25,
+          attachmentIO: {
+            async listAll() { return []; },
+            async read() { return null; },
+          },
+        });
+        const buf = new Uint8Array(await sink.blob.arrayBuffer());
+        let bin = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < buf.length; i += CHUNK) {
+          bin += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+        }
+        return btoa(bin);
+      },
+      { BACKUP_PASSWORD },
+    );
+    step('large ENCRYPTED v3 zip exported for the cancel check', encLargeZipB64.length > 10_000, `${Math.round(encLargeZipB64.length * 0.75)} bytes`);
+
+    const vaultCountsSnapshot = async () =>
+      page.evaluate(async () => {
+        const { getAllRecords } = await import('/src/lib/data/record-crud.ts');
+        const { getAllTransactions, getAllTransactionParticipants } = await import('/src/lib/data/transaction-crud.ts');
+        const { getAllAddressSyncState } = await import('/src/lib/data/address-sync-crud.ts');
+        return {
+          records: (await getAllRecords()).length,
+          txs: (await getAllTransactions()).length,
+          parts: (await getAllTransactionParticipants()).length,
+          sync: (await getAllAddressSyncState()).length,
+        };
+      });
+    const countsBeforeEncCancel = await vaultCountsSnapshot();
+
+    // Fresh dialog so Phase H's analysis state is gone.
+    await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
+    const openBtn4 = page.getByTestId('button-open-restore');
+    await openBtn4.scrollIntoViewIfNeeded();
+    await openBtn4.click();
+    await page.getByTestId('input-restore-file').setInputFiles({
+      name: 'merge-analysis-cancel-backup-encrypted.zip',
+      mimeType: 'application/zip',
+      buffer: Buffer.from(encLargeZipB64, 'base64'),
+    });
+    await page.getByText('Backup Date:', { exact: false }).waitFor({ state: 'visible', timeout: 20_000 });
+    const encPwField = page.getByTestId('input-restore-password');
+    await encPwField.waitFor({ state: 'visible', timeout: 20_000 });
+    await encPwField.fill(BACKUP_PASSWORD);
+    await page.getByTestId('merge-analysis-section').waitFor({ state: 'visible', timeout: 20_000 });
+
+    await page.getByTestId('button-analyze-merge').click();
+    const encProgress = page.getByTestId('analysis-progress');
+    await encProgress.waitFor({ state: 'visible', timeout: 30_000 });
+    // Gate the cancel on a streamed table phase: at that point the KDF has
+    // completed and batch lines are actively being DECRYPTED and classified —
+    // the mid-decrypt window this phase exists to prove.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('[data-testid="text-analysis-phase"]');
+        return !!el && /^Analyzing /.test(el.textContent || '');
+      },
+      undefined,
+      { timeout: 60_000 },
+    );
+    const encPhaseText = await page.getByTestId('text-analysis-phase').innerText().catch(() => '');
+    step('encrypted analysis reached a streamed (decrypting) table phase', /^Analyzing /.test(encPhaseText), encPhaseText);
+
+    await page.getByTestId('button-cancel-analysis').click();
+    const encCancelToast = page.getByText('Analysis Cancelled', { exact: false }).first();
+    const encToastSeen = await encCancelToast
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    step('"Analysis Cancelled" toast shown after mid-decrypt cancel', encToastSeen);
+
+    await encProgress.waitFor({ state: 'hidden', timeout: 15_000 });
+    const encResultsAfterCancel = await page.getByTestId('analysis-results').isVisible().catch(() => false);
+    const encAnalyzeEnabled = await page.getByTestId('button-analyze-merge').isEnabled();
+    step(
+      'encrypted cancel resets the dialog (no results, Analyze re-enabled)',
+      !encResultsAfterCancel && encAnalyzeEnabled,
+      `results=${encResultsAfterCancel} analyzeEnabled=${encAnalyzeEnabled}`,
+    );
+
+    const countsAfterEncCancel = await vaultCountsSnapshot();
+    step(
+      'mid-decrypt cancel wrote nothing to the vault (all row counts unchanged)',
+      JSON.stringify(countsAfterEncCancel) === JSON.stringify(countsBeforeEncCancel),
+      `before=${JSON.stringify(countsBeforeEncCancel)} after=${JSON.stringify(countsAfterEncCancel)}`,
+    );
+
+    // Re-run Analyze with the correct password: the real KDF + decrypt path
+    // must stream to completion normally after a cancel.
+    await page.getByTestId('button-analyze-merge').click();
+    await page.getByTestId('analysis-results').waitFor({ state: 'visible', timeout: 180_000 });
+    const encRecordsRowText = (
+      await page.getByTestId('analysis-row-records').innerText().catch(() => '(missing)')
+    ).replace(/\s+/g, ' ');
+    step(
+      're-run encrypted Analyze after cancel completes normally',
+      /already present/.test(encRecordsRowText),
+      encRecordsRowText,
+    );
+
     await context.close();
   } finally {
     await browser.close().catch(() => {});
