@@ -437,6 +437,10 @@ args = "address-deriver-node-check"
 task = "workflow.run"
 args = "ipc-error-sanitization"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "node-settings-cert-revoke-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1573,3 +1577,15 @@ args = "node scripts/check-metadata-sources-dedup-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+    [[workflows.workflow]]
+    name = "node-settings-cert-revoke-node-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "npx vitest run client/src/pages/NodeSettings.certRevokeReprompt.test.tsx"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+    
