@@ -130,6 +130,12 @@ for (const file of files) {
 // routes messages through sanitizeIpcError/toIpcError.
 const SANCTIONED_WRAPPERS = ['wrap'];
 
+// Set when any handler registration relies on a sanctioned wrapper call. When
+// true, the wrapper's DEFINITION is verified below (lockstep source check) so
+// a lookalike local `wrap` — or a real one that lost its try/catch +
+// sanitizeIpcError routing — cannot silently bypass this guard.
+let usedSanctionedWrapper = false;
+
 // Skip whitespace and comments starting at i; returns next code index.
 function skipTrivia(src, i) {
   for (;;) {
@@ -205,8 +211,13 @@ function analyzeHandlerCallback(src, argStart, argEnd) {
   const rest = src.slice(i, argEnd);
 
   // Sanctioned wrapper call: wrap( ... )
+  // Returns { wrapper: name } so the caller can verify the binding actually
+  // resolves to the sanctioned wrapper in this file (see
+  // verifyWrapperBinding) — identifier spelling alone is not enough.
   const wrapperMatch = rest.match(/^([A-Za-z_$][\w$]*)\s*\(/);
-  if (wrapperMatch && SANCTIONED_WRAPPERS.includes(wrapperMatch[1])) return null;
+  if (wrapperMatch && SANCTIONED_WRAPPERS.includes(wrapperMatch[1])) {
+    return { wrapper: wrapperMatch[1] };
+  }
 
   // Parse a function expression: optional async, then function(...) or
   // arrow params.
@@ -279,6 +290,127 @@ function analyzeHandlerCallback(src, argStart, argEnd) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Lockstep check of the sanctioned wrapper's DEFINITION.
+//
+// Pass 2 accepts any handler callback that is a call to a function named
+// `wrap`. Nothing else guarantees the `wrap` in scope is the sanitizing
+// wrapper from electron/engine-handlers.cjs. Verify the definition still has
+// a whole-body try/catch whose catch routes through sanitizeIpcError/
+// toIpcError; otherwise a lookalike helper silently bypasses this guard.
+// ---------------------------------------------------------------------------
+
+const ENGINE_HANDLERS = path.resolve(ELECTRON_DIR, 'engine-handlers.cjs');
+
+// Per-file binding check: a handler callback written as `wrap(...)` is only
+// sanctioned when the `wrap` in scope demonstrably IS the verified wrapper
+// from engine-handlers.cjs. Returns null when safe, otherwise a reason.
+function verifyWrapperBinding(file, source, wrapperName) {
+  const isCanonical = path.resolve(file) === ENGINE_HANDLERS;
+  const declRe = new RegExp(`\\b(?:const|let|var|function)\\s+${wrapperName}\\b`, 'g');
+  const declCount = (source.match(declRe) || []).length;
+  if (isCanonical) {
+    if (declCount > 1) {
+      return `multiple local declarations of \`${wrapperName}\` in engine-handlers.cjs — a shadowing lookalike could bypass the sanitizing wrapper`;
+    }
+    return null; // definition verified separately by verifySanctionedWrapperDefinition
+  }
+  if (declCount > 0) {
+    return `\`${wrapperName}\` is declared locally in this file instead of being imported from ./engine-handlers.cjs — local lookalike wrappers are not sanctioned`;
+  }
+  const importRe = new RegExp(
+    `\\{[^}]*\\b${wrapperName}\\b[^}]*\\}\\s*=\\s*require\\(\\s*['"]\\./engine-handlers(?:\\.cjs)?['"]\\s*\\)`,
+  );
+  if (!importRe.test(source)) {
+    return `\`${wrapperName}\` is not imported from ./engine-handlers.cjs in this file — cannot confirm it is the sanctioned sanitizing wrapper`;
+  }
+  return null;
+}
+
+// Returns null when the wrap definition is verified safe, otherwise a
+// human-readable reason string.
+function verifySanctionedWrapperDefinition() {
+  if (!fs.existsSync(ENGINE_HANDLERS)) {
+    return 'engine-handlers.cjs not found in the scanned directory — the sanctioned wrap() definition cannot be verified. If the wrapper moved, update ENGINE_HANDLERS in scripts/check-ipc-error-sanitization.js.';
+  }
+  const src = fs.readFileSync(ENGINE_HANDLERS, 'utf-8');
+  const def = src.match(/\bconst\s+wrap\s*=/);
+  if (!def) {
+    return 'no `const wrap =` definition found in engine-handlers.cjs — the sanctioned wrapper was renamed or removed; update SANCTIONED_WRAPPERS and this check together.';
+  }
+  let i = skipTrivia(src, def.index + def[0].length);
+  // Outer params: (fn) or bare identifier, then =>.
+  if (src[i] === '(') {
+    i = matchBalanced(src, i, '(', ')');
+    if (i === -1) return 'unrecognized wrap definition shape';
+    i = skipTrivia(src, i);
+  } else {
+    const ident = src.slice(i).match(/^[A-Za-z_$][\w$]*/);
+    if (!ident) return 'unrecognized wrap definition shape';
+    i = skipTrivia(src, i + ident[0].length);
+  }
+  if (!src.startsWith('=>', i)) return 'unrecognized wrap definition shape — expected `const wrap = (fn) => ...`';
+  i = skipTrivia(src, i + 2);
+  // Inner returned handler: optional async, params, =>, { body }.
+  const asyncMatch = src.slice(i).match(/^async\b/);
+  if (asyncMatch) i = skipTrivia(src, i + asyncMatch[0].length);
+  if (src[i] === '(') {
+    i = matchBalanced(src, i, '(', ')');
+    if (i === -1) return 'unrecognized wrap definition shape';
+    i = skipTrivia(src, i);
+  } else {
+    const ident = src.slice(i).match(/^[A-Za-z_$][\w$]*/);
+    if (!ident) return 'unrecognized wrap definition shape';
+    i = skipTrivia(src, i + ident[0].length);
+  }
+  if (!src.startsWith('=>', i)) return 'unrecognized wrap definition shape — expected wrap to return a handler function';
+  i = skipTrivia(src, i + 2);
+  if (src[i] !== '{') {
+    return 'wrap() returns an expression-bodied handler — a throw inside it rejects the invoke with raw error text; the returned handler must have a whole-body try/catch.';
+  }
+  const bodyEnd = matchBalanced(src, i, '{', '}');
+  if (bodyEnd === -1) return 'unrecognized wrap definition shape';
+
+  let j = skipTrivia(src, i + 1);
+  if (!src.startsWith('try', j) || /[\w$]/.test(src[j + 3] || '')) {
+    return 'wrap() handler body must START with try { ... } catch — statements before the try can throw raw error text across IPC.';
+  }
+  j = skipTrivia(src, j + 3);
+  if (src[j] !== '{') return 'unrecognized wrap definition shape';
+  j = matchBalanced(src, j, '{', '}');
+  if (j === -1) return 'unrecognized wrap definition shape';
+  j = skipTrivia(src, j);
+  if (!src.startsWith('catch', j)) {
+    return 'wrap() handler try block has no catch — a rejection still leaks raw error text across IPC.';
+  }
+  j = skipTrivia(src, j + 5);
+  if (src[j] === '(') {
+    j = matchBalanced(src, j, '(', ')');
+    if (j === -1) return 'unrecognized wrap definition shape';
+    j = skipTrivia(src, j);
+  }
+  if (src[j] !== '{') return 'unrecognized wrap definition shape';
+  const catchStart = j;
+  const catchEnd = matchBalanced(src, j, '{', '}');
+  if (catchEnd === -1) return 'unrecognized wrap definition shape';
+  j = skipTrivia(src, catchEnd);
+  if (src.startsWith('finally', j)) {
+    j = skipTrivia(src, j + 7);
+    if (src[j] !== '{') return 'unrecognized wrap definition shape';
+    j = matchBalanced(src, j, '{', '}');
+    if (j === -1) return 'unrecognized wrap definition shape';
+    j = skipTrivia(src, j);
+  }
+  if (j < bodyEnd - 1) {
+    return 'wrap() handler body has statements AFTER the try/catch — they can throw raw error text across IPC.';
+  }
+  const catchBody = src.slice(catchStart, catchEnd);
+  if (!/\b(?:sanitizeIpcError|toIpcError)\s*\(/.test(catchBody)) {
+    return "wrap()'s catch block no longer routes through sanitizeIpcError(...)/toIpcError(...) — the wrapper would return raw error text over IPC.";
+  }
+  return null;
+}
+
 const coverageViolations = [];
 
 for (const file of files) {
@@ -312,7 +444,11 @@ for (const file of files) {
       else if (ch === ',' && depth === 1) { commaIdx = k; break; }
     }
     if (commaIdx === -1) continue;
-    const reason = analyzeHandlerCallback(source, commaIdx + 1, callEnd - 1);
+    let reason = analyzeHandlerCallback(source, commaIdx + 1, callEnd - 1);
+    if (reason && typeof reason === 'object' && reason.wrapper) {
+      usedSanctionedWrapper = true;
+      reason = verifyWrapperBinding(file, source, reason.wrapper);
+    }
     if (reason) {
       coverageViolations.push({
         file: path.relative(ROOT, file),
@@ -321,6 +457,21 @@ for (const file of files) {
         reason,
       });
     }
+  }
+}
+
+if (usedSanctionedWrapper) {
+  const wrapperReason = verifySanctionedWrapperDefinition();
+  if (wrapperReason) {
+    console.error(
+      '\x1b[31m%s\x1b[0m',
+      'check-ipc-error-sanitization self-check failed: sanctioned wrap() wrapper definition is no longer verified safe.',
+    );
+    console.error(`  -> ${wrapperReason}`);
+    console.error(
+      '  -> Handlers registered via wrap(...) are only exempt from the whole-body try/catch requirement because the wrapper itself catches everything and routes messages through sanitizeIpcError/toIpcError. Restore that shape in engine-handlers.cjs, or update SANCTIONED_WRAPPERS and this check in lockstep.',
+    );
+    process.exit(1);
   }
 }
 
