@@ -58,6 +58,13 @@ vi.mock("@/lib/db-upgrade-progress", () => ({
   subscribeDbUpgradeProgress: () => () => {},
   clearDbUpgradeProgress: () => {},
 }));
+// One-time "vault protection strengthened" notice shown after a successful
+// transparent KDF upgrade — mocked so tests can assert exactly when it fires.
+const toastMock = vi.fn();
+vi.mock("@/hooks/use-toast", () => ({
+  toast: (...args: unknown[]) => toastMock(...args),
+  useToast: () => ({ toast: (...args: unknown[]) => toastMock(...args), toasts: [], dismiss: () => {} }),
+}));
 
 import { AuthProvider, useAuth } from "./AuthContext";
 import {
@@ -119,6 +126,7 @@ beforeEach(async () => {
   auth = null;
   vi.restoreAllMocks();
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  toastMock.mockClear();
   await vaultDb.vault.clear();
 });
 
@@ -154,6 +162,8 @@ describe("login: failed transparent KDF upgrade", () => {
     expect(
       errorSpy.mock.calls.some((c) => String(c[0]).includes("KDF upgrade failed")),
     ).toBe(true);
+    // No "protection strengthened" notice when the upgrade did NOT happen.
+    expect(toastMock).not.toHaveBeenCalled();
 
     // Row keeps its exact legacy shape: no kdf record, hash and salt untouched
     // — nothing about the failed attempt can strand the vault half-upgraded.
@@ -185,6 +195,37 @@ describe("login: failed transparent KDF upgrade", () => {
     // Password unlocks via the stored (upgraded) parameters, wrong one fails.
     expect(await verifyVaultPassword(PASSWORD, upgraded)).toBe(true);
     expect(await verifyVaultPassword("wrong", upgraded)).toBe(false);
+
+    // The successful upgrade surfaces the one-time strengthening notice.
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(toastMock.mock.calls[0][0]).toMatchObject({
+      title: "Vault protection strengthened",
+    });
+  });
+
+  it("shows the strengthening notice once — never again on subsequent logins", async () => {
+    await seedLegacyVault(PASSWORD);
+    await mountAuth();
+
+    let ok = false;
+    await act(async () => {
+      ok = await auth!.login(PASSWORD);
+    });
+    expect(ok).toBe(true);
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(toastMock.mock.calls[0][0]).toMatchObject({
+      title: "Vault protection strengthened",
+    });
+
+    await act(async () => {
+      auth!.logout();
+    });
+    await act(async () => {
+      ok = await auth!.login(PASSWORD);
+    });
+    expect(ok).toBe(true);
+    // Already at current parameters — no repeat notice.
+    expect(toastMock).toHaveBeenCalledTimes(1);
   });
 
   it("a wrong password never reaches the upgrade path", async () => {

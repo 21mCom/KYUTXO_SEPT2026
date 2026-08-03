@@ -42,6 +42,7 @@ import { migrateAttachmentPaths } from '@/lib/attachments';
 import { decryptLegacyRecords, getTotalTableCount, countUnrecoveredLegacyRows, type LegacyDecryptProgress, type LockedRecordRef } from '@/lib/legacy-decrypt';
 import { decryptLegacyAttachmentFiles, type FileDecryptProgress } from '@/lib/legacy-decrypt-files';
 import { getActivityBus } from '@/lib/activity-bus';
+import { toast } from '@/hooks/use-toast';
 import { db, CURRENT_SCHEMA_VERSION } from '@/lib/database';
 import {
   subscribeDbUpgradeProgress,
@@ -549,7 +550,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // parameters (Argon2id). Best-effort — a failure here must never block
         // a valid login; the upgrade simply retries on the next unlock.
         try {
-          await upgradeVaultKdfIfNeeded(password, settings);
+          const upgraded = await upgradeVaultKdfIfNeeded(password, settings);
+          if (upgraded) {
+            // One-time, non-blocking notice: the upgrade makes this and future
+            // unlocks noticeably slower (memory-hard derivation, by design), so
+            // tell the user why instead of upgrading silently. Subsequent
+            // logins and fresh vaults are already at the current parameters, so
+            // upgradeVaultKdfIfNeeded returns false and no notice repeats.
+            toast({
+              title: 'Vault protection strengthened',
+              description:
+                'Your vault password protection was upgraded to a stronger standard (Argon2id). Unlocking may take slightly longer now — this is expected. Your existing backups remain readable.',
+              duration: 12000,
+            });
+          }
         } catch (error) {
           console.error('KDF upgrade failed (will retry next unlock):', error);
         }
