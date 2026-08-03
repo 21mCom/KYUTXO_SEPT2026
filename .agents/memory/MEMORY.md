@@ -97,4 +97,5 @@
 - [createdAt sort tie-breaks](created-at-sort-tiebreak.md) — "most recent row" sorts on Date.now() need an id tie-break; same-millisecond inserts sort arbitrarily and mis-de-dup.
 - [React disabled-click guard](react-disabled-click-guard.md) — React swallows forced clicks while props.disabled is set; assert the disabled state, not handler fallback toasts behind it.
 - [Radix toast vs Playwright strict](radix-toast-playwright-strict.md) — toast text duplicates into aria-live; getByText needs .first(); gate cancel asserts on a streamed phase, not first progress.
+- [Corrupted test-file repair](corrupted-test-repair.md) — restore mangled tests' original intent from git history; a "repair" that deletes them leaves green workflows with zero coverage.
 - [Detail-panel click races](detail-panel-click-races.md) — async badges (e.g. conflict count) shift layout mid-click and steal coordinate clicks in browser checks; dispatchEvent('click') + recover if URL changed.
