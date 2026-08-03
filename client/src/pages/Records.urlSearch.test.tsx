@@ -101,7 +101,7 @@ vi.mock("dexie", () => {
   };
 });
 
-// Mutable record served by the mocked db.records.get — lets the ?id= deep-link
+// Mutable record served by the mocked records table get — lets the ?id= deep-link
 // test provide a direct-loadable record without reworking the module mock.
 let mockRecordById: Record<number, unknown> = {};
 

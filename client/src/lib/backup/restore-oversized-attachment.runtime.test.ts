@@ -36,6 +36,7 @@ import {
 import {
   bulkAddAttachments,
   clearAttachments,
+  getAllAttachments,
   type CreateAttachmentData,
 } from "@/lib/data/attachments-crud";
 
@@ -153,7 +154,7 @@ describe("oversized attachment files are skipped, never fail the restore", () =>
     // restored record points at bytes that don't exist on disk.
     expect(result.counts.droppedOversizedAttachmentRows).toBe(1);
     expect(result.counts.attachments).toBe(2);
-    const rows = await db.attachments.toArray();
+    const rows = await getAllAttachments();
     expect(rows.map((r) => r.objectStoragePath).sort()).toEqual(
       [paths[0], paths[2]].sort(),
     );
@@ -193,7 +194,7 @@ describe("oversized attachment files are skipped, never fail the restore", () =>
     // Row for the 413-rejected file dropped as well.
     expect(result.counts.droppedOversizedAttachmentRows).toBe(1);
     expect(result.counts.attachments).toBe(2);
-    const rows = await db.attachments.toArray();
+    const rows = await getAllAttachments();
     expect(rows.some((r) => r.objectStoragePath === paths[1])).toBe(false);
     expect(rows).toHaveLength(2);
   });
