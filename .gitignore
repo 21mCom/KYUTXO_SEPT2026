@@ -13,3 +13,4 @@ scripts/demo-vault/cache/
 
 # Transient canary written/deleted by scripts/check-db-noise-guard.js — never commit it.
 client/src/test/__dbNoiseGuardCanary__.test.ts
+release
