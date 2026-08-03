@@ -1300,9 +1300,18 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
                 if (mergeUndoLog && typeof reviewName === "string") {
                   mergeUndoLog.reviewFilesWritten.push(reviewName);
                 }
-              } catch {
-                // intentionally swallowed — best-effort routing
-                counts.orphanedAttachmentFilesLost += 1;
+              } catch (reviewErr) {
+                if (reviewErr instanceof BackupCancelledError) throw reviewErr;
+                if (reviewErr instanceof AttachmentTooLargeError) {
+                  // The desktop cap rejected this ONE orphaned file: record it
+                  // as an oversized skip so the summary NAMES it, instead of
+                  // lumping it into the generic "could not be saved" tally.
+                  counts.skippedOversizedAttachmentFiles += 1;
+                  skippedOversizedAttachments.push(relPath);
+                } else {
+                  // intentionally swallowed — best-effort routing
+                  counts.orphanedAttachmentFilesLost += 1;
+                }
               }
               counts.orphanedAttachmentFiles += 1;
               processed += 1;

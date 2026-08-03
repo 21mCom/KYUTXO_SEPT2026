@@ -321,7 +321,7 @@ interface ElectronAPI {
   // Total byte size of all attachment files (pre-flight export size estimate)
   getAttachmentsSize: () => Promise<{ success: boolean; totalBytes?: number; fileCount?: number; error?: string }>;
   // Needs Review folder (orphaned restore attachments)
-  writeNeedsReview: (originalFilename: string, data: ArrayBuffer) => Promise<{ success: boolean; savedName?: string; error?: string }>;
+  writeNeedsReview: (originalFilename: string, data: ArrayBuffer) => Promise<{ success: boolean; savedName?: string; error?: string; code?: string }>;
   openNeedsReviewFolder: () => Promise<{ success: boolean; error?: string }>;
   listNeedsReview: () => Promise<{ success: boolean; files?: NeedsReviewFile[]; error?: string }>;
   readNeedsReview: (name: string) => Promise<{ success: boolean; data?: ArrayBuffer; error?: string }>;

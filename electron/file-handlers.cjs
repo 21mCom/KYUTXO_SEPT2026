@@ -543,7 +543,14 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       const dest = path.join(needsReviewDir, candidate);
       const buffer = Buffer.from(data);
       if (buffer.byteLength > maxAttachmentBytesLimit) {
-        return { success: false, error: `Attachment exceeds the maximum size of ${maxAttachmentBytesLimit} bytes` };
+        // Distinct code so the restore writer can map this to the typed
+        // AttachmentTooLargeError and skip just this orphaned file (parity
+        // with write-attachment) instead of failing the whole restore.
+        return {
+          success: false,
+          code: 'ATTACHMENT_TOO_LARGE',
+          error: `Attachment exceeds the maximum size of ${maxAttachmentBytesLimit} bytes`,
+        };
       }
       // O_EXCL: never overwrite (or write through a link at) an existing name.
       fs.writeFileSync(dest, buffer, { flag: 'wx' });

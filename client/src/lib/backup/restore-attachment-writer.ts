@@ -86,6 +86,16 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         const api = getElectronAPI();
         const result = await api.writeNeedsReview(originalFilename, fileData);
         if (!result.success) {
+          // Size-cap rejection = this ONE orphaned file exceeds the desktop
+          // cap. Throw the typed error so the restore records it as an
+          // oversized skip (named in the summary) instead of a generic
+          // best-effort loss — and never as a restore-fatal failure.
+          if (result.code === "ATTACHMENT_TOO_LARGE") {
+            throw new AttachmentTooLargeError(
+              originalFilename,
+              result.error || "Attachment exceeds the maximum size",
+            );
+          }
           throw new Error(result.error ?? `Failed to write ${originalFilename} to Needs Review folder`);
         }
         if (result.savedName) {

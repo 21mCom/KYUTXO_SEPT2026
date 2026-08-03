@@ -53,6 +53,7 @@ class FakeIpcMain {
 
 let baseDir: string;
 let attachmentsDir: string;
+let needsReviewDir: string;
 let ipc: FakeIpcMain;
 
 // The writer's Electron branch is driven by @/lib/electron; route it to the
@@ -63,6 +64,9 @@ vi.mock("@/lib/electron", () => ({
     writeAttachment: (relativePath: string, data: ArrayBuffer) =>
       ipc.invoke("write-attachment", { relativePath, data: new Uint8Array(data) }),
     listAllAttachments: () => ipc.invoke("list-all-attachments"),
+    writeNeedsReview: (filename: string, data: ArrayBuffer) =>
+      ipc.invoke("write-needs-review", { filename, data: new Uint8Array(data) }),
+    deleteNeedsReview: (name: string) => ipc.invoke("delete-needs-review", name),
   }),
 }));
 
@@ -70,7 +74,7 @@ beforeAll(() => {
   baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "kyutxo-restore-writer-electron-"));
   attachmentsDir = path.join(baseDir, "attachments");
   fs.mkdirSync(attachmentsDir, { recursive: true });
-  const needsReviewDir = path.join(baseDir, "needs-review");
+  needsReviewDir = path.join(baseDir, "needs-review");
   fs.mkdirSync(needsReviewDir, { recursive: true });
 
   const requireCjs = createRequire(import.meta.url);
@@ -94,6 +98,8 @@ beforeEach(async () => {
   await clearAttachments({ skipNotification: true });
   fs.rmSync(attachmentsDir, { recursive: true, force: true });
   fs.mkdirSync(attachmentsDir, { recursive: true });
+  fs.rmSync(needsReviewDir, { recursive: true, force: true });
+  fs.mkdirSync(needsReviewDir, { recursive: true });
 });
 
 describe("createRestoreAttachmentWriter against the real Electron write-attachment handler", () => {
@@ -213,5 +219,137 @@ describe("createRestoreAttachmentWriter against the real Electron write-attachme
       expect(new Uint8Array(onDisk)).toEqual(sourceFiles.get(paths[i]));
     }
     expect(fs.existsSync(path.join(attachmentsDir, ...paths[1].split("/")))).toBe(false);
+  });
+
+  it("writeReview surfaces the real write-needs-review size-cap rejection as a typed AttachmentTooLargeError", async () => {
+    const writer = createRestoreAttachmentWriter();
+    const oversized = new Uint8Array(CAP + 1).fill(9);
+
+    await expect(
+      writer.writeReview!("orphan-doc.pdf", oversized.buffer),
+    ).rejects.toSatisfy((err: unknown) => {
+      if (!(err instanceof AttachmentTooLargeError)) return false;
+      return (
+        err.relPath === "orphan-doc.pdf" &&
+        err.message.includes(`maximum size of ${CAP} bytes`)
+      );
+    });
+    // Nothing may land in the Needs Review folder.
+    expect(fs.readdirSync(needsReviewDir)).toEqual([]);
+  });
+
+  it("an under-cap writeReview really lands in the Needs Review folder", async () => {
+    const writer = createRestoreAttachmentWriter();
+    const bytes = new Uint8Array([5, 6, 7]);
+    const savedName = await writer.writeReview!("kept.bin", bytes.buffer);
+    expect(savedName).toBe("kept.bin");
+    const onDisk = fs.readFileSync(path.join(needsReviewDir, "kept.bin"));
+    expect(new Uint8Array(onDisk)).toEqual(bytes);
+  });
+
+  it("a restore with an oversized ORPHANED file skips it, names it, and completes", async () => {
+    // One real record with an under-cap attachment, plus TWO orphan rows
+    // (recordId points at a record absent from the backup): one under-cap
+    // (routes to Needs Review) and one oversized (must be skipped + named,
+    // not counted as a generic loss, and must not abort the restore).
+    const inputString = "addr-orphan-00001";
+    const [recordId] = await bulkCreateRecords(
+      [
+        {
+          type: "address",
+          inputString,
+          inputStringLower: inputString,
+          label: "r-owner",
+          tags: [],
+          categories: [],
+          addressImportance: "manual",
+        } as unknown as CreateRecordData,
+      ],
+      { skipNotification: true, skipVocabularySync: true },
+    );
+
+    const ownedPath = "ab/cd/owned.bin";
+    const orphanSmallPath = "ab/cd/orphan-small.bin";
+    const orphanBigPath = "ab/cd/orphan-big.bin";
+    const sourceFiles = new Map<string, Uint8Array>([
+      [ownedPath, new Uint8Array(8).fill(1)],
+      [orphanSmallPath, new Uint8Array(8).fill(2)],
+      [orphanBigPath, new Uint8Array(CAP * 4).fill(3)],
+    ]);
+
+    await bulkAddAttachments(
+      [
+        {
+          recordId,
+          filename: "owned.pdf",
+          mimeType: "application/pdf",
+          size: 8,
+          objectStoragePath: ownedPath,
+        },
+        {
+          recordId: 999_999, // absent from the backup → orphan on restore
+          filename: "orphan-small.pdf",
+          mimeType: "application/pdf",
+          size: 8,
+          objectStoragePath: orphanSmallPath,
+        },
+        {
+          recordId: 999_999,
+          filename: "orphan-big.pdf",
+          mimeType: "application/pdf",
+          size: CAP * 4,
+          objectStoragePath: orphanBigPath,
+        },
+      ] as unknown as CreateAttachmentData[],
+      { skipNotification: true },
+    );
+
+    const attachmentIO: AttachmentFileIO = {
+      async listAll() {
+        return [...sourceFiles.keys()];
+      },
+      async read(relPath) {
+        const v = sourceFiles.get(relPath);
+        return v
+          ? (v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) as ArrayBuffer)
+          : null;
+      },
+    };
+    const sink = new MemorySink();
+    await exportBackup({
+      sink: sink as BackupSink,
+      encrypted: false,
+      batchSize: 2,
+      attachmentIO,
+    });
+    const blob = sink.blob as Blob;
+    await clearAllRecords({ skipNotification: true });
+    await clearAttachments({ skipNotification: true });
+
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter: createRestoreAttachmentWriter(),
+    });
+
+    // Restore completed with the record intact.
+    expect(result.counts.records).toBe(1);
+    expect(await countRecords()).toBe(1);
+    expect(result.counts.attachmentFiles).toBe(1);
+
+    // Both orphans were encountered; the oversized one is an oversized SKIP
+    // (named), not a generic best-effort loss.
+    expect(result.counts.orphanedAttachmentFiles).toBe(2);
+    expect(result.counts.orphanedAttachmentFilesLost).toBe(0);
+    expect(result.counts.skippedOversizedAttachmentFiles).toBe(1);
+    expect(result.skippedOversizedAttachments).toEqual([orphanBigPath]);
+
+    // The under-cap orphan really landed in Needs Review under its original
+    // filename; the oversized one landed nowhere.
+    expect(fs.readdirSync(needsReviewDir)).toEqual(["orphan-small.pdf"]);
+    expect(fs.existsSync(path.join(attachmentsDir, ...orphanBigPath.split("/")))).toBe(false);
+
+    // The owned file was really written by the handler.
+    const onDisk = fs.readFileSync(path.join(attachmentsDir, ...ownedPath.split("/")));
+    expect(new Uint8Array(onDisk)).toEqual(sourceFiles.get(ownedPath));
   });
 });
