@@ -143,6 +143,20 @@ export class AttachmentWriteError extends Error {
   }
 }
 
+// Thrown by an AttachmentFileWriter's write() when the platform write endpoint
+// rejects a file specifically for being OVER the size cap (HTTP 413 from
+// /api/attachments/write in web). The restore treats this as a per-file SKIP —
+// the file is reported in the restore summary but the rest of the vault
+// restores intact — instead of failing the entire restore over one file.
+export class AttachmentTooLargeError extends Error {
+  relPath: string;
+  constructor(relPath: string, message: string) {
+    super(message);
+    this.name = "AttachmentTooLargeError";
+    this.relPath = relPath;
+  }
+}
+
 // Result of a pre-flight disk-space check run BEFORE the destructive clear.
 export interface DiskSpaceEstimate {
   // Raw estimate of bytes the restore will write to disk.
@@ -271,7 +285,15 @@ export interface RestoreResult {
     // export get a minimal blockchain-discovered address record rebuilt for
     // their address, so no recordId dangles. Always 0 for full backups.
     rebuiltDiscoveredShells: number;
+    // Attachment files SKIPPED because they exceed the per-file size cap
+    // (either detected while streaming the archive entry, or rejected by the
+    // platform write endpoint with a too-large error). The vault rows restore
+    // normally; only these files' bytes are not written.
+    skippedOversizedAttachmentFiles: number;
   };
+  // Relative paths of the oversized attachment files that were skipped, so the
+  // UI can tell the user exactly which files were not restored.
+  skippedOversizedAttachments: string[];
 }
 
 export const MAX_ATTACHMENT_FILE_BYTES = 100 * 1024 * 1024; // 100 MiB
@@ -510,7 +532,13 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     orphanedAttachmentFiles: 0,
     orphanedAttachmentFilesLost: 0,
     rebuiltDiscoveredShells: 0,
+    skippedOversizedAttachmentFiles: 0,
   };
+
+  // Relative paths of oversized attachment files this restore skipped (see
+  // counts.skippedOversizedAttachmentFiles). Reported on the result so the UI
+  // can name the exact files that were not restored.
+  const skippedOversizedAttachments: string[] = [];
 
   // Becomes true once the destructive clear has run. After this point the
   // existing vault is gone, so a user-initiated cancel cannot return to the
@@ -1240,6 +1268,16 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               // specific "disk may be full / file rejected" message rather than
               // a raw endpoint error. Cancellation must NOT be reclassified.
               if (writeErr instanceof BackupCancelledError) throw writeErr;
+              // The platform endpoint rejected this ONE file for exceeding the
+              // size cap (e.g. HTTP 413): skip it with a per-file warning
+              // instead of failing the whole restore over one file.
+              if (writeErr instanceof AttachmentTooLargeError) {
+                counts.skippedOversizedAttachmentFiles += 1;
+                skippedOversizedAttachments.push(relPath);
+                processed += 1;
+                report("Restoring attachment files...");
+                return;
+              }
               throw new AttachmentWriteError(
                 relPath,
                 writeErr instanceof Error ? writeErr.message : String(writeErr),
@@ -1250,7 +1288,19 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
             counts.attachmentFiles += 1;
             processed += 1;
             report("Restoring attachment files...");
-          }, { maxBytes: opts.maxAttachmentFileBytes ?? MAX_ATTACHMENT_FILE_BYTES });
+          }, {
+            maxBytes: opts.maxAttachmentFileBytes ?? MAX_ATTACHMENT_FILE_BYTES,
+            // An archive entry over the cap (e.g. exported by the desktop app
+            // or an older build without the cap) is SKIPPED — recorded so the
+            // restore summary names it — rather than aborting the restore.
+            onMaxBytesExceeded: () => {
+              throwIfAborted();
+              counts.skippedOversizedAttachmentFiles += 1;
+              skippedOversizedAttachments.push(relPath);
+              processed += 1;
+              report("Restoring attachment files...");
+            },
+          });
         }
 
         return null; // ignore anything else
@@ -1390,7 +1440,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   } catch {}
 
   opts.onProgress?.({ percent: 100, phase: "Restore complete" });
-  return { manifest, counts };
+  return { manifest, counts, skippedOversizedAttachments };
 }
 
 export function isSafeAttachmentRelPath(relPath: unknown): relPath is string {

@@ -241,7 +241,11 @@ export async function captureMergeOrigin(
           o.originType === incoming.originType &&
           normalizeOriginSource(o.source) === normalizeOriginSource(incoming.source)
       )
-      .sort((a, b) => b.createdAt - a.createdAt);
+      // Tie-break equal timestamps by id (later insert wins): two origins
+      // appended within the same millisecond otherwise sort arbitrarily, and
+      // the de-dup below could compare against the OLDER row and wrongly
+      // refresh it instead of appending.
+      .sort((a, b) => b.createdAt - a.createdAt || (b.id ?? 0) - (a.id ?? 0));
     const latestSameSource = sameSourceOrigins[0];
     if (latestSameSource?.id && originValuesEqual(latestSameSource, incoming)) {
       await db.recordOrigins.update(latestSameSource.id, {

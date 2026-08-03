@@ -93,7 +93,14 @@ async function seedRecord(fields: Partial<DbRecord> = {}): Promise<DbRecord> {
 }
 
 beforeEach(async () => {
-  await Promise.all(testDb.tables.map((t) => t.clear()));
+  // Clear tables inside a single transaction so the clears are atomic and
+  // deterministic — concurrent Promise.all clears on fake-indexeddb can race
+  // with a previous test's still-settling writes, contaminating the next test.
+  await testDb.transaction("rw", testDb.tables, async () => {
+    for (const t of testDb.tables) {
+      await t.clear();
+    }
+  });
 });
 
 afterAll(async () => {

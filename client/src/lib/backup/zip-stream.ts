@@ -192,19 +192,38 @@ export class ZipEntryTooLargeError extends Error {
 // unboundedly — instead of discovering the size only at onEnd.
 export function collectBytesConsumer(
   onDone: (bytes: Uint8Array) => Promise<void> | void,
-  opts: { maxBytes?: number } = {},
+  opts: {
+    maxBytes?: number;
+    // When set, exceeding maxBytes does NOT abort the stream: buffered bytes
+    // are discarded, the rest of the entry is drained without buffering, and
+    // this callback runs at entry end (instead of onDone) with the total byte
+    // count seen. Lets a restore SKIP one oversized attachment file while the
+    // rest of the archive continues to restore normally.
+    onMaxBytesExceeded?: (totalBytes: number) => Promise<void> | void;
+  } = {},
 ): ZipEntryConsumer {
   const parts: Uint8Array[] = [];
   let buffered = 0;
+  let exceeded = false;
   return {
     onChunk(chunk) {
       buffered += chunk.length;
       if (opts.maxBytes != null && buffered > opts.maxBytes) {
-        throw new ZipEntryTooLargeError(opts.maxBytes);
+        if (!opts.onMaxBytesExceeded) {
+          throw new ZipEntryTooLargeError(opts.maxBytes);
+        }
+        // Skip mode: stop buffering (free memory), keep draining the entry.
+        exceeded = true;
+        parts.length = 0;
+        return;
       }
-      parts.push(chunk);
+      if (!exceeded) parts.push(chunk);
     },
     async onEnd() {
+      if (exceeded) {
+        await opts.onMaxBytesExceeded!(buffered);
+        return;
+      }
       const total = parts.reduce((n, c) => n + c.length, 0);
       const out = new Uint8Array(total);
       let off = 0;

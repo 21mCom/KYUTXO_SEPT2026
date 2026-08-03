@@ -1,7 +1,10 @@
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { deleteFile } from "@/lib/attachments";
 import { ATTACHMENTS_DIR } from "@/lib/backup/format";
-import type { AttachmentFileWriter } from "@/lib/backup/restore";
+import {
+  AttachmentTooLargeError,
+  type AttachmentFileWriter,
+} from "@/lib/backup/restore";
 
 // The AttachmentFileWriter used by every v3 restore entry point (the Settings
 // Restore-from-Backup flow and the one-click demo-vault loader). Extracted from
@@ -26,6 +29,15 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         });
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
+          // 413 = this ONE file exceeds the server's size cap. Throw the typed
+          // error so the restore skips the file with a per-file warning instead
+          // of failing the whole restore over it.
+          if (response.status === 413) {
+            throw new AttachmentTooLargeError(
+              relativePath,
+              errorData.error || "Attachment exceeds the maximum size",
+            );
+          }
           throw new Error(errorData.error || response.statusText);
         }
       }
