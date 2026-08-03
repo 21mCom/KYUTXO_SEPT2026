@@ -49,6 +49,8 @@ const BLOCK_125552_HASH =
 let server: net.Server;
 let serverPort: number;
 const headerByHeight = new Map<number, unknown>();
+// When set, unknown-height errors use this message instead (hostile-server case).
+let hostileErrorMessage: string | null = null;
 
 let stopKeepalive: () => void;
 let ipc: FakeIpcMain;
@@ -75,7 +77,9 @@ beforeAll(async () => {
               JSON.stringify({
                 jsonrpc: "2.0",
                 id: req.id,
-                error: { message: "height out of range" },
+                error: {
+                  message: hostileErrorMessage ?? "height out of range",
+                },
               }) + "\n",
             );
             continue;
@@ -179,5 +183,33 @@ describe("electrum-get-block-hash input validation", () => {
     const result = await getBlockHash(99999999); // no entry -> server error
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/height out of range/);
+  });
+
+  it("caps and cleans an oversized/hostile server error before it crosses IPC", async () => {
+    // A malicious server controls the JSON-RPC error text: send a huge
+    // message stuffed with control characters, newlines, and URL/host
+    // material. The IPC-visible error must be length-capped, free of control
+    // chars, and must not leak the URL — while still being a failure.
+    hostileErrorMessage =
+      "height out of range " +
+      "\x00\x07evil\x1b[31mANSI\x1b[0m\r\ninjected\n".repeat(50) +
+      "see http://attacker.example.com/steal " +
+      "A".repeat(5000);
+    try {
+      const result = await getBlockHash(4000); // no entry -> hostile error
+      expect(result.success).toBe(false);
+      expect(typeof result.error).toBe("string");
+      // Length cap: 200 chars of server text plus the fixed prefix.
+      expect(result.error.length).toBeLessThanOrEqual(250);
+      // No control characters or newlines survive.
+      expect(result.error).not.toMatch(/[\x00-\x1f\x7f]/);
+      // Remote URL/host material never crosses the bridge.
+      expect(result.error).not.toContain("example.com");
+      expect(result.error).not.toContain("http");
+      // The useful plain-word hint is preserved.
+      expect(result.error).toMatch(/height out of range/);
+    } finally {
+      hostileErrorMessage = null;
+    }
   });
 });
