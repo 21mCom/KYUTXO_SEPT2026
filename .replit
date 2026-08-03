@@ -55,6 +55,10 @@ args = "private-key-file-reject-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "private-key-scan-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "psbt-builder-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1645,6 +1649,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-merge-preview-rows-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "private-key-scan-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/wallet-import/import-manager.scanForPrivateKeys.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

@@ -23,9 +23,11 @@ import { beginBulkOperation, endBulkOperation } from '../database';
 export function scanForPrivateKeys(content: string): { hasPrivateKeys: boolean; warnings: string[] } {
   const warnings: string[] = [];
   
-  // Check for extended private keys (xprv/tprv)
-  if (/xprv[a-zA-Z0-9]{100,}/i.test(content) || /tprv[a-zA-Z0-9]{100,}/i.test(content)) {
-    warnings.push('File appears to contain extended private keys (xprv/tprv)');
+  // Check for extended private keys across all common SLIP-132 prefixes:
+  // xprv/tprv (BIP-32), yprv/uprv (P2SH-P2WPKH), zprv/vprv (P2WPKH),
+  // Yprv/Uprv/Zprv/Vprv (multisig variants). Case-insensitive to be safe.
+  if (/[xtyuzv]prv[a-zA-Z0-9]{100,}/i.test(content)) {
+    warnings.push('File appears to contain extended private keys (xprv/yprv/zprv/tprv/uprv/vprv)');
   }
   
   // Check for WIF private keys (start with 5, K, or L followed by 50-52 base58 chars)
