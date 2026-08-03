@@ -563,7 +563,7 @@ export function RestoreBackupFlow() {
         // name each one so the user knows exactly which files were not restored.
         const skippedOversized = result.skippedOversizedAttachments ?? [];
         const v3SkippedMsg = skippedOversized.length > 0
-          ? ` Warning: ${skippedOversized.length} attachment file${skippedOversized.length !== 1 ? "s" : ""} exceeded the maximum size and ${skippedOversized.length !== 1 ? "were" : "was"} not restored: ${skippedOversized.join(", ")}.`
+          ? ` Warning: ${skippedOversized.length} attachment file${skippedOversized.length !== 1 ? "s" : ""} exceeded the maximum size and ${skippedOversized.length !== 1 ? "were" : "was"} not restored: ${skippedOversized.join(", ")}.${(result.counts.droppedOversizedAttachmentRows ?? 0) > 0 ? ` ${result.counts.droppedOversizedAttachmentRows} matching attachment entr${result.counts.droppedOversizedAttachmentRows !== 1 ? "ies were" : "y was"} removed so no record points at a missing file.` : ""}`
           : "";
         const v3ReplacedMsg = backfill.orphansFound
           ? ""

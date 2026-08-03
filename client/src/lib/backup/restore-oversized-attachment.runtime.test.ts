@@ -148,6 +148,15 @@ describe("oversized attachment files are skipped, never fail the restore", () =>
     expect(restoredFiles.has(paths[0])).toBe(true);
     expect(restoredFiles.has(paths[1])).toBe(false);
     expect(restoredFiles.has(paths[2])).toBe(true);
+
+    // The dangling attachment ROW for the skipped file was removed too, so no
+    // restored record points at bytes that don't exist on disk.
+    expect(result.counts.droppedOversizedAttachmentRows).toBe(1);
+    expect(result.counts.attachments).toBe(2);
+    const rows = await db.attachments.toArray();
+    expect(rows.map((r) => r.objectStoragePath).sort()).toEqual(
+      [paths[0], paths[2]].sort(),
+    );
   });
 
   it("a write endpoint rejecting one file as too large (413) skips that file only", async () => {
@@ -180,6 +189,13 @@ describe("oversized attachment files are skipped, never fail the restore", () =>
     expect(restoredFiles.has(paths[1])).toBe(false);
     expect(restoredFiles.has(paths[0])).toBe(true);
     expect(restoredFiles.has(paths[2])).toBe(true);
+
+    // Row for the 413-rejected file dropped as well.
+    expect(result.counts.droppedOversizedAttachmentRows).toBe(1);
+    expect(result.counts.attachments).toBe(2);
+    const rows = await db.attachments.toArray();
+    expect(rows.some((r) => r.objectStoragePath === paths[1])).toBe(false);
+    expect(rows).toHaveLength(2);
   });
 
   it("no skips: result reports zero skipped files and an empty list", async () => {
@@ -196,6 +212,8 @@ describe("oversized attachment files are skipped, never fail the restore", () =>
     expect(result.counts.skippedOversizedAttachmentFiles).toBe(0);
     expect(result.skippedOversizedAttachments).toEqual([]);
     expect(result.counts.attachmentFiles).toBe(3);
+    expect(result.counts.droppedOversizedAttachmentRows).toBe(0);
+    expect(result.counts.attachments).toBe(3);
   });
 
   it("a genuine (non-size) write failure still fails the restore as before", async () => {

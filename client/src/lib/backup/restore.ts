@@ -287,9 +287,15 @@ export interface RestoreResult {
     rebuiltDiscoveredShells: number;
     // Attachment files SKIPPED because they exceed the per-file size cap
     // (either detected while streaming the archive entry, or rejected by the
-    // platform write endpoint with a too-large error). The vault rows restore
-    // normally; only these files' bytes are not written.
+    // platform write endpoint with a too-large error). The rest of the vault
+    // restores normally; only these files' bytes are not written.
     skippedOversizedAttachmentFiles: number;
+    // Attachment DB rows this restore inserted but then REMOVED because their
+    // file was skipped for size (see skippedOversizedAttachmentFiles). Without
+    // this, restored records would point at attachment files whose bytes are
+    // missing on disk. Always ≤ skippedOversizedAttachmentFiles' row matches;
+    // already excluded from counts.attachments.
+    droppedOversizedAttachmentRows: number;
   };
   // Relative paths of the oversized attachment files that were skipped, so the
   // UI can tell the user exactly which files were not restored.
@@ -533,7 +539,15 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     orphanedAttachmentFilesLost: 0,
     rebuiltDiscoveredShells: 0,
     skippedOversizedAttachmentFiles: 0,
+    droppedOversizedAttachmentRows: 0,
   };
+
+  // Attachment DB row ids inserted by THIS restore, keyed by their
+  // objectStoragePath. When an attachment FILE is later skipped for exceeding
+  // the size cap, the matching row(s) are deleted after the stream completes —
+  // otherwise the restored record would show an attachment whose bytes do not
+  // exist on disk (a dangling row the audit would only catch much later).
+  const insertedAttachmentIdsByPath = new Map<string, number[]>();
 
   // Relative paths of oversized attachment files this restore skipped (see
   // counts.skippedOversizedAttachmentFiles). Reported on the result so the UI
@@ -613,6 +627,33 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       }
     }
     writtenFiles.length = 0;
+  }
+
+  // Deletes attachment DB rows this restore inserted whose FILE was skipped
+  // for exceeding the per-file size cap, so no restored record points at an
+  // attachment whose bytes are missing on disk. Runs after the ZIP stream
+  // completes (rows stream before file entries, so skips are only known
+  // then). Merge-safe: only rows THIS restore inserted are candidates, so a
+  // de-duped live row backed by pre-existing bytes is never touched; dropped
+  // ids are also pulled from the merge undo log so a later cancel does not
+  // double-delete them.
+  async function dropRowsForSkippedOversizedFiles(): Promise<void> {
+    if (skippedOversizedAttachments.length === 0) return;
+    const idsToDrop: number[] = [];
+    for (const relPath of skippedOversizedAttachments) {
+      const ids = insertedAttachmentIdsByPath.get(relPath);
+      if (ids?.length) idsToDrop.push(...ids);
+    }
+    if (idsToDrop.length === 0) return;
+    await bulkDeleteAttachments(idsToDrop, { skipNotification: true });
+    counts.attachments -= idsToDrop.length;
+    counts.droppedOversizedAttachmentRows = idsToDrop.length;
+    if (mergeUndoLog) {
+      const dropped = new Set(idsToDrop);
+      mergeUndoLog.attachmentIds = mergeUndoLog.attachmentIds.filter(
+        (id) => !dropped.has(id),
+      );
+    }
   }
 
   // Best-effort removal of OLD-vault attachment files a SUCCESSFUL restore left
@@ -842,6 +883,14 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       }
       if (out.length) {
         const newIds = await bulkAddAttachments(out, { skipNotification: true });
+        for (let i = 0; i < out.length; i++) {
+          const p = out[i].objectStoragePath;
+          if (!p) continue;
+          const path = String(p);
+          const ids = insertedAttachmentIdsByPath.get(path);
+          if (ids) ids.push(newIds[i]);
+          else insertedAttachmentIdsByPath.set(path, [newIds[i]]);
+        }
         if (mergeUndoLog) {
           mergeUndoLog.attachmentIds.push(...newIds);
           for (const a of out) {
@@ -1316,6 +1365,15 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     // Re-link discovery-tree pointers through the completed id map — same
     // failure/cancel contracts as above.
     await remapDiscoveryPointers();
+
+    // Attachment ROWS whose file was skipped for exceeding the size cap are
+    // removed now (rows stream before files, so skips are only known here).
+    // Leaving them would make restored records show attachments whose bytes
+    // are missing on disk. The skipped files are still counted and NAMED on
+    // the result, so the restore summary tells the user exactly what was
+    // dropped. Only rows THIS restore inserted are touched — in merge mode a
+    // de-duped (pre-existing) live row is never deleted.
+    await dropRowsForSkippedOversizedFiles();
   } catch (err) {
     const aborted = opts.signal?.aborted ?? false;
     if (err instanceof BackupCancelledError || aborted) {
