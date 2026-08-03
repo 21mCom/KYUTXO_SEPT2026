@@ -63,6 +63,10 @@ args = "electrum-sent-nudge-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "tor-proxy-settings-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "psbt-builder-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1510,6 +1514,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-ipc-error-sanitization.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "tor-proxy-settings-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-tor-proxy-settings-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
