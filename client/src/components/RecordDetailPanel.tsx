@@ -528,7 +528,9 @@ export function RecordDetailPanel({
   const [discoveryTreeOpen, setDiscoveryTreeOpen] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
   const [technicalOpen, setTechnicalOpen] = useState(false);
-  const [conflictCount, setConflictCount] = useState(0);
+  // null = conflict check still running; the badge slot below reserves space
+  // either way so the badge popping in can't shift neighboring controls.
+  const [conflictCount, setConflictCount] = useState<number | null>(null);
   const [blockchainTx, setBlockchainTx] = useState<BlockchainTransaction | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
@@ -591,6 +593,7 @@ export function RecordDetailPanel({
         setConflictCount(0);
         return;
       }
+      setConflictCount(null);
       try {
         const origins = await getRecordOrigins(Number(record.id));
         if (origins.length < 2) {
@@ -683,17 +686,6 @@ export function RecordDetailPanel({
                     )}
                   </Badge>
                 )}
-                {conflictCount > 0 && (
-                  <Badge 
-                    variant="outline" 
-                    className="text-orange-600 border-orange-300 cursor-pointer hover-elevate"
-                    onClick={() => navigate(`/conflict-resolution?recordId=${record.id}`)}
-                    data-testid="badge-conflicts"
-                  >
-                    <AlertCircle className="h-3 w-3 mr-1" />
-                    {conflictCount} Conflict{conflictCount > 1 ? 's' : ''}
-                  </Badge>
-                )}
                 {record.type === 'address' && (() => {
                   const bp = classifyBehavior({
                     synced: record.statsComputedAt != null,
@@ -709,6 +701,24 @@ export function RecordDetailPanel({
                     </Badge>
                   );
                 })()}
+              </div>
+              {/* Dedicated, always-present slot for the async conflict badge.
+                  Its fixed min-height means the badge popping in (or resolving
+                  to zero) never shifts neighboring interactive controls —
+                  previously a late badge could displace e.g. the Metadata
+                  Sources toggle right under a user's click. */}
+              <div className="mt-2 flex min-h-[22px] items-center" data-testid="slot-conflicts">
+                {conflictCount !== null && conflictCount > 0 && (
+                  <Badge
+                    variant="outline"
+                    className="text-orange-600 border-orange-300 cursor-pointer hover-elevate"
+                    onClick={() => navigate(`/conflict-resolution?recordId=${record.id}`)}
+                    data-testid="badge-conflicts"
+                  >
+                    <AlertCircle className="h-3 w-3 mr-1" />
+                    {conflictCount} Conflict{conflictCount > 1 ? 's' : ''}
+                  </Badge>
+                )}
               </div>
             </div>
             <div className="flex gap-1">

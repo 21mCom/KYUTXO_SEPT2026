@@ -196,10 +196,12 @@ async function readPanel(page, recordId) {
   const sourcesList = page.getByTestId('list-metadata-sources');
   const expandDeadline = Date.now() + 30_000;
   for (;;) {
-    // The async conflict-count badge can pop in next to the toggle and shift
-    // layout mid-click (a coordinate click then lands on the badge and
-    // navigates to Conflict Resolution). Dispatch the click on the element
-    // itself, and recover if a mis-click navigated us away.
+    // The async conflict-count badge now renders in a reserved fixed-height
+    // slot (RecordDetailPanel), so it no longer shifts layout when it pops in.
+    // Coordinate clicks are still racy here for an unrelated reason: the
+    // detail Sheet's slide-in transition doesn't progress between idle
+    // headless frames, so a plain click can compute its point mid-slide.
+    // Dispatch on the element itself and recover if a mis-click navigated.
     if (!page.url().includes(`records?id=${recordId}`)) {
       console.log(`[metadata-sources-dedup-browser] navigated away (${page.url()}); returning to deep link`);
       await page.goto(`${BASE_URL}records?id=${recordId}`, { waitUntil: 'load', timeout: 60_000 });
