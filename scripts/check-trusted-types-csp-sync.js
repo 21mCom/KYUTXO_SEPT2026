@@ -33,7 +33,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '..');
+// Test hook: CHECK_TT_CSP_SYNC_ROOT points the guard at a fixture directory
+// (see scripts/check-trusted-types-csp-sync.test.mjs). Fixture layout mirrors
+// the real repo: electron/main.cjs, scripts/check-trusted-types-browser.mjs,
+// scripts/check-packaged-electron-browser.mjs.
+const ROOT = process.env.CHECK_TT_CSP_SYNC_ROOT
+  ? path.resolve(process.env.CHECK_TT_CSP_SYNC_ROOT)
+  : path.resolve(__dirname, '..');
 
 const MAIN_CJS = path.resolve(ROOT, 'electron/main.cjs');
 const BROWSER_CHECK = path.resolve(ROOT, 'scripts/check-trusted-types-browser.mjs');

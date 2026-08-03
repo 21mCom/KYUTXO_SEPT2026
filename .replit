@@ -469,6 +469,10 @@ args = "failed-unlock-node-check"
 task = "workflow.run"
 args = "ipc-sanitization-guard-tests"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "trusted-types-csp-sync-tests"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1690,6 +1694,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/check-ipc-error-sanitization.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "trusted-types-csp-sync-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-trusted-types-csp-sync.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
