@@ -159,7 +159,8 @@ async function runDerive(page, input, label) {
 async function main() {
   await ensureServer();
   const browser = await launchBrowserWithRetry();
-  const context = await browser.newContext({ serviceWorkers: 'block' });
+  const context = await browser.newContext({ serviceWorkers: 'block', acceptDownloads: true });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE_URL.replace(/\/$/, '') });
   const page = await context.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => {
@@ -207,6 +208,92 @@ async function main() {
     check('Sparrow: first address matches the BIP-84 test vector',
       sparrow.firstRow.includes(BIP84_FIRST_RECEIVE),
       `firstRow="${sparrow.firstRow.replace(/\s+/g, ' ').trim()}"`);
+  }
+
+  // ── Copy all + Download CSV: browser-only clipboard/Blob paths (Task #1799) ──
+  if (sparrow && sparrow.rows === 20) {
+    // Ground truth: every rendered row's index/address/chain/path, in order.
+    const rendered = await page.getByTestId('list-derived-addresses')
+      .locator('[data-testid^="row-derived-"]')
+      .evaluateAll((rows) => rows.map((r) => {
+        const spans = r.querySelectorAll('span');
+        return {
+          index: spans[0]?.textContent?.trim() ?? '',
+          address: r.querySelector('span[title]')?.getAttribute('title') ?? '',
+          chain: r.querySelector('[class*="inline-flex"], .badge')?.textContent?.trim()
+            ?? Array.from(r.children).map((c) => c.textContent?.trim()).find((t) => t === 'receive' || t === 'change')
+            ?? '',
+          path: spans[spans.length - 1]?.textContent?.trim() ?? '',
+        };
+      }));
+    check('rendered ground truth: 20 rows with addresses',
+      rendered.length === 20 && rendered.every((r) => r.address.length > 0),
+      `rows=${rendered.length}`);
+    check('rendered ground truth: first address is the pinned BIP-84 vector',
+      rendered[0]?.address === BIP84_FIRST_RECEIVE, `first="${rendered[0]?.address}"`);
+
+    await page.getByTestId('button-copy-all').click();
+    const clip = await page.evaluate(() => navigator.clipboard.readText()).catch((e) => `(clipboard read failed: ${e.message})`);
+    const expectedClip = rendered.map((r) => r.address).join('\n');
+    check('Copy all: clipboard equals all 20 derived addresses in order',
+      clip === expectedClip,
+      clip === expectedClip ? '20 lines exact match' : `clip[0..80]="${String(clip).slice(0, 80)}"`);
+
+    // ── Download CSV: full row-by-row comparison against the rendered rows ──
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 30_000 }),
+      page.getByTestId('button-download-csv').click(),
+    ]).catch((e) => { check('Download CSV: download event fired', false, e.message); return [null]; });
+    if (download) {
+      const filename = download.suggestedFilename();
+      check('Download CSV: filename shape',
+        /^derived-addresses-.+-20\.csv$/.test(filename), `filename="${filename}"`);
+      const path = await download.path();
+      const { readFileSync } = await import('node:fs');
+      const csv = readFileSync(path, 'utf8');
+      check('Download CSV: CRLF line endings with trailing newline',
+        csv.includes('\r\n') && csv.endsWith('\r\n'), `len=${csv.length}`);
+      const csvLines = csv.split('\r\n').filter(Boolean);
+      check('Download CSV: header row matches',
+        csvLines[0] === 'Address,Chain,Index,Derivation Path', `header="${csvLines[0]}"`);
+      check('Download CSV: 20 data rows', csvLines.length === 21, `lines=${csvLines.length}`);
+      // These derived values contain no commas/quotes/sigils, so each CSV line
+      // must equal the raw joined cells of the corresponding rendered row.
+      let rowMismatch = null;
+      for (let i = 0; i < rendered.length; i++) {
+        const expected = [rendered[i].address, rendered[i].chain, rendered[i].index, rendered[i].path].join(',');
+        if (csvLines[i + 1] !== expected) {
+          rowMismatch = `row ${i}: got "${csvLines[i + 1]}" want "${expected}"`;
+          break;
+        }
+      }
+      check('Download CSV: every data row matches its rendered row exactly',
+        rowMismatch === null, rowMismatch ?? 'all 20 rows match');
+    }
+
+    // ── Formula-safety: exercise the exact serializer the button uses with
+    // hostile sigil values, in the real browser bundle (not a benign fixture).
+    const hostile = await page.evaluate(async () => {
+      const mod = await import('/src/lib/address-deriver.ts');
+      const rows = [
+        { address: '=HYPERLINK("http://evil")', chain: '+SUM(A1)', index: 0, path: '-2+3' },
+        { address: '@cmd', chain: ' =trim-leading', index: 1, path: '\t+tab' },
+      ];
+      return mod.deriverRowsToCsv(rows);
+    }).catch((e) => `(serializer eval failed: ${e.message})`);
+    const hostileLines = String(hostile).split('\r\n').filter(Boolean).slice(1);
+    const neutralized =
+      hostileLines.length === 2 &&
+      hostileLines[0].startsWith(`"'=HYPERLINK(`) &&
+      hostileLines[0].includes(`'+SUM(A1)`) &&
+      hostileLines[0].endsWith(`'-2+3`) &&
+      hostileLines[1].startsWith(`'@cmd`) &&
+      hostileLines[1].includes(`' =trim-leading`) &&
+      hostileLines[1].includes(`'\t+tab`);
+    check('Formula-safety: hostile sigil cells are apostrophe-neutralized by the live serializer',
+      neutralized, `rows=${JSON.stringify(hostileLines)}`);
+  } else {
+    check('Copy all / Download CSV: prerequisite Sparrow derive succeeded', false, 'skipped — no rows');
   }
 
   check('no uncaught page errors', pageErrors.length === 0, `pageErrors=${pageErrors.length}`);

@@ -50,6 +50,7 @@
 - [pdf.js browser harness](pdfjs-browser-harness.md) — Nix Chromium v125 can't run pdfjs-dist default build (Promise.try); use legacy build + legacy worker ?url in browser; pdf.js is only an oracle.
 - [Task-env chromium + validation EAGAIN](task-env-chromium.md) — task envs may lack chromium (install via system deps); parallel validation can EAGAIN-kill vitest workers — verify serially before chasing regressions.
 - [Concurrent browser-check contention](browser-check-contention.md) — parallel browser checks crash each other; retry-wrap sessions, never kill chromium/restart workflow mid-run; pre-start the app workflow.
+- [E2E export-check exactness](e2e-export-check-exactness.md) — review rejects loose export checks: compare clipboard/CSV exactly to rendered rows and exercise sanitizers with hostile inputs, not benign fixtures.
 - [.replit validation wiring](dotreplit-validation-wiring.md) — new check gates validation only via verifyAndReplaceDotReplit (isValidation + run list); flaky-only validation failures → audited skip; harden launches with retries.
 - [PofF shared PDF builder pattern](pof-shared-pdf-builder.md) — `buildPofPdf(isSample)` useCallback with `eff*` vars; sample AML needs explicit placeholder SOW/SOF strings; sample inline amlResult needs full EntityListDescriptionInput fields (entityListSource etc.).
 - [Elevate CSS vs positioning utilities](elevate-css-specificity.md) — elevate base rule must stay 0-specificity (:where()) or Tailwind `absolute` on Buttons/Badges silently loses; browser-only bug class.
