@@ -387,6 +387,10 @@ args = "server-response-hygiene-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "prod-response-hygiene-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "launch-token-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1525,6 +1529,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-tor-proxy-settings-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "prod-response-hygiene-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-prod-response-hygiene.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
