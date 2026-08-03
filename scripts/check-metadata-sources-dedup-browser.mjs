@@ -160,22 +160,24 @@ async function readOrigins(page, addr) {
   }, { address: addr });
 }
 
-/** Open the record's detail via a real row click and read the Metadata Sources panel count + rows. */
+/** Open the record's detail via the `?id=` deep link and read the Metadata Sources panel count + rows.
+ * The deep link itself is under test (Task #1814): wouter strips the query
+ * string in browser mode, so Records.tsx must fall back to
+ * window.location.search — regressions leave the plain list on screen. */
 async function readPanel(page, recordId) {
-  await page.goto(`${BASE_URL}records`, { waitUntil: 'load', timeout: 60_000 });
+  await page.goto(`${BASE_URL}records?id=${recordId}`, { waitUntil: 'load', timeout: 60_000 });
   await unlockIfNeeded(page);
-  const row = page.getByTestId(`row-record-${recordId}`);
-  await row.waitFor({ state: 'visible', timeout: 30_000 });
-  // Click a neutral cell (the Type cell) — the first cell is the selection
-  // checkbox and other cells carry their own click handlers (address links).
-  await row.locator('td').nth(1).click();
-  const detailSeen = await page
+  // Hard assertion: the direct link must open the detail view (no row click).
+  await page
     .getByText('Record Details')
     .first()
-    .waitFor({ state: 'visible', timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
-  console.log(`[metadata-sources-dedup-browser] detail view opened for record ${recordId}: ${detailSeen}`);
+    .waitFor({ state: 'visible', timeout: 30_000 })
+    .catch(async (err) => {
+      const bodyText = ((await page.locator('body').textContent().catch(() => '')) ?? '').slice(0, 800);
+      console.log(`[metadata-sources-dedup-browser] ?id=${recordId} deep link did not open the detail view; body: ${bodyText}`);
+      throw err;
+    });
+  console.log(`[metadata-sources-dedup-browser] detail view opened via ?id=${recordId} deep link`);
   const toggle = page.getByTestId('button-toggle-sources');
   try {
     await toggle.waitFor({ state: 'visible', timeout: 30_000 });
@@ -187,8 +189,34 @@ async function readPanel(page, recordId) {
   const headerText = ((await toggle.textContent()) ?? '').trim();
   const match = headerText.match(/Metadata Sources \((\d+)\)/);
   const headerCount = match ? Number(match[1]) : -1;
-  await toggle.click();
-  await page.getByTestId('list-metadata-sources').waitFor({ state: 'visible', timeout: 15_000 });
+  // The detail view first renders from a direct DB load, then re-renders once
+  // the background list load resolves the same record — a click that lands
+  // just before that swap gets its expansion reset. Re-click until the list
+  // actually shows.
+  const sourcesList = page.getByTestId('list-metadata-sources');
+  const expandDeadline = Date.now() + 30_000;
+  for (;;) {
+    // The async conflict-count badge can pop in next to the toggle and shift
+    // layout mid-click (a coordinate click then lands on the badge and
+    // navigates to Conflict Resolution). Dispatch the click on the element
+    // itself, and recover if a mis-click navigated us away.
+    if (!page.url().includes(`records?id=${recordId}`)) {
+      console.log(`[metadata-sources-dedup-browser] navigated away (${page.url()}); returning to deep link`);
+      await page.goto(`${BASE_URL}records?id=${recordId}`, { waitUntil: 'load', timeout: 60_000 });
+      await toggle.waitFor({ state: 'visible', timeout: 30_000 });
+    }
+    const clicked = await toggle.dispatchEvent('click', undefined, { timeout: 3_000 }).then(() => true).catch(() => false);
+    const visible = clicked && await sourcesList
+      .waitFor({ state: 'visible', timeout: 3_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (visible) break;
+    if (Date.now() > expandDeadline) {
+      const bodyText = ((await page.locator('body').textContent().catch(() => '')) ?? '').slice(0, 1200);
+      throw new Error(`Metadata Sources list did not expand for record ${recordId} within 30s (last click ok=${clicked}); body: ${bodyText}`);
+    }
+    await page.waitForTimeout(500);
+  }
   const rowCount = await page.locator('[data-testid="list-metadata-sources"] [data-testid^="button-origin-"]').count();
   return { headerText, headerCount, rowCount };
 }

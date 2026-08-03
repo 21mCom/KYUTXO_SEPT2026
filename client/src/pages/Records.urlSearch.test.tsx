@@ -101,6 +101,10 @@ vi.mock("dexie", () => {
   };
 });
 
+// Mutable record served by the mocked db.records.get — lets the ?id= deep-link
+// test provide a direct-loadable record without reworking the module mock.
+let mockRecordById: Record<number, unknown> = {};
+
 vi.mock("@/lib/database", async () => {
   const dbTypes = await import("@/lib/db-types");
   const recordsBetween = () => ({
@@ -129,7 +133,7 @@ vi.mock("@/lib/database", async () => {
         offset: () => ({ limit: () => ({ toArray: () => Promise.resolve([]) }) }),
       }),
     }),
-    get: () => Promise.resolve(undefined),
+    get: (id: number) => Promise.resolve(mockRecordById[id]),
   };
 
   return {
@@ -151,6 +155,7 @@ import Records from "./Records";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockRecordById = {};
 });
 
 afterEach(() => {
@@ -183,6 +188,44 @@ describe("Records ?search= deep link", () => {
         () => {
           const input = screen.getByTestId("input-search") as HTMLInputElement;
           expect(input.value).toBe(SEARCHED);
+        },
+        { timeout: 3000 },
+      );
+    } finally {
+      window.history.replaceState(null, "", "/records");
+    }
+  });
+});
+
+describe("Records ?id= deep link", () => {
+  it("opens the record detail view from window.location.search in browser mode", async () => {
+    // Same wouter behavior as above: in browser mode the location hook returns
+    // only the pathname, so `/records?id=<id>` must be read from
+    // window.location.search — otherwise the plain list stays on screen
+    // (Task #1814, observed while building the Metadata Sources dedup check).
+    mockRecordById[42] = {
+      id: 42,
+      type: "address",
+      inputString: "bc1qdeeplinkopenrecordxxxxxxxxxxxxxxxxxx",
+      label: "Deep-linked record",
+      tags: [],
+      categories: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    mockWouterLocation = "/records";
+    window.history.replaceState(null, "", "/records?id=42");
+    try {
+      render(<Records />);
+
+      await waitFor(
+        () => {
+          // The dedicated detail view replaces the list entirely.
+          expect(screen.getByTestId("mock-record-detail-panel")).toBeTruthy();
+          expect(screen.getByTestId("text-page-title").textContent).toContain(
+            "Record Details",
+          );
+          expect(screen.queryByTestId("mock-record-table")).toBeNull();
         },
         { timeout: 3000 },
       );
