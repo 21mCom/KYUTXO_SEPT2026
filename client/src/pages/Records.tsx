@@ -102,6 +102,51 @@ function mergeTopRecordsById(groups: DbRecord[][], limit: number): DbRecord[] {
   return merged.slice(0, limit);
 }
 
+// Behavior narrowing over a raw DB record. Labels derive from the cached
+// on-chain stat fields already stored on each record (same single source of
+// truth as the page's client-side behavior filter and RecordTable's badge),
+// so this works as a plain JS predicate inside the bounded hidden-tier scan —
+// no per-record DB lookups. An empty filter set means "no narrowing".
+function matchesBehaviorFilters(record: DbRecord, filters: Set<BehaviorLabel>): boolean {
+  if (filters.size === 0) return true;
+  if (record.type !== 'address') return false;
+  return filters.has(behaviorLabelFromCachedStats(record));
+}
+
+// Residual match predicate WITHOUT the tier exclusion — shared by the page
+// load's filterFn and the hidden-matches count (which asks "would this
+// hidden-tier row match the current narrowing if it weren't hidden?"). Built
+// as a factory so the behavior-filter recount effect can rebuild it outside
+// the load effect with identical semantics.
+function buildResidualNoTier(opts: {
+  search: string;
+  columnFilters: ColumnFilter[];
+  addedSince: number | null;
+}): (record: DbRecord) => boolean {
+  const { search, columnFilters, addedSince } = opts;
+  return (record: DbRecord): boolean => {
+    // Recency window composes with every branch (identifier lookup,
+    // substring search, date-added keyset) as a residual predicate.
+    if (addedSince !== null && (record.createdAt ?? 0) < addedSince) {
+      return false;
+    }
+    for (const filter of columnFilters) {
+      if (!matchesColumnFilter(record, filter)) return false;
+    }
+    if (search) {
+      if (!(
+        record.label?.toLowerCase().includes(search) ||
+        record.inputString?.toLowerCase().includes(search) ||
+        record.owner?.toLowerCase().includes(search) ||
+        record.walletName?.toLowerCase().includes(search) ||
+        record.notes?.toLowerCase().includes(search) ||
+        record.tags?.some((t) => t.toLowerCase().includes(search))
+      )) return false;
+    }
+    return true;
+  };
+}
+
 function matchesColumnFilter(record: DbRecord, filter: ColumnFilter): boolean {
   let value: unknown;
   if (filter.field === 'hasNotes') {
@@ -184,6 +229,17 @@ export default function Records() {
   // the cached on-chain stats already on each loaded record — no DB scan. Applied
   // to the loaded page only, so it is intentionally absent from the load effect.
   const [behaviorFilters, setBehaviorFilters] = useState<Set<BehaviorLabel>>(new Set());
+  // Live view of the behavior filter for the hidden-matches machinery. The
+  // load effect intentionally does NOT depend on behaviorFilters (behavior is
+  // applied client-side to the loaded page), so its deferred hidden-match
+  // count reads this ref at call time to honor the current selection.
+  const behaviorFiltersRef = useRef(behaviorFilters);
+  behaviorFiltersRef.current = behaviorFilters;
+  // Monotonic token for hidden-match count runs. Every starter (a load's
+  // deferred count, the engine count diff, or the behavior-filter recount)
+  // claims a fresh token and only commits its result while still current, so
+  // overlapping runs can never apply out of order.
+  const hiddenCountRunRef = useRef(0);
   // Vault-wide per-behavior totals, materialized by a streamed background pass.
   // Shown beside each option in the behavior picker so the filter is actionable
   // even though it can only narrow the loaded page.
@@ -351,36 +407,19 @@ export default function Records() {
         const identifierSearch = looksLikeBitcoinIdentifier(search);
         const filtersActive = search !== '' || columnFilters.length > 0;
         // Broader gate for the hidden-matches hint: the recency window
-        // (addedSince) also narrows the visible set via residualNoTier, so a
-        // window that only hidden-tier rows satisfy must still trigger the
-        // count instead of silently dead-ending. Kept separate from
+        // (addedSince) and the behavior filter also narrow the visible set —
+        // a narrowing that only hidden-tier rows satisfy must still trigger
+        // the count instead of silently dead-ending. Kept separate from
         // filtersActive so the count/paging branches below are unchanged.
-        const hiddenMatchFiltersActive = filtersActive || addedSince !== null;
-        
+        // Behavior is read via the ref so the deferred count (which runs
+        // post-render) honors the selection current at that moment.
+        const hiddenMatchFiltersActive = () =>
+          filtersActive || addedSince !== null || behaviorFiltersRef.current.size > 0;
+
         // Residual predicate WITHOUT the tier exclusion — reused by the
         // hidden-matches count, which asks "would this hidden-tier row match
         // the current filters if it weren't hidden?".
-        const residualNoTier = (record: DbRecord): boolean => {
-          // Recency window composes with every branch (identifier lookup,
-          // substring search, date-added keyset) as a residual predicate.
-          if (addedSince !== null && (record.createdAt ?? 0) < addedSince) {
-            return false;
-          }
-          for (const filter of columnFilters) {
-            if (!matchesColumnFilter(record, filter)) return false;
-          }
-          if (search) {
-            if (!(
-              record.label?.toLowerCase().includes(search) ||
-              record.inputString?.toLowerCase().includes(search) ||
-              record.owner?.toLowerCase().includes(search) ||
-              record.walletName?.toLowerCase().includes(search) ||
-              record.notes?.toLowerCase().includes(search) ||
-              record.tags?.some((t) => t.toLowerCase().includes(search))
-            )) return false;
-          }
-          return true;
-        };
+        const residualNoTier = buildResidualNoTier({ search, columnFilters, addedSince });
 
         const filterFn = (record: DbRecord): boolean => {
           // Exclusion semantics (matches the engine SQL and browse paths):
@@ -511,13 +550,22 @@ export default function Records() {
         // cancellation-aware. The engine path derives the same number as an
         // exact SQL count diff inside its count block instead.
         const startDexieHiddenMatchesCount = () => {
-          if (useEngine || !hiddenMatchFiltersActive || includeBlockchainDiscovered) return;
+          // The engine count block computes this number as an exact SQL diff
+          // instead — EXCEPT when a behavior filter is active: behavior labels
+          // are not engine-expressible, so that combination falls back to this
+          // bounded Dexie scan even on the engine path.
+          const behaviorActive = behaviorFiltersRef.current.size > 0;
+          if (useEngine && !behaviorActive) return;
+          if (!hiddenMatchFiltersActive() || includeBlockchainDiscovered) return;
+          const runId = ++hiddenCountRunRef.current;
           countHiddenTierMatches({
-            matches: residualNoTier,
+            matches: (r) =>
+              residualNoTier(r) && matchesBehaviorFilters(r, behaviorFiltersRef.current),
             identifier: identifierSearch,
-            isCancelled: () => loadVersionRef.current !== version,
+            isCancelled: () =>
+              loadVersionRef.current !== version || hiddenCountRunRef.current !== runId,
           }).then((result) => {
-            if (loadVersionRef.current !== version) return;
+            if (loadVersionRef.current !== version || hiddenCountRunRef.current !== runId) return;
             setHiddenMatches(result.count > 0 ? result : null);
           }).catch(e => { console.warn('[Records] Hidden-match count failed:', e); });
         };
@@ -555,8 +603,14 @@ export default function Records() {
             setCountLoading(true);
             // Hidden-matches hint (exact on the engine): re-run the same
             // filtered count with discovered rows included; the difference is
-            // how many matches the default view is hiding.
-            const wantHiddenMatches = hiddenMatchFiltersActive && !includeBlockchainDiscovered;
+            // how many matches the default view is hiding. Behavior filters
+            // aren't engine-expressible, so that combination is handled by
+            // startDexieHiddenMatchesCount above instead of the SQL diff.
+            const wantHiddenMatches =
+              hiddenMatchFiltersActive() &&
+              !includeBlockchainDiscovered &&
+              behaviorFiltersRef.current.size === 0;
+            const hiddenRunId = wantHiddenMatches ? ++hiddenCountRunRef.current : 0;
             Promise.all([
               engineCountRecords(engineOpts),
               engineCountRecords({ includeBlockchainDiscovered: true }),
@@ -569,7 +623,7 @@ export default function Records() {
               setTotalCount(visible);
               setNavigableCount(visible);
               setTotalBlockchainDiscovered(Math.max(0, all - nonDiscovered));
-              if (withHidden !== null) {
+              if (withHidden !== null && hiddenCountRunRef.current === hiddenRunId) {
                 const hiddenCount = Math.max(0, withHidden - visible);
                 setHiddenMatches(
                   hiddenCount > 0
@@ -922,6 +976,44 @@ export default function Records() {
     
     loadRecords();
   }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, debouncedSearch, columnFilters, retrySig, engineReadySignal, dateSort, addedSince]);
+
+  // Behavior-filter changes don't reload the page (behavior narrows the loaded
+  // page client-side), so they also can't ride the load effect's deferred
+  // hidden-match count. Recompute it here instead: a behavior-only narrowing
+  // over the default view must still surface "N matches are hidden among
+  // blockchain-discovered records" instead of silently dead-ending. Bounded by
+  // the same match/scan caps and guarded by both the load version and the
+  // hidden-count run token so a superseding load or newer recount wins.
+  const behaviorRecountMountedRef = useRef(false);
+  useEffect(() => {
+    if (!behaviorRecountMountedRef.current) {
+      // Initial mount: the first load's own deferred count covers this state.
+      behaviorRecountMountedRef.current = true;
+      return;
+    }
+    const version = loadVersionRef.current;
+    const runId = ++hiddenCountRunRef.current;
+    const search = debouncedSearch.toLowerCase().trim();
+    const narrowingActive =
+      search !== '' || columnFilters.length > 0 || addedSince !== null || behaviorFilters.size > 0;
+    if (!narrowingActive || includeBlockchainDiscovered) {
+      setHiddenMatches(null);
+      return;
+    }
+    const residualNoTier = buildResidualNoTier({ search, columnFilters, addedSince });
+    countHiddenTierMatches({
+      matches: (r) => residualNoTier(r) && matchesBehaviorFilters(r, behaviorFilters),
+      identifier: looksLikeBitcoinIdentifier(search),
+      isCancelled: () =>
+        loadVersionRef.current !== version || hiddenCountRunRef.current !== runId,
+    }).then((result) => {
+      if (loadVersionRef.current !== version || hiddenCountRunRef.current !== runId) return;
+      setHiddenMatches(result.count > 0 ? result : null);
+    }).catch(e => { console.warn('[Records] Hidden-match recount failed:', e); });
+    // Intentionally only behaviorFilters: every other input change triggers a
+    // full load, whose own deferred count recomputes this with fresh state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [behaviorFilters]);
 
   // Watchdog: while a load is continuously in progress, tick an elapsed-seconds
   // counter. On very large vaults the first load after a big update can take a

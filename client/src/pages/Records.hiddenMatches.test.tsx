@@ -135,6 +135,36 @@ vi.mock("@/components/RecordFilters", () => ({
     />
   ),
 }));
+// Inert tally hook so the real BehaviorFilter's vault-wide counts never touch
+// the fake db surface.
+vi.mock("@/hooks/use-behavior-tally", () => ({
+  useBehaviorTally: () => ({
+    counts: null,
+    computing: false,
+    progress: null,
+    cancel: vi.fn(),
+    restart: vi.fn(),
+  }),
+}));
+// Interactive stand-in for the behavior filter: one click toggles a single
+// "not-enough-data" selection on/off.
+vi.mock("@/components/BehaviorFilter", () => ({
+  BehaviorFilter: ({
+    selected,
+    onChange,
+  }: {
+    selected: Set<string>;
+    onChange: (next: Set<string>) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="mock-behavior-filter"
+      onClick={() =>
+        onChange(selected.size > 0 ? new Set() : new Set(["not-enough-data"]))
+      }
+    />
+  ),
+}));
 // Interactive stand-in for the recency-window filter (addedSince).
 vi.mock("@/components/DateAddedFilter", () => ({
   DateAddedFilter: ({
@@ -323,6 +353,63 @@ describe("Records hidden-tier match notice", () => {
       timeout: 3000,
     });
     expect(notice.textContent).toContain("1 match is hidden");
+  });
+
+  it("a behavior-only narrowing triggers the hidden-match count with a behavior-aware predicate", async () => {
+    mockLocation = "/records";
+    hiddenResult = { count: 2, capped: false, scanCapped: false };
+    render(<Records />);
+
+    // No narrowing yet → no count started, no notice.
+    await waitFor(() => {
+      expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+    });
+    expect(vi.mocked(countHiddenTierMatches).mock.calls.length).toBe(0);
+
+    // Select the "not-enough-data" behavior label.
+    fireEvent.click(screen.getByTestId("mock-behavior-filter"));
+
+    const notice = await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 3000,
+    });
+    expect(notice.textContent).toContain("2 matches are hidden");
+
+    // The count's predicate must honor the behavior selection: an unsynced
+    // address record matches "not-enough-data"; a synced one and a non-address
+    // record do not.
+    const calls = vi.mocked(countHiddenTierMatches).mock.calls;
+    const { matches } = calls[calls.length - 1][0];
+    expect(
+      matches({ type: "address", tags: [] } as never),
+    ).toBe(true);
+    expect(
+      matches({ type: "address", statsComputedAt: 1, cachedTxCount: 5, cachedLastActivityTime: Math.floor(Date.now() / 1000), tags: [] } as never),
+    ).toBe(false);
+    expect(matches({ type: "transaction", tags: [] } as never)).toBe(false);
+
+    // One click includes the hidden rows.
+    fireEvent.click(screen.getByTestId("button-show-hidden-matches"));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("mock-blockchain-toggle").getAttribute("data-checked"),
+      ).toBe("true");
+      expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+    });
+  });
+
+  it("clearing a behavior-only narrowing clears the notice", async () => {
+    mockLocation = "/records";
+    hiddenResult = { count: 4, capped: false, scanCapped: false };
+    render(<Records />);
+
+    fireEvent.click(screen.getByTestId("mock-behavior-filter"));
+    await screen.findByTestId("notice-hidden-matches", undefined, { timeout: 3000 });
+
+    // Toggle back to an empty selection → no narrowing → no notice.
+    fireEvent.click(screen.getByTestId("mock-behavior-filter"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+    });
   });
 
   it("also surfaces the notice under non-empty results", async () => {
