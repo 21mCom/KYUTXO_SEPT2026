@@ -417,6 +417,10 @@ args = "kdf-upgrade-browser-check"
 task = "workflow.run"
 args = "address-deriver-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ipc-error-sanitization"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1495,6 +1499,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-records-search-visibility-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "ipc-error-sanitization"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-ipc-error-sanitization.js"
 
 [workflows.workflow.metadata]
 isValidation = true

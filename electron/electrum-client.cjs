@@ -788,7 +788,8 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
       }
       return { success: true, revoked };
     } catch (error) {
-      return { success: false, error: error.message };
+      logMainError('[KYUTXO] electrum-revoke-certificate failed', error);
+      return { success: false, error: toIpcError(error, 'Failed to revoke certificate trust') };
     }
   });
 
