@@ -90,4 +90,5 @@
 - [Tor proxy server-side trust](tor-proxy-server-side-trust.md) — allowlist + SOCKS URL live server-side via pushed settings; per-request trust params removed, never reintroduce; dedup cache drops allowlist on server restart.
 - [Streaming download fd cleanup](stream-download-fd-cleanup.md) — stream files to HTTP responses via pipeline (never .pipe); client aborts otherwise leak FileHandle fds; verify via /proc/self/fd.
 - [HTTP concurrency-limit tests](http-concurrency-limit-tests.md) — undici fetch pools ~10 conns/origin and hides server-side queue overflow; use node:http agent:false + slow-resolving upstream stubs.
+- [Radix toast vs Playwright strict](radix-toast-playwright-strict.md) — toast text duplicates into aria-live; getByText needs .first(); gate cancel asserts on a streamed phase, not first progress.
 - [Electron error hygiene scope](electron-error-hygiene.md) — sanitization tasks cover main-process LOGS too, not just IPC payloads; redact host:port via opaque conn ids, log name+errno only; server JSON-RPC error text may pass through tagged.

@@ -842,22 +842,9 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
 
     const before = await snapshotVaultTables();
     const controller = new AbortController();
-    let sawProgress = false;
-    await expect(
-      analyzeV3Backup({
-        source: blobChunks(blob),
-        signal: controller.signal,
-        onProgress: () => {
-          sawProgress = true;
-          controller.abort();
-        },
-      }),
-    ).rejects.toBeInstanceOf(BackupCancelledError);
-    expect(sawProgress).toBe(true);
-    expect(await snapshotVaultTables()).toBe(before);
-  });
 
-  it("rejects a wrong password non-destructively, then accepts the right one", async () => {
+    let sawStreamPhase = false;
+    let sawStreamPhase = false;
     const PASSWORD = "correct horse battery staple";
     await seedExportedVault();
     const blob = await exportToBlob(true, PASSWORD);

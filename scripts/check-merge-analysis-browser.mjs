@@ -488,6 +488,177 @@ async function main() {
     await page.getByTestId('analysis-results').waitFor({ state: 'visible', timeout: 120_000 });
     step('correct password decrypts and renders analysis results', true);
 
+    // ── Phase H: cancel mid-stream leaves the dialog usable ─────────────────
+    // A tiny backup finishes before a cancel can land, so seed a LARGE backup
+    // (thousands of rows) + a large live vault (slows the lazy merge-key set
+    // load) to open a real cancel window, then assert the "Analysis Cancelled"
+    // toast, the reset UI, and that a re-run Analyze completes normally.
+    await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
+
+    const LARGE_COUNT = 6000;
+    const largeZipB64 = await page.evaluate(
+      async ({ LARGE_COUNT }) => {
+        const { bulkCreateRecords, clearAllRecords } = await import('/src/lib/data/record-crud.ts');
+        const { bulkAddTransactions, bulkAddParticipants, clearTransactions, clearParticipants } =
+          await import('/src/lib/data/transaction-crud.ts');
+        const { bulkAddAddressSyncState, clearAddressSyncState } =
+          await import('/src/lib/data/address-sync-crud.ts');
+        const { exportBackup } = await import('/src/lib/backup/export.ts');
+        const { MemorySink } = await import('/src/lib/backup/sink.ts');
+
+        await clearAllRecords({ skipNotification: true });
+        await clearTransactions({ skipNotification: true });
+        await clearParticipants({ skipNotification: true });
+        await clearAddressSyncState({ skipNotification: true });
+
+        const pad = (i) => String(i).padStart(6, '0');
+        const addr = (i) => `bc1qlargecancel${pad(i)}0000000000000000000000`;
+        const txid = (i) => pad(i).repeat(11).slice(0, 64);
+
+        const recs = [];
+        for (let i = 0; i < LARGE_COUNT; i++) {
+          recs.push({
+            type: 'address',
+            inputString: addr(i),
+            label: `Large cancel-check record ${i} — padding padding padding padding`,
+            tags: [],
+            categories: [],
+            createdAt: 1_700_000_000_000 + i,
+            updatedAt: 1_700_000_000_000 + i,
+          });
+        }
+        const ids = await bulkCreateRecords(recs, { skipNotification: true, skipVocabularySync: true });
+
+        const txs = [];
+        const parts = [];
+        const syncs = [];
+        for (let i = 0; i < LARGE_COUNT; i++) {
+          txs.push({ txid: txid(i), blockHeight: 800_000 + i, blockTime: 1_700_000_000 + i, fee: 200, feeRate: 1.2, syncedAt: 1_700_000_500_000 });
+          parts.push({ txid: txid(i), role: 'output', address: addr(i), amount: 10_000 + i, vout: 0, recordId: ids[i] });
+          syncs.push({ address: addr(i), recordId: ids[i], lastSyncedHeight: 800_000 + i, lastSyncedAt: 1_700_000_500_000, txCount: 1 });
+        }
+        await bulkAddTransactions(txs, { skipNotification: true });
+        await bulkAddParticipants(parts, { skipNotification: true });
+        await bulkAddAddressSyncState(syncs, { skipNotification: true });
+
+        const sink = new MemorySink();
+        await exportBackup({
+          sink,
+          encrypted: false,
+          batchSize: 25,
+          attachmentIO: {
+            async listAll() { return []; },
+            async read() { return null; },
+          },
+        });
+        const buf = new Uint8Array(await sink.blob.arrayBuffer());
+        let bin = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < buf.length; i += CHUNK) {
+          bin += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+        }
+        return btoa(bin);
+      },
+      { LARGE_COUNT },
+    );
+    step('large backup source seeded and v3 zip exported', largeZipB64.length > 10_000, `${Math.round(largeZipB64.length * 0.75)} bytes`);
+
+    // Reshape the live vault to a LARGE, fully-disjoint vault so the lazy
+    // merge-key loads + per-batch classification take real time.
+    const largeLive = await page.evaluate(async ({ LARGE_COUNT }) => {
+      const { getAllRecords, bulkCreateRecords, clearAllRecords } = await import('/src/lib/data/record-crud.ts');
+      const { clearTransactions, clearParticipants } = await import('/src/lib/data/transaction-crud.ts');
+      const { clearAddressSyncState } = await import('/src/lib/data/address-sync-crud.ts');
+      await clearAllRecords({ skipNotification: true });
+      await clearTransactions({ skipNotification: true });
+      await clearParticipants({ skipNotification: true });
+      await clearAddressSyncState({ skipNotification: true });
+      const pad = (i) => String(i).padStart(6, '0');
+      const recs = [];
+      for (let i = 0; i < LARGE_COUNT; i++) {
+        recs.push({
+          type: 'address',
+          inputString: `bc1qlivecancel${pad(i)}00000000000000000000000`,
+          label: `Live-only record ${i}`,
+          tags: [],
+          categories: [],
+          createdAt: 1_690_000_000_000 + i,
+          updatedAt: 1_690_000_000_000 + i,
+        });
+      }
+      await bulkCreateRecords(recs, { skipNotification: true, skipVocabularySync: true });
+      return { recordCount: (await getAllRecords()).length };
+    }, { LARGE_COUNT });
+    step('live vault reshaped to large disjoint vault', largeLive.recordCount === LARGE_COUNT, `records=${largeLive.recordCount}`);
+
+    await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
+    const openBtn3 = page.getByTestId('button-open-restore');
+    await openBtn3.scrollIntoViewIfNeeded();
+    await openBtn3.click();
+    await page.getByTestId('input-restore-file').setInputFiles({
+      name: 'merge-analysis-cancel-backup.zip',
+      mimeType: 'application/zip',
+      buffer: Buffer.from(largeZipB64, 'base64'),
+    });
+    await page.getByText('Backup Date:', { exact: false }).waitFor({ state: 'visible', timeout: 20_000 });
+    await page.getByTestId('merge-analysis-section').waitFor({ state: 'visible', timeout: 20_000 });
+
+    await page.getByTestId('button-analyze-merge').click();
+    // Progress UI (bar + phase text + cancel button) must render mid-run.
+    const progress = page.getByTestId('analysis-progress');
+    await progress.waitFor({ state: 'visible', timeout: 15_000 });
+    // Gate the cancel on a STREAMED table phase ("Analyzing <table>..."), not
+    // the pre-stream "Reading backup file..." / "Verifying backup..." (5%)
+    // phases — otherwise a cancel could land before any batch is streamed and
+    // the check would not prove mid-stream cancellation.
+    const phaseLoc = page.getByTestId('text-analysis-phase');
+    await page
+      .waitForFunction(
+        () => {
+          const el = document.querySelector('[data-testid="text-analysis-phase"]');
+          return !!el && /^Analyzing /.test(el.textContent || '');
+        },
+        undefined,
+        { timeout: 30_000 },
+      );
+    const phaseText = await phaseLoc.innerText().catch(() => '');
+    step('analysis reached a streamed table phase mid-run', /^Analyzing /.test(phaseText), phaseText);
+
+    // Cancel mid-stream. If the run somehow outraces the click, the results
+    // panel appears instead and the assertions below fail loudly.
+    await page.getByTestId('button-cancel-analysis').click();
+    // .first(): Radix toasts duplicate their text into an aria-live region,
+    // which trips Playwright strict mode on a bare getByText.
+    const cancelToast = page.getByText('Analysis Cancelled', { exact: false }).first();
+    const toastSeen = await cancelToast
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    step('"Analysis Cancelled" toast shown after mid-stream cancel', toastSeen);
+
+    // UI resets: progress gone, no results, Analyze re-enabled.
+    await progress.waitFor({ state: 'hidden', timeout: 15_000 });
+    const resultsAfterCancel = await page.getByTestId('analysis-results').isVisible().catch(() => false);
+    const analyzeEnabled = await page.getByTestId('button-analyze-merge').isEnabled();
+    step(
+      'cancel resets the dialog (no results, Analyze re-enabled)',
+      !resultsAfterCancel && analyzeEnabled,
+      `results=${resultsAfterCancel} analyzeEnabled=${analyzeEnabled}`,
+    );
+
+    // Re-run Analyze on the same file: must stream to completion normally.
+    await page.getByTestId('button-analyze-merge').click();
+    await page.getByTestId('analysis-results').waitFor({ state: 'visible', timeout: 180_000 });
+    const largeRecordsRow = page.getByTestId('analysis-row-records');
+    const largeRowText = (await largeRecordsRow.innerText().catch(() => '(missing)')).replace(/\s+/g, ' ');
+    step(
+      're-run Analyze after cancel completes normally',
+      new RegExp(`${LARGE_COUNT} new`).test(largeRowText),
+      largeRowText,
+    );
+
     await context.close();
   } finally {
     await browser.close().catch(() => {});
