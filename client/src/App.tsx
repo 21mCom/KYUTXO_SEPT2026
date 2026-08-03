@@ -290,7 +290,13 @@ function AppContent() {
     );
   }
 
-  if (isInitialized === null || isLoading) {
+  // NOTE: while unauthenticated but initialized, a login attempt toggles the
+  // global isLoading flag — LoginScreen must STAY MOUNTED through it (it shows
+  // its own "Please wait..." state). Unmounting it here wipes its local error
+  // state, so a wrong password would fail silently with no "Incorrect
+  // password" message (packaged-app bug). Only gate on isLoading before the
+  // vault status is known or after authentication succeeds.
+  if (isInitialized === null || (isLoading && isAuthenticated)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="text-center">
