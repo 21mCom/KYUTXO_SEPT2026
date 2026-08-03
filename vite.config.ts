@@ -32,6 +32,11 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // No cross-origin grants: the launch-token security model relies on the
+    // browser refusing any other origin access to the served HTML (which
+    // carries the token <meta> tag) and to /api. Vite's default (cors: true)
+    // would stamp Access-Control-Allow-Origin: * on the token-bearing page.
+    cors: false,
     fs: {
       strict: true,
       deny: ["**/.*"],

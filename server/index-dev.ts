@@ -23,6 +23,13 @@ export async function setupVite(app: Express, server: Server) {
     middlewareMode: true,
     hmr: { server },
     allowedHosts,
+    // No cross-origin grants: the launch-token model relies on the browser
+    // refusing other origins access to the token-bearing HTML and /api.
+    // Vite's default (cors: true) reflects the request Origin, which would
+    // let a malicious page in another tab read the token <meta> tag.
+    // NOTE: this inline `server` object replaces the `server` key from
+    // vite.config.ts, so CORS must be disabled here, not only there.
+    cors: false,
   };
 
   const vite = await createViteServer({
