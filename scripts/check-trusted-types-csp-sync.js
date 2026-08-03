@@ -97,7 +97,7 @@ function lintTrustedTypesPolicyNames(directive, label) {
 
 const mainDirectives = extractCspDirectives(
   MAIN_CJS,
-  /['"]Content-Security-Policy['"]\s*:/,
+  /const\s+PACKAGED_CSP\s*=/,
   'electron/main.cjs',
 );
 const checkDirectives = extractCspDirectives(

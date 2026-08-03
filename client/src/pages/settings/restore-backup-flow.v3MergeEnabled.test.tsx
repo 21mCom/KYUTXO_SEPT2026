@@ -123,6 +123,10 @@ function makeAnalysisResult(rowCount: number) {
       customFields: { ...zero },
       derivationTemplates: { ...zero },
       recordOrigins: { ...zero, orphanedSkipped: 0 },
+      evidence: { ...zero },
+      priceData: { ...zero },
+      dustFlags: { ...zero },
+      savedPsbts: { ...zero },
     },
     report: { parts: ["Type,Identifier,Label\r\n"], rowCount },
   };

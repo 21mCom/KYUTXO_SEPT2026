@@ -317,31 +317,104 @@ ipcMain.handle('tor-status', async () => {
 // APP LIFECYCLE & SECURITY
 // ============================================================================
 
+// The Vite build emits absolute asset URLs ("/assets/..."). Under the packaged
+// app's file:// origin those resolve to the filesystem root and 404, leaving a
+// blank window. Serve any absolute path that does not exist on disk from the
+// packaged renderer directory (inside app.asar) instead. Traversal outside
+// that directory is refused.
+const RENDERER_MIME = {
+  '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
+  '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf', '.map': 'application/json', '.txt': 'text/plain',
+  '.webmanifest': 'application/manifest+json',
+};
+
+// Single source of truth for the packaged app's CSP. Delivered BOTH via the
+// file-protocol handler below (the document response — required, because
+// webRequest.onHeadersReceived cannot inject headers into file:// responses)
+// and via onHeadersReceived for any http(s) resources.
+const PACKAGED_CSP = [
+  "default-src 'self'",
+  // 'wasm-unsafe-eval' permits WebAssembly compilation only (NOT JS
+  // eval). Required by the Argon2id KDF (hash-wasm) — without it the
+  // packaged app cannot derive vault/backup keys.
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
+  "img-src 'self' data: blob:",
+  "connect-src 'self' https://mempool.space https://blockstream.info",
+  // HTML-parsing sinks must go through the app's named Trusted Types
+  // policy (client/src/lib/trusted-types.ts), so injected strings
+  // can't reach innerHTML/document.write and hijack the window.
+  "require-trusted-types-for 'script'",
+  // Only the app's own policies (client/src/lib/trusted-types.ts)
+  // may be created; any other createPolicy call throws, so injected
+  // scripts can't mint a permissive policy to bypass the sink guard.
+  "trusted-types kyutxo-app default",
+].join('; ');
+
+function registerPackagedRendererProtocol() {
+  const publicDir = path.join(app.getAppPath(), 'dist', 'public');
+  protocol.handle('file', async (request) => {
+    let pathname;
+    try {
+      pathname = decodeURIComponent(new URL(request.url).pathname);
+    } catch {
+      return new Response('Bad request', { status: 400 });
+    }
+    // Windows pathnames arrive as "/C:/...".
+    if (process.platform === 'win32' && /^\/[A-Za-z]:[\\/]/.test(pathname)) {
+      pathname = pathname.slice(1);
+    }
+    let resolved = path.normalize(pathname);
+    try {
+      await fs.promises.access(resolved, fs.constants.R_OK);
+    } catch {
+      // Not a real file (e.g. "/assets/index-*.js") — remap into the packaged
+      // renderer dir, refusing anything that escapes it.
+      const candidate = path.normalize(path.join(publicDir, pathname.replace(/^[\\/]+/, '')));
+      if (candidate !== publicDir && !candidate.startsWith(publicDir + path.sep)) {
+        return new Response('Forbidden', { status: 403 });
+      }
+      resolved = candidate;
+    }
+    try {
+      let data = await fs.promises.readFile(resolved);
+      const ext = path.extname(resolved).toLowerCase();
+      const type = RENDERER_MIME[ext] || 'application/octet-stream';
+      const headers = { 'Content-Type': type };
+      if (ext === '.html') {
+        // Chromium does not enforce CSP delivered as a response HEADER on
+        // file:// documents — it must arrive as a <meta> tag. Keep the header
+        // too (harmless, and http(s) resources get it via onHeadersReceived).
+        headers['Content-Security-Policy'] = PACKAGED_CSP;
+        const html = data.toString('utf8');
+        const metaTag = `<meta http-equiv="Content-Security-Policy" content="${PACKAGED_CSP}">`;
+        data = Buffer.from(
+          html.includes('http-equiv="Content-Security-Policy"')
+            ? html
+            : html.replace(/<head>/i, `<head>\n    ${metaTag}`),
+          'utf8',
+        );
+      }
+      return new Response(data, { headers });
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
+  });
+}
+
 app.whenReady().then(() => {
   if (!isDev) {
+    registerPackagedRendererProtocol();
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
       callback({
         responseHeaders: {
           ...details.responseHeaders,
-          'Content-Security-Policy': [
-            "default-src 'self'",
-            // 'wasm-unsafe-eval' permits WebAssembly compilation only (NOT JS
-            // eval). Required by the Argon2id KDF (hash-wasm) — without it the
-            // packaged app cannot derive vault/backup keys.
-            "script-src 'self' 'wasm-unsafe-eval'",
-            "style-src 'self' 'unsafe-inline'",
-            "font-src 'self' data:",
-            "img-src 'self' data: blob:",
-            "connect-src 'self' https://mempool.space https://blockstream.info",
-            // HTML-parsing sinks must go through the app's named Trusted Types
-            // policy (client/src/lib/trusted-types.ts), so injected strings
-            // can't reach innerHTML/document.write and hijack the window.
-            "require-trusted-types-for 'script'",
-            // Only the app's own policies (client/src/lib/trusted-types.ts)
-            // may be created; any other createPolicy call throws, so injected
-            // scripts can't mint a permissive policy to bypass the sink guard.
-            "trusted-types kyutxo-app default",
-          ].join('; ')
+          'Content-Security-Policy': [PACKAGED_CSP]
         }
       });
     });

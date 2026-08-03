@@ -112,7 +112,6 @@ const ADDR_BACKUP = "bc1qbackuponly00000000000000000000000000000";
 const ADDR_DISCOVERY = "bc1qdiscoveryonly00000000000000000000000000";
 const ADDR_META = "bc1qdiscoverywithmeta0000000000000000000000";
 const ADDR_LOCAL = "bc1qlocalonly000000000000000000000000000000";
-
 const HOSTILE_LABEL = '=HYPERLINK("http://evil.example","x")';
 const HOSTILE_NOTES = 'note with "quotes", commas\nand a newline';
 const HOSTILE_OWNER = "+cmd-injection";
@@ -830,10 +829,11 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     const before = await snapshotVaultTables();
     const controller = new AbortController();
 
-    let sawStreamPhase = false;
+    let sawProgress = false;
+    let sawProgress = false;
 
-    let sawStreamPhase = false;
-    let sawStreamPhase = false;
+    let sawProgress = false;
+    let sawProgress = false;
     const PASSWORD = "correct horse battery staple";
     await seedExportedVault();
     const blob = await exportToBlob(true, PASSWORD);
@@ -862,14 +862,14 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     const priceBefore = (await getAllPriceData()).length;
     const dustBefore = (await getAllDustFlags()).length;
     const psbtsBefore = (await getAllSavedPsbts()).length;
-    const psbtBase = {
-      destinationAddress: ADDR_SHARED,
-      feeRateSatsPerVb: 1,
-      feeSats: 100,
-      estimatedVbytes: 100,
-      totalInputSats: 10_000,
-      sendAmountSats: 9_900,
-      changeSats: 0,
-      inputs: [],
-      outputs: [],
-    };
+const psbtBase = {
+  destinationAddress: ADDR_SHARED,
+  feeRateSatsPerVb: 1,
+  feeSats: 100,
+  estimatedVbytes: 100,
+  totalInputSats: 10_000,
+  sendAmountSats: 9_900,
+  changeSats: 0,
+  inputs: [],
+  outputs: [],
+};
