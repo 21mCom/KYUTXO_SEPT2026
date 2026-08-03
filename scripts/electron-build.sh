@@ -32,4 +32,14 @@ npx electron-builder --config electron-builder.json
 echo "Step 4: Verifying the packaged renderer (blank-window release gate)..."
 node scripts/check-packaged-electron-browser.mjs
 
+# RELEASE GATE: prove the native better-sqlite3 read-engine survives packaging —
+# the worker bundle is inside the asar at the path engine-handlers.cjs spawns,
+# the .node addon is asarUnpack'd onto real disk, and the extracted shipped
+# bytes actually load and open a scratch database. The renderer gate above
+# deliberately skips the native module (nix Electron 29 / npmRebuild off), so
+# this is the only place an asarUnpack or worker-bundle-path regression fails.
+# Reuses the release/ output already produced above.
+echo "Step 5: Verifying the packaged native read-engine (asarUnpack release gate)..."
+KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-native-engine.mjs
+
 echo "Build complete! Check the 'release' folder for distributable packages."

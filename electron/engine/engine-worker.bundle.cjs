@@ -632,7 +632,13 @@ function buildRecordWhere(opts) {
   if (search) {
     const like = `%${escapeLikeTerm(search)}%`;
     clauses.push(
-      "(inputStringLower LIKE ? ESCAPE '\\' OR lower(label) LIKE ? ESCAPE '\\' OR lower(owner) LIKE ? ESCAPE '\\' OR lower(walletName) LIKE ? ESCAPE '\\' OR lower(notes) LIKE ? ESCAPE '\\' OR (tags IS NOT NULL AND json_valid(tags) AND EXISTS (SELECT 1 FROM json_each(records.tags) WHERE lower(json_each.value) LIKE ? ESCAPE '\\')))"
+      // lower(inputString), NOT the mirrored inputStringLower column: rows
+      // from legacy-decrypt-era vaults can carry a stale/blank
+      // inputStringLower, and a leading-wildcard LIKE can't use the index
+      // either way — deriving from inputString costs nothing extra and keeps
+      // such rows searchable (parity with the Dexie residual filter, which
+      // lowercases inputString directly).
+      "(lower(inputString) LIKE ? ESCAPE '\\' OR lower(label) LIKE ? ESCAPE '\\' OR lower(owner) LIKE ? ESCAPE '\\' OR lower(walletName) LIKE ? ESCAPE '\\' OR lower(notes) LIKE ? ESCAPE '\\' OR (tags IS NOT NULL AND json_valid(tags) AND EXISTS (SELECT 1 FROM json_each(records.tags) WHERE lower(json_each.value) LIKE ? ESCAPE '\\')))"
     );
     bind.push(like, like, like, like, like, like);
   }
@@ -1026,6 +1032,7 @@ function getWalletUsageSummaries(db2) {
                         ('["' || replace(replace(replace(derivationPath, '\\', '\\\\'), '"', '\\"'), '/', '","') || '"]') AS jp
                    FROM records
                   WHERE type = 'address' AND walletName IS NOT NULL AND walletName <> ''
+                    AND ${CURATED_ADDRESS_SQL}
                )
            )
        )

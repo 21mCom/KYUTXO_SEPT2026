@@ -104,7 +104,8 @@ function buildAsar() {
   // (fast; no installers) and skips npmRebuild: rebuilding better-sqlite3
   // against Electron 39 headers needs network and would mismatch the nix
   // Electron 29 ABI we launch with anyway. The renderer/CSP surface under test
-  // does not involve the native module.
+  // does not involve the native module — that packaging surface is covered by
+  // the companion gate scripts/check-packaged-native-engine.mjs.
   run('npm', ['run', 'build']);
   run('node', ['scripts/build-native-engine.mjs']);
   run('npx', [
