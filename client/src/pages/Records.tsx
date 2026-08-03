@@ -233,8 +233,12 @@ export default function Records() {
 
   useEffect(() => {
     try {
+      // The wouter location carries the query string only in hash-routed
+      // (packaged) mode; in browser mode it rides on window.location.search.
       const queryIndex = location.indexOf('?');
-      const queryString = queryIndex >= 0 ? location.substring(queryIndex + 1) : '';
+      const queryString = queryIndex >= 0
+        ? location.substring(queryIndex + 1)
+        : (window.location.search || '').replace(/^\?/, '');
       const params = new URLSearchParams(queryString);
       
       const id = params.get("id");

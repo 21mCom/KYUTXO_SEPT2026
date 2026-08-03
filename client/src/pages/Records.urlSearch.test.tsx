@@ -40,8 +40,12 @@ vi.mock("@/hooks/use-db-change-signal", () => ({
 
 const SEARCHED = "bc1qdeeplinkedaddressxxxxxxxxxxxxxxxxxxxx";
 
+// Mutable so individual tests can simulate wouter's two modes:
+// - packaged (hash-routed) mode: query string rides on the wouter location
+// - browser mode: wouter strips the query string; it's only on window.location
+let mockWouterLocation = `/records?search=${SEARCHED}`;
 vi.mock("wouter", () => ({
-  useLocation: () => [`/records?search=${SEARCHED}`, vi.fn()],
+  useLocation: () => [mockWouterLocation, vi.fn()],
 }));
 
 const emptyVocab = { tags: [], categories: [], owners: [], walletNames: [], seedNames: [], walletSoftware: [] };
@@ -155,6 +159,7 @@ afterEach(() => {
 
 describe("Records ?search= deep link", () => {
   it("applies the URL search even when the record list is empty", async () => {
+    mockWouterLocation = `/records?search=${SEARCHED}`;
     render(<Records />);
 
     await waitFor(
@@ -164,5 +169,25 @@ describe("Records ?search= deep link", () => {
       },
       { timeout: 3000 },
     );
+  });
+
+  it("falls back to window.location.search when wouter strips the query (browser mode)", async () => {
+    // In browser mode, wouter's location hook returns only the pathname —
+    // the deep-link query must be read from window.location.search instead.
+    mockWouterLocation = "/records";
+    window.history.replaceState(null, "", `/records?search=${SEARCHED}`);
+    try {
+      render(<Records />);
+
+      await waitFor(
+        () => {
+          const input = screen.getByTestId("input-search") as HTMLInputElement;
+          expect(input.value).toBe(SEARCHED);
+        },
+        { timeout: 3000 },
+      );
+    } finally {
+      window.history.replaceState(null, "", "/records");
+    }
   });
 });
