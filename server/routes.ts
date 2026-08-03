@@ -1,6 +1,9 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import attachmentsRouter, { sweepStaleUploadTempFiles } from "./attachments";
+import attachmentsRouter, {
+  sweepStaleUploadTempFiles,
+  scheduleUploadTempSweep,
+} from "./attachments";
 import torProxyRouter from "./tor-proxy";
 import { requireLaunchToken } from "./launch-token";
 
@@ -16,6 +19,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // power loss mid-upload. Fire-and-forget: never delays or fails startup
   // (the sweep itself catches and logs all per-file errors).
   void sweepStaleUploadTempFiles();
+
+  // Long-lived desktop sessions: re-run the same sweep on a coarse interval
+  // (unref'd timer, never blocks shutdown) so orphans from a client crash
+  // mid-session don't linger until the next launch.
+  scheduleUploadTempSweep();
   
   // Tor proxy routes for routing blockchain API requests through Tor
   app.use('/api/tor', torProxyRouter);

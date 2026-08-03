@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { resolveAttachmentPath, containedRealPath, sweepStaleUploadTempFiles } from "./attachments";
+import {
+  resolveAttachmentPath,
+  containedRealPath,
+  sweepStaleUploadTempFiles,
+  scheduleUploadTempSweep,
+  UPLOAD_TMP_SWEEP_INTERVAL_MS,
+} from "./attachments";
 
 const BASE = path.resolve(
   process.env.KYUTXO_DATA_DIR || path.join(process.cwd(), "data"),
@@ -221,5 +227,71 @@ describe("sweepStaleUploadTempFiles", () => {
     expect(
       await sweepStaleUploadTempFiles({ dir: path.join(dir, "missing"), now: Date.now() }),
     ).toBe(0);
+  });
+});
+
+// scheduleUploadTempSweep: periodic re-sweep for long-lived desktop sessions.
+// The startup sweep alone leaves crash orphans until the next launch when the
+// server stays up for days; the interval re-runs the SAME sweep (same
+// strictly-older-than mtime rule) so in-flight uploads are still never touched.
+describe("scheduleUploadTempSweep", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("re-invokes the sweep on each interval tick", async () => {
+    const sweep = vi.fn(async () => 0);
+    const timer = scheduleUploadTempSweep({ sweep });
+    try {
+      expect(sweep).not.toHaveBeenCalled(); // startup sweep is separate — no immediate run
+      await vi.advanceTimersByTimeAsync(UPLOAD_TMP_SWEEP_INTERVAL_MS);
+      expect(sweep).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2 * UPLOAD_TMP_SWEEP_INTERVAL_MS);
+      expect(sweep).toHaveBeenCalledTimes(3);
+    } finally {
+      clearInterval(timer);
+    }
+  });
+
+  it("honors a custom interval", async () => {
+    const sweep = vi.fn(async () => 0);
+    const timer = scheduleUploadTempSweep({ sweep, intervalMs: 1000 });
+    try {
+      await vi.advanceTimersByTimeAsync(999);
+      expect(sweep).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sweep).toHaveBeenCalledTimes(1);
+    } finally {
+      clearInterval(timer);
+    }
+  });
+
+  it("keeps ticking after a sweep rejects (fire-and-forget, never breaks the timer)", async () => {
+    const sweep = vi
+      .fn<[], Promise<number>>()
+      .mockRejectedValueOnce(new Error("disk hiccup"))
+      .mockResolvedValue(0);
+    const timer = scheduleUploadTempSweep({ sweep, intervalMs: 1000 });
+    try {
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sweep).toHaveBeenCalledTimes(2);
+    } finally {
+      clearInterval(timer);
+    }
+  });
+
+  it("returns an unref'd timer so the interval never blocks process shutdown", () => {
+    const timer = scheduleUploadTempSweep({ sweep: async () => 0 });
+    try {
+      // Node timers expose hasRef(); an unref'd timer must not keep the loop alive.
+      expect((timer as unknown as { hasRef?: () => boolean }).hasRef?.()).toBe(false);
+    } finally {
+      clearInterval(timer);
+    }
   });
 });

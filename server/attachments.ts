@@ -164,6 +164,34 @@ export async function sweepStaleUploadTempFiles(
   return removed;
 }
 
+// The desktop app can keep one server process alive for days or weeks, so the
+// startup sweep alone would let a client-crash orphan linger until the next
+// launch. Re-sweep on a coarse interval; the 1-hour strictly-older-than mtime
+// rule (reused unchanged) keeps in-flight uploads untouchable.
+export const UPLOAD_TMP_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+// Schedule the periodic re-sweep. The timer is unref'd so it never keeps the
+// process alive at shutdown, and each tick is fire-and-forget (the sweep
+// catches/logs its own errors and never throws). Returns the timer so tests
+// (or a caller) can clear it. `sweep` is injectable for interval-wiring tests.
+export function scheduleUploadTempSweep(
+  options: {
+    intervalMs?: number;
+    sweep?: () => Promise<number>;
+  } = {},
+): NodeJS.Timeout {
+  const intervalMs = options.intervalMs ?? UPLOAD_TMP_SWEEP_INTERVAL_MS;
+  const sweep = options.sweep ?? sweepStaleUploadTempFiles;
+  const timer = setInterval(() => {
+    // sweepStaleUploadTempFiles never rejects, but an injected sweep might —
+    // swallow so a single failed tick can never surface as an unhandled
+    // rejection or stop future ticks.
+    void sweep().catch(() => {});
+  }, intervalMs);
+  timer.unref();
+  return timer;
+}
+
 // Log a filesystem/IO failure server-side WITHOUT the raw error message: Node
 // error messages embed absolute filesystem paths (ENOENT '/home/...'), which
 // are internal detail that should not reach logs any more than clients. The
