@@ -57,6 +57,12 @@ export function parseChainType(
  * inherit the parent wallet's `walletName`) are skipped so they never inflate
  * a wallet's totals; legacy rows with no importance tier count as curated.
  * This matches the engine's CURATED_ADDRESS_SQL predicate exactly.
+ *
+ * PRODUCT DECISION (curated-only): a wallet whose addresses are ALL
+ * discovered/pending-review intentionally gets NO row in Wallet Overview —
+ * such "wallets" are just sync-inherited labels on counterparty addresses,
+ * not user wallets, and listing them would pollute the usage stats. Those
+ * rows stay reachable via Records filters (walletName / importance).
  */
 export function addRecordToWalletUsage(
   walletMap: Map<string, WalletUsageStats>,

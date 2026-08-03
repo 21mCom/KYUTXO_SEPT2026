@@ -302,9 +302,19 @@ export default function WalletOverview() {
   return (
     <div className="flex flex-col h-full p-6 gap-4 overflow-hidden">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-2">
-          <Wallet className="h-6 w-6 text-primary" />
-          <h1 className="text-2xl font-bold" data-testid="text-page-title">Wallet Overview</h1>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <Wallet className="h-6 w-6 text-primary" />
+            <h1 className="text-2xl font-bold" data-testid="text-page-title">Wallet Overview</h1>
+          </div>
+          {/* Product decision: Wallet Overview is CURATED-ONLY. Wallets whose
+              addresses are all blockchain-discovered/pending-review (walletName
+              inherited from sync onto counterparty rows) are intentionally not
+              listed — they aren't user wallets and would pollute usage stats.
+              Discovered rows remain reachable via Records filters. */}
+          <p className="text-sm text-muted-foreground" data-testid="text-page-subtitle">
+            Usage stats for your curated wallets. Blockchain-discovered addresses are excluded — find them in Records.
+          </p>
         </div>
         
         <div className="flex items-center gap-2">
