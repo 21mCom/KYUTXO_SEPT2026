@@ -67,6 +67,10 @@ args = "tor-proxy-settings-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "electrum-cert-trust-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "psbt-builder-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1540,6 +1544,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-prod-response-hygiene.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "electrum-cert-trust-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-electrum-cert-trust-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
