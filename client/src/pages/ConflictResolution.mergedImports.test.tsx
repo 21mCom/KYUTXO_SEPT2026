@@ -276,6 +276,31 @@ describe("MetadataSourcesPanel — agrees with the page", () => {
     );
   });
 
+  it("keeps the conflicts badge OUTSIDE the toggle button, and toggling expands without navigating (Task #1838 guard)", async () => {
+    const record = await seedMergedRecord();
+
+    render(
+      <TestProviders>
+        <MetadataSourcesPanel recordId={record.id!} record={record} />
+      </TestProviders>,
+    );
+
+    const badge = await screen.findByTestId("badge-sources-conflicts");
+    const toggle = screen.getByTestId("button-toggle-sources");
+
+    // The badge must NOT be nested inside the toggle button — if a refactor
+    // moves it back in, a click aimed at the toggle could be hijacked into a
+    // navigation to the Conflict Resolution page.
+    expect(toggle.contains(badge)).toBe(false);
+
+    // Clicking the toggle expands the panel...
+    const urlBefore = window.location.pathname + window.location.search;
+    fireEvent.click(toggle);
+    await screen.findByTestId("list-metadata-sources");
+    // ...and never changes the location.
+    expect(window.location.pathname + window.location.search).toBe(urlBefore);
+  });
+
   it("shows no conflict badge once resolved (parity with the page's empty state)", async () => {
     const record = await seedMergedRecord();
     const { updateRecord } = await import("@/lib/data/record-crud");
