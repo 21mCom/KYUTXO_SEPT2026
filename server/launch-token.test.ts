@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { afterEach, describe, expect, it } from "vitest";
 import express from "express";
 import type { Server } from "node:http";
@@ -162,6 +165,42 @@ describe("rejectUnknownHosts middleware", () => {
     });
     expect(status).toBe(403);
     void base;
+  });
+});
+
+// --- Electron startup path vs the Host guard -------------------------------
+// The desktop app has two ways of reaching this server:
+//  - dev: BrowserWindow.loadURL("http://localhost:5000") — the Host header is
+//    "localhost:5000" and must stay allowlisted, or the whole dev app 403s.
+//  - packaged: BrowserWindow.loadFile(...) serves the renderer from file://
+//    and all attachment/Tor/Electrum IO goes through IPC handlers, so no HTTP
+//    request (and no Host header) is ever sent to this server.
+// These tests read electron/main.cjs so a change to the startup URL that
+// falls outside the allowlist fails here instead of shipping a 403ing app.
+describe("Electron startup path passes rejectUnknownHosts", () => {
+  const mainSrc = readFileSync(
+    path.join(__dirname, "..", "electron", "main.cjs"),
+    "utf8",
+  );
+
+  it("allows the Host header form of every loadURL http(s) origin in main.cjs", () => {
+    const urls = [...mainSrc.matchAll(/loadURL\(\s*['"`](https?:\/\/[^'"`]+)/g)].map(
+      (m) => m[1],
+    );
+    expect(urls.length).toBeGreaterThan(0);
+    for (const raw of urls) {
+      const u = new URL(raw);
+      // URL.host is exactly what the browser sends as the Host header.
+      expect(isAllowedHost(u.host), `Host "${u.host}" from ${raw}`).toBe(true);
+    }
+  });
+
+  it("packaged renderer loads via loadFile (no Host header sent at all)", () => {
+    // The non-dev branch must keep using loadFile: file:// pages never issue
+    // a Host header to this server, so the guard cannot break the packaged
+    // app. If someone switches the packaged path to loadURL(http...), the
+    // test above picks up the new origin and checks it against the allowlist.
+    expect(mainSrc).toMatch(/loadFile\(indexPath\)/);
   });
 });
 
