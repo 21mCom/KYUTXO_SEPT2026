@@ -50,8 +50,9 @@ vi.mock("@/hooks/use-db-change-signal", () => ({
   subscribeToDbChanges: () => () => {},
 }));
 
+let mockLocation = "/records?search=stash";
 vi.mock("wouter", () => ({
-  useLocation: () => ["/records?search=stash", vi.fn()],
+  useLocation: () => [mockLocation, vi.fn()],
 }));
 
 const emptyVocab = { tags: [], categories: [], owners: [], walletNames: [], seedNames: [], walletSoftware: [] };
@@ -76,6 +77,7 @@ vi.mock("@/lib/dataFacade", () => ({
 }));
 
 vi.mock("@/lib/records-query", () => ({
+  MAX_MATERIALIZE: 100000,
   buildRecordsCollection: vi.fn(() => ({})),
   buildIdentifierSearchCollection: vi.fn(() => ({})),
   looksLikeBitcoinIdentifier: vi.fn(() => null),
@@ -100,6 +102,12 @@ vi.mock("@/lib/data/record-crud", async (importOriginal) => {
   return {
     ...actual,
     countHiddenTierMatches: vi.fn(() => Promise.resolve(hiddenResult)),
+    // The date-added (addedSince) branch hits the createdAt keyset helpers,
+    // which need a fuller Dexie surface than the fake db below provides.
+    getRecordsPageByCreatedAtKeyset: vi.fn(() => Promise.resolve([])),
+    countRecordsByCreatedAtWindow: vi.fn(() =>
+      Promise.resolve({ count: 0, truncated: false }),
+    ),
   };
 });
 
@@ -109,8 +117,37 @@ vi.mock("@/components/RecordTable", () => ({
 vi.mock("@/components/RecordDetailPanel", () => ({
   RecordDetailPanel: () => <div data-testid="mock-record-detail-panel" />,
 }));
+// Interactive stand-in so tests can apply a tag column filter without a search.
 vi.mock("@/components/RecordFilters", () => ({
-  RecordFilters: () => <div data-testid="mock-record-filters" />,
+  RecordFilters: ({
+    onFiltersChange,
+  }: {
+    onFiltersChange: (filters: unknown[]) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="mock-record-filters"
+      onClick={() =>
+        onFiltersChange([
+          { id: "t1", field: "tags", operator: "includes", value: "hiddenonlytag" },
+        ])
+      }
+    />
+  ),
+}));
+// Interactive stand-in for the recency-window filter (addedSince).
+vi.mock("@/components/DateAddedFilter", () => ({
+  DateAddedFilter: ({
+    onSinceChange,
+  }: {
+    onSinceChange: (since: number | null) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="mock-date-added-filter"
+      onClick={() => onSinceChange(1000)}
+    />
+  ),
 }));
 // Interactive stand-in so the "Show hidden matches" click can be observed
 // flipping the include toggle.
@@ -190,6 +227,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hiddenResult = { count: 0, capped: false, scanCapped: false };
   pageRecords = [];
+  mockLocation = "/records?search=stash";
 });
 
 afterEach(() => {
@@ -240,6 +278,51 @@ describe("Records hidden-tier match notice", () => {
       expect(vi.mocked(countHiddenTierMatches).mock.calls.length).toBeGreaterThan(0);
     });
     expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+  });
+
+  it("a tag-only column filter (no search) still triggers the hidden-match count and notice", async () => {
+    mockLocation = "/records";
+    hiddenResult = { count: 2, capped: false, scanCapped: false };
+    render(<Records />);
+
+    // No narrowing yet → no count started, no notice.
+    await waitFor(() => {
+      expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+    });
+    expect(vi.mocked(countHiddenTierMatches).mock.calls.length).toBe(0);
+
+    fireEvent.click(screen.getByTestId("mock-record-filters"));
+
+    const notice = await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 3000,
+    });
+    expect(notice.textContent).toContain("2 matches are hidden");
+
+    fireEvent.click(screen.getByTestId("button-show-hidden-matches"));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("mock-blockchain-toggle").getAttribute("data-checked"),
+      ).toBe("true");
+      expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+    });
+  });
+
+  it("a recency-window-only narrowing (addedSince) triggers the hidden-match count", async () => {
+    mockLocation = "/records";
+    hiddenResult = { count: 1, capped: false, scanCapped: false };
+    render(<Records />);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+    });
+    expect(vi.mocked(countHiddenTierMatches).mock.calls.length).toBe(0);
+
+    fireEvent.click(screen.getByTestId("mock-date-added-filter"));
+
+    const notice = await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 3000,
+    });
+    expect(notice.textContent).toContain("1 match is hidden");
   });
 
   it("also surfaces the notice under non-empty results", async () => {

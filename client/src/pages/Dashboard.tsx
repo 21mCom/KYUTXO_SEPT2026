@@ -266,7 +266,15 @@ export default function Dashboard() {
   // weren't hidden. Runs only after the filtered view has rendered, is
   // bounded on both sides (match cap / scan cap inside countHiddenTierMatches),
   // and is version-guarded so a superseded filter change never sets state.
-  const searchOrColumnFilterActive = debouncedSearch.trim() !== '' || columnFilters.length > 0;
+  // Any narrowing that could match hidden rows activates the count: text
+  // search, column filters, and the FilterBar's type/tag/category filters
+  // (the hidden-match predicate below already includes all of these).
+  const searchOrColumnFilterActive =
+    debouncedSearch.trim() !== '' ||
+    columnFilters.length > 0 ||
+    (filter.type !== undefined && filter.type !== 'all') ||
+    filter.tags.length > 0 ||
+    filter.categories.length > 0;
   useEffect(() => {
     const version = ++hiddenMatchVersionRef.current;
     setHiddenMatches(null);

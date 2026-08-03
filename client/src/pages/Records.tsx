@@ -350,6 +350,12 @@ export default function Records() {
         // scan (the 15-20 min freeze on large vaults). See records-query.ts.
         const identifierSearch = looksLikeBitcoinIdentifier(search);
         const filtersActive = search !== '' || columnFilters.length > 0;
+        // Broader gate for the hidden-matches hint: the recency window
+        // (addedSince) also narrows the visible set via residualNoTier, so a
+        // window that only hidden-tier rows satisfy must still trigger the
+        // count instead of silently dead-ending. Kept separate from
+        // filtersActive so the count/paging branches below are unchanged.
+        const hiddenMatchFiltersActive = filtersActive || addedSince !== null;
         
         // Residual predicate WITHOUT the tier exclusion — reused by the
         // hidden-matches count, which asks "would this hidden-tier row match
@@ -505,7 +511,7 @@ export default function Records() {
         // cancellation-aware. The engine path derives the same number as an
         // exact SQL count diff inside its count block instead.
         const startDexieHiddenMatchesCount = () => {
-          if (useEngine || !filtersActive || includeBlockchainDiscovered) return;
+          if (useEngine || !hiddenMatchFiltersActive || includeBlockchainDiscovered) return;
           countHiddenTierMatches({
             matches: residualNoTier,
             identifier: identifierSearch,
@@ -550,7 +556,7 @@ export default function Records() {
             // Hidden-matches hint (exact on the engine): re-run the same
             // filtered count with discovered rows included; the difference is
             // how many matches the default view is hiding.
-            const wantHiddenMatches = filtersActive && !includeBlockchainDiscovered;
+            const wantHiddenMatches = hiddenMatchFiltersActive && !includeBlockchainDiscovered;
             Promise.all([
               engineCountRecords(engineOpts),
               engineCountRecords({ includeBlockchainDiscovered: true }),

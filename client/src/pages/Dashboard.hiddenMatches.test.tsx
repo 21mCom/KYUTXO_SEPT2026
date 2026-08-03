@@ -115,8 +115,23 @@ vi.mock("@/components/RecordDetailPanel", () => ({
 vi.mock("@/components/DemoVaultLoader", () => ({
   DemoVaultLoader: () => null,
 }));
+// Interactive stub so tests can activate FilterBar-style filters (tag /
+// category / type) without driving the real combobox UI.
 vi.mock("@/components/FilterBar", () => ({
-  FilterBar: () => null,
+  FilterBar: ({ filter, onChange }: any) => (
+    <div>
+      <button
+        type="button"
+        data-testid="stub-filter-tag"
+        onClick={() => onChange({ ...filter, tags: ["hiddenonlytag"] })}
+      />
+      <button
+        type="button"
+        data-testid="stub-filter-type-other"
+        onClick={() => onChange({ ...filter, type: "other" })}
+      />
+    </div>
+  ),
 }));
 
 testDb = new TestDb(`KYUTXO-dashhidden-${Date.now()}-${Math.random()}`);
@@ -308,6 +323,71 @@ describe("Dashboard hidden-tier matches", () => {
     expect(
       screen.getByTestId("button-blockchain-toggle").className,
     ).toContain("text-primary");
+    expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+  }, 60000);
+
+  it("a tag-only filter that matches only hidden-tier rows shows the notice and the button reveals them", async () => {
+    await seedRecord({
+      inputString: "bc1qtagonlyhidden00000000000000000001",
+      label: "Synced tagged address",
+      tags: ["hiddenonlytag"],
+      source: "blockchain-sync",
+      addressImportance: "blockchain-discovered",
+    });
+    await seedRecord({
+      inputString: "bc1qtagonlyvisible0000000000000000002",
+      label: "Savings",
+    });
+
+    renderDashboard();
+    await waitFor(
+      () => expect(tableText()).toContain("bc1qtagonlyvisible"),
+      { timeout: 15000 },
+    );
+
+    // Tag-only narrowing (no text search, no column filter).
+    fireEvent.click(screen.getByTestId("stub-filter-tag"));
+
+    const notice = await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 15000,
+    });
+    expect(notice.textContent).toContain("1 match is hidden");
+    expect(screen.getByText(/No records found/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("button-show-hidden-matches"));
+    await waitFor(
+      () => expect(tableText()).toContain("bc1qtagonlyhidden"),
+      { timeout: 15000 },
+    );
+    expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+  }, 60000);
+
+  it("a type-only filter with no hidden matches shows no notice", async () => {
+    await seedRecord({
+      inputString: "bc1qtypefilterhidden000000000000000001",
+      label: "Synced address",
+      source: "blockchain-sync",
+      addressImportance: "blockchain-discovered",
+    });
+    await seedRecord({
+      inputString: "bc1qtypefiltervisible00000000000000002",
+      label: "Savings",
+    });
+
+    renderDashboard();
+    await waitFor(
+      () => expect(tableText()).toContain("bc1qtypefiltervisible"),
+      { timeout: 15000 },
+    );
+
+    // "other" type matches neither the hidden nor the visible address rows.
+    fireEvent.click(screen.getByTestId("stub-filter-type-other"));
+    await waitFor(
+      () => expect(screen.getByText(/No records found/i)).toBeTruthy(),
+      { timeout: 15000 },
+    );
+    // Give the deferred count a beat, then confirm it stayed silent.
+    await new Promise((r) => setTimeout(r, 250));
     expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
   }, 60000);
 
