@@ -292,6 +292,29 @@ describe("captureMergeOrigin — duplicate-origin de-dup (Task: repeated imports
     expect(await getRecordOriginsByRecordId(record.id!)).toHaveLength(3);
   });
 
+  it("de-dups walletImport sources that differ only by the run timestamp", async () => {
+    const record = await seedRecord();
+    const run1 = {
+      ...incoming,
+      originType: "wallet-sync" as const,
+      source: "walletImport-Sparrow Wallet_2026-08-02_161633",
+    };
+    await captureMergeOrigin(record, run1);
+    const before = await getRecordOriginsByRecordId(record.id!);
+
+    // Same import re-run later: only the embedded timestamp differs.
+    await captureMergeOrigin(record, {
+      ...run1,
+      source: "walletImport-Sparrow Wallet_2026-08-03_090000",
+    });
+
+    const after = await getRecordOriginsByRecordId(record.id!);
+    expect(after).toHaveLength(before.length);
+    const refreshed = after.find((o) => o.originType === "wallet-sync");
+    // Displayed source follows the latest run.
+    expect(refreshed?.source).toBe("walletImport-Sparrow Wallet_2026-08-03_090000");
+  });
+
   it("de-dups against the MOST RECENT same-source origin only", async () => {
     const record = await seedRecord();
     await captureMergeOrigin(record, incoming);

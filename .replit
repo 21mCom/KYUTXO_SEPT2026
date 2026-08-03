@@ -203,6 +203,10 @@ args = "merge-analysis-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "metadata-sources-dedup-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "edit-attachments-toast-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1555,6 +1559,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-electrum-cert-trust-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "metadata-sources-dedup-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-metadata-sources-dedup-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

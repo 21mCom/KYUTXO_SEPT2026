@@ -168,6 +168,15 @@ function normalizeOriginValue(value: unknown): string | undefined {
   return String(value);
 }
 
+// Wallet-file imports stamp a per-run timestamp into the source name
+// ("walletImport-Sparrow Wallet_2026-08-02_161633"). The run timestamp is
+// not part of the logical source identity — re-running the same import must
+// still de-dup — so strip it for comparison purposes.
+function normalizeOriginSource(source: string | undefined): string {
+  const s = source || '';
+  return s.replace(/^(walletImport-.+?)_\d{4}-\d{2}-\d{2}_\d{6}$/, '$1');
+}
+
 // Fields that constitute an origin's "value" for duplicate detection.
 const ORIGIN_VALUE_FIELDS = [
   ...ORIGIN_STRING_FIELDS,
@@ -230,13 +239,18 @@ export async function captureMergeOrigin(
       .filter(
         (o) =>
           o.originType === incoming.originType &&
-          (o.source || '') === (incoming.source || '')
+          normalizeOriginSource(o.source) === normalizeOriginSource(incoming.source)
       )
       .sort((a, b) => b.createdAt - a.createdAt);
     const latestSameSource = sameSourceOrigins[0];
     if (latestSameSource?.id && originValuesEqual(latestSameSource, incoming)) {
       await db.recordOrigins.update(latestSameSource.id, {
         createdAt: incoming.createdAt ?? now,
+        // Keep the displayed source in step with the latest run when only
+        // the embedded run timestamp differs.
+        ...(incoming.source && incoming.source !== latestSameSource.source
+          ? { source: incoming.source }
+          : {}),
       });
       return;
     }
