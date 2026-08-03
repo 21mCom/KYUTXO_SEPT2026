@@ -121,6 +121,22 @@ describe("isAllowedHost (DNS-rebinding defense)", () => {
     expect(isAllowedHost("evil-replit.dev")).toBe(false);
     expect(isAllowedHost("replit.dev.attacker.com")).toBe(false);
   });
+
+  it("allows .replit.app deployment hosts only when REPL_ID is set", () => {
+    delete process.env.REPL_ID;
+    expect(isAllowedHost("bitcoin-metadata-manager-balibule.replit.app")).toBe(
+      false,
+    );
+    process.env.REPL_ID = "test-repl";
+    expect(isAllowedHost("bitcoin-metadata-manager-balibule.replit.app")).toBe(
+      true,
+    );
+    expect(isAllowedHost("my-app.replit.app:443")).toBe(true);
+    expect(isAllowedHost("evil-replit.app")).toBe(false);
+    expect(isAllowedHost("replit.app.attacker.com")).toBe(false);
+    expect(isAllowedHost("my-app.replit.app.attacker.com")).toBe(false);
+    expect(isAllowedHost("my-app.replit.app:443.attacker.com")).toBe(false);
+  });
 });
 
 describe("rejectUnknownHosts middleware", () => {

@@ -79,10 +79,16 @@ export function isAllowedHost(host: string | undefined): boolean {
   ) {
     return true;
   }
-  // Replit's preview proxy connects with its own *.replit.dev hostname; only
-  // honored when actually running inside a Replit environment (mirrors the
-  // Vite allowedHosts scoping in index-dev.ts).
-  if (process.env.REPL_ID && hostname.endsWith(".replit.dev")) {
+  // Replit's preview proxy connects with its own *.replit.dev hostname, and
+  // published (autoscale) deployments are served from a *.replit.app
+  // hostname; both are only honored when actually running inside a Replit
+  // environment (mirrors the Vite allowedHosts scoping in index-dev.ts).
+  // These are registered public-suffix domains, so an attacker cannot point
+  // an arbitrary DNS name at them without controlling a Replit deployment.
+  if (
+    process.env.REPL_ID &&
+    (hostname.endsWith(".replit.dev") || hostname.endsWith(".replit.app"))
+  ) {
     return true;
   }
   return false;
