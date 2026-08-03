@@ -386,7 +386,14 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       
       const buffer = Buffer.from(data);
       if (buffer.byteLength > maxAttachmentBytesLimit) {
-        return { success: false, error: `Attachment exceeds the maximum size of ${maxAttachmentBytesLimit} bytes` };
+        // Distinct code so the restore writer can map this to the typed
+        // AttachmentTooLargeError and skip just this file (parity with the
+        // web endpoint's HTTP 413) instead of failing the whole restore.
+        return {
+          success: false,
+          code: 'ATTACHMENT_TOO_LARGE',
+          error: `Attachment exceeds the maximum size of ${maxAttachmentBytesLimit} bytes`,
+        };
       }
       
       const dir = path.dirname(filePath);

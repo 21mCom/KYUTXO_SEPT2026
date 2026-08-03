@@ -17,6 +17,16 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         const api = getElectronAPI();
         const result = await api.writeAttachment(relativePath, fileData);
         if (!result.success) {
+          // Size-cap rejection = this ONE file exceeds the desktop cap. Throw
+          // the typed error so the restore skips the file with a per-file
+          // warning (same contract as the web branch's HTTP 413) instead of
+          // failing the whole restore over it.
+          if (result.code === "ATTACHMENT_TOO_LARGE") {
+            throw new AttachmentTooLargeError(
+              relativePath,
+              result.error || "Attachment exceeds the maximum size",
+            );
+          }
           throw new Error(result.error || `Failed to write attachment ${relativePath}`);
         }
       } else {

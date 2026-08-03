@@ -16,7 +16,6 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach } from "vitest";
 
 import { db } from "@/lib/database";
-import { getAllAttachments } from "@/lib/data/attachments-crud";
 import { exportBackup, type AttachmentFileIO } from "./export";
 import {
   restoreV3Backup,
@@ -136,17 +135,23 @@ describe("oversized attachment files are skipped, never fail the restore", () =>
     const result = await restoreV3Backup({
       source: blobChunks(blob),
       attachmentWriter: collectingWriter,
+      maxAttachmentFileBytes: CAP,
     });
 
+    // Vault data restored intact.
     expect(result.counts.records).toBe(3);
+    expect(await countRecords()).toBe(3);
+
+    // The two small files restored; the oversized one skipped and NAMED.
     expect(result.counts.attachmentFiles).toBe(2);
     expect(result.counts.skippedOversizedAttachmentFiles).toBe(1);
     expect(result.skippedOversizedAttachments).toEqual([paths[1]]);
-    expect(restoredFiles.has(paths[1])).toBe(false);
     expect(restoredFiles.has(paths[0])).toBe(true);
+    expect(restoredFiles.has(paths[1])).toBe(false);
     expect(restoredFiles.has(paths[2])).toBe(true);
 
-    // Row for the 413-rejected file dropped as well.
+    // The dangling attachment ROW for the skipped file was removed too, so no
+    // restored record points at bytes that don't exist on disk.
     expect(result.counts.droppedOversizedAttachmentRows).toBe(1);
     expect(result.counts.attachments).toBe(2);
     const rows = await getAllAttachments();
@@ -175,7 +180,7 @@ describe("oversized attachment files are skipped, never fail the restore", () =>
 
     const result = await restoreV3Backup({
       source: blobChunks(blob),
-      attachmentWriter: collectingWriter,
+      attachmentWriter: writer413,
     });
 
     expect(result.counts.records).toBe(3);

@@ -1623,7 +1623,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/backup/restore-oversized-attachment.runtime.test.ts client/src/lib/backup/restore-attachment-writer.realEndpoint.test.ts"
+args = "npx vitest run client/src/lib/backup/restore-oversized-attachment.runtime.test.ts client/src/lib/backup/restore-attachment-writer.realEndpoint.test.ts client/src/lib/backup/restore-attachment-writer.electronEndpoint.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

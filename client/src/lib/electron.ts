@@ -303,7 +303,9 @@ interface ElectronAPI {
   listAttachments: (identifier: string) => Promise<{ success: boolean; files?: string[]; error?: string }>;
   // Backup/restore operations
   listAllAttachments: () => Promise<{ success: boolean; files?: string[]; totalBytes?: number; error?: string }>;
-  writeAttachment: (relativePath: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
+  // `code: "ATTACHMENT_TOO_LARGE"` marks a size-cap rejection so the restore
+  // writer can skip just that file (parity with the web endpoint's HTTP 413).
+  writeAttachment: (relativePath: string, data: ArrayBuffer) => Promise<{ success: boolean; code?: string; error?: string }>;
   renameAttachment: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>;
   // Streaming backup writer (export) — chunks are written straight to disk.
   backupOpen: (suggestedName: string) => Promise<{ success: boolean; id?: string; canceled?: boolean; error?: string }>;

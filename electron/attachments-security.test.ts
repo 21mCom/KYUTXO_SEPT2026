@@ -181,6 +181,9 @@ describe("write-attachment (restore)", () => {
     });
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/maximum size/);
+    // Distinct code: the restore writer maps this to AttachmentTooLargeError
+    // so an oversized file is skipped instead of failing the whole restore.
+    expect(r.code).toBe("ATTACHMENT_TOO_LARGE");
     expect(fs.existsSync(path.join(attachmentsDir, "restored"))).toBe(false);
   });
 
