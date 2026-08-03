@@ -95,5 +95,6 @@
 - [Packaged Electron no local server](electron-packaged-no-local-server.md) — packaged app is file:// + IPC only (no Host header ever); only dev Electron hits localhost:5000; lockstep tests parse main.cjs.
 - [Electron error hygiene scope](electron-error-hygiene.md) — sanitization tasks cover main-process LOGS too, not just IPC payloads; redact host:port via opaque conn ids, log name+errno only; server JSON-RPC error text may pass through tagged.
 - [createdAt sort tie-breaks](created-at-sort-tiebreak.md) — "most recent row" sorts on Date.now() need an id tie-break; same-millisecond inserts sort arbitrarily and mis-de-dup.
+- [React disabled-click guard](react-disabled-click-guard.md) — React swallows forced clicks while props.disabled is set; assert the disabled state, not handler fallback toasts behind it.
 - [Radix toast vs Playwright strict](radix-toast-playwright-strict.md) — toast text duplicates into aria-live; getByText needs .first(); gate cancel asserts on a streamed phase, not first progress.
 - [Detail-panel click races](detail-panel-click-races.md) — async badges (e.g. conflict count) shift layout mid-click and steal coordinate clicks in browser checks; dispatchEvent('click') + recover if URL changed.

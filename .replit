@@ -47,6 +47,10 @@ args = "wallet-import-reattribution-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "private-key-file-reject-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "psbt-builder-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1615,6 +1619,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-wallet-drilldown-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "private-key-file-reject-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-private-key-file-reject-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
