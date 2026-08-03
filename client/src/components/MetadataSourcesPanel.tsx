@@ -334,40 +334,51 @@ export function MetadataSourcesPanel({ recordId, record }: MetadataSourcesPanelP
     <div>
       <Separator className="my-4" />
       <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-        <CollapsibleTrigger asChild>
-          <Button
-            variant="ghost"
-            className="w-full justify-between p-0 h-auto hover:bg-transparent mb-3"
-            data-testid="button-toggle-sources"
-          >
-            <h4 className="text-sm font-medium flex items-center gap-2">
-              <History className="h-4 w-4" />
-              Metadata Sources ({origins.length})
-              {totalConflicts > 0 && (
-                <Badge
-                  variant="outline"
-                  className="gap-1 text-orange-600 border-orange-300 bg-orange-50 dark:bg-orange-950/30 dark:border-orange-700 cursor-pointer"
-                  onClick={(e) => {
-                    // Deep-link to the Conflict Resolution page for this
-                    // record without toggling the surrounding collapsible.
-                    e.stopPropagation();
-                    e.preventDefault();
-                    navigate(`/conflict-resolution?recordId=${recordId}`);
-                  }}
-                  data-testid="badge-sources-conflicts"
-                >
-                  <AlertCircle className="h-3 w-3" />
-                  {totalConflicts} conflicts
-                </Badge>
+        {/* The conflicts deep-link badge lives OUTSIDE the toggle button so a
+            click aimed anywhere at "the toggle" can never be hijacked into a
+            navigation (Task #1838). The badge sits at the right edge, next to
+            the chevron, visually and spatially distinct from the toggle area. */}
+        <div className="flex items-center gap-2 mb-3">
+          <CollapsibleTrigger asChild>
+            <Button
+              variant="ghost"
+              className="flex-1 justify-between p-0 h-auto hover:bg-transparent"
+              data-testid="button-toggle-sources"
+            >
+              <h4 className="text-sm font-medium flex items-center gap-2">
+                <History className="h-4 w-4" />
+                Metadata Sources ({origins.length})
+              </h4>
+              {isExpanded ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
               )}
-            </h4>
-            {isExpanded ? (
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            )}
-          </Button>
-        </CollapsibleTrigger>
+            </Button>
+          </CollapsibleTrigger>
+          {totalConflicts > 0 && (
+            <Badge
+              variant="outline"
+              role="button"
+              tabIndex={0}
+              className="gap-1 shrink-0 text-orange-600 border-orange-300 bg-orange-50 dark:bg-orange-950/30 dark:border-orange-700 cursor-pointer"
+              onClick={() => {
+                // Deep-link to the Conflict Resolution page for this record.
+                navigate(`/conflict-resolution?recordId=${recordId}`);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  navigate(`/conflict-resolution?recordId=${recordId}`);
+                }
+              }}
+              data-testid="badge-sources-conflicts"
+            >
+              <AlertCircle className="h-3 w-3" />
+              {totalConflicts} conflicts
+            </Badge>
+          )}
+        </div>
 
         <CollapsibleContent>
           <div className="space-y-2" data-testid="list-metadata-sources">

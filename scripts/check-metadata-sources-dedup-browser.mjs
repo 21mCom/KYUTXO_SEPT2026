@@ -196,18 +196,16 @@ async function readPanel(page, recordId) {
   const sourcesList = page.getByTestId('list-metadata-sources');
   const expandDeadline = Date.now() + 30_000;
   for (;;) {
-    // The async conflict-count badge now renders in a reserved fixed-height
-    // slot (RecordDetailPanel), so it no longer shifts layout when it pops in.
-    // Coordinate clicks are still racy here for an unrelated reason: the
-    // detail Sheet's slide-in transition doesn't progress between idle
-    // headless frames, so a plain click can compute its point mid-slide.
-    // Dispatch on the element itself and recover if a mis-click navigated.
+    // The conflicts deep-link badge now lives OUTSIDE the toggle button
+    // (Task #1838), so a plain click on the toggle can never be hijacked
+    // into a navigation. The retry loop below only covers the render-swap
+    // race where an early click's expansion gets reset.
     if (!page.url().includes(`records?id=${recordId}`)) {
       console.log(`[metadata-sources-dedup-browser] navigated away (${page.url()}); returning to deep link`);
       await page.goto(`${BASE_URL}records?id=${recordId}`, { waitUntil: 'load', timeout: 60_000 });
       await toggle.waitFor({ state: 'visible', timeout: 30_000 });
     }
-    const clicked = await toggle.dispatchEvent('click', undefined, { timeout: 3_000 }).then(() => true).catch(() => false);
+    const clicked = await toggle.click({ timeout: 3_000 }).then(() => true).catch(() => false);
     const visible = clicked && await sourcesList
       .waitFor({ state: 'visible', timeout: 3_000 })
       .then(() => true)
