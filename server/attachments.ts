@@ -109,6 +109,61 @@ async function discardTempFile(file: { path?: string } | undefined): Promise<voi
   }
 }
 
+// A temp file this old cannot belong to an in-flight upload (requests are
+// bounded well below this), so it must be an orphan left by a crash/power
+// loss mid-stream. Kept generous so slow links never race the sweep.
+export const STALE_UPLOAD_TMP_MS = 60 * 60 * 1000; // 1 hour
+
+// Best-effort startup sweep of orphaned upload temp files. Every normal
+// request path removes its own temp file (discardTempFile / multer abort),
+// but a crash or power loss mid-upload strands the partial file forever.
+// Only files STRICTLY older than the threshold are removed, so in-flight
+// uploads are never touched. Errors are logged WITHOUT paths (see
+// logServerError) and never propagate — a failed sweep must not affect
+// startup. Returns the number of files removed (for tests/diagnostics).
+export async function sweepStaleUploadTempFiles(
+  options: { dir?: string; maxAgeMs?: number; now?: number } = {},
+): Promise<number> {
+  const dir = options.dir ?? UPLOAD_TMP_DIR;
+  const maxAgeMs = options.maxAgeMs ?? STALE_UPLOAD_TMP_MS;
+  const now = options.now ?? Date.now();
+  let removed = 0;
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    // ENOENT: staging dir not created yet — nothing to sweep.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logServerError('Upload temp sweep error', error);
+    }
+    return 0;
+  }
+  for (const entry of entries) {
+    // Only plain files: the staging dir should contain nothing else, and the
+    // sweep must never recurse or follow/delete anything unexpected.
+    if (!entry.isFile()) continue;
+    const filePath = path.join(dir, entry.name);
+    try {
+      const stat = await fs.lstat(filePath);
+      if (!stat.isFile()) continue;
+      // mtime is the staleness signal: every write to a file still being
+      // streamed advances it, so an in-flight upload always looks fresh.
+      // ctime/birthtime are deliberately excluded — ctime changes on
+      // metadata-only touches and birthtime is unreliable across filesystems.
+      const lastActivity = stat.mtimeMs;
+      if (now - lastActivity <= maxAgeMs) continue; // in-flight or fresh — leave it
+      await fs.unlink(filePath);
+      removed++;
+    } catch (error) {
+      // File vanished (its request finished) or unlink failed — best effort.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logServerError('Upload temp sweep error', error);
+      }
+    }
+  }
+  return removed;
+}
+
 // Log a filesystem/IO failure server-side WITHOUT the raw error message: Node
 // error messages embed absolute filesystem paths (ENOENT '/home/...'), which
 // are internal detail that should not reach logs any more than clients. The

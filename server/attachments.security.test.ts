@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { resolveAttachmentPath, containedRealPath } from "./attachments";
+import { resolveAttachmentPath, containedRealPath, sweepStaleUploadTempFiles } from "./attachments";
 
 const BASE = path.resolve(
   process.env.KYUTXO_DATA_DIR || path.join(process.cwd(), "data"),
@@ -143,5 +143,83 @@ describe("containedRealPath", () => {
     const f = path.join(sibling, "x.txt");
     fs.writeFileSync(f, "x");
     expect(await containedRealPath(base, f)).toBeNull();
+  });
+});
+
+// sweepStaleUploadTempFiles: startup cleanup of upload temp files orphaned by
+// a crash or power loss mid-upload. Must delete only stale plain files, never
+// fresh (in-flight) files, and never throw.
+describe("sweepStaleUploadTempFiles", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "kyutxo-tmp-sweep-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function makeFile(name: string, ageMs: number, now: number): string {
+    const p = path.join(dir, name);
+    fs.writeFileSync(p, "partial upload bytes");
+    const t = new Date(now - ageMs);
+    fs.utimesSync(p, t, t);
+    return p;
+  }
+
+  it("removes files older than the threshold and keeps fresh ones", async () => {
+    const now = Date.now();
+    const stale = makeFile("upload_old.tmp", 2 * 60 * 60 * 1000, now);
+    const fresh = makeFile("upload_new.tmp", 5 * 60 * 1000, now);
+    const removed = await sweepStaleUploadTempFiles({ dir, now });
+    expect(removed).toBe(1);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it("keeps a file created long ago whose mtime is recent (still being written)", async () => {
+    const now = Date.now();
+    const p = path.join(dir, "upload_active.tmp");
+    fs.writeFileSync(p, "streaming");
+    // birthtime old is not simulatable portably, but a recent mtime alone must
+    // protect the file regardless of any other timestamp.
+    fs.utimesSync(p, new Date(now - 10_000), new Date(now - 10_000));
+    expect(await sweepStaleUploadTempFiles({ dir, now })).toBe(0);
+    expect(fs.existsSync(p)).toBe(true);
+  });
+
+  it("respects a custom maxAgeMs", async () => {
+    const now = Date.now();
+    const p = makeFile("upload_x.tmp", 30_000, now);
+    expect(await sweepStaleUploadTempFiles({ dir, now, maxAgeMs: 10_000 })).toBe(1);
+    expect(fs.existsSync(p)).toBe(false);
+  });
+
+  it("skips directories and symlinks even when stale", async () => {
+    const now = Date.now();
+    const old = new Date(now - 3 * 60 * 60 * 1000);
+    const sub = path.join(dir, "subdir");
+    fs.mkdirSync(sub);
+    fs.utimesSync(sub, old, old);
+    const outside = path.join(os.tmpdir(), `kyutxo-sweep-target-${process.pid}`);
+    fs.writeFileSync(outside, "outside");
+    fs.utimesSync(outside, old, old);
+    const link = path.join(dir, "planted-link.tmp");
+    fs.symlinkSync(outside, link);
+    try {
+      expect(await sweepStaleUploadTempFiles({ dir, now })).toBe(0);
+      expect(fs.existsSync(sub)).toBe(true);
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(fs.existsSync(outside)).toBe(true);
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
+  });
+
+  it("returns 0 without throwing when the staging dir does not exist", async () => {
+    expect(
+      await sweepStaleUploadTempFiles({ dir: path.join(dir, "missing"), now: Date.now() }),
+    ).toBe(0);
   });
 });
