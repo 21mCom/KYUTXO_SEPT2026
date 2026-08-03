@@ -68,6 +68,14 @@ function uploadRequest(
 const small = (seed = 1) => new Uint8Array([seed, 2, 3]);
 const overCap = () => new Uint8Array(CAP + 1);
 
+// Uploads stream to a staging dir inside the data root; every request must
+// leave it empty afterwards (success moves the file, failure deletes it).
+function tmpFilesLeft(): number {
+  const tmpDir = path.join(dataDir, "attachments-tmp");
+  if (!fs.existsSync(tmpDir)) return 0;
+  return fs.readdirSync(tmpDir).length;
+}
+
 describe("upload size limits", () => {
   it("rejects an upload above the cap with 413 and writes nothing", async () => {
     const res = await uploadRequest("/upload", { identifier: "big" }, "big.bin", overCap());
@@ -75,6 +83,7 @@ describe("upload size limits", () => {
     const body = await res.json();
     expect(body.error).toMatch(/maximum size/);
     expect(fs.existsSync(path.join(attachmentsDir, "big"))).toBe(false);
+    expect(tmpFilesLeft()).toBe(0);
   });
 
   it("rejects an oversized restore write with 413", async () => {
@@ -86,6 +95,18 @@ describe("upload size limits", () => {
     );
     expect(res.status).toBe(413);
     expect(fs.existsSync(path.join(attachmentsDir, "restore"))).toBe(false);
+    expect(tmpFilesLeft()).toBe(0);
+  });
+
+  it("leaves no staging temp files after successful upload/write or a rejected write", async () => {
+    const up = await uploadRequest("/upload", { identifier: "tmpcheck" }, "a.bin", small(4));
+    expect(up.status).toBe(200);
+    const w = await uploadRequest("/write", { relativePath: "tmpcheck/b.bin" }, "b.bin", small(5));
+    expect(w.status).toBe(200);
+    // A rejected (path-escape) write must also clean up its staged bytes.
+    const bad = await uploadRequest("/write", { relativePath: "../escape.bin" }, "e.bin", small(6));
+    expect(bad.status).toBe(403);
+    expect(tmpFilesLeft()).toBe(0);
   });
 });
 

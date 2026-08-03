@@ -22,24 +22,16 @@ const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 
 const router = Router();
 
-// Hard cap on a single attachment's bytes. multer's memoryStorage buffers the
-// whole upload in memory, so WITHOUT a limit a single POST can exhaust server
-// memory; with `limits.fileSize` multer aborts the stream as soon as the cap is
-// exceeded instead of buffering unboundedly. The same cap covers the restore
-// write path (which shares the upload middleware). Override via env for tests.
+// Hard cap on a single attachment's bytes. Uploads stream to a temp file on
+// disk (diskStorage), so server memory stays flat regardless of file size or
+// concurrency; `limits.fileSize` still makes multer abort the stream (and
+// remove the partial temp file) as soon as the cap is exceeded. The same cap
+// covers the restore write path (which shares the upload middleware).
+// Override via env for tests.
 export const MAX_ATTACHMENT_BYTES =
   Number(process.env.KYUTXO_MAX_ATTACHMENT_BYTES) > 0
     ? Number(process.env.KYUTXO_MAX_ATTACHMENT_BYTES)
     : 100 * 1024 * 1024; // 100 MiB
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: MAX_ATTACHMENT_BYTES,
-    files: 1,
-    fields: 20,
-  },
-});
 
 // Wraps multer so a rejected upload (oversized file, too many fields) becomes a
 // clean JSON 413/400 instead of an Express default 500 HTML error page.
@@ -66,12 +58,54 @@ function singleFileUpload(req: Request, res: Response, next: NextFunction): void
 const DATA_DIR = process.env.KYUTXO_DATA_DIR || path.join(process.cwd(), 'data');
 const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
 
+// Staging area for streamed uploads. Lives inside the data root (same
+// filesystem as ATTACHMENTS_DIR, so the final rename/link is atomic and never
+// falls back to a copy) but OUTSIDE the attachments tree, so partial/orphaned
+// temp files can never appear in list-all, backups, or the attachment audit.
+const UPLOAD_TMP_DIR = path.join(DATA_DIR, 'attachments-tmp');
+
 // Ensure attachments directory exists
 async function ensureDir(dirPath: string): Promise<void> {
   try {
     await fs.mkdir(dirPath, { recursive: true });
   } catch (error) {
     // Directory already exists
+  }
+}
+
+// Disk-based streaming storage: multer pipes the request body straight to a
+// temp file, so the whole attachment is never materialized as a Buffer in
+// server memory (concurrent 100 MiB uploads/restores stay O(1) in RAM). The
+// temp name is self-generated (crypto-random) — the client-supplied filename
+// is never used on disk here. On a limit violation multer aborts the stream
+// and removes the partial temp file itself.
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      fs.mkdir(UPLOAD_TMP_DIR, { recursive: true })
+        .then(() => cb(null, UPLOAD_TMP_DIR))
+        .catch((err) => cb(err as Error, UPLOAD_TMP_DIR));
+    },
+    filename: (_req, _file, cb) => {
+      cb(null, `upload_${Date.now()}_${randomBytes(8).toString('hex')}.tmp`);
+    },
+  }),
+  limits: {
+    fileSize: MAX_ATTACHMENT_BYTES,
+    files: 1,
+    fields: 20,
+  },
+});
+
+// Best-effort removal of a streamed upload's temp file. Called on EVERY exit
+// path of the upload/write handlers so rejected or failed requests cannot
+// accumulate orphaned temp files in the staging dir.
+async function discardTempFile(file: { path?: string } | undefined): Promise<void> {
+  if (!file?.path) return;
+  try {
+    await fs.unlink(file.path);
+  } catch {
+    // Already gone (moved into place or cleaned up by multer) — fine.
   }
 }
 
@@ -242,8 +276,10 @@ function sanitizeIdentifier(identifier: string): string {
 
 // Upload attachment
 router.post('/upload', singleFileUpload, async (req: Request, res) => {
+  const file = (req as any).file as
+    | { path: string; originalname: string; mimetype: string; size: number }
+    | undefined;
   try {
-    const file = (req as any).file;
     if (!file) {
       return res.status(400).json({ error: 'No file provided' });
     }
@@ -267,8 +303,12 @@ router.post('/upload', singleFileUpload, async (req: Request, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Unique filename: crypto-random suffix + O_EXCL write with collision
-    // retry, so an existing file can never be overwritten or raced into.
+    // Unique filename: crypto-random suffix + hard-link with collision retry.
+    // link(2) fails with EEXIST when the destination exists (O_EXCL
+    // semantics) and never follows a symlink at the destination's final
+    // component, so an existing file can never be overwritten or raced into.
+    // The bytes were already streamed to the temp file, so no copy happens
+    // here — link + unlink is an atomic move on the same filesystem.
     const safeFilename = file.originalname.replace(/[<>:"/\\|?*]/g, '_');
     const ext = path.extname(safeFilename);
     const baseName = path.basename(safeFilename, ext);
@@ -277,7 +317,7 @@ router.post('/upload', singleFileUpload, async (req: Request, res) => {
     for (let attempt = 0; attempt < 10 && !wrote; attempt++) {
       filename = `${baseName}_${randomSuffix()}${ext}`;
       try {
-        await fs.writeFile(path.join(realDir, filename), file.buffer, { flag: 'wx' });
+        await fs.link(file.path, path.join(realDir, filename));
         wrote = true;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
@@ -299,6 +339,10 @@ router.post('/upload', singleFileUpload, async (req: Request, res) => {
   } catch (error) {
     logServerError('Upload error', error);
     res.status(500).json({ error: 'Upload failed' });
+  } finally {
+    // Remove the staging temp file on every exit path (after a successful
+    // link this deletes the temp name, completing the atomic move).
+    await discardTempFile(file);
   }
 });
 
@@ -366,8 +410,8 @@ router.get('/list-all', async (req, res) => {
 
 // Write attachment from backup (for restore) - MUST be before wildcard routes
 router.post('/write', singleFileUpload, async (req: Request, res) => {
+  const file = (req as any).file as { path: string } | undefined;
   try {
-    const file = (req as any).file;
     if (!file) {
       return res.status(400).json({ error: 'No file provided' });
     }
@@ -399,21 +443,25 @@ router.post('/write', singleFileUpload, async (req: Request, res) => {
     
     // Write file (restore legitimately overwrites colliding paths). O_NOFOLLOW
     // makes the open itself refuse a symlink swapped in at the final component
-    // after the containment check (no-op on Windows).
+    // after the containment check (no-op on Windows). The bytes stream from
+    // the staging temp file to the destination — never through a Buffer.
     const fh = await fs.open(
       realFile,
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | NOFOLLOW,
     );
-    try {
-      await fh.writeFile(file.buffer);
-    } finally {
-      await fh.close();
-    }
+    // Both streams own their FileHandles (autoClose): pipeline destroys both
+    // ends on success or failure, so neither fd can leak.
+    const src = (await fs.open(file.path, fsConstants.O_RDONLY)).createReadStream({
+      autoClose: true,
+    });
+    await pipeline(src, fh.createWriteStream({ autoClose: true }));
 
     res.json({ success: true });
   } catch (error) {
     logServerError('Write attachment error', error);
     res.status(500).json({ error: 'Write failed' });
+  } finally {
+    await discardTempFile(file);
   }
 });
 
