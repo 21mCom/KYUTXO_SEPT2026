@@ -427,6 +427,10 @@ args = "launch-token-cross-origin-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "launch-token-cross-origin-prod-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "tor-proxy-hardening-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1720,6 +1724,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-launch-token-cross-origin-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "launch-token-cross-origin-prod-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-launch-token-cross-origin-prod-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
