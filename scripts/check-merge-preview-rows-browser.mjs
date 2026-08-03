@@ -23,6 +23,10 @@
 //      with the exact counts.
 //   5. Reloads, repeats with zipEmpty, and asserts the four rows are ABSENT
 //      while the analysis results (records row) still render.
+//   6. Repeats with a PASSWORD-PROTECTED (encrypted) export: asserts Analyze
+//      is disabled until a password is entered, the correct password yields
+//      the same four rows/counts, and a WRONG password fails cleanly (toast,
+//      no results) without changing any vault table counts.
 //
 // Usage: node scripts/check-merge-preview-rows-browser.mjs
 // Requires: a `chromium` binary on PATH (Nix) and `playwright-core`.
@@ -38,6 +42,8 @@ await acquireBrowserCheckLock();
 const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
 const BASE_URL = `http://localhost:${PORT}/`;
 const SETUP_PASSWORD = 'merge-preview-check-123';
+const BACKUP_PASSWORD = 'encrypted-preview-pw-456';
+const WRONG_PASSWORD = 'definitely-not-the-password';
 
 const ADDR = 'bc1qmergepreviewrows000000000000000000000000';
 // Distinct first-8 chars everywhere (testid-collision lesson).
@@ -130,8 +136,10 @@ async function unlockIfNeeded(page) {
 }
 
 // Open the Settings restore dialog, feed it a zip, pick Merge, run Analyze,
-// and wait for the results panel.
-async function analyzeZip(page, zipB64, zipName) {
+// and wait for the results panel. For encrypted zips pass opts.password;
+// opts.expectFailure waits for the destructive toast instead of results.
+// Returns { analyzeDisabledBeforePassword } for encrypted gating asserts.
+async function analyzeZip(page, zipB64, zipName, opts = {}) {
   await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
   await unlockIfNeeded(page);
 
@@ -150,8 +158,28 @@ async function analyzeZip(page, zipB64, zipName) {
   await page.getByTestId('radio-merge').click();
   const analyzeBtn = page.getByTestId('button-analyze-merge');
   await analyzeBtn.scrollIntoViewIfNeeded();
+
+  let analyzeDisabledBeforePassword = null;
+  if (opts.password !== undefined) {
+    // Encrypted path: the button must be gated until a password is entered.
+    analyzeDisabledBeforePassword = await analyzeBtn.isDisabled();
+    const pwField = page.getByTestId('input-restore-password');
+    await pwField.waitFor({ state: 'visible', timeout: 10_000 });
+    await pwField.fill(opts.password);
+  }
+
   await analyzeBtn.click();
-  await page.getByTestId('analysis-results').waitFor({ state: 'visible', timeout: 60_000 });
+  if (opts.expectFailure) {
+    // Wrong password must surface the non-destructive failure toast (toast
+    // text duplicates into aria-live — use .first()).
+    await page
+      .getByText('Could not analyze backup', { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 60_000 });
+  } else {
+    await page.getByTestId('analysis-results').waitFor({ state: 'visible', timeout: 60_000 });
+  }
+  return { analyzeDisabledBeforePassword };
 }
 
 async function main() {
@@ -198,8 +226,8 @@ async function main() {
 
     // ── Phase A: seed source vault, export zipFull + zipEmpty, then reshape
     //    the live vault so exactly ONE row per table collides by natural key ──
-    const { zipFullB64, zipEmptyB64 } = await page.evaluate(
-      async ({ ADDR, DUST_TXID_A, DUST_TXID_B }) => {
+    const { zipFullB64, zipEmptyB64, zipEncB64 } = await page.evaluate(
+      async ({ ADDR, DUST_TXID_A, DUST_TXID_B, BACKUP_PASSWORD }) => {
         const { bulkCreateRecords, clearAllRecords } = await import('/src/lib/data/record-crud.ts');
         const { addEvidence, clearAllEvidenceData } = await import('/src/lib/data/evidence-crud.ts');
         const { addPriceData, clearPriceData } = await import('/src/lib/data/price-data-crud.ts');
@@ -208,11 +236,12 @@ async function main() {
         const { exportBackup } = await import('/src/lib/backup/export.ts');
         const { MemorySink } = await import('/src/lib/backup/sink.ts');
 
-        const exportZipB64 = async () => {
+        const exportZipB64 = async (password) => {
           const sink = new MemorySink();
           await exportBackup({
             sink,
-            encrypted: false,
+            encrypted: Boolean(password),
+            password,
             batchSize: 25,
             attachmentIO: {
               async listAll() { return []; },
@@ -278,8 +307,10 @@ async function main() {
         await savePsbt({ ...psbtBase, name: 'Shared preview PSBT', psbtBase64: psbtSharedB64 });
         await savePsbt({ ...psbtBase, name: 'Backup-only preview PSBT', psbtBase64: psbtNewB64 });
 
-        // zipFull carries 2 rows in each of the four tables.
+        // zipFull carries 2 rows in each of the four tables; zipEnc is the
+        // SAME content exported as a password-protected (encrypted) v3 zip.
         const zipFullB64 = await exportZipB64();
+        const zipEncB64 = await exportZipB64(BACKUP_PASSWORD);
 
         // zipEmpty carries NONE of them (record remains so analysis has data).
         await clearAllEvidenceData({ skipNotification: true });
@@ -295,13 +326,13 @@ async function main() {
         await markOutpointsAsDust([dustShared]);
         await savePsbt({ ...psbtBase, name: 'Shared preview PSBT (live)', psbtBase64: psbtSharedB64 });
 
-        return { zipFullB64, zipEmptyB64 };
+        return { zipFullB64, zipEmptyB64, zipEncB64 };
       },
-      { ADDR, DUST_TXID_A, DUST_TXID_B },
+      { ADDR, DUST_TXID_A, DUST_TXID_B, BACKUP_PASSWORD },
     );
-    step('source vault seeded; zipFull + zipEmpty exported; live vault holds 1 matching row per table',
-      zipFullB64.length > 100 && zipEmptyB64.length > 100,
-      `full=${Math.round(zipFullB64.length * 0.75)}B empty=${Math.round(zipEmptyB64.length * 0.75)}B`);
+    step('source vault seeded; zipFull + zipEmpty + zipEnc exported; live vault holds 1 matching row per table',
+      zipFullB64.length > 100 && zipEmptyB64.length > 100 && zipEncB64.length > 100,
+      `full=${Math.round(zipFullB64.length * 0.75)}B empty=${Math.round(zipEmptyB64.length * 0.75)}B enc=${Math.round(zipEncB64.length * 0.75)}B`);
 
     // ── Phase B: analyze zipFull — all four rows visible with exact counts ──
     await analyzeZip(page, zipFullB64, 'merge-preview-full.zip');
@@ -333,6 +364,61 @@ async function main() {
       const count = await page.getByTestId(`analysis-row-inline-${key}`).count();
       step(`zipEmpty: "${label}" preview row is hidden when the backup carries none`, count === 0, `count=${count}`);
     }
+
+    // ── Phase D: encrypted zip + CORRECT password — same rows, same counts ──
+    const { analyzeDisabledBeforePassword } = await analyzeZip(
+      page, zipEncB64, 'merge-preview-encrypted.zip', { password: BACKUP_PASSWORD },
+    );
+    step('zipEnc: Analyze button is disabled until a password is entered',
+      analyzeDisabledBeforePassword === true);
+    for (const [key, label] of ROWS) {
+      const row = page.getByTestId(`analysis-row-inline-${key}`);
+      const visible = await row.isVisible().catch(() => false);
+      const text = visible ? (await row.innerText()).replace(/\s+/g, ' ').trim() : '(absent)';
+      step(
+        `zipEnc + correct password: "${label}" preview row shows 1 new · 1 already present`,
+        visible && text.includes(label) && text.includes('1 new') && text.includes('1 already present'),
+        text,
+      );
+    }
+
+    // ── Phase E: encrypted zip + WRONG password — clean failure, vault
+    //    untouched ──────────────────────────────────────────────────────────
+    const countsBefore = await page.evaluate(async () => {
+      const { db } = await import('/src/lib/database.ts');
+      return {
+        records: await db.records.count(),
+        evidence: await db.evidence.count(),
+        priceData: await db.priceData.count(),
+        dustFlags: await db.dustFlags.count(),
+        savedPsbts: await db.savedPsbts.count(),
+      };
+    });
+
+    await analyzeZip(page, zipEncB64, 'merge-preview-encrypted.zip', {
+      password: WRONG_PASSWORD,
+      expectFailure: true,
+    });
+    step('zipEnc + wrong password: failure toast surfaces ("Could not analyze backup")', true);
+
+    const resultsCount = await page.getByTestId('analysis-results').count();
+    step('zipEnc + wrong password: no analysis results render', resultsCount === 0, `count=${resultsCount}`);
+
+    const countsAfter = await page.evaluate(async () => {
+      const { db } = await import('/src/lib/database.ts');
+      return {
+        records: await db.records.count(),
+        evidence: await db.evidence.count(),
+        priceData: await db.priceData.count(),
+        dustFlags: await db.dustFlags.count(),
+        savedPsbts: await db.savedPsbts.count(),
+      };
+    });
+    step(
+      'zipEnc + wrong password: vault untouched (table counts unchanged)',
+      JSON.stringify(countsAfter) === JSON.stringify(countsBefore),
+      `before=${JSON.stringify(countsBefore)} after=${JSON.stringify(countsAfter)}`,
+    );
 
     await context.close();
   } finally {
