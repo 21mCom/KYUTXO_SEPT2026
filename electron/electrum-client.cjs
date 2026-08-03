@@ -795,59 +795,66 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
 
   // Electrum connection test (creates fresh connection to test connectivity)
   ipcMain.handle('electrum-test', async (event, rawArgs) => {
-    const startTime = Date.now();
-    const parsed = validateElectrumIpc(electrumIpcSchemas.test, rawArgs);
-    if (!parsed.ok) {
-      return { success: false, error: parsed.error, latency: Date.now() - startTime };
-    }
-    const { host, port, useSSL, timeout, useTor, torProxyUrl } = parsed.data;
-    const cleanedHost = cleanElectrumHost(host);
-    const options = { useTor: !!useTor, torProxyUrl };
-
     try {
-      // Get or create pooled connection
-      const { key, pooled } = await getPooledConnection(cleanedHost, port, useSSL, timeout || 15000, options);
-
-      // Send server.version only on fresh connections, ping on reused ones
-      const version = await ensureVersionHandshake(key, timeout || 15000);
-
-      // Cache version for future reuse
-      const conn = electrumPool.connections.get(key);
-      if (conn) conn.cachedVersion = version;
-
-      // Get block height to verify full functionality
-      const headerResult = await pooledRequest(key, 'blockchain.headers.subscribe', [], timeout || 15000);
-      const blockHeight = headerResult?.height || headerResult?.block_height;
-
-      const latency = Date.now() - startTime;
-
-      return {
-        success: true,
-        serverVersion: Array.isArray(version) ? version.join(' ') : String(version),
-        blockHeight,
-        latency,
-        message: `Connected to Electrum server (${Array.isArray(version) ? version[0] : version})`,
-        connectionPooled: pooled,
-        transport: conn?.transport || (options.useTor ? 'tor' : 'direct'),
-        certificate: conn?.certificate || undefined,
-      };
-    } catch (error) {
-      logMainError('[KYUTXO] electrum-test failed', error);
-      const latency = Date.now() - startTime;
-      // If test fails, destroy the pooled connection so next attempt starts fresh
-      const key = poolKey(cleanedHost, port, useSSL, options);
-      const conn = electrumPool.connections.get(key);
-      if (conn) {
-        try { conn.socket.destroy(); } catch (e) {}
-        electrumPool.connections.delete(key);
+      const startTime = Date.now();
+      const parsed = validateElectrumIpc(electrumIpcSchemas.test, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error, latency: Date.now() - startTime };
       }
-      return {
-        success: false,
-        error: toIpcError(error, 'Electrum connection test failed'),
-        errorCode: error.code || undefined,
-        certificate: error.certificate || undefined,
-        latency,
-      };
+      const { host, port, useSSL, timeout, useTor, torProxyUrl } = parsed.data;
+      const cleanedHost = cleanElectrumHost(host);
+      const options = { useTor: !!useTor, torProxyUrl };
+
+      try {
+        // Get or create pooled connection
+        const { key, pooled } = await getPooledConnection(cleanedHost, port, useSSL, timeout || 15000, options);
+
+        // Send server.version only on fresh connections, ping on reused ones
+        const version = await ensureVersionHandshake(key, timeout || 15000);
+
+        // Cache version for future reuse
+        const conn = electrumPool.connections.get(key);
+        if (conn) conn.cachedVersion = version;
+
+        // Get block height to verify full functionality
+        const headerResult = await pooledRequest(key, 'blockchain.headers.subscribe', [], timeout || 15000);
+        const blockHeight = headerResult?.height || headerResult?.block_height;
+
+        const latency = Date.now() - startTime;
+
+        return {
+          success: true,
+          serverVersion: Array.isArray(version) ? version.join(' ') : String(version),
+          blockHeight,
+          latency,
+          message: `Connected to Electrum server (${Array.isArray(version) ? version[0] : version})`,
+          connectionPooled: pooled,
+          transport: conn?.transport || (options.useTor ? 'tor' : 'direct'),
+          certificate: conn?.certificate || undefined,
+        };
+      } catch (error) {
+        logMainError('[KYUTXO] electrum-test failed', error);
+        const latency = Date.now() - startTime;
+        // If test fails, destroy the pooled connection so next attempt starts fresh
+        const key = poolKey(cleanedHost, port, useSSL, options);
+        const conn = electrumPool.connections.get(key);
+        if (conn) {
+          try { conn.socket.destroy(); } catch (e) {}
+          electrumPool.connections.delete(key);
+        }
+        return {
+          success: false,
+          error: toIpcError(error, 'Electrum connection test failed'),
+          errorCode: error.code || undefined,
+          certificate: error.certificate || undefined,
+          latency,
+        };
+      }
+    } catch (error) {
+      // Outer envelope: statements before the main try (validation, host
+      // cleaning) must never reject the invoke with raw error text.
+      logMainError('[KYUTXO] electrum-test failed', error);
+      return { success: false, error: toIpcError(error, 'Electrum connection test failed') };
     }
   });
 
@@ -976,70 +983,75 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   const BATCH_PIPELINE_WINDOW = 8;
 
   ipcMain.handle('electrum-batch-get-history', async (event, rawArgs) => {
-    const startTime = Date.now();
-
     try {
-      const parsed = validateElectrumIpc(electrumIpcSchemas.batchGetHistory, rawArgs);
-      if (!parsed.ok) {
-        return { success: false, error: parsed.error, results: [], latency: Date.now() - startTime };
-      }
-      const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl } = parsed.data;
-      const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
-      await ensureVersionHandshake(key, timeout || 15000);
+      const startTime = Date.now();
 
-      console.log(`[Electrum Pool] Batch fetching ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
-
-      // Indexed by input position so result order matches the request order
-      // even though responses arrive out of order. Per-address failures stay
-      // isolated: one bad address only fails its own entry.
-      const results = new Array(addresses.length);
-      let next = 0;
-      const pipelineWorker = async () => {
-        while (true) {
-          const i = next++;
-          if (i >= addresses.length) return;
-          const address = addresses[i];
-          try {
-            const scripthash = addressToScripthash(address);
-            const history = await pooledRequest(key, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000);
-            results[i] = {
-              address,
-              success: true,
-              history: history || [],
-            };
-          } catch (err) {
-            results[i] = {
-              address,
-              success: false,
-              error: toIpcError(err, 'Address lookup failed'),
-              history: [],
-            };
-          }
+      try {
+        const parsed = validateElectrumIpc(electrumIpcSchemas.batchGetHistory, rawArgs);
+        if (!parsed.ok) {
+          return { success: false, error: parsed.error, results: [], latency: Date.now() - startTime };
         }
-      };
-      const workers = [];
-      for (let w = 0; w < Math.min(BATCH_PIPELINE_WINDOW, addresses.length); w++) {
-        workers.push(pipelineWorker());
+        const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl } = parsed.data;
+        const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
+        await ensureVersionHandshake(key, timeout || 15000);
+
+        console.log(`[Electrum Pool] Batch fetching ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
+
+        // Indexed by input position so result order matches the request order
+        // even though responses arrive out of order. Per-address failures stay
+        // isolated: one bad address only fails its own entry.
+        const results = new Array(addresses.length);
+        let next = 0;
+        const pipelineWorker = async () => {
+          while (true) {
+            const i = next++;
+            if (i >= addresses.length) return;
+            const address = addresses[i];
+            try {
+              const scripthash = addressToScripthash(address);
+              const history = await pooledRequest(key, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000);
+              results[i] = {
+                address,
+                success: true,
+                history: history || [],
+              };
+            } catch (err) {
+              results[i] = {
+                address,
+                success: false,
+                error: toIpcError(err, 'Address lookup failed'),
+                history: [],
+              };
+            }
+          }
+        };
+        const workers = [];
+        for (let w = 0; w < Math.min(BATCH_PIPELINE_WINDOW, addresses.length); w++) {
+          workers.push(pipelineWorker());
+        }
+        await Promise.all(workers);
+      
+        const latency = Date.now() - startTime;
+      
+        return {
+          success: true,
+          results,
+          latency,
+          addressCount: addresses.length,
+          connectionReused: pooled,
+        };
+      } catch (error) {
+        logMainError('[KYUTXO] electrum-batch-get-history failed', error);
+        return {
+          success: false,
+          error: toIpcError(error, 'Failed to batch-fetch address history from the Electrum server'),
+          results: [],
+          latency: Date.now() - startTime,
+        };
       }
-      await Promise.all(workers);
-      
-      const latency = Date.now() - startTime;
-      
-      return {
-        success: true,
-        results,
-        latency,
-        addressCount: addresses.length,
-        connectionReused: pooled,
-      };
     } catch (error) {
       logMainError('[KYUTXO] electrum-batch-get-history failed', error);
-      return {
-        success: false,
-        error: toIpcError(error, 'Failed to batch-fetch address history from the Electrum server'),
-        results: [],
-        latency: Date.now() - startTime,
-      };
+      return { success: false, error: toIpcError(error, 'Electrum batch history request failed'), results: [] };
     }
   });
 
@@ -1049,67 +1061,72 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
   // indexed by input position, and per-address failures stay isolated so one
   // bad address only fails its own entry.
   ipcMain.handle('electrum-batch-get-utxos', async (event, rawArgs) => {
-    const startTime = Date.now();
-
     try {
-      const parsed = validateElectrumIpc(electrumIpcSchemas.batchGetUtxos, rawArgs);
-      if (!parsed.ok) {
-        return { success: false, error: parsed.error, results: [], latency: Date.now() - startTime };
-      }
-      const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl } = parsed.data;
-      const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
-      await ensureVersionHandshake(key, timeout || 15000);
+      const startTime = Date.now();
 
-      console.log(`[Electrum Pool] Batch fetching UTXOs for ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
-
-      const results = new Array(addresses.length);
-      let next = 0;
-      const pipelineWorker = async () => {
-        while (true) {
-          const i = next++;
-          if (i >= addresses.length) return;
-          const address = addresses[i];
-          try {
-            const scripthash = addressToScripthash(address);
-            const utxos = await pooledRequest(key, 'blockchain.scripthash.listunspent', [scripthash], timeout || 30000);
-            results[i] = {
-              address,
-              success: true,
-              utxos: utxos || [],
-            };
-          } catch (err) {
-            results[i] = {
-              address,
-              success: false,
-              error: toIpcError(err, 'Address lookup failed'),
-              utxos: [],
-            };
-          }
+      try {
+        const parsed = validateElectrumIpc(electrumIpcSchemas.batchGetUtxos, rawArgs);
+        if (!parsed.ok) {
+          return { success: false, error: parsed.error, results: [], latency: Date.now() - startTime };
         }
-      };
-      const workers = [];
-      for (let w = 0; w < Math.min(BATCH_PIPELINE_WINDOW, addresses.length); w++) {
-        workers.push(pipelineWorker());
+        const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl } = parsed.data;
+        const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
+        await ensureVersionHandshake(key, timeout || 15000);
+
+        console.log(`[Electrum Pool] Batch fetching UTXOs for ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
+
+        const results = new Array(addresses.length);
+        let next = 0;
+        const pipelineWorker = async () => {
+          while (true) {
+            const i = next++;
+            if (i >= addresses.length) return;
+            const address = addresses[i];
+            try {
+              const scripthash = addressToScripthash(address);
+              const utxos = await pooledRequest(key, 'blockchain.scripthash.listunspent', [scripthash], timeout || 30000);
+              results[i] = {
+                address,
+                success: true,
+                utxos: utxos || [],
+              };
+            } catch (err) {
+              results[i] = {
+                address,
+                success: false,
+                error: toIpcError(err, 'Address lookup failed'),
+                utxos: [],
+              };
+            }
+          }
+        };
+        const workers = [];
+        for (let w = 0; w < Math.min(BATCH_PIPELINE_WINDOW, addresses.length); w++) {
+          workers.push(pipelineWorker());
+        }
+        await Promise.all(workers);
+
+        const latency = Date.now() - startTime;
+
+        return {
+          success: true,
+          results,
+          latency,
+          addressCount: addresses.length,
+          connectionReused: pooled,
+        };
+      } catch (error) {
+        logMainError('[KYUTXO] electrum-batch-get-utxos failed', error);
+        return {
+          success: false,
+          error: toIpcError(error, 'Failed to batch-fetch address UTXOs from the Electrum server'),
+          results: [],
+          latency: Date.now() - startTime,
+        };
       }
-      await Promise.all(workers);
-
-      const latency = Date.now() - startTime;
-
-      return {
-        success: true,
-        results,
-        latency,
-        addressCount: addresses.length,
-        connectionReused: pooled,
-      };
     } catch (error) {
       logMainError('[KYUTXO] electrum-batch-get-utxos failed', error);
-      return {
-        success: false,
-        error: toIpcError(error, 'Failed to batch-fetch address UTXOs from the Electrum server'),
-        results: [],
-        latency: Date.now() - startTime,
-      };
+      return { success: false, error: toIpcError(error, 'Electrum batch UTXO request failed'), results: [] };
     }
   });
 }

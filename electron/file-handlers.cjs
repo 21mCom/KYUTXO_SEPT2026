@@ -108,7 +108,12 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
   // Note: absolute data/attachments paths are deliberately NOT exposed over
   // IPC; the renderer only ever needs presence/mode flags.
   ipcMain.handle('is-portable-mode', () => {
-    return portableMode;
+    try {
+      return portableMode;
+    } catch (error) {
+      logMainError('[KYUTXO] is-portable-mode failed', error);
+      return false;
+    }
   });
 
   ipcMain.handle('save-attachment', async (event, { identifier, filename, data }) => {

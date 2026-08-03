@@ -189,128 +189,148 @@ registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow: () => mainWi
 // allowlist and SOCKS proxy selection for 'tor-request' derive from this
 // main-process state, never from per-request input.
 ipcMain.handle('tor-update-settings', async (event, rawSettings) => {
-  const parsed = torProxySettingsSchema.safeParse(rawSettings);
-  if (!parsed.success) {
-    return { success: false, error: `Invalid tor settings: ${parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
+  try {
+    const parsed = torProxySettingsSchema.safeParse(rawSettings);
+    if (!parsed.success) {
+      return { success: false, error: `Invalid tor settings: ${parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
+    }
+    return updateTorProxySettings(parsed.data);
+  } catch (error) {
+    logMainError('[KYUTXO] tor-update-settings failed', error);
+    return { success: false, error: sanitizeIpcError(error, 'Failed to update Tor settings') };
   }
-  return updateTorProxySettings(parsed.data);
 });
 
 ipcMain.handle('tor-test', async () => {
-  const proxiesToTest = [
-    { name: "Tor Browser", url: TOR_BROWSER_PROXY },
-    { name: "Tor Service", url: DEFAULT_TOR_PROXY },
-  ];
+  try {
+    const proxiesToTest = [
+      { name: "Tor Browser", url: TOR_BROWSER_PROXY },
+      { name: "Tor Service", url: DEFAULT_TOR_PROXY },
+    ];
 
-  // Test the configured custom proxy first (from main-process settings).
-  const configuredProxy = getTorProxySettings().torProxyUrl;
-  if (configuredProxy && configuredProxy !== TOR_BROWSER_PROXY && configuredProxy !== DEFAULT_TOR_PROXY) {
-    proxiesToTest.unshift({ name: "Custom", url: configuredProxy });
-  }
-
-  for (const proxy of proxiesToTest) {
-    try {
-      const result = await makeProxiedRequest({
-        url: "https://check.torproject.org/api/ip",
-        torProxyUrl: proxy.url,
-        timeout: 15000,
-      });
-
-      if (result.success && result.data) {
-        const torCheck = result.data;
-        if (torCheck.IsTor) {
-          return {
-            success: true,
-            // Proxy URLs never cross the IPC bridge; the renderer maps the
-            // proxy name back to its known built-in URL (and already holds
-            // any custom URL in its own settings).
-            proxyName: proxy.name,
-            isTor: true,
-            torIp: torCheck.IP,
-            latency: result.latency,
-            message: `Connected via ${proxy.name}. Exit IP: ${torCheck.IP}`,
-          };
-        }
-      }
-    } catch {
-      continue;
+    // Test the configured custom proxy first (from main-process settings).
+    const configuredProxy = getTorProxySettings().torProxyUrl;
+    if (configuredProxy && configuredProxy !== TOR_BROWSER_PROXY && configuredProxy !== DEFAULT_TOR_PROXY) {
+      proxiesToTest.unshift({ name: "Custom", url: configuredProxy });
     }
-  }
 
-  return {
-    success: false,
-    error: "Could not connect to Tor. Make sure Tor Browser or Tor service is running.",
-    // Report only proxy names — a renderer-supplied custom proxy URL must not
-    // be echoed back in the failure payload.
-    testedProxies: proxiesToTest.map(p => p.name),
-  };
+    for (const proxy of proxiesToTest) {
+      try {
+        const result = await makeProxiedRequest({
+          url: "https://check.torproject.org/api/ip",
+          torProxyUrl: proxy.url,
+          timeout: 15000,
+        });
+
+        if (result.success && result.data) {
+          const torCheck = result.data;
+          if (torCheck.IsTor) {
+            return {
+              success: true,
+              // Proxy URLs never cross the IPC bridge; the renderer maps the
+              // proxy name back to its known built-in URL (and already holds
+              // any custom URL in its own settings).
+              proxyName: proxy.name,
+              isTor: true,
+              torIp: torCheck.IP,
+              latency: result.latency,
+              message: `Connected via ${proxy.name}. Exit IP: ${torCheck.IP}`,
+            };
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return {
+      success: false,
+      error: "Could not connect to Tor. Make sure Tor Browser or Tor service is running.",
+      // Report only proxy names — a renderer-supplied custom proxy URL must not
+      // be echoed back in the failure payload.
+      testedProxies: proxiesToTest.map(p => p.name),
+    };
+  } catch (error) {
+    logMainError('[KYUTXO] tor-test failed', error);
+    return { success: false, error: sanitizeIpcError(error, 'Tor connection test failed') };
+  }
 });
 
 ipcMain.handle('tor-request', async (event, rawArgs) => {
-  const parsedArgs = torRequestSchema.safeParse(rawArgs);
-  if (!parsedArgs.success) {
-    return { success: false, error: `Invalid tor-request input: ${parsedArgs.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
+  try {
+    const parsedArgs = torRequestSchema.safeParse(rawArgs);
+    if (!parsedArgs.success) {
+      return { success: false, error: `Invalid tor-request input: ${parsedArgs.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
+    }
+    // Allowlisting, proxy selection, and resource bounds are enforced inside
+    // handleTorRequest from main-process settings (see tor-proxy.cjs).
+    return await handleTorRequest(parsedArgs.data);
+  } catch (error) {
+    logMainError('[KYUTXO] tor-request failed', error);
+    return { success: false, error: sanitizeIpcError(error, 'Tor request failed') };
   }
-  // Allowlisting, proxy selection, and resource bounds are enforced inside
-  // handleTorRequest from main-process settings (see tor-proxy.cjs).
-  return await handleTorRequest(parsedArgs.data);
 });
 
 ipcMain.handle('tor-status', async () => {
-  const proxiesToTest = [
-    { name: "Tor Browser", url: TOR_BROWSER_PROXY, port: 9150 },
-    { name: "Tor Service", url: DEFAULT_TOR_PROXY, port: 9050 },
-  ];
+  try {
+    const proxiesToTest = [
+      { name: "Tor Browser", url: TOR_BROWSER_PROXY, port: 9150 },
+      { name: "Tor Service", url: DEFAULT_TOR_PROXY, port: 9050 },
+    ];
 
-  const results = [];
+    const results = [];
 
-  for (const proxy of proxiesToTest) {
-    try {
-      const result = await makeProxiedRequest({
-        url: "https://check.torproject.org/api/ip",
-        torProxyUrl: proxy.url,
-        timeout: 10000,
-      });
-
-      if (result.success) {
-        const torCheck = result.data;
-        results.push({
-          name: proxy.name,
-          port: proxy.port,
-          available: true,
-          isTor: torCheck.IsTor || false,
-          exitIp: torCheck.IP,
-          latency: result.latency,
+    for (const proxy of proxiesToTest) {
+      try {
+        const result = await makeProxiedRequest({
+          url: "https://check.torproject.org/api/ip",
+          torProxyUrl: proxy.url,
+          timeout: 10000,
         });
-      } else {
+
+        if (result.success) {
+          const torCheck = result.data;
+          results.push({
+            name: proxy.name,
+            port: proxy.port,
+            available: true,
+            isTor: torCheck.IsTor || false,
+            exitIp: torCheck.IP,
+            latency: result.latency,
+          });
+        } else {
+          results.push({
+            name: proxy.name,
+            port: proxy.port,
+            available: false,
+            error: result.error,
+          });
+        }
+      } catch (error) {
+        // Raw exception text can embed proxy URLs/paths — keep it off the bridge.
+        logMainError(`[KYUTXO] Tor status check (${proxy.name}) failed`, error);
         results.push({
           name: proxy.name,
           port: proxy.port,
           available: false,
-          error: result.error,
+          error: sanitizeIpcError(error, "Status check failed"),
         });
       }
-    } catch (error) {
-      // Raw exception text can embed proxy URLs/paths — keep it off the bridge.
-      logMainError(`[KYUTXO] Tor status check (${proxy.name}) failed`, error);
-      results.push({
-        name: proxy.name,
-        port: proxy.port,
-        available: false,
-        error: sanitizeIpcError(error, "Status check failed"),
-      });
     }
+
+    const anyAvailable = results.some(r => r.available && r.isTor);
+
+    return {
+      torAvailable: anyAvailable,
+      proxies: results,
+      recommendation: anyAvailable 
+        ? `Tor is available via ${results.find(r => r.available && r.isTor)?.name}`
+        : "No Tor proxy detected. Please start Tor Browser or install the Tor service.",
+    };
+  } catch (error) {
+    logMainError('[KYUTXO] tor-status failed', error);
+    return { torAvailable: false, proxies: [], recommendation: sanitizeIpcError(error, 'Tor status check failed') };
   }
-
-  const anyAvailable = results.some(r => r.available && r.isTor);
-
-  return {
-    torAvailable: anyAvailable,
-    proxies: results,
-    recommendation: anyAvailable 
-      ? `Tor is available via ${results.find(r => r.available && r.isTor)?.name}`
-      : "No Tor proxy detected. Please start Tor Browser or install the Tor service.",
-  };
 });
 
 // ============================================================================
