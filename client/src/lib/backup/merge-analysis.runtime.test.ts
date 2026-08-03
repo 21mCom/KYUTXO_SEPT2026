@@ -81,7 +81,6 @@ import {
   clearEvidence,
   clearEvidenceAttachments,
   addEvidence,
-  addEvidenceAttachment,
   getAllEvidence,
 } from "@/lib/data/evidence-crud";
 import { addPriceData, getAllPriceData, clearPriceData } from "@/lib/data/price-data-crud";
@@ -103,21 +102,6 @@ const attachmentIO: AttachmentFileIO = {
 const attachmentWriter: AttachmentFileWriter = {
   async write() {},
 };
-
-// Base fields for saved-PSBT fixtures; individual tests override name/base64.
-const psbtBase = {
-  destinationAddress: "bc1qshared0000000000000000000000000000000000",
-  feeRateSatsPerVb: 1,
-  feeSats: 100,
-  estimatedVbytes: 100,
-  totalInputSats: 10_000,
-  sendAmountSats: 9_900,
-  changeSats: 0,
-  inputs: [],
-  outputs: [],
-};
-
-const PASSWORD = "correct horse battery staple";
 
 const TXID_SHARED = "a".repeat(64);
 const TXID_BACKUP = "d".repeat(64);
@@ -655,11 +639,11 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
 
   it("predicts merge insert counts per table (analyze → merge parity)", async () => {
     await seedExportedVault();
-    const blob = await exportToBlob(true, PASSWORD);
+    const blob = await exportToBlob();
     await clearEverything();
     await seedLiveVault();
 
-    const analysis = await analyzeV3Backup({ source: blobChunks(blob), password: PASSWORD });
+    const analysis = await analyzeV3Backup({ source: blobChunks(blob) });
 
     // Records: shared (present), backup-only (added), discovery-only (skipped),
     // discovery-tier-with-metadata (added — user metadata always wins).
@@ -711,7 +695,6 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
       source: blobChunks(blob),
       attachmentWriter,
       restoreMode: "merge",
-      password: PASSWORD,
     });
     // Merge inserts discovery-only records too — added + skipped predicts it.
     expect(merged.counts.records).toBe(
@@ -756,24 +739,35 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     );
     const backupRecords = await getAllRecords();
     const backupOnlyId = backupRecords.find((r) => r.inputString === ADDR_BACKUP)!.id!;
-
-    // recordOrigins in the backup: one on the shared record (duplicated in the
-    // live vault → alreadyPresent) and two more that are backup-only → added.
+    // Duplicated in the live vault (same natural key) → alreadyPresent.
     await addRecordOrigin(
       { recordId: sharedId, originType: "manual", source: "manual entry", createdAt: 1_700_000_001_000 },
       { skipNotification: true },
     );
+    // New origin on the shared (de-duped) record → added.
     await addRecordOrigin(
-      { recordId: sharedId, originType: "import", source: "wallet import", createdAt: 1_700_000_002_000 },
+      { recordId: sharedId, originType: "bulk-import", source: "import.csv", createdAt: 1_700_000_002_000 },
       { skipNotification: true },
     );
+    // Origin on a record the merge would INSERT (synthetic id path) → added.
     await addRecordOrigin(
-      { recordId: backupOnlyId, originType: "manual", source: "bulk import", createdAt: 1_700_000_003_000 },
+      { recordId: backupOnlyId, originType: "manual", source: "manual entry", createdAt: 1_700_000_003_000 },
       { skipNotification: true },
     );
 
-    // Inline data rows: a "shared" one (duplicated in the live vault →
-    // alreadyPresent) and a backup-only one (→ added) per table.
+    // Backup carries TWO rows in each of the newly-previewed tables: one the
+    // live vault will duplicate (→ alreadyPresent) and one backup-only (→ added).
+    const psbtBase = {
+      destinationAddress: ADDR_SHARED,
+      feeRateSatsPerVb: 1,
+      feeSats: 100,
+      estimatedVbytes: 100,
+      totalInputSats: 10_000,
+      sendAmountSats: 9_900,
+      changeSats: 0,
+      inputs: [],
+      outputs: [],
+    };
     await addEvidence(
       { title: "Shared Doc", documentType: "receipt", originalDate: "2024-01-01", tags: [], partiesInvolved: [] } as any,
       { skipNotification: true },
@@ -782,16 +776,22 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
       { title: "Backup Doc", documentType: "invoice", originalDate: "2024-02-02", tags: [], partiesInvolved: [] } as any,
       { skipNotification: true },
     );
-    await addPriceData({ date: "2024-01-01", currency: "USD", asset: "BTC", price: 42000 } as any, { skipNotification: true });
-    await addPriceData({ date: "2024-02-02", currency: "USD", asset: "BTC", price: 43000 } as any, { skipNotification: true });
+    await addPriceData(
+      { date: "2024-01-01", currency: "USD", asset: "BTC", close: 42000, source: "test", importedAt: 1_700_000_000_000 } as any,
+      { skipNotification: true },
+    );
+    await addPriceData(
+      { date: "2024-02-02", currency: "USD", asset: "BTC", close: 43000, source: "test", importedAt: 1_700_000_000_000 } as any,
+      { skipNotification: true },
+    );
     await markOutpointsAsDust([
       { txid: TXID_SHARED, vout: 0, address: ADDR_SHARED, amountSats: 500 },
-      { txid: TXID_BACKUP, vout: 0, address: ADDR_BACKUP, amountSats: 600 },
+      { txid: TXID_SHARED, vout: 1, address: ADDR_SHARED, amountSats: 600 },
     ]);
     await savePsbt({ ...psbtBase, name: "Shared PSBT", psbtBase64: "cHNidP-shared" } as any);
     await savePsbt({ ...psbtBase, name: "Backup PSBT", psbtBase64: "cHNidP-backup" } as any);
 
-    const blob = await exportToBlob(true, PASSWORD);
+    const blob = await exportToBlob();
     await clearEverything();
     await seedLiveVault();
     await createTag("shared-tag");
@@ -807,13 +807,16 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
       { title: "Shared Doc", documentType: "receipt", originalDate: "2024-01-01", tags: [], partiesInvolved: [] } as any,
       { skipNotification: true },
     );
-    await addPriceData({ date: "2024-01-01", currency: "USD", asset: "BTC", price: 42000 } as any, { skipNotification: true });
+    await addPriceData(
+      { date: "2024-01-01", currency: "USD", asset: "BTC", close: 42000, source: "test", importedAt: 1_700_000_000_000 } as any,
+      { skipNotification: true },
+    );
     await markOutpointsAsDust([
       { txid: TXID_SHARED, vout: 0, address: ADDR_SHARED, amountSats: 500 },
     ]);
     await savePsbt({ ...psbtBase, name: "Shared PSBT", psbtBase64: "cHNidP-shared" } as any);
 
-    const analysis = await analyzeV3Backup({ source: blobChunks(blob), password: PASSWORD });
+    const analysis = await analyzeV3Backup({ source: blobChunks(blob) });
     expect(analysis.inline.tags).toEqual({ total: 2, added: 1, alreadyPresent: 1 });
     expect(analysis.inline.owners).toEqual({ total: 1, added: 1, alreadyPresent: 0 });
     expect(analysis.inline.customFields).toEqual({ total: 1, added: 1, alreadyPresent: 0 });
@@ -843,46 +846,50 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
     const priceBefore = (await getAllPriceData()).length;
     const dustBefore = (await getAllDustFlags()).length;
     const psbtsBefore = (await getAllSavedPsbts()).length;
-
     await restoreV3Backup({
       source: blobChunks(blob),
       attachmentWriter,
       restoreMode: "merge",
-      password: PASSWORD,
     });
+    expect((await getTags()).length - tagsBefore).toBe(analysis.inline.tags.added);
+    expect((await getOwners()).length - ownersBefore).toBe(analysis.inline.owners.added);
+    expect((await getAllCustomFields()).length - fieldsBefore).toBe(
+      analysis.inline.customFields.added,
+    );
+    expect((await getAllDerivationTemplates()).length - templatesBefore).toBe(
+      analysis.inline.derivationTemplates.added,
+    );
+    expect((await getAllRecordOrigins()).length - originsBefore).toBe(
+      analysis.inline.recordOrigins.added,
+    );
+    expect((await getAllEvidence()).length - evidenceBefore).toBe(analysis.inline.evidence.added);
+    expect((await getAllPriceData()).length - priceBefore).toBe(analysis.inline.priceData.added);
+    expect((await getAllDustFlags()).length - dustBefore).toBe(analysis.inline.dustFlags.added);
+    expect((await getAllSavedPsbts()).length - psbtsBefore).toBe(
+      analysis.inline.savedPsbts.added,
+    );
+  });
 
-    expect((await getTags()).length).toBe(tagsBefore + analysis.inline.tags.added);
-    expect((await getOwners()).length).toBe(ownersBefore + analysis.inline.owners.added);
-    expect((await getAllCustomFields()).length).toBe(
-      fieldsBefore + analysis.inline.customFields.added,
-    );
-    expect((await getAllDerivationTemplates()).length).toBe(
-      templatesBefore + analysis.inline.derivationTemplates.added,
-    );
-    expect((await getAllRecordOrigins()).length).toBe(
-      originsBefore + analysis.inline.recordOrigins.added,
-    );
-    expect((await getAllEvidence()).length).toBe(
-      evidenceBefore + analysis.inline.evidence.added,
-    );
-    expect((await getAllPriceData()).length).toBe(
-      priceBefore + analysis.inline.priceData.added,
-    );
-    expect((await getAllDustFlags()).length).toBe(
-      dustBefore + analysis.inline.dustFlags.added,
-    );
-    expect((await getAllSavedPsbts()).length).toBe(
-      psbtsBefore + analysis.inline.savedPsbts.added,
-    );
+  it("is read-only: no vault row is created, modified, or deleted", async () => {
+    await seedExportedVault();
+    const blob = await exportToBlob();
+    await clearEverything();
+    await seedLiveVault();
+    await seedLiveInlineMetadata();
+
+    const before = await snapshotVaultTables();
+    await analyzeV3Backup({ source: blobChunks(blob) });
+    const after = await snapshotVaultTables();
+    expect(after).toBe(before);
   });
 
   it("excludes discovery-only records from the CSV but keeps metadata-bearing ones, escaped", async () => {
     await seedExportedVault();
-    const blob = await exportToBlob(true, PASSWORD);
+    const blob = await exportToBlob();
     await clearEverything();
     await seedLiveVault();
 
-    const analysis = await analyzeV3Backup({ source: blobChunks(blob), password: PASSWORD });
+    const analysis = await analyzeV3Backup({ source: blobChunks(blob) });
     expect(analysis.report.rowCount).toBe(2);
 
     const csv = analysis.report.parts.join("");
@@ -907,18 +914,17 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
 
   it("cancels mid-analysis without touching the vault", async () => {
     await seedExportedVault();
-    const blob = await exportToBlob(true, PASSWORD);
+    const blob = await exportToBlob();
     await clearEverything();
     await seedLiveVault();
+    await seedLiveInlineMetadata();
 
     const before = await snapshotVaultTables();
     const controller = new AbortController();
-
     let sawProgress = false;
     await expect(
       analyzeV3Backup({
         source: blobChunks(blob),
-        password: PASSWORD,
         signal: controller.signal,
         onProgress: () => {
           sawProgress = true;
@@ -931,6 +937,7 @@ describe("analyzeV3Backup (read-only merge analysis)", () => {
   });
 
   it("rejects a wrong password non-destructively, then accepts the right one", async () => {
+    const PASSWORD = "correct horse battery staple";
     await seedExportedVault();
     const blob = await exportToBlob(true, PASSWORD);
     await clearEverything();

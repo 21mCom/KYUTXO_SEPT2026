@@ -35,6 +35,10 @@ args = "Start application"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "merge-preview-rows-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "wallet-overview-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1630,6 +1634,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-private-key-file-reject-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "merge-preview-rows-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-merge-preview-rows-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
