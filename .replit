@@ -465,6 +465,10 @@ args = "node-settings-cert-revoke-node-check"
 task = "workflow.run"
 args = "failed-unlock-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ipc-sanitization-guard-tests"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1675,6 +1679,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/components/LoginScreen.failedUnlock.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "ipc-sanitization-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-ipc-error-sanitization.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

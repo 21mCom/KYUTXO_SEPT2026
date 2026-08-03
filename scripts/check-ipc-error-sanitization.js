@@ -27,7 +27,12 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
-const ELECTRON_DIR = path.resolve(ROOT, 'electron');
+// Test hook (see scripts/check-ipc-error-sanitization.test.mjs): point the
+// scanner at a fixture directory instead of electron/. The fixture dir must
+// contain its own security-utils.cjs stub so the self-checks still exercise.
+const ELECTRON_DIR = process.env.CHECK_IPC_SANITIZATION_DIR
+  ? path.resolve(process.env.CHECK_IPC_SANITIZATION_DIR)
+  : path.resolve(ROOT, 'electron');
 
 // Common catch-binding identifiers.
 const ERR_IDENT = '(?:error|err|e|e2|e3|ex|cause)';
