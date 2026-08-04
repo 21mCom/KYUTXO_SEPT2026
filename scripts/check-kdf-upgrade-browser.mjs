@@ -7,7 +7,10 @@
 //     A. Seeds a vault row exactly the way a PRE-STRENGTHENING build wrote it
 //        (hash derived at LEGACY 100k, NO kdfIterations/kdf field) without
 //        booting the app, then logs in through the real login form.
-//     B. Asserts the transparent upgrade ran: row now carries the current
+//     B. Asserts the one-time "Vault protection strengthened" toast is
+//        actually visible on screen (Toaster mounted where login fires the
+//        module-level toast()), that no repeat notice shows on the second
+//        unlock, and that the transparent upgrade ran: row now carries the current
 //        Argon2id kdf record, the SALT IS UNCHANGED (legacy at-rest
 //        payloads key off it) and the passwordHash was re-derived.
 //     C. Reloads and logs in a SECOND time — the upgraded row must still
@@ -231,6 +234,20 @@ async function main() {
     await login(page);
     step('legacy vault unlocked through the real login form', true);
 
+    // The one-time "Vault protection strengthened" notice must actually render
+    // on screen (Toaster mounted in the tree where login fires the module-level
+    // toast()). Radix duplicates toast text into an aria-live region, so use
+    // .first(). The toast stays up 12s — assert right after login resolves.
+    const strengthenedToast = page.getByText('Vault protection strengthened').first();
+    const toastVisible = await strengthenedToast
+      .waitFor({ state: 'visible', timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    step(
+      '"Vault protection strengthened" notice is visible on screen after the upgrading unlock',
+      toastVisible,
+    );
+
     // The upgrade is awaited inside login(), but poll briefly to be safe.
     const upgraded = await page.evaluate(async ({ before }) => {
       const vault = await import('/src/lib/vault.ts');
@@ -261,6 +278,19 @@ async function main() {
     await gotoWithRetry(page, BASE_URL);
     await login(page);
     step('upgraded vault still unlocks on a second login (current parameters)', true);
+
+    // The notice is one-time: an already-upgraded vault must show NO repeat
+    // toast. Give any stray toast a moment to render before asserting absence.
+    await page.waitForTimeout(3_000);
+    const repeatToastVisible = await page
+      .getByText('Vault protection strengthened')
+      .first()
+      .isVisible()
+      .catch(() => false);
+    step(
+      'no repeat "Vault protection strengthened" notice on a second unlock',
+      !repeatToastVisible,
+    );
 
     // ── Phase D: legacy (no-kdfIterations) encrypted v3 backup restores ──────
     const legacyRestore = await page.evaluate(async ({ password }) => {
