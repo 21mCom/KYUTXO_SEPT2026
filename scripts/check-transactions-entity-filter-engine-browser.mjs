@@ -33,7 +33,12 @@
 //      capturing the reported total AND the ordered first-page card testids
 //   3. arm the bridge (localStorage flag + the app's ENGINE_SCHEMA_VERSION),
 //      reload, assert evaluateEngineFreshness('transactions') === ready-fresh
-//   4. PHASE B — engine-served: walk the SAME scenarios; every scenario must
+//   4. Task #1882: the walkthrough also covers the OP_RETURN toggle (engine
+//      opReturnOnly, browse + all-tiers) and the amount/date client-side
+//      filters composed on the engine candidate scan (Transactions.tsx
+//      scanResult path), with bridge proof that opReturnOnly reached both the
+//      browse reads and the limit=1000 scan enumeration
+//   5. PHASE B — engine-served: walk the SAME scenarios; every scenario must
 //      report the same total and render the same ordered rows as phase A, and
 //      the bridge instrumentation (window.__engineMock.countCalls/pageCalls)
 //      must show the reads were engine-served with the expected filter opts
@@ -57,9 +62,19 @@ const ADDR_ALPHA = 'bc1qtxengfilteralphaownedaddressxxxxxxxx';
 const ADDR_BETA = 'bc1qtxengfilterbetaownedaddressxxxxxxxxx';
 const ADDR_DISCOVERED = 'bc1qtxengfilterdiscoveredaddressxxxxxxxx';
 
-const N_ALPHA = 120; // curated, wallet Alpha, owner Alice, tag hot
-const N_BETA = 45; // curated, wallet Beta, owner Bob, tag cold
-const N_DISCOVERED = 60; // blockchain-discovered, walletName Alpha (inherited)
+const N_ALPHA = 120; // curated, wallet Alpha, owner Alice, tag hot — blockTime today
+const N_BETA = 45; // curated, wallet Beta, owner Bob, tag cold — blockTime 2 days ago
+const N_DISCOVERED = 60; // blockchain-discovered, walletName Alpha — blockTime 5 days ago
+
+// OP_RETURN marks (Task #1882): alpha i%3===0, beta i%5===0, discovered i%4===0.
+const OPRET_ALPHA = Math.ceil(N_ALPHA / 3); // 40
+const OPRET_BETA = Math.ceil(N_BETA / 5); // 9
+const OPRET_DISCOVERED = Math.ceil(N_DISCOVERED / 4); // 15
+// Amount filter: participant amounts are 10_000+i sats, so min 0.0001006 BTC
+// (10_060 sats) keeps alpha i>=60 only (beta tops out at 10_044 sats).
+const AMOUNT_MIN_BTC = '0.0001006';
+const N_AMOUNT_MIN = 60; // alpha i in 60..119
+const N_OPRET_AMOUNT_MIN = 20; // alpha i in {60,63,...,117}
 
 function txidFor(prefix, i) {
   return `${prefix}${String(i).padStart(4, '0')}`.padEnd(64, 'e');
@@ -334,6 +349,34 @@ async function openFilters(page) {
   await page.getByTestId('button-advanced-filters').click();
 }
 
+/**
+ * Activate a Radix TabsTrigger inside the filters popover. Coordinate clicks
+ * can hang mid-action against portal-rendered popover content (see
+ * .agents/memory/detail-panel-click-races.md), so dispatch the events Radix
+ * listens to directly (mousedown activates the tab, click for completeness).
+ */
+async function activateTab(page, testid) {
+  const el = page.getByTestId(testid);
+  await el.waitFor({ state: 'attached' });
+  await el.dispatchEvent('mousedown');
+  await el.dispatchEvent('click');
+}
+
+/**
+ * Set a controlled React input's value without Playwright's actionability
+ * polling (which wedges against this popover — same bug class as the tab
+ * clicks above). Uses the native value setter so React's onChange fires.
+ */
+async function setInputValue(page, testid, value) {
+  const el = page.getByTestId(testid);
+  await el.waitFor({ state: 'attached' });
+  await el.evaluate((node, v) => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(node, v);
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+  }, value);
+}
+
 async function selectEntity(page, dimension, value) {
   await openFilters(page);
   await page.getByTestId(`select-entity-${dimension}`).click();
@@ -387,6 +430,55 @@ async function runScenarioWalkthrough(page) {
   const targetTxid = txidFor('aaaa', 7);
   await page.getByTestId('input-search').fill(targetTxid.slice(0, 16));
   await capture('tag-hot-plus-search', 1, 45_000);
+
+  // ── Task #1882: OP_RETURN toggle + amount/date client-side filters ────────
+  // These run LAST, and interact via evaluate/dispatchEvent instead of
+  // coordinate clicks: after the scan scenarios, Playwright's actionability
+  // polling wedges against this page (fills hang "waiting for editable",
+  // popover children flap attached/detached mid-click).
+  await setInputValue(page, 'input-search', '');
+  await page.getByTestId('button-clear-entity-tag').dispatchEvent('click');
+  await capture('reset-default-curated', N_ALPHA + N_BETA);
+
+  // OP_RETURN toggle on the curated default view (engine opReturnOnly+curatedOnly).
+  await page.getByTestId('button-opreturn-filter').dispatchEvent('click');
+  await capture('opreturn-curated', OPRET_ALPHA + OPRET_BETA);
+
+  // OP_RETURN across all tiers (engine opReturnOnly without curatedOnly).
+  await page.getByTestId('button-blockchain-toggle').dispatchEvent('click');
+  await capture('opreturn-all-tiers', OPRET_ALPHA + OPRET_BETA + OPRET_DISCOVERED);
+  await page.getByTestId('button-blockchain-toggle').dispatchEvent('click');
+
+  // Amount filter composed ON TOP of the OP_RETURN toggle: drives the
+  // scanResult candidate scan (engine enumerates opReturnOnly+curatedOnly
+  // candidates in SQL, amount filters client-side on the stream).
+  await page.getByTestId('button-advanced-filters').dispatchEvent('click');
+  await activateTab(page, 'tab-amount-range');
+  await setInputValue(page, 'input-amount-min', AMOUNT_MIN_BTC);
+  await page.keyboard.press('Escape');
+  await capture('opreturn-plus-amount-min', N_OPRET_AMOUNT_MIN, 45_000);
+  await page.getByTestId('button-clear-amount-filter').dispatchEvent('click');
+  await page.getByTestId('button-opreturn-filter').dispatchEvent('click'); // OP_RETURN off
+
+  // Amount filter alone on the curated view (scanResult path, no OP_RETURN).
+  await page.getByTestId('button-advanced-filters').dispatchEvent('click');
+  await activateTab(page, 'tab-amount-range');
+  await setInputValue(page, 'input-amount-min', AMOUNT_MIN_BTC);
+  await page.keyboard.press('Escape');
+  await capture('amount-min-curated', N_AMOUNT_MIN, 45_000);
+  await page.getByTestId('button-clear-amount-filter').dispatchEvent('click');
+
+  // Date filter (From = today via the calendar): only today's alpha rows match.
+  await page.getByTestId('button-advanced-filters').dispatchEvent('click');
+  await activateTab(page, 'tab-date-range');
+  await page.getByTestId('button-date-start').dispatchEvent('click');
+  const todayCell = page.locator('.rdp button.bg-accent').first();
+  await todayCell.waitFor({ state: 'attached' });
+  await todayCell.dispatchEvent('click'); // today cell
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await capture('date-from-today-curated', N_ALPHA, 45_000);
+  await page.getByTestId('button-clear-date-filter').dispatchEvent('click');
 
   // No reset needed: each phase starts from a fresh navigation.
   return out;
@@ -483,19 +575,30 @@ async function main() {
         });
 
         const pad = (p, i) => `${p}${String(i).padStart(4, '0')}`.padEnd(64, 'e');
-        const now = Math.floor(Date.now() / 1000);
+        // Deterministic, date-diverse blockTimes anchored on LOCAL midnight so
+        // the calendar-driven date filter has a stable ground truth: alpha is
+        // today (01:00 + i minutes), beta 2 days ago, discovered 5 days ago.
+        // Every blockTime is unique, so the Dexie blockTime-desc sort needs no
+        // id tie-break to agree with the engine ordering.
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const t0 = Math.floor(todayStart.getTime() / 1000);
         const txs = [];
         const parts = [];
-        const push = (prefix, n, addr, recordId, baseTime) => {
+        const push = (prefix, n, addr, recordId, baseTime, opReturnEvery) => {
           for (let i = 0; i < n; i++) {
             const txid = pad(prefix, i);
-            txs.push({ txid, blockHeight: 800000 + txs.length, blockTime: baseTime - i * 60, fee: 100, feeRate: 1, syncedAt: Date.now() });
+            txs.push({
+              txid, blockHeight: 800000 + txs.length, blockTime: baseTime + i * 60,
+              fee: 100, feeRate: 1, syncedAt: Date.now(),
+              hasOpReturn: i % opReturnEvery === 0,
+            });
             parts.push({ txid, role: 'output', address: addr, amount: 10_000 + i, vout: 0, recordId });
           }
         };
-        push('aaaa', nAlpha, addrAlpha, alphaId, now);
-        push('bbbb', nBeta, addrBeta, betaId, now - 100_000);
-        push('dddd', nDiscovered, addrDiscovered, discId, now - 200_000);
+        push('aaaa', nAlpha, addrAlpha, alphaId, t0 + 3_600, 3);
+        push('bbbb', nBeta, addrBeta, betaId, t0 - 2 * 86_400, 5);
+        push('dddd', nDiscovered, addrDiscovered, discId, t0 - 5 * 86_400, 4);
 
         const CHUNK = 200;
         for (let i = 0; i < txs.length; i += CHUNK) {
@@ -604,6 +707,14 @@ async function main() {
       sawTagHot: sawOpts(countOpts, (o) => o.tag === 'hot'),
       pageSawWalletAlpha: sawOpts(mock.pageCalls, (o) => o.wallet === 'Alpha' && o.curatedOnly === true),
       pageSawTagHot: sawOpts(mock.pageCalls, (o) => o.tag === 'hot'),
+      // Task #1882: opReturnOnly must reach the engine on the browse count/page
+      // reads AND on the scanResult candidate enumeration (limit=1000 batches);
+      // amount/date scans run the same enumeration with curatedOnly only.
+      sawOpReturnCurated: sawOpts(countOpts, (o) => o.opReturnOnly === true && o.curatedOnly === true),
+      sawOpReturnAllTiers: sawOpts(countOpts, (o) => o.opReturnOnly === true && !o.curatedOnly),
+      pageSawOpReturnBrowse: sawOpts(mock.pageCalls, (o) => o.opReturnOnly === true && o.limit !== 1000),
+      scanSawOpReturnCandidates: sawOpts(mock.pageCalls, (o) => o.opReturnOnly === true && o.curatedOnly === true && o.limit === 1000),
+      scanSawCuratedCandidates: sawOpts(mock.pageCalls, (o) => !o.opReturnOnly && o.curatedOnly === true && o.limit === 1000),
       queryErrors: mock.queryErrors,
       unsupported: mock.unsupported,
       txFingerprintReads: mock.txFingerprintReads,
@@ -617,6 +728,9 @@ async function main() {
         proof.sawCuratedDefault && proof.sawWalletAlphaCurated && proof.sawWalletAlphaAllTiers &&
         proof.sawOwnerBob && proof.sawAddressBeta && proof.sawTagHot &&
         proof.pageSawWalletAlpha && proof.pageSawTagHot &&
+        proof.sawOpReturnCurated && proof.sawOpReturnAllTiers &&
+        proof.pageSawOpReturnBrowse && proof.scanSawOpReturnCandidates &&
+        proof.scanSawCuratedCandidates &&
         proof.txFingerprintReads > 0 && proof.partFingerprintReads > 0 &&
         proof.queryErrors.length === 0,
       detail: JSON.stringify(proof),

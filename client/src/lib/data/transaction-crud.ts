@@ -1,4 +1,3 @@
-import type { IndexableType } from 'dexie';
 import { db, notifyDbChange, USER_CURATED_TIERS, type BlockchainTransaction, type TransactionParticipant } from '../database';
 
 export type CreateTransactionData = Omit<BlockchainTransaction, 'id'>;
@@ -208,7 +207,10 @@ export async function countTransactions(): Promise<number> {
 }
 
 export async function countTransactionsWithOpReturn(): Promise<number> {
-  return db.blockchainTransactions.where('hasOpReturn').equals(true as unknown as IndexableType).count();
+  // NOTE: hasOpReturn is stored as a boolean, which is not a valid IndexedDB
+  // key — where('hasOpReturn').equals(true) throws DataError at query time.
+  // Scan-and-filter like the OP_RETURN page readers instead.
+  return db.blockchainTransactions.filter(tx => tx.hasOpReturn === true).count();
 }
 
 export async function getTransactionsPageByBlockTime(
@@ -255,9 +257,10 @@ export async function getOrderedTransactionPrimaryKeysByBlockTime(): Promise<str
 }
 
 export async function getOpReturnTransactionPrimaryKeys(): Promise<string[]> {
+  // Boolean hasOpReturn is not an indexable IndexedDB key (see
+  // countTransactionsWithOpReturn) — collect keys via a scan instead.
   return (await db.blockchainTransactions
-    .where('hasOpReturn')
-    .equals(true as unknown as IndexableType)
+    .filter(tx => tx.hasOpReturn === true)
     .primaryKeys()) as unknown as string[];
 }
 
