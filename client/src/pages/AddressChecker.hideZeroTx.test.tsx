@@ -7,7 +7,9 @@
 // errored and invalid rows visible, and (c) show an accurate hidden-row count.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, within, cleanup } from "@testing-library/react";
+import "fake-indexeddb/auto";
+import { screen, waitFor, fireEvent, within, cleanup } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 // Radix Tooltips only render their content on hover; render the parts inline so
 // the page needs no TooltipProvider in the tree.
@@ -41,7 +43,10 @@ vi.mock("@/hooks/use-node-settings", () => ({
 
 const getAddressCoreStats = vi.fn();
 const createProviderFromSettings = vi.fn(() => ({ getAddressCoreStats }));
-vi.mock("@/lib/blockchain-api", () => ({
+// The shared provider harness (RecordDetailPanel -> transaction-sync) imports
+// more than createProviderFromSettings — keep the originals, override one.
+vi.mock("@/lib/blockchain-api", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   createProviderFromSettings: (...a: unknown[]) => createProviderFromSettings(...a),
 }));
 
@@ -85,12 +90,12 @@ describe("AddressChecker — hide 0-transaction rows toggle", () => {
   });
 
   it("does not show the toggle before any results exist", () => {
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     expect(screen.queryByTestId("checkbox-hide-zero-tx")).toBeNull();
   });
 
   it("hides done-zero rows only, keeps error/invalid rows, and shows the hidden count", async () => {
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     await runCheckWithAllRows();
 
     // Rows (original indexes): 0 = done/0-tx, 1 = done/active, 2 = error, 3 = invalid.
@@ -127,7 +132,7 @@ describe("AddressChecker — hide 0-transaction rows toggle", () => {
   });
 
   it("resets the toggle to off on Reset", async () => {
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     await runCheckWithAllRows();
 
     fireEvent.click(screen.getByTestId("checkbox-hide-zero-tx"));

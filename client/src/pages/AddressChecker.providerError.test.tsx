@@ -15,7 +15,9 @@
 //      disappears, the Reset button appears, and Check Addresses is re-enabled.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, within, cleanup } from "@testing-library/react";
+import "fake-indexeddb/auto";
+import { screen, waitFor, fireEvent, within, cleanup } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 // Radix Tooltips only render their content on hover, but the per-row error
 // message lives inside <TooltipContent>. Render the tooltip parts inline so the
@@ -52,7 +54,10 @@ vi.mock("@/hooks/use-node-settings", () => ({
 
 const getAddressCoreStats = vi.fn();
 const createProviderFromSettings = vi.fn(() => ({ getAddressCoreStats }));
-vi.mock("@/lib/blockchain-api", () => ({
+// The shared provider harness (RecordDetailPanel -> transaction-sync) imports
+// more than createProviderFromSettings — keep the originals, override one.
+vi.mock("@/lib/blockchain-api", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   createProviderFromSettings: (...a: unknown[]) => createProviderFromSettings(...a),
 }));
 
@@ -83,7 +88,7 @@ describe("AddressChecker — unreachable node isolation", () => {
   });
 
   it("marks only the failing address as error and finishes the rest", async () => {
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
 
     const textarea = screen.getByTestId("textarea-address-input");
     fireEvent.change(textarea, { target: { value: `${ADDR_A}\n${ADDR_B}\n${ADDR_C}` } });
@@ -126,7 +131,7 @@ describe("AddressChecker — unreachable node isolation", () => {
       return { txCount: 1, receivedSats: 5000, sentSats: 0, balanceSats: 5000 };
     });
 
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     fireEvent.change(screen.getByTestId("textarea-address-input"), {
       target: { value: `${ADDR_A}\n${ADDR_B}\n${ADDR_C}` },
     });
@@ -157,7 +162,7 @@ describe("AddressChecker — unreachable node isolation", () => {
       return { txCount: 3, receivedSats: 100000, sentSats: 40000, balanceSats: 60000 };
     });
 
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     fireEvent.change(screen.getByTestId("textarea-address-input"), {
       // Include an invalid line as row 3.
       target: { value: `${ADDR_A}\n${ADDR_B}\n${ADDR_C}\nnot-an-address` },
@@ -192,7 +197,7 @@ describe("AddressChecker — unreachable node isolation", () => {
         }),
     );
 
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     fireEvent.change(screen.getByTestId("textarea-address-input"), {
       target: { value: ADDR_A },
     });

@@ -1767,41 +1767,48 @@ export async function findRecordByInputString(inputString: string): Promise<Reco
   return await db.records.where('inputStringLower').equals(canonical.toLowerCase()).first();
 }
 
+/** One saved-address match from getSavedAddressRecordLookup. */
+export interface SavedAddressRecordMatch {
+  /** Saved record's label, or null when the record has no label. */
+  label: string | null;
+  /** Record id, so a click target can open the record without a per-row query. */
+  recordId: number;
+}
 /**
  * Batched vault-membership lookup for the Address Checker: given a list of
  * pasted addresses, return a Map from lowercased address to the saved address
- * record's label (null when the record has no label) for every address that
- * exists as a `type: 'address'` record. Matching is case-insensitive via the
- * indexed `inputStringLower` column, and the whole list resolves in ONE
- * `anyOf` query so even a 5,000-address run issues a single DB round-trip.
+ * record's label + id for every address that exists as a `type: 'address'`
+ * record. Matching is case-insensitive via the indexed `inputStringLower`
+ * column, and the whole list resolves in ONE `anyOf` query so even a
+ * 5,000-address run issues a single DB round-trip.
  *
  * Read-only best-effort: any failure degrades to an empty Map (with a
  * console warning) so a DB hiccup can never break a check run.
  */
 export async function getSavedAddressRecordLookup(
   addresses: string[]
-): Promise<Map<string, string | null>> {
+): Promise<Map<string, SavedAddressRecordMatch>> {
   const keys = [...new Set(
     addresses
       .map(a => a.trim().toLowerCase())
       .filter(a => a.length > 0)
   )];
-  const membership = new Map<string, string | null>();
+  const membership = new Map<string, SavedAddressRecordMatch>();
   if (keys.length === 0) return membership;
 
   try {
     const matches = await db.records
       .where('inputStringLower')
       .anyOf(keys)
-      .filter(r => r.type === 'address')
+      .filter(r => r.type === 'address' && r.id !== undefined)
       .toArray();
     for (const record of matches) {
       const key = record.inputStringLower ?? record.inputString.toLowerCase();
       const label = record.label?.trim() ? record.label : null;
       const existing = membership.get(key);
       // Prefer a labeled record when duplicates of the same address exist.
-      if (existing === undefined || (existing === null && label !== null)) {
-        membership.set(key, label);
+      if (existing === undefined || (existing.label === null && label !== null)) {
+        membership.set(key, { label, recordId: record.id! });
       }
     }
   } catch (err) {

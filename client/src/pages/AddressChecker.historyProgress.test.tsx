@@ -16,7 +16,9 @@
 // and `onProgress` callback the test drives manually.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, act, cleanup } from "@testing-library/react";
+import "fake-indexeddb/auto";
+import { screen, waitFor, fireEvent, act, cleanup } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 // Radix Tooltips only render content on hover; render the parts inline so nothing
 // in this page needs a TooltipProvider in the tree.
@@ -77,7 +79,10 @@ const getAddressHistoryDates = vi.fn((address: string, onProgress?: (scanned: nu
 });
 
 const createProviderFromSettings = vi.fn(() => ({ getAddressCoreStats, getAddressHistoryDates }));
-vi.mock("@/lib/blockchain-api", () => ({
+// The shared provider harness (RecordDetailPanel -> transaction-sync) imports
+// more than createProviderFromSettings — keep the originals, override one.
+vi.mock("@/lib/blockchain-api", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   createProviderFromSettings: (...a: unknown[]) => createProviderFromSettings(...a),
 }));
 
@@ -103,7 +108,7 @@ const FIRST_SEEN_LABEL = new Date(FIRST_SEEN * 1000).toLocaleDateString(undefine
 // Run the checker up to the point where the address row is "Done" and its
 // First Seen cell is ready to start an on-demand history walk.
 async function renderAndCheck() {
-  render(<AddressChecker />);
+  renderWithProviders(<AddressChecker />);
   fireEvent.change(screen.getByTestId("textarea-address-input"), { target: { value: ADDR } });
   fireEvent.click(screen.getByTestId("button-run-check"));
   await waitFor(() => {
@@ -201,7 +206,7 @@ describe("AddressChecker — live history scan-progress counter", () => {
     // Second valid mainnet bech32 address (BIP173 P2WSH test vector).
     const ADDR2 = "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv2";
 
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     fireEvent.change(screen.getByTestId("textarea-address-input"), {
       target: { value: `${ADDR}\n${ADDR2}` },
     });

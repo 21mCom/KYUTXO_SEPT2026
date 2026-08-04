@@ -16,12 +16,13 @@ import { validateAddress, formatBTC } from "@/lib/bitcoin";
 import type { AddressInfo, ApiTransaction } from "@/lib/providers/types";
 import { computeHistoryFromTxs } from "@/lib/providers/address-history";
 import { runWithConcurrency, chunk, createPatchBuffer } from "@/lib/address-checker-run";
-import { getSavedAddressRecordLookup } from "@/lib/data/record-crud";
+import { getSavedAddressRecordLookup, type SavedAddressRecordMatch } from "@/lib/data/record-crud";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 // Shared empty lookup so rows see a stable reference before a run's
 // vault-membership snapshot resolves (keeps the memoized rows from
 // re-rendering when nothing changed).
-const EMPTY_VAULT_MEMBERSHIP: ReadonlyMap<string, string | null> = new Map();
+const EMPTY_VAULT_MEMBERSHIP: ReadonlyMap<string, SavedAddressRecordMatch> = new Map();
 
 // Provider-aware concurrency: an Electrum node over the pooled multiplexed
 // socket tolerates many parallel lookups; public HTTP APIs (mempool.space,
@@ -190,6 +191,7 @@ const AddressCheckRow = memo(function AddressCheckRow({
   isHistoryRunning,
   onLoadHistory,
   vaultMembership,
+  onOpenSavedRecord,
 }: {
   row: AddressRow;
   i: number;
@@ -199,8 +201,10 @@ const AddressCheckRow = memo(function AddressCheckRow({
   measureRef: (el: HTMLTableRowElement | null) => void;
   isHistoryRunning: boolean;
   onLoadHistory: (index: number) => void;
-  /** Per-run snapshot: lowercased address → saved record label (null = unlabeled). */
-  vaultMembership: ReadonlyMap<string, string | null>;
+  /** Per-run snapshot: lowercased address → saved record label + id. */
+  vaultMembership: ReadonlyMap<string, SavedAddressRecordMatch>;
+  /** Opens the saved record in the global record preview panel. */
+  onOpenSavedRecord: (recordId: number) => void;
 }) {
   return (
     <TableRow
@@ -237,20 +241,23 @@ const AddressCheckRow = memo(function AddressCheckRow({
           cell comment above. The saved record's label rides in the title. */}
       <TableCell data-testid={`cell-invault-${i}`}>
         {(() => {
-          const savedLabel = row.isInvalid
+          const saved = row.isInvalid
             ? undefined
             : vaultMembership.get(row.raw.toLowerCase());
-          return savedLabel !== undefined ? (
-            <span
-              className="cursor-default inline-flex"
-              title={savedLabel ? `Saved in vault: ${savedLabel}` : "Saved in vault"}
+          return saved !== undefined ? (
+            <button
+              type="button"
+              className="inline-flex cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title={saved.label ? `Saved in vault: ${saved.label} (click to open)` : "Saved in vault (click to open)"}
+              aria-label={saved.label ? `Open saved record: ${saved.label}` : "Open saved record"}
+              onClick={() => onOpenSavedRecord(saved.recordId)}
               data-testid={`badge-invault-${i}`}
             >
               <Badge variant="secondary" className="gap-1 text-green-600 dark:text-green-400">
                 <CheckCircle className="h-3 w-3" />
                 Saved
               </Badge>
-            </span>
+            </button>
           ) : (
             <span className="text-muted-foreground">—</span>
           );
@@ -365,6 +372,7 @@ function parseInput(text: string): ParseResult {
 
 export default function AddressChecker() {
   const { nodeSettings } = useNodeSettings();
+  const { openRecordPreview } = useRecordPreview();
   const [pastedText, setPastedText] = useState("");
   const [rows, setRows] = useState<AddressRow[]>([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -1035,6 +1043,7 @@ export default function AddressChecker() {
                             isHistoryRunning={isHistoryRunning}
                             onLoadHistory={runHistoryForRow}
                             vaultMembership={vaultMembership}
+                            onOpenSavedRecord={openRecordPreview}
                           />
                         );
                       })}

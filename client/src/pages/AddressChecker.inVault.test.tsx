@@ -8,7 +8,8 @@
 
 import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 // Render every virtualized row (jsdom's zero-size scroll element would
 // otherwise render none).
@@ -40,7 +41,10 @@ vi.mock("@/hooks/use-node-settings", () => ({
 
 const getAddressCoreStats = vi.fn();
 const createProviderFromSettings = vi.fn(() => ({ getAddressCoreStats }));
-vi.mock("@/lib/blockchain-api", () => ({
+// The shared provider harness (RecordDetailPanel -> transaction-sync) imports
+// more than createProviderFromSettings — keep the originals, override one.
+vi.mock("@/lib/blockchain-api", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   createProviderFromSettings: (...a: unknown[]) => createProviderFromSettings(...a),
 }));
 
@@ -108,7 +112,7 @@ describe("AddressChecker — In Vault column", () => {
   });
 
   it("flags saved addresses (case-insensitive, with label tooltip) and dashes the rest", async () => {
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     await runCheck();
 
     // Saved address → "Saved" badge carrying the record's label for hover.
@@ -116,7 +120,7 @@ describe("AddressChecker — In Vault column", () => {
       expect(screen.getByTestId("badge-invault-0")).toBeTruthy();
     });
     const badge = screen.getByTestId("badge-invault-0");
-    expect(badge.getAttribute("title")).toBe("Saved in vault: Savings wallet");
+    expect(badge.getAttribute("title")).toBe("Saved in vault: Savings wallet (click to open)");
     expect(screen.getByTestId("cell-invault-0").textContent).toContain("Saved");
 
     // Unsaved address (only a txid-type record exists for it) → neutral dash.
@@ -129,7 +133,7 @@ describe("AddressChecker — In Vault column", () => {
   });
 
   it("resolves membership in one batched lookup per run, never per-row", async () => {
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     await runCheck();
 
     await waitFor(() => {
@@ -141,7 +145,7 @@ describe("AddressChecker — In Vault column", () => {
   });
 
   it("recomputes the snapshot on Reset + re-run so newly saved addresses appear", async () => {
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
     await runCheck();
     await waitFor(() => {
       expect(screen.getByTestId("badge-invault-0")).toBeTruthy();
@@ -163,7 +167,39 @@ describe("AddressChecker — In Vault column", () => {
       expect(screen.getByTestId("badge-invault-1")).toBeTruthy();
     });
     // Unlabeled record falls back to a generic tooltip.
-    expect(screen.getByTestId("badge-invault-1").getAttribute("title")).toBe("Saved in vault");
+    expect(screen.getByTestId("badge-invault-1").getAttribute("title")).toBe("Saved in vault (click to open)");
     expect(lookupSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens the saved record in the global preview panel when the badge is clicked", async () => {
+    renderWithProviders(<AddressChecker />);
+    await runCheck();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("badge-invault-0")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("badge-invault-0"));
+
+    // The global record detail panel opens showing the saved record's
+    // identifier (the seeded uppercase inputString, not the pasted lowercase
+    // address) — proving the click resolved the actual saved record by id.
+    await waitFor(() => {
+      const identifier = screen.getByTestId("text-panel-identifier");
+      expect(identifier.textContent).toBe(ADDR_SAVED.toUpperCase());
+    });
+  });
+
+  it("keeps unmatched and invalid rows non-interactive", async () => {
+    renderWithProviders(<AddressChecker />);
+    await runCheck();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("badge-invault-0")).toBeTruthy();
+    });
+    // No badge (and hence no button) for unmatched/invalid rows.
+    expect(screen.queryByTestId("badge-invault-1")).toBeNull();
+    expect(screen.getByTestId("cell-invault-1").querySelector("button")).toBeNull();
+    expect(screen.queryByTestId("badge-invault-2")).toBeNull();
+    expect(screen.getByTestId("cell-invault-2").querySelector("button")).toBeNull();
   });
 });

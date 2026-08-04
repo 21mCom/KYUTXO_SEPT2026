@@ -8,7 +8,9 @@
 // active addresses quickly. Rows with activity keep rendering real numbers.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import "fake-indexeddb/auto";
+import { screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 // Radix Tooltips only render their content on hover; render the parts inline so
 // the page needs no TooltipProvider in the tree.
@@ -42,7 +44,10 @@ vi.mock("@/hooks/use-node-settings", () => ({
 
 const getAddressCoreStats = vi.fn();
 const createProviderFromSettings = vi.fn(() => ({ getAddressCoreStats }));
-vi.mock("@/lib/blockchain-api", () => ({
+// The shared provider harness (RecordDetailPanel -> transaction-sync) imports
+// more than createProviderFromSettings — keep the originals, override one.
+vi.mock("@/lib/blockchain-api", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   createProviderFromSettings: (...a: unknown[]) => createProviderFromSettings(...a),
 }));
 
@@ -70,7 +75,7 @@ describe("AddressChecker — zero values render as em dash", () => {
   });
 
   it("shows dashes for a done row with 0 transactions and 0 balance, numbers for an active row", async () => {
-    render(<AddressChecker />);
+    renderWithProviders(<AddressChecker />);
 
     fireEvent.change(screen.getByTestId("textarea-address-input"), {
       target: { value: `${ADDR_EMPTY}\n${ADDR_ACTIVE}` },
