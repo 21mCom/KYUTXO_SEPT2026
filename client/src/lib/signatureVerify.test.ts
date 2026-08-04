@@ -488,6 +488,93 @@ describe('BIP-322 verification (bare P2SH multisig)', () => {
     expect(result.verified).toBe(true);
     expect(result.format).toBe('bip322');
   });
+
+  /**
+   * Forged proofs that reuse ONE cosigner's signature twice. The stack
+   * container is [dummy, sigA, sigB, redeemScript]; a lone cosigner could try
+   * to fill both signature slots with their own (individually valid)
+   * signature. checkMultisig's sequential key matching must reject this: the
+   * duplicated signature verifies against its own key but not the next one,
+   * so the proof can never reach the required threshold.
+   */
+  const b64ToBytes = (b64: string): Uint8Array => {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  };
+  const bytesToB64 = (bytes: Uint8Array): string => {
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin);
+  };
+  /** Parse a small serialized witness stack (single-byte varints only). */
+  const parseStack = (bytes: Uint8Array): Uint8Array[] => {
+    const items: Uint8Array[] = [];
+    let off = 0;
+    const count = bytes[off++];
+    for (let i = 0; i < count; i++) {
+      const len = bytes[off++];
+      items.push(bytes.subarray(off, off + len));
+      off += len;
+    }
+    expect(off).toBe(bytes.length);
+    return items;
+  };
+  const serializeStack = (items: Uint8Array[]): Uint8Array => {
+    const total = 1 + items.reduce((n, it) => n + 1 + it.length, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    out[off++] = items.length;
+    for (const it of items) {
+      out[off++] = it.length;
+      out.set(it, off);
+      off += it.length;
+    }
+    return out;
+  };
+  /** Replace one signature slot with a copy of another cosigner's signature. */
+  const forgeDuplicateSig = (stackSigB64: string, copyFrom: number, into: number): string => {
+    const items = parseStack(b64ToBytes(stackSigB64));
+    // [dummy, sig1, …, sigM, redeemScript] — signature slots are 1..length-2.
+    const forged = items.slice();
+    forged[into] = items[copyFrom];
+    return bytesToB64(serializeStack(forged));
+  };
+
+  it('rejects a 2-of-2 bare P2SH proof where one cosigner signature is duplicated', async () => {
+    // Sanity: the original proof still verifies, so the only difference in the
+    // forged proof is the duplicated signature.
+    const genuine = await verifyBip322P2SH(BARE_P2SH_2OF2_ADDR, FULL_MSG, BARE_P2SH_2OF2_STACK_SIG);
+    expect(genuine.verified).toBe(true);
+
+    // First cosigner fills both slots with their own signature.
+    const dupFirst = forgeDuplicateSig(BARE_P2SH_2OF2_STACK_SIG, 1, 2);
+    const r1 = await verifyBip322P2SH(BARE_P2SH_2OF2_ADDR, FULL_MSG, dupFirst);
+    expect(r1.verified).toBe(false);
+    expect(r1.error).toMatch(/did not verify/i);
+
+    // Second cosigner fills both slots with their own signature.
+    const dupSecond = forgeDuplicateSig(BARE_P2SH_2OF2_STACK_SIG, 2, 1);
+    const r2 = await verifyBip322P2SH(BARE_P2SH_2OF2_ADDR, FULL_MSG, dupSecond);
+    expect(r2.verified).toBe(false);
+    expect(r2.error).toMatch(/did not verify/i);
+  });
+
+  it('rejects a 2-of-3 bare P2SH proof where one cosigner signature is duplicated', async () => {
+    const genuine = await verifyBip322P2SH(BARE_P2SH_2OF3_ADDR, FULL_MSG, BARE_P2SH_2OF3_STACK_SIG);
+    expect(genuine.verified).toBe(true);
+
+    const dupFirst = forgeDuplicateSig(BARE_P2SH_2OF3_STACK_SIG, 1, 2);
+    const r1 = await verifyBip322P2SH(BARE_P2SH_2OF3_ADDR, FULL_MSG, dupFirst);
+    expect(r1.verified).toBe(false);
+    expect(r1.error).toMatch(/did not verify/i);
+
+    const dupSecond = forgeDuplicateSig(BARE_P2SH_2OF3_STACK_SIG, 2, 1);
+    const r2 = await verifyBip322P2SH(BARE_P2SH_2OF3_ADDR, FULL_MSG, dupSecond);
+    expect(r2.verified).toBe(false);
+    expect(r2.error).toMatch(/did not verify/i);
+  });
 });
 
 describe('verifyBitcoinSignature routing (BIP-322 Full)', () => {
