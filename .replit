@@ -359,6 +359,10 @@ args = "bulk-editor-notes-append-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "bulk-editor-counterparty-set-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "rebuild-toast-details-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1043,6 +1047,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-bulk-editor-notes-append-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bulk-editor-counterparty-set-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bulk-editor-counterparty-set-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
