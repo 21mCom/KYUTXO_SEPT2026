@@ -445,6 +445,19 @@ const BARE_P2SH_2OF3_STACK_SIG =
 const BARE_P2SH_2OF3_TX_SIG =
   'AAAAAAFxr/qnPauOAuQd90YhAeABWOEFVQN7gEAsWjsZbbC8fAAAAAD9/QAARzBEAiAnJfmHDdgXyDM3awJW9aIkJORs86hE2Dexnv+6JZOMOQIgAT6TCLuEp3kmMErsAXMCB7p373HhEWqkSsYwhOay90sBSDBFAiEA+lSPGfot/IIBQAWtfP2EqiVWPytSquz4SH+twe9u//ICIDahyOfgf8C0mHyOop5DZDDuCprjf8LWHkr5w0BM1gRyAUxpUiED3v3qTNtnd1CkIP7oB+rPIeuYmK55uXaHZuT6oEotSjQhAlYBVwy0fyONKwKG20qZD6DzuijRoxn1589VwqJETafMIQIrTqCnl6RD0pPvXP9ET0l58GrP69fobSd0dWVhODhbbFOuAAAAAAEAAAAAAAAAAAFqAAAAAA==';
 
+/**
+ * Bare P2SH 2-of-2 vector whose signatures commit to a VERSION-2 to_sign
+ * transaction. BIP-322 permits the virtual to_sign to carry nVersion 0 or 2,
+ * and some legacy wallet tooling emits v2. Produced deterministically offline
+ * from fixed keys, both as the raw stack container and as the serialized v2
+ * to_sign transaction.
+ */
+const BARE_P2SH_V2_ADDR = '3QaPLKWhH6Ya8Vs8jNLn24PwLku3pcBVdX';
+const BARE_P2SH_V2_STACK_SIG =
+  'BABIMEUCIQCMts29giEhlMpUFkZyLoZs0/55pX7/kFg2fnmVJK9JowIgFT7rLXaCO60MlQagK6osSTDIyHZfMKQrg/k7QLDmFxgBSDBFAiEAjw3lcH7JmxMxeFG4VJrLbMdEgcIK6tfwYLBtTdMi76cCIFwR9YzXDs2y0nuD3ufQ66Nl1uRbTV7YL3Qpg2I4uJtcAUdSIQN6Kd+0JvMup1/v/xrdIeuy48LYMhP7UxyWGOAEOJpWwiEDr5RcqgcjtS5AB47aJ+TAs2ePeF3j7LOosGkgTosjePBSrg==';
+const BARE_P2SH_V2_TX_SIG =
+  'AgAAAAF5BXXu7+6SUHew36ZtM3MKgq45VapW+ZfUAXhV+w+/jwAAAADbAEgwRQIhAIy2zb2CISGUylQWRnIuhmzT/nmlfv+QWDZ+eZUkr0mjAiAVPustdoI7rQyVBqArqixJMMjIdl8wpCuD+TtAsOYXGAFIMEUCIQCPDeVwfsmbEzF4UbhUmstsx0SBwgrq1/BgsG1N0yLvpwIgXBH1jNcOzbLSe4Pe59Dro2XW5FtNXtgvdCmDYji4m1wBR1IhA3op37Qm8y6nX+//Gt0h67LjwtgyE/tTHJYY4AQ4mlbCIQOvlFyqByO1LkAHjton5MCzZ494XePss6iwaSBOiyN48FKuAAAAAAEAAAAAAAAAAAFqAAAAAA==';
+
 describe('BIP-322 verification (bare P2SH multisig)', () => {
   it('verifies a 2-of-2 bare P2SH multisig proof (stack container)', async () => {
     const result = await verifyBip322P2SH(BARE_P2SH_2OF2_ADDR, FULL_MSG, BARE_P2SH_2OF2_STACK_SIG);
@@ -463,6 +476,24 @@ describe('BIP-322 verification (bare P2SH multisig)', () => {
     expect(stack.verified).toBe(true);
     const tx = await verifyBip322P2SH(BARE_P2SH_2OF3_ADDR, FULL_MSG, BARE_P2SH_2OF3_TX_SIG);
     expect(tx.verified).toBe(true);
+  });
+
+  it('verifies a bare P2SH proof signed over a version-2 to_sign (stack container)', async () => {
+    const result = await verifyBip322P2SH(BARE_P2SH_V2_ADDR, FULL_MSG, BARE_P2SH_V2_STACK_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('verifies a bare P2SH proof signed over a version-2 to_sign (serialized v2 transaction)', async () => {
+    const result = await verifyBip322P2SH(BARE_P2SH_V2_ADDR, FULL_MSG, BARE_P2SH_V2_TX_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('rejects a v2-committed proof against the wrong message', async () => {
+    const result = await verifyBip322P2SH(BARE_P2SH_V2_ADDR, 'Goodbye World', BARE_P2SH_V2_STACK_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
   });
 
   it('rejects a bare-multisig proof against the wrong message', async () => {

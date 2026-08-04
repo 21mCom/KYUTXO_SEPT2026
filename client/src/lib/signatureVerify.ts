@@ -1338,16 +1338,30 @@ export async function verifyBip322P2SH(
   }
   if (bytesEqual(bareRedeemHash, scriptHash)) {
     const inputStack = witness.slice(0, witness.length - 1);
-    const computeSighash = (hashType: number): Uint8Array =>
-      new Uint8Array(toSign.hashForSignature(0, redeemScript as Buffer, hashType));
-    let ok: boolean;
-    try {
-      ok = execWitnessScriptV0(redeemScript, inputStack, computeSighash);
-    } catch (err) {
+    // BIP-322 permits the virtual to_sign transaction to carry nVersion 0 or
+    // 2, and some legacy wallet tooling signs over a version-2 to_sign. The
+    // legacy (pre-BIP-143) sighash commits to nVersion, so try v0 first (the
+    // common case) and fall back to v2 before rejecting.
+    let ok = false;
+    let execError: unknown = null;
+    for (const toSignVersion of [0, 2]) {
+      toSign.version = toSignVersion;
+      const computeSighash = (hashType: number): Uint8Array =>
+        new Uint8Array(toSign.hashForSignature(0, redeemScript as Buffer, hashType));
+      try {
+        ok = execWitnessScriptV0(redeemScript, inputStack, computeSighash);
+        execError = null;
+      } catch (err) {
+        ok = false;
+        execError = err;
+      }
+      if (ok) break;
+    }
+    if (execError !== null) {
       return {
         verified: false,
         error: `BIP-322 (bare P2SH) verification failed: ${
-          err instanceof Error ? err.message : String(err)
+          execError instanceof Error ? execError.message : String(execError)
         }`,
       };
     }
