@@ -279,6 +279,10 @@ args = "descriptor-import-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "canonical-identifiers-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "descriptor-bsms-import-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1810,6 +1814,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-poisoning-copy-guard-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "canonical-identifiers-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/bitcoin.canonicalize.test.ts client/src/lib/data/record-crud.canonicalization.test.ts client/src/lib/transaction-sync.canonicalMatch.test.ts client/src/components/RecordFormDialog.identifierWarning.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

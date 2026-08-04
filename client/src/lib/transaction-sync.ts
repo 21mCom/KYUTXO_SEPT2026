@@ -3,7 +3,7 @@
 
 import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
-import { validateAddress } from './bitcoin';
+import { validateAddress, canonicalizeRecordIdentifier } from './bitcoin';
 import {
   createRecord,
   createRecordOrigin,
@@ -1846,7 +1846,10 @@ export class TransactionSyncService {
     discoveredInTxid?: string,
     discoveredFromRecordId?: number
   ): Promise<{ recordId: number; isNew: boolean } | null> {
-    const existing = await db.records.where('inputString').equals(address).first();
+    // Canonicalize the lookup key: stored identifiers are canonical, so a
+    // manually created record matches even if it was originally typed padded
+    // or uppercase (and repaired to canonical form).
+    const existing = await db.records.where('inputString').equals(canonicalizeRecordIdentifier(address)).first();
     
     if (existing && existing.id) {
       return { recordId: existing.id, isNew: false };
@@ -1955,7 +1958,7 @@ export class TransactionSyncService {
     // Check if a transaction record already exists for this txid
     // Scope to type='transaction' to avoid collisions with address records
     const existing = await db.records
-      .where('inputString').equals(txid)
+      .where('inputString').equals(canonicalizeRecordIdentifier(txid))
       .and(r => r.type === 'transaction')
       .first();
     

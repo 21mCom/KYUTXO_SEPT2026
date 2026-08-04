@@ -4,6 +4,7 @@ import { db } from '../database';
 import { IMPORTANCE_TIERS } from '../provenance';
 import { expandLabelTokens } from '../label-tokens';
 import { isUserCuratedImportance } from '../db-types';
+import { canonicalizeRecordIdentifier } from '../bitcoin';
 
 // Determine if the incoming importance should upgrade the existing one
 // Returns the new importance if it should be upgraded, or undefined if no change
@@ -34,7 +35,9 @@ export async function checkForDuplicates(
 ): Promise<DuplicateInfo[]> {
   const BATCH_SIZE = 500;
   const lookupMap = new Map<string, DBRecord>();
-  const uniqueInputs = [...new Set(parsedRecords.map(r => r.inputString.trim()))];
+  // Canonicalize lookup keys: stored identifiers are canonical, so an
+  // uppercase/padded pasted address must still match its existing record.
+  const uniqueInputs = [...new Set(parsedRecords.map(r => canonicalizeRecordIdentifier(r.inputString)))];
 
   for (let i = 0; i < uniqueInputs.length; i += BATCH_SIZE) {
     const batch = uniqueInputs.slice(i, i + BATCH_SIZE);

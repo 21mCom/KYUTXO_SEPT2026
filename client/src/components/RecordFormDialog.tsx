@@ -52,6 +52,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
+import { canonicalizeRecordIdentifier, isMixedCaseBech32 } from "@/lib/bitcoin";
 import { formatFileSize } from "@/lib/attachments";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { AttachmentList } from "./AttachmentList";
@@ -520,6 +521,16 @@ export function RecordFormDialog({
     return /^[a-fA-F0-9]{64}$/.test(txid.trim());
   };
 
+  // Non-blocking paste-mistake warnings. "other" records are explicitly
+  // free-form, so no warning applies to them. The CRUD layer canonicalizes
+  // whatever is entered on save — these warnings only describe what will
+  // happen, they never block submission.
+  const trimmedIdentifier = (formData.inputString || "").trim();
+  const hex64Warning =
+    formData.type !== "other" && /^[a-fA-F0-9]{64}$/.test(trimmedIdentifier);
+  const mixedCaseBech32Warning =
+    formData.type !== "other" && !hex64Warning && isMixedCaseBech32(trimmedIdentifier);
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -613,9 +624,38 @@ export function RecordFormDialog({
                 <AlertDescription>
                   <span className="font-medium">This record already exists.</span>
                   <span className="block text-sm mt-1">
-                    The form has been filled with the existing data for "{duplicateRecord.label}". 
+                    The form has been filled with the existing data for "{duplicateRecord.label}".
                     You can modify the fields and save to update the existing record.
                   </span>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {(hex64Warning || mixedCaseBech32Warning) && (
+              <Alert className="mt-2" data-testid="alert-identifier-warning">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  {hex64Warning ? (
+                    <>
+                      <span className="font-medium">This will be saved as a transaction ID.</span>
+                      <span className="block text-sm mt-1">
+                        This 64-character hex string could also be an x-only public key pasted by
+                        accident — public keys are not tracked, only addresses and transaction IDs.
+                        Double-check what you copied before saving.
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-medium">This address will be saved in lowercase.</span>
+                      <span className="block text-sm mt-1">
+                        Bech32 addresses mixing upper- and lowercase letters are usually a paste
+                        mistake. It will be stored in its canonical form:{" "}
+                        <span className="font-mono break-all">
+                          {canonicalizeRecordIdentifier(trimmedIdentifier)}
+                        </span>
+                      </span>
+                    </>
+                  )}
                 </AlertDescription>
               </Alert>
             )}

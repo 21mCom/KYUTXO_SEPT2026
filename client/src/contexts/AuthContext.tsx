@@ -27,12 +27,15 @@ import {
   setInputStringLowerRepaired,
   isSearchVisibilityRepaired,
   setSearchVisibilityRepaired,
+  isCanonicalInputStringsRepaired,
+  setCanonicalInputStringsRepaired,
   verifyVaultPassword,
   upgradeVaultKdfIfNeeded,
 } from '@/lib/vault';
 import {
   repairInputStringLower,
   repairAddressImportanceTiers,
+  repairCanonicalInputStrings,
   detectSearchVisibilityIssues,
   countRecords,
 } from '@/lib/data/record-crud';
@@ -463,6 +466,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Background canonical-identifier repair: rewrites rows whose stored
+  // inputString is not in canonical form (padded / uppercase bech32 /
+  // uppercase-hex txid) so exact-match lookups (sync find-or-create, import
+  // merges, provenance, fund-trail, fast-path search) all agree on record
+  // identity. Rows whose canonical key would collide with another record are
+  // left untouched — the Database Doctor surfaces their count. Same once-only
+  // flag + re-runnable pattern as the search-visibility repair (re-armed
+  // after backup restores); chained after it so the two full-table passes
+  // never contend for IndexedDB transactions.
+  const canonicalIdentifierRepairInFlightRef = useRef(false);
+  const runCanonicalIdentifierRepair = useCallback(async () => {
+    if (canonicalIdentifierRepairInFlightRef.current) return;
+    canonicalIdentifierRepairInFlightRef.current = true;
+    const bus = () => {
+      try { return getActivityBus(); } catch { return null; }
+    };
+    try {
+      if (await isCanonicalInputStringsRepaired()) return;
+
+      const result = await repairCanonicalInputStrings((scanned, fixed, skipped) => {
+        bus()?.publishTask({
+          id: 'canonical-identifier-repair',
+          label: 'Normalizing Record Identifiers',
+          phase:
+            `${scanned.toLocaleString()} checked, ${fixed.toLocaleString()} normalized` +
+            (skipped > 0 ? `, ${skipped.toLocaleString()} skipped (would duplicate)` : ''),
+          current: scanned,
+          total: 0,
+        });
+      });
+
+      if (result.ok) {
+        await setCanonicalInputStringsRepaired(true);
+        if (result.fixed > 0 || result.skippedCollisions > 0) {
+          console.log(
+            `[CanonicalIdentifierRepair] Normalized ${result.fixed} of ${result.scanned} records` +
+            (result.skippedCollisions > 0
+              ? `; left ${result.skippedCollisions} collision row(s) untouched (see Database Doctor)`
+              : ''),
+          );
+        }
+      } else {
+        console.warn('[CanonicalIdentifierRepair] Incomplete — will retry next login');
+      }
+    } catch (err) {
+      console.error('[CanonicalIdentifierRepair] Failed:', err);
+    } finally {
+      canonicalIdentifierRepairInFlightRef.current = false;
+      try { getActivityBus().completeTask('canonical-identifier-repair'); } catch {}
+    }
+  }, []);
+
   const runStartupMigrations = useCallback(async (password: string, saltBase64: string) => {
     // Single-flight: if a migration is already running (e.g. it was started by a
     // previous login and the user logged out then back in), do not start a
@@ -487,9 +542,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // finish (they hold the migration overlay up; this pass must never block
     // the UI). Serialized behind them so it never contends with the legacy
     // decrypt for IndexedDB transactions. Its own single-flight guard makes a
-    // quick logout/re-login safe.
-    void runSearchVisibilityRepair();
-  }, [runAttachmentPathMigration, runLegacyDecryptMigration, runInputStringLowerRepair, runSearchVisibilityRepair]);
+    // quick logout/re-login safe. The canonical-identifier repair is chained
+    // after it so the two full-table background passes run one at a time.
+    void (async () => {
+      await runSearchVisibilityRepair();
+      await runCanonicalIdentifierRepair();
+    })();
+  }, [runAttachmentPathMigration, runLegacyDecryptMigration, runInputStringLowerRepair, runSearchVisibilityRepair, runCanonicalIdentifierRepair]);
 
   const setupPassword = useCallback(async (password: string) => {
     setIsLoading(true);

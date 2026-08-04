@@ -30,6 +30,7 @@ export interface VaultSettings {
   legacyFileDecryptCheckpoint?: { tableIndex: number; lastId: number };
   inputStringLowerRepaired?: boolean;
   searchVisibilityRepaired?: boolean;
+  canonicalInputStringsRepaired?: boolean;
 }
 
 class VaultDatabase extends Dexie {
@@ -223,6 +224,25 @@ export async function setSearchVisibilityRepaired(repaired: boolean): Promise<vo
 }
 
 /**
+ * Once-per-vault-generation flag for the startup canonical-identifier repair
+ * (repairCanonicalInputStrings — rewrites rows whose stored inputString is
+ * not in canonical form: padded, uppercase bech32, uppercase-hex txid). Set
+ * only when the pass fully succeeds; re-armed after backup restores, which
+ * can reintroduce verbatim non-canonical rows from old backups.
+ */
+export async function isCanonicalInputStringsRepaired(): Promise<boolean> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.canonicalInputStringsRepaired ?? false;
+}
+
+export async function setCanonicalInputStringsRepaired(repaired: boolean): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', { canonicalInputStringsRepaired: repaired });
+  }
+}
+
+/**
  * Re-arm the startup search-visibility repair so it runs again on the next
  * login. Called after a backup restore completes (both v3 and legacy paths):
  * restored rows can carry legacy/unknown importance tiers or stale search
@@ -230,6 +250,10 @@ export async function setSearchVisibilityRepaired(repaired: boolean): Promise<vo
  */
 export async function rearmSearchVisibilityRepair(): Promise<void> {
   await setSearchVisibilityRepaired(false);
+  // Restores can also reintroduce non-canonical identifiers verbatim, and a
+  // padded identifier is invisible to the same fast-path search keys — so the
+  // canonical-identifier repair re-arms alongside the search-visibility one.
+  await setCanonicalInputStringsRepaired(false);
 }
 
 export async function isLegacyFileDecryptComplete(): Promise<boolean> {
@@ -275,6 +299,7 @@ export async function markFreshVaultMigrationsComplete(): Promise<void> {
       legacyFileDecryptComplete: true,
       inputStringLowerRepaired: true,
       searchVisibilityRepaired: true,
+      canonicalInputStringsRepaired: true,
     });
   }
 }
@@ -295,6 +320,7 @@ export async function resetMigrationFlagsForLegacyFixture(): Promise<void> {
       legacyFileDecryptCheckpoint: { tableIndex: 0, lastId: 0 },
       inputStringLowerRepaired: false,
       searchVisibilityRepaired: false,
+      canonicalInputStringsRepaired: false,
     });
   }
 }

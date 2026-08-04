@@ -146,6 +146,9 @@ const ALWAYS_ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/lib/testSeedData.ts'),
   path.resolve(ROOT, 'client/src/lib/records-query.ts'),
   path.resolve(ROOT, 'client/src/lib/records-query.equivalence.test.ts'),
+  // Seeds pre-canonicalization rows verbatim (the CRUD layer itself now
+  // canonicalizes, so direct writes are the only way to emulate them).
+  path.resolve(ROOT, 'client/src/lib/data/record-crud.canonicalization.test.ts'),
   path.resolve(ROOT, 'client/src/lib/bip329-export.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-proximity.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-entity-contacts.test.ts'),

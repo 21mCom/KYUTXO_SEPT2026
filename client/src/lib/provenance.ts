@@ -4,6 +4,7 @@
 import { db, type Record, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from './database';
 import { getParticipantsByAddress, getParticipantsByTxid, updateRecord } from './dataFacade';
 import { countAddressSyncState } from './data/address-sync-crud';
+import { canonicalizeRecordIdentifier } from './bitcoin';
 import { addRecordOrigin } from './data/record-origins-crud';
 
 // Importance tier levels (higher number = higher importance)
@@ -83,7 +84,8 @@ async function getTransactionParticipants(txid: string): Promise<TransactionPart
 
 // Build address node with label info and importance tier (using indexed DB lookup)
 async function buildAddressNodeFromDb(address: string): Promise<AddressNode> {
-  const record = await db.records.where('inputString').equals(address).first();
+  // Canonicalize the lookup key so it matches canonically stored identifiers.
+  const record = await db.records.where('inputString').equals(canonicalizeRecordIdentifier(address)).first();
 
   return {
     address,

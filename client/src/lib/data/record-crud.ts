@@ -2,6 +2,7 @@ import Dexie from 'dexie';
 import { db, notifyDbChange, isUserCuratedImportance, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type DerivationTemplate, type AddressImportance } from '../database';
 import { isValidImportanceTier, isHiddenDiscoveryTier, HIDDEN_DISCOVERY_TIERS } from '../db-types';
 import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from './vocabulary-crud';
+import { canonicalizeRecordIdentifier } from '../bitcoin';
 import { getActivityBus } from '../activity-bus';
 import { type GroupBy, GROUP_EMPTY_KEY, addressMatchesGroup, type AddressBalanceRow } from '../balance-grouping';
 
@@ -127,10 +128,18 @@ export function deriveAddressImportance(data: CreateRecordData): AddressImportan
 
 function buildFullRecord(data: CreateRecordData): Record {
   const now = Date.now();
+  // Store identifiers in canonical form (trimmed; bech32/txid lowercased) so
+  // every exact-match lookup — sync find-or-create, import merges, provenance,
+  // fund-trail, fast-path search — agrees on record identity no matter how the
+  // identifier was typed.
+  const canonicalInput = data.inputString
+    ? canonicalizeRecordIdentifier(data.inputString)
+    : data.inputString;
   return {
     ...data,
+    inputString: canonicalInput,
     addressImportance: deriveAddressImportance(data),
-    inputStringLower: data.inputString ? data.inputString.toLowerCase() : '',
+    inputStringLower: canonicalInput ? canonicalInput.toLowerCase() : '',
     createdAt: data.createdAt ?? now,
     updatedAt: data.updatedAt ?? now,
   };
@@ -266,7 +275,13 @@ export async function updateRecord(
     updatedAt: Date.now(),
   };
   if (updates.inputString !== undefined) {
-    merged.inputStringLower = updates.inputString ? updates.inputString.toLowerCase() : '';
+    // Same canonicalization as the create path: an edit can never reintroduce
+    // a padded / differently-cased identifier.
+    const canonicalInput = updates.inputString
+      ? canonicalizeRecordIdentifier(updates.inputString)
+      : updates.inputString;
+    merged.inputString = canonicalInput;
+    merged.inputStringLower = canonicalInput ? canonicalInput.toLowerCase() : '';
   }
   const updated: Record = merged;
 
@@ -853,6 +868,119 @@ export async function repairAddressImportanceTiers(
   return { scanned, fixed, ok };
 }
 
+/**
+ * One-time (re-runnable) repair for rows written before identifiers were
+ * canonicalized at the CRUD boundary. Such rows store a padded, uppercase
+ * bech32, or uppercase-hex `inputString` verbatim, which makes them invisible
+ * to the case-sensitive exact-match lookups sync/import/provenance use and
+ * drops them from the fast-path `inputStringLower` search (their lowercase
+ * key carries the padding).
+ *
+ * Two keyset-batched passes (abort-safe on huge vaults, yields between
+ * batches):
+ *   1. Count how many records share each canonical key. This needs
+ *      whole-vault key multiplicity, so the counts live in one in-memory map
+ *      (a few MB even on very large vaults) — there is no index that can
+ *      answer "would this rewrite collide?" without it.
+ *   2. Rewrite non-canonical rows whose canonical key is claimed by exactly
+ *      one record. Rows whose canonical key collides with another record are
+ *      left UNTOUCHED (rewriting them would fabricate a duplicate) and
+ *      counted in `skippedCollisions` so the Database Doctor can surface them.
+ *
+ * Fixed rows get a fresh `updatedAt` so the engine mirror's freshness
+ * fingerprint (count, maxId, maxUpdatedAt) observes the change. Re-running is
+ * safe: normalized rows no longer qualify, and collision rows are re-skipped.
+ *
+ * Returns counts plus `ok`; callers should only persist a "done" flag when
+ * `ok` is true, so a partial failure retries on next login.
+ */
+export async function repairCanonicalInputStrings(
+  onProgress?: (scanned: number, fixed: number, skippedCollisions: number) => void,
+): Promise<{ scanned: number; fixed: number; skippedCollisions: number; ok: boolean }> {
+  const BATCH = 1000;
+  let lastId = 0;
+  let scanned = 0;
+  let fixed = 0;
+  let skippedCollisions = 0;
+  let ok = true;
+  const canonicalKeyCounts = new Map<string, number>();
+
+  try {
+    // Pass 1: canonical-key multiplicity across the whole table.
+    for (;;) {
+      const chunk = await db.records
+        .where('id')
+        .above(lastId)
+        .limit(BATCH)
+        .toArray();
+      if (chunk.length === 0) break;
+      lastId = chunk[chunk.length - 1].id!;
+
+      for (const r of chunk) {
+        if (!r.inputString) continue;
+        const key = canonicalizeRecordIdentifier(r.inputString);
+        canonicalKeyCounts.set(key, (canonicalKeyCounts.get(key) ?? 0) + 1);
+      }
+
+      if (chunk.length < BATCH) break;
+      // Yield between batches so a huge vault does not freeze the renderer.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    // Pass 2: rewrite non-colliding non-canonical rows.
+    lastId = 0;
+    for (;;) {
+      const chunk = await db.records
+        .where('id')
+        .above(lastId)
+        .limit(BATCH)
+        .toArray();
+      if (chunk.length === 0) break;
+      lastId = chunk[chunk.length - 1].id!;
+      scanned += chunk.length;
+
+      const now = Date.now();
+      const toFix: Record[] = [];
+      for (const r of chunk) {
+        if (!r.inputString) continue;
+        const canonical = canonicalizeRecordIdentifier(r.inputString);
+        if (canonical === r.inputString) continue;
+        if ((canonicalKeyCounts.get(canonical) ?? 0) > 1) {
+          skippedCollisions++;
+          continue;
+        }
+        toFix.push({
+          ...r,
+          inputString: canonical,
+          inputStringLower: canonical.toLowerCase(),
+          updatedAt: now,
+        });
+      }
+
+      if (toFix.length > 0) {
+        await db.records.bulkPut(toFix);
+        fixed += toFix.length;
+      }
+
+      onProgress?.(scanned, fixed, skippedCollisions);
+      if (chunk.length < BATCH) break;
+      // Yield between batches so a huge vault does not freeze the renderer.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  } catch (err) {
+    ok = false;
+    console.error(
+      '[repairCanonicalInputStrings] Failed:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  if (fixed > 0) {
+    notifyDbChange('records');
+  }
+
+  return { scanned, fixed, skippedCollisions, ok };
+}
 export interface SearchVisibilityIssues {
   /** At least one row has a missing or unrecognized importance tier. */
   tiersAffected: boolean;
@@ -1045,12 +1173,14 @@ export async function getRecordsByType(type: string): Promise<Record[]> {
 }
 
 export async function getRecordsByInputString(inputString: string): Promise<Record[]> {
-  return db.records.where('inputString').equals(inputString).toArray();
+  // Canonicalize the lookup key: stored identifiers are canonical, so a
+  // padded / differently-cased query must match them.
+  return db.records.where('inputString').equals(canonicalizeRecordIdentifier(inputString)).toArray();
 }
 
 export async function getRecordsByInputStrings(values: string[]): Promise<Record[]> {
   if (values.length === 0) return [];
-  return db.records.where('inputString').anyOf(values).toArray();
+  return db.records.where('inputString').anyOf(values.map(canonicalizeRecordIdentifier)).toArray();
 }
 
 export async function getAddressRecordsByImportanceTiers(
@@ -1629,12 +1759,12 @@ export async function searchRecordsByQuery(
 export async function findRecordByInputString(inputString: string): Promise<Record | undefined> {
   if (!inputString) return undefined;
 
-  const trimmed = inputString.trim();
+  const canonical = canonicalizeRecordIdentifier(inputString);
 
-  const exactMatch = await db.records.where('inputString').equals(trimmed).first();
+  const exactMatch = await db.records.where('inputString').equals(canonical).first();
   if (exactMatch) return exactMatch;
 
-  return await db.records.where('inputStringLower').equals(trimmed.toLowerCase()).first();
+  return await db.records.where('inputStringLower').equals(canonical.toLowerCase()).first();
 }
 
 /**

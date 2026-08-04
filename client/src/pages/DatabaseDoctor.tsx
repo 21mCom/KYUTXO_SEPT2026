@@ -59,13 +59,16 @@ import { isValidImportanceTier, isHiddenDiscoveryTier } from "@/lib/db-types";
 import {
   repairInputStringLower,
   repairAddressImportanceTiers,
+  repairCanonicalInputStrings,
 } from "@/lib/data/record-crud";
 import {
   isLegacyDecryptComplete,
   getLegacyDecryptCompletedTables,
   isInputStringLowerRepaired,
   setInputStringLowerRepaired,
+  setCanonicalInputStringsRepaired,
 } from "@/lib/vault";
+import { canonicalizeRecordIdentifier } from "@/lib/bitcoin";
 import { isEncryptedPlaceholder } from "@/lib/legacy-decrypt";
 import {
   detectStaleCachedBalances,
@@ -117,6 +120,16 @@ interface RecordStats {
   // user metadata (label/tags/notes) — healthy, but invisible in the default
   // Records view, which is the #1 "my old tagged record vanished" cause.
   hiddenTierTagged: number;
+  // Stored inputString is NOT in canonical form (padded / uppercase bech32 /
+  // uppercase-hex txid). Such rows are invisible to the case-sensitive
+  // exact-match lookups sync and import merges use. The EXACT predicate the
+  // canonical-identifier repair fixes.
+  nonCanonicalIdentifier: number;
+  // Subset of nonCanonicalIdentifier: rows the repair SKIPS because rewriting
+  // them would collide with another record that claims the same canonical key
+  // (i.e. a true duplicate pair). Surfaced so the user knows they exist — the
+  // repair reports, never merges.
+  canonicalIdentifierCollision: number;
 }
 
 interface SampleRow {
@@ -248,8 +261,16 @@ export default function DatabaseDoctor() {
         missingTier: 0,
         invalidTier: 0,
         hiddenTierTagged: 0,
+        nonCanonicalIdentifier: 0,
+        canonicalIdentifierCollision: 0,
       };
       const samples: SampleRow[] = [];
+      // Canonical-identifier health needs whole-table key multiplicity (the
+      // same tradeoff the repair makes): one map of canonical key → row count,
+      // plus the canonical keys of the (normally tiny) set of non-canonical
+      // rows so collisions can be counted after the scan.
+      const canonicalKeyCounts = new Map<string, number>();
+      const nonCanonicalKeys: string[] = [];
 
       let lastId = 0;
       let hasMore = true;
@@ -290,6 +311,19 @@ export default function DatabaseDoctor() {
           const expectedLower =
             typeof inputVal === "string" && inputVal ? inputVal.toLowerCase() : "";
           if (row["inputStringLower"] !== expectedLower) recordStats.searchKeyDesynced += 1;
+
+          // Canonical-identifier health: the EXACT predicate the
+          // canonical-identifier repair fixes (stored value ≠ its canonical
+          // form), plus the key-multiplicity bookkeeping needed to count how
+          // many of those rows the repair would SKIP as collisions.
+          if (typeof inputVal === "string" && inputVal) {
+            const canonical = canonicalizeRecordIdentifier(inputVal);
+            canonicalKeyCounts.set(canonical, (canonicalKeyCounts.get(canonical) ?? 0) + 1);
+            if (canonical !== inputVal) {
+              recordStats.nonCanonicalIdentifier += 1;
+              nonCanonicalKeys.push(canonical);
+            }
+          }
 
           // Tier health: missing or unrecognized tiers silently drop out of
           // index-narrowed tier queries; hidden-tier rows carrying user
@@ -335,6 +369,13 @@ export default function DatabaseDoctor() {
         // Yield so the UI stays responsive on large vaults.
         await new Promise((r) => setTimeout(r, 0));
       }
+
+      // A non-canonical row collides when ANOTHER record also claims its
+      // canonical key — the repair leaves those rows untouched (it reports,
+      // never merges), so surface exactly that skipped count.
+      recordStats.canonicalIdentifierCollision = nonCanonicalKeys.filter(
+        (key) => (canonicalKeyCounts.get(key) ?? 0) > 1,
+      ).length;
 
       setResult({
         tableCounts,
@@ -473,7 +514,8 @@ function Verdict({ result }: { result: DoctorResult }) {
   } else if (
     recordStats.searchKeyDesynced > 0 ||
     recordStats.invalidTier > 0 ||
-    recordStats.missingTier > 0
+    recordStats.missingTier > 0 ||
+    recordStats.nonCanonicalIdentifier > 0
   ) {
     tone = "warn";
     title = "Your records are readable, but some may not show up in search or lists.";
@@ -481,6 +523,16 @@ function Verdict({ result }: { result: DoctorResult }) {
       lines.push(
         `${recordStats.searchKeyDesynced.toLocaleString()} records have an out-of-date search key, so typing their address or transaction ID into search may not find them. Use "Rebuild search keys" below to fix this now — the automatic login-time repair only ever runs once, so it will not fix these on its own.`,
       );
+    }
+    if (recordStats.nonCanonicalIdentifier > 0) {
+      lines.push(
+        `${recordStats.nonCanonicalIdentifier.toLocaleString()} records store their address/transaction ID with stray whitespace or non-standard casing (usually typed or pasted that way before identifiers were normalized on save). Blockchain sync and wallet imports may not match them, which can create duplicate "discovered" records for the same address. Use "Rebuild search keys" below to normalize them.`,
+      );
+      if (recordStats.canonicalIdentifierCollision > 0) {
+        lines.push(
+          `${recordStats.canonicalIdentifierCollision.toLocaleString()} of those records were left untouched because normalizing them would duplicate another record that already stores the same address/transaction ID. The repair never merges records on its own — review and merge these duplicates yourself.`,
+        );
+      }
     }
     if (recordStats.invalidTier > 0 || recordStats.missingTier > 0) {
       lines.push(
@@ -636,6 +688,18 @@ function RecordHealthCard({ stats, flags }: { stats: RecordStats; flags: Migrati
           testid="stat-hidden-tier-tagged"
         />
         <StatLine
+          label="Address/txid not in canonical form (repairable)"
+          value={stats.nonCanonicalIdentifier.toLocaleString()}
+          testid="stat-non-canonical-identifier"
+          highlight={stats.nonCanonicalIdentifier > 0}
+        />
+        <StatLine
+          label="Normalization skipped (would duplicate another record)"
+          value={stats.canonicalIdentifierCollision.toLocaleString()}
+          testid="stat-canonical-identifier-collision"
+          highlight={stats.canonicalIdentifierCollision > 0}
+        />
+        <StatLine
           label="With a blank label"
           value={stats.blankLabel.toLocaleString()}
           testid="stat-blank-label"
@@ -668,11 +732,13 @@ function RecordHealthCard({ stats, flags }: { stats: RecordStats; flags: Migrati
  * The Doctor's only vault-writing tools (besides the Balance card's recompute),
  * and both are idempotent, batch-yielding repairs:
  *
- * - "Rebuild search keys": re-runs repairInputStringLower on demand. The
- *   login-time run is gated by a once-only vault flag, so rows that drifted
- *   AFTER that flag was set are otherwise never repaired — this button is the
- *   escape hatch. On success it (re)arms the flag so the login path stays
- *   skipped.
+ * - "Rebuild search keys": re-runs repairInputStringLower on demand, then
+ *   repairCanonicalInputStrings (normalizes padded / differently-cased
+ *   identifiers; collision rows are skipped and reported, never merged). The
+ *   login-time runs are gated by once-only vault flags, so rows that drifted
+ *   AFTER those flags were set are otherwise never repaired — this button is
+ *   the escape hatch. On success it (re)arms the flags so the login path
+ *   stays skipped.
  * - "Normalize importance tiers": re-derives addressImportance for rows whose
  *   stored tier is missing or unrecognized (e.g. restored verbatim from an old
  *   backup), using the row's own provenance — sync/discovery provenance maps
@@ -700,13 +766,36 @@ function RepairToolsCard({
           `Checked ${scanned.toLocaleString()} records — rebuilt ${fixed.toLocaleString()}…`,
         );
       });
+      let allOk = res.ok;
+      // Chain the canonical-identifier repair: a padded / differently-cased
+      // stored identifier is invisible to the same exact-match and fast-path
+      // lookups, and its login-time run is once-only too.
+      let canonicalRes: Awaited<ReturnType<typeof repairCanonicalInputStrings>> | null = null;
       if (res.ok) {
-        // (Re)arm the once-only login flag: the on-demand run just did the work,
-        // so the login path can keep skipping.
+        canonicalRes = await repairCanonicalInputStrings((scanned, fixed, skipped) => {
+          setRepairProgress(
+            `Normalizing identifiers — ${scanned.toLocaleString()} checked, ${fixed.toLocaleString()} normalized` +
+              (skipped > 0 ? `, ${skipped.toLocaleString()} skipped (would duplicate)` : "") +
+              "…",
+          );
+        });
+        if (!canonicalRes.ok) allOk = false;
+      }
+      if (allOk) {
+        // (Re)arm the once-only login flags: the on-demand runs just did the
+        // work, so the login path can keep skipping.
         await setInputStringLowerRepaired(true).catch(() => {});
+        await setCanonicalInputStringsRepaired(true).catch(() => {});
         toast({
           title: "Search keys rebuilt",
-          description: `Rebuilt ${res.fixed.toLocaleString()} of ${res.scanned.toLocaleString()} checked records.`,
+          description:
+            `Rebuilt ${res.fixed.toLocaleString()} of ${res.scanned.toLocaleString()} checked records.` +
+            (canonicalRes && (canonicalRes.fixed > 0 || canonicalRes.skippedCollisions > 0)
+              ? ` Normalized ${canonicalRes.fixed.toLocaleString()} identifier(s)` +
+                (canonicalRes.skippedCollisions > 0
+                  ? `; ${canonicalRes.skippedCollisions.toLocaleString()} left untouched because normalizing would duplicate another record — review them yourself.`
+                  : ".")
+              : ""),
         });
       } else {
         toast({
@@ -784,6 +873,12 @@ function RepairToolsCard({
               {stats.searchKeyDesynced > 0
                 ? `${stats.searchKeyDesynced.toLocaleString()} records currently have an out-of-date search key.`
                 : "No out-of-date search keys detected right now."}{" "}
+              {stats.nonCanonicalIdentifier > 0
+                ? `${stats.nonCanonicalIdentifier.toLocaleString()} records store a non-canonical address/transaction ID` +
+                  (stats.canonicalIdentifierCollision > 0
+                    ? ` (${stats.canonicalIdentifierCollision.toLocaleString()} of them can't be auto-normalized without duplicating another record).`
+                    : ".")
+                  : "No non-canonical identifiers detected right now."}{" "}
               The automatic login-time repair runs only once ever, so drift that happened later is
               only fixed here.
             </p>

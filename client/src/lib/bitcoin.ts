@@ -182,6 +182,44 @@ export function validateAddress(address: string): ValidationResult {
 }
 
 /**
+ * Canonical storage form for a record identifier (address or transaction ID):
+ *
+ * - Surrounding whitespace is stripped.
+ * - Transaction IDs (64 hex chars) are lowercased — hex case carries no meaning.
+ * - Bech32/bech32m addresses (bc1…/tb1…/bcrt1…) are lowercased — BIP-173 makes
+ *   them case-insensitive (all-lower and all-upper are both valid encodings of
+ *   the same address).
+ * - Base58 addresses (1…/3…/m…/n…/2…) are returned trimmed but otherwise
+ *   untouched — case is meaningful in Base58Check, so "the same characters in
+ *   different case" are genuinely different addresses.
+ *
+ * Every write path (record CRUD) stores this form and every exact-match lookup
+ * (sync find-or-create, wallet-import merge, provenance, fund-trail, search)
+ * canonicalizes its key the same way, so all subsystems agree on record
+ * identity no matter how the identifier was typed or pasted.
+ */
+export function canonicalizeRecordIdentifier(input: string): string {
+  if (!input || typeof input !== 'string') return input;
+  const trimmed = input.trim();
+  if (/^[a-fA-F0-9]{64}$/.test(trimmed)) return trimmed.toLowerCase();
+  if (/^(?:bc|tb|bcrt)1[a-z0-9]+$/i.test(trimmed)) return trimmed.toLowerCase();
+  return trimmed;
+}
+
+/**
+ * True when the input looks like a bech32/bech32m address written with mixed
+ * case. Mixed case is invalid per BIP-173 (which demands all-lower or
+ * all-upper) but is tolerated by the app's intentionally lenient checksum
+ * policy; the record will be saved in its lowercase canonical form. Used to
+ * surface a non-blocking paste warning in the record form.
+ */
+export function isMixedCaseBech32(input: string): boolean {
+  const trimmed = typeof input === 'string' ? input.trim() : '';
+  if (!/^(?:bc|tb|bcrt)1[a-z0-9]+$/i.test(trimmed)) return false;
+  return /[a-z]/.test(trimmed) && /[A-Z]/.test(trimmed);
+}
+
+/**
  * Truncates a Bitcoin address for display
  */
 export function truncateAddress(address: string, startChars = 10, endChars = 10): string {

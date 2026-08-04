@@ -15,6 +15,7 @@
 
 import { db } from '../database';
 import type { Record as DbRecord, TransactionParticipant, UtxoLineage } from '../database';
+import { canonicalizeRecordIdentifier } from '../bitcoin';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -182,7 +183,8 @@ export async function getAddressesForGroup(
 export async function getRecordByAddress(
   address: string
 ): Promise<DbRecord | undefined> {
-  return db.records.where('inputString').equals(address).first();
+  // Canonicalize the lookup key so it matches canonically stored identifiers.
+  return db.records.where('inputString').equals(canonicalizeRecordIdentifier(address)).first();
 }
 
 // ---------------------------------------------------------------------------
