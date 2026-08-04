@@ -29,7 +29,13 @@ import type { BalanceIntegrityCard as BalanceIntegrityCardType } from "./Databas
 // DatabaseDoctor.tsx pulls in the IndexedDB-backed db and the heavy stats module.
 // The card only needs the stats functions, which we mock, and the db, which it
 // never touches in this flow.
-vi.mock("@/lib/database", () => ({ db: {} }));
+// Partial mock: the shared provider harness deep-imports modules (e.g.
+// use-node-settings) that need real constants from "@/lib/database", so only
+// override `db` — a wholesale factory mock breaks those importers at collection.
+vi.mock("@/lib/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/database")>();
+  return { ...actual, db: {} };
+});
 vi.mock("@/lib/data/address-stats", () => ({
   detectStaleCachedBalances: vi.fn(),
   recomputeAddressStats: vi.fn(),
