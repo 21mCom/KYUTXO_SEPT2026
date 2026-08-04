@@ -475,7 +475,7 @@ describe("buildIdentifierSearchCollection", () => {
 // Records store canonical identifiers (canonicalizeRecordIdentifier) and the
 // inputStringLower index stores the lowercase of that canonical form. The
 // static guard (scripts/check-input-string-canonicalization.js) cannot see
-// dynamic-field narrows (records table `.where(n.field)`), so these tests prove
+// dynamic-field narrows (a records `.where(n.field)` call), so these tests prove
 // that identifier-shaped inputs entering records-query narrows are
 // canonicalized: padded / uppercase / mixed-case bech32 and txid inputs must
 // still resolve to their canonical (lowercased, trimmed) index keys.
