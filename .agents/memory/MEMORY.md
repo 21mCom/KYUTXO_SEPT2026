@@ -107,3 +107,4 @@
 - [Optional Record fields in real vaults](optional-record-fields-real-vault.md) — rows created without tags/label store UNDEFINED; jsdom fixtures that always set them hide browser-only `.length` crashes.
 - [Workflow-runner phantom rg entries](workflow-runner-phantom-rg.md) — runner rg scan can hit dangling .local/skills mounts invisible shell-side; ignores/renames useless; consent + kill 1 rebuilds.
 - [Balance page vs seeded cached stats](balance-page-seeded-stats.md) — pre-set balanceFormulaVersion=2 or the page's one-time recompute wipes seeded cached stats to zero.
+- [Held-tx liveQuery lag](dexie-held-tx-livequery-lag.md) — deterministically stale useLiveQuery list: insert in a held rw tx (Dexie.waitFor), click, then release; never race timers or same-task cmdk clicks.

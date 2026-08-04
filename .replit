@@ -363,6 +363,10 @@ args = "add-metadata-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "quick-tagger-duplicate-tag-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "heuristic-resync-progress-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1132,6 +1136,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-add-metadata-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "quick-tagger-duplicate-tag-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-quick-tagger-duplicate-tag-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
