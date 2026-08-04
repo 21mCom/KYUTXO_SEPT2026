@@ -310,6 +310,31 @@ describe("BalanceOverview heuristic re-sync", () => {
     expect(screen.queryByTestId("banner-heuristic-warning")).not.toBeNull();
   });
 
+  it("toasts an honest bulk message when all syncs succeed but some addresses stay estimated", async () => {
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    // Every sync call succeeds, yet the recount still finds 1 heuristic
+    // address (its spend prevouts couldn't be resolved) — the toast must not
+    // claim exact matching.
+    followUpHeuristicCount = 1;
+    await renderAndShowBanner();
+
+    fireEvent.click(screen.getByTestId("button-resync-heuristic"));
+
+    await waitFor(() => expect(syncSingleAddress).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Re-synced, but some still estimated");
+    expect(toastCalls[0].description).toContain("Re-synced 2 addresses");
+    expect(toastCalls[0].description).toContain("1 still uses estimated matching");
+    expect(toastCalls[0].description).toContain("spend data couldn't be resolved");
+    expect(toastCalls[0].variant).toBeUndefined();
+
+    // The banner stays up with the refreshed count.
+    await waitFor(() => {
+      const banner = screen.getByTestId("banner-heuristic-warning");
+      expect(banner.textContent).toContain("1 address");
+    });
+  });
+
   it("toasts 'Partially re-synced' when some addresses fail but others succeed", async () => {
     getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
     followUpHeuristicCount = 1;

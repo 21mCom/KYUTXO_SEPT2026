@@ -1272,6 +1272,13 @@ export default function BalanceOverview() {
               : "None of the addresses could be re-synced. Check your provider settings and try again.",
           variant: synced > 0 ? undefined : "destructive",
         });
+      } else if (remaining > 0) {
+        // Every sync succeeded, but some addresses stayed heuristic (their
+        // spend prevouts couldn't be resolved) — don't claim exact matching.
+        toast({
+          title: "Re-synced, but some still estimated",
+          description: `Re-synced ${synced.toLocaleString()} address${synced !== 1 ? "es" : ""}, but ${remaining.toLocaleString()} still use${remaining === 1 ? "s" : ""} estimated matching — their spend data couldn't be resolved.`,
+        });
       } else {
         toast({
           title: "Re-synced",
