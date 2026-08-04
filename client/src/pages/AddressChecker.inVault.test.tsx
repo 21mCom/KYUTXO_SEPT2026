@@ -64,7 +64,7 @@ vi.mock("@/lib/data/record-crud", async (importOriginal) => {
 });
 
 import AddressChecker from "./AddressChecker";
-import { createRecord, clearAllRecords } from "@/lib/data/record-crud";
+import { createRecord, clearAllRecords, getRecordsByInputString } from "@/lib/data/record-crud";
 
 // Valid mainnet addresses.
 const ADDR_SAVED = "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3";
@@ -181,11 +181,60 @@ describe("AddressChecker — In Vault column", () => {
     fireEvent.click(screen.getByTestId("badge-invault-0"));
 
     // The global record detail panel opens showing the saved record's
-    // identifier (the seeded uppercase inputString, not the pasted lowercase
-    // address) — proving the click resolved the actual saved record by id.
+    // identifier (canonicalized to lowercase on create) and its label —
+    // proving the click resolved the actual saved record by id.
     await waitFor(() => {
       const identifier = screen.getByTestId("text-panel-identifier");
-      expect(identifier.textContent).toBe(ADDR_SAVED.toUpperCase());
+      expect(identifier.textContent).toBe(ADDR_SAVED);
+    });
+    expect(screen.getByText("Savings wallet")).toBeTruthy();
+  });
+
+  it("opens the labeled record when two saved records share the same address", async () => {
+    // Two `type: 'address'` records for the same address: an UNLABELED one
+    // created first and a LABELED one created second. The lookup must prefer
+    // the labeled record, so the badge click must open it — the panel title
+    // (the record's label) proves which record was opened.
+    await createRecord({
+      type: "address",
+      inputString: ADDR_UNSAVED,
+      label: "",
+      tags: [],
+      categories: [],
+    });
+    await createRecord({
+      type: "address",
+      inputString: ADDR_UNSAVED,
+      label: "Labeled duplicate",
+      tags: [],
+      categories: [],
+    });
+    // Guard the fixture: both records must actually exist as separate rows,
+    // otherwise the labeled-preference branch isn't exercised at all.
+    // (beforeEach also seeds a txid-type record for this address; count only
+    // the address-type rows the lookup considers.)
+    const addressRows = (await getRecordsByInputString(ADDR_UNSAVED)).filter(
+      (r) => r.type === "address"
+    );
+    expect(addressRows.length).toBe(2);
+
+    renderWithProviders(<AddressChecker />);
+    await runCheck();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("badge-invault-1")).toBeTruthy();
+    });
+    // Tooltip carries the labeled record's label, not the generic fallback.
+    expect(screen.getByTestId("badge-invault-1").getAttribute("title")).toBe(
+      "Saved in vault: Labeled duplicate (click to open)"
+    );
+
+    fireEvent.click(screen.getByTestId("badge-invault-1"));
+    // The panel title is the opened record's label: the labeled duplicate,
+    // not the unlabeled record that was created first.
+    await waitFor(() => {
+      expect(screen.getByText("Labeled duplicate")).toBeTruthy();
+      expect(screen.getByTestId("text-panel-identifier").textContent).toBe(ADDR_UNSAVED);
     });
   });
 

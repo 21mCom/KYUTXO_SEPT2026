@@ -547,6 +547,10 @@ args = "address-checker-invault-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "address-checker-invault-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "transactions-entity-filter-engine-browser-check"
 
 [[workflows.workflow]]
@@ -1968,6 +1972,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-canonical-identifiers-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-invault-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/AddressChecker.inVault.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
