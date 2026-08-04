@@ -20,7 +20,12 @@
 //   4. A parser-rejected request (malformed JSON) still gets nosniff — the
 //      header middleware must stay registered before the body parsers in the
 //      built bundle too.
-//   5. The captured server log contains the request line (method/path/status)
+//   5. DNS-rebinding defense survives the bundle: a raw request with a
+//      forged non-loopback Host header (with or without a valid launch
+//      token, well-formed or parser-rejected body) is rejected 403 before
+//      any parser or route runs, while the same raw request with a
+//      loopback Host is served (control).
+//   6. The captured server log contains the request line (method/path/status)
 //      but never response bodies, the attachment's absolute filesystem path,
 //      or the file's secret content.
 //
@@ -30,6 +35,7 @@
 
 import { execSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -203,7 +209,94 @@ async function main() {
       `status=${badJson.status}, header=${badJson.headers.get('x-content-type-options')}`,
     );
 
-    // ── 5. Server log hygiene ───────────────────────────────────────────────
+    // ── 5. DNS-rebinding defense: rogue Host headers are rejected ──────────
+    // fetch/undici normalizes the Host header, so use node:http to send a
+    // literal forged Host against the loopback socket — exactly what a
+    // rebound-DNS browser request looks like to the server.
+    const rawRequest = (options, body = null) =>
+      new Promise((resolve, reject) => {
+        const req = http.request(
+          { host: '127.0.0.1', port: PORT, ...options },
+          (res) => {
+            let data = '';
+            res.on('data', (d) => { data += d; });
+            res.on('end', () =>
+              resolve({ status: res.statusCode, headers: res.headers, body: data }));
+          },
+        );
+        req.on('error', reject);
+        if (body !== null) req.write(body);
+        req.end();
+      });
+
+    // 5a. Rogue Host cannot read the token-bearing HTML.
+    const rogueHtml = await rawRequest({
+      method: 'GET',
+      path: '/',
+      headers: { Host: 'attacker.example' },
+    });
+    step(
+      'rogue Host on / is rejected with 403 and never sees the launch token',
+      rogueHtml.status === 403 &&
+        !rogueHtml.body.includes(LAUNCH_TOKEN) &&
+        rogueHtml.body.includes('Forbidden'),
+      `status=${rogueHtml.status}, leaked=${rogueHtml.body.includes(LAUNCH_TOKEN)}`,
+    );
+    step(
+      'rogue-Host 403 response carries nosniff',
+      rogueHtml.headers['x-content-type-options'] === 'nosniff',
+      `header=${rogueHtml.headers['x-content-type-options']}`,
+    );
+
+    // 5b. Rogue Host with a VALID launch token is still rejected before any
+    // route runs — the host check must not be bypassable by a replayed token.
+    const rogueApi = await rawRequest({
+      method: 'GET',
+      path: `/api/attachments/download/${SECRET_REL_PATH}`,
+      headers: { Host: 'attacker.example:5391', [TOKEN_HEADER]: LAUNCH_TOKEN },
+    });
+    step(
+      'rogue Host + valid token on /api is rejected 403 before the route runs',
+      rogueApi.status === 403 && !rogueApi.body.includes('Download failed'),
+      `status=${rogueApi.status}, body=${rogueApi.body.slice(0, 120)}`,
+    );
+
+    // 5c. Parser-rejected request from a rogue Host: the host check is
+    // registered before the body parsers, so the malformed body must never
+    // reach a parser — the response is 403, not a parser 4xx.
+    const rogueBadJson = await rawRequest(
+      {
+        method: 'POST',
+        path: '/api/tor/settings',
+        headers: {
+          Host: 'attacker.example',
+          [TOKEN_HEADER]: LAUNCH_TOKEN,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength('{ not json'),
+        },
+      },
+      '{ not json',
+    );
+    step(
+      'malformed body from rogue Host is rejected 403 (not answered by a parser)',
+      rogueBadJson.status === 403,
+      `status=${rogueBadJson.status}, body=${rogueBadJson.body.slice(0, 120)}`,
+    );
+
+    // Sanity: the same raw-socket path with a loopback Host succeeds, so the
+    // rogue rejections above are due to the Host value, not the transport.
+    const loopbackHtml = await rawRequest({
+      method: 'GET',
+      path: '/',
+      headers: { Host: `localhost:${PORT}` },
+    });
+    step(
+      'same raw request with loopback Host is served normally (control)',
+      loopbackHtml.status === 200 && loopbackHtml.body.includes(`content="${LAUNCH_TOKEN}"`),
+      `status=${loopbackHtml.status}`,
+    );
+
+    // ── 6. Server log hygiene ───────────────────────────────────────────────
     // Give the async request-logger "finish" handlers a moment to flush.
     await new Promise((r) => setTimeout(r, 500));
     step(
