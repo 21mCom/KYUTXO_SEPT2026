@@ -235,6 +235,10 @@ args = "aml-participant-cap-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "op-return-fallback-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "demo-vault-loader-node-check"
 
 [[workflows.workflow.tasks]]
@@ -2148,6 +2152,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-pof-addons-pdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "op-return-fallback-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/transaction-crud.opReturnBooleanScan.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
