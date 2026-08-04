@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { useSettings, updatePeelChainViewMode } from "@/hooks/use-settings";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { useGuardedAddressCopy } from "@/hooks/use-guarded-address-copy";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
 import { getParticipantsByTxids } from "@/lib/data/transaction-crud";
@@ -51,7 +51,7 @@ export function shortPeelTxid(t: string): string {
 
 function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinTxids: Set<string> }) {
   const { openRecordPreviewByAddress } = useRecordPreview();
-  const { copy, isCopied } = useCopyToClipboard(1500);
+  const { copyAddress: guardedCopyAddress, isCopied } = useGuardedAddressCopy(1500);
   const [deepDiveTxid, setDeepDiveTxid] = useState<string | null>(null);
   const marginTop = 36;
   const hopGap = 150;
@@ -76,7 +76,7 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
   };
   const copyAddr = (value: string) => {
     if (!value || value === "—") return;
-    copy(value, { label: "Address" });
+    void guardedCopyAddress(value);
   };
   const onCopyKeyDown = (e: React.KeyboardEvent, value: string) => {
     if (e.key === "Enter" || e.key === " ") {

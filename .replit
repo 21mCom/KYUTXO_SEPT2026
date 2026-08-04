@@ -1796,7 +1796,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/address-poisoning.test.ts client/src/lib/address-poisoning.scale.test.ts client/src/pages/AddressPoisoning.test.tsx client/src/components/AddressLink.poisoningGuard.test.tsx"
+args = "npx vitest run client/src/lib/address-poisoning.test.ts client/src/lib/address-poisoning.scale.test.ts client/src/pages/AddressPoisoning.test.tsx client/src/components/AddressLink.poisoningGuard.test.tsx client/src/hooks/use-guarded-address-copy.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

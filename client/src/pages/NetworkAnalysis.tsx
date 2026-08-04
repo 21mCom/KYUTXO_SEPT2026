@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { useGuardedAddressCopy } from "@/hooks/use-guarded-address-copy";
 import {
   Play,
   StopCircle,
@@ -669,12 +669,12 @@ function StatsPanel({ stats }: { stats: GraphStats }) {
 }
 
 export function CopyAddressButton({ address }: { address: string }) {
-  const { copy, isCopied } = useCopyToClipboard();
+  const { copyAddress, isCopied } = useGuardedAddressCopy();
   const copied = isCopied(address);
 
   const handleCopy = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
-    copy(address, { label: "Address" });
+    void copyAddress(address);
   };
 
   const handleCopyKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {

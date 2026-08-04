@@ -55,6 +55,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { useGuardedAddressCopy } from "@/hooks/use-guarded-address-copy";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useTags, createTag as createTagHook } from "@/hooks/use-tags";
 import { useCategories, createCategory as createCategoryHook } from "@/hooks/use-categories";
@@ -155,6 +156,7 @@ export default function DescriptorImport() {
   const { categories } = useCategories();
   const { toast } = useToast();
   const { copy } = useCopyToClipboard();
+  const { copyAddress: guardedCopyAddress } = useGuardedAddressCopy();
 
   const { owners: existingOwners } = useOwners();
   const { walletNames: existingWalletNames } = useWalletNames();
@@ -704,7 +706,7 @@ export default function DescriptorImport() {
   };
 
   const copyAddress = (address: string) => {
-    copy(address, { label: "Address" });
+    void guardedCopyAddress(address);
   };
 
   return (

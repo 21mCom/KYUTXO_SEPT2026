@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { useGuardedAddressCopy } from "@/hooks/use-guarded-address-copy";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { getBtcUsdPriceData } from "@/lib/data/price-data-crud";
@@ -1665,10 +1665,10 @@ export default function BalanceOverview() {
     [expandedGroups, ensureGroupRows],
   );
 
-  const { copy, copiedKey } = useCopyToClipboard();
+  const { copy, copiedKey, copyAddress: guardedCopyAddress } = useGuardedAddressCopy();
   const copyAddress = useCallback((address: string) => {
-    copy(address, { label: "Address" });
-  }, [copy]);
+    void guardedCopyAddress(address);
+  }, [guardedCopyAddress]);
 
   // Open the "missing transactions" dialog and compute the list. Works fully
   // offline — it reads only local participant data and needs no provider.
@@ -2167,7 +2167,7 @@ export default function BalanceOverview() {
                   resyncTxProgress={singleResyncTxProgress}
                   resyncDisabled={resyncingHeuristic}
                   copiedKey={copiedKey}
-                  onCopy={(address) => copy(address, { label: "Address" })}
+                  onCopy={(address) => void guardedCopyAddress(address)}
                   onResync={handleResyncSingleHeuristic}
                 />
               ) : (

@@ -39,7 +39,7 @@ import {
 } from "lucide-react";
 import { updateRecord, getParticipantsByAddresses, getSpendInputsByOutpoints } from "@/lib/dataFacade";
 import { useToast } from "@/hooks/use-toast";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { useGuardedAddressCopy } from "@/hooks/use-guarded-address-copy";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
@@ -267,7 +267,7 @@ export default function AddressReuse() {
   const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.AddressReuse);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const { toast } = useToast();
-  const { copy, isCopied } = useCopyToClipboard();
+  const { copy, isCopied, copyAddress: guardedCopyAddress } = useGuardedAddressCopy();
   
   // Filter states
   const [reuseTypeFilter, setReuseTypeFilter] = useState<ReuseReason | 'all'>('all');
@@ -434,6 +434,10 @@ export default function AddressReuse() {
   };
 
   const copyToClipboard = (text: string, type: string) => {
+    if (type === "Address") {
+      void guardedCopyAddress(text);
+      return;
+    }
     copy(text, { label: type });
   };
 

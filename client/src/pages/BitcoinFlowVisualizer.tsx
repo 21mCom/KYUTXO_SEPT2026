@@ -31,7 +31,7 @@ import type { TransactionParticipant } from "@/lib/database";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useTags } from "@/hooks/use-tags";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { useGuardedAddressCopy } from "@/hooks/use-guarded-address-copy";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 
 interface FilteredAddress {
@@ -156,12 +156,12 @@ export function AddressFinderRow({ addr, onSelect, satsToBtcDisplay, formatDate,
   formatDate: (ts: number) => string;
   rowHeight: number;
 }) {
-  const { copy, isCopied } = useCopyToClipboard();
+  const { copyAddress, isCopied } = useGuardedAddressCopy();
   const copied = isCopied(addr.address);
 
   const handleCopy = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
-    copy(addr.address, { label: "Address" });
+    void copyAddress(addr.address);
   };
 
   const handleRowKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
