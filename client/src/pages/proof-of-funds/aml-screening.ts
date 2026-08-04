@@ -78,10 +78,26 @@ export async function runAmlScreening(addresses: string[]): Promise<AmlScreening
   const txidSlice = ourTxids.slice(0, MAX_TXIDS);
 
   const BATCH = 500;
+  // Total-participant cap: 2000 txids × hundreds of participants each can
+  // otherwise balloon allParts to millions of rows and freeze the UI. When the
+  // cap is hit we stop loading and continue with the partial graph — a partial
+  // hop-distance result is still meaningful (it can only under-report
+  // proximity, never invent it).
+  const MAX_TOTAL_PARTICIPANTS = 100_000;
   const allParts: typeof ownParticipants = [];
   for (let i = 0; i < txidSlice.length; i += BATCH) {
     const batch = txidSlice.slice(i, i + BATCH);
     const parts = await getParticipantsByTxids(batch);
+    const remaining = MAX_TOTAL_PARTICIPANTS - allParts.length;
+    if (parts.length > remaining) {
+      allParts.push(...parts.slice(0, remaining));
+      console.warn(
+        `[aml-screening] Participant cap of ${MAX_TOTAL_PARTICIPANTS} reached ` +
+          `after ${Math.min(i + BATCH, txidSlice.length)} of ${txidSlice.length} txids; ` +
+          `continuing with partial graph data.`,
+      );
+      break;
+    }
     allParts.push(...parts);
   }
 
