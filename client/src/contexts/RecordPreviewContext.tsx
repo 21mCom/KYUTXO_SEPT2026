@@ -547,6 +547,13 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         counterpartyType: data.counterpartyType,
         counterpartyName: data.counterpartyName,
         ...typeSwitchClears,
+        // DELIBERATE OMISSION: `conflictResolutions` is a Conflict Resolution
+        // audit trail, never rendered/submitted by RecordFormDialog. Because
+        // updateRecord MERGES into the existing row, omitting it preserves
+        // recorded decisions; carrying `data.conflictResolutions` (undefined
+        // from the form) would overwrite and silently drop them. It is
+        // correspondingly listed in NON_EDITABLE_FIELDS in
+        // RecordPreviewContext.editFieldFidelity.test.tsx.
       });
 
       // Upload any new files for the existing record

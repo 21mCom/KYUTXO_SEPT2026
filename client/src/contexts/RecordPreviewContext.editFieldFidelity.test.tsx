@@ -74,6 +74,14 @@ import { clearAllRecords, getRecord } from "@/lib/data/record-crud";
 //   - per-address stats cache (written only by the sync/recompute path):
 //     cachedBalanceSats, cachedTxCount, cachedLastActivityTime,
 //     statsComputedAt, cachedUtxoCount
+//   - conflict-resolution audit trail (written only by the Conflict Resolution
+//     flow, never rendered or submitted by RecordFormDialog): conflictResolutions.
+//     DELIBERATE DECISION (Task #1913): handleUpdateRecord must NOT carry this
+//     field — updateRecord merges into the existing row, so omitting it
+//     preserves recorded decisions, while carrying `data.conflictResolutions`
+//     (always undefined from the form) would OVERWRITE and drop them via
+//     IndexedDB's structured clone. See the matching note in
+//     RecordPreviewContext.handleUpdateRecord.
 const NON_EDITABLE_FIELDS: ReadonlySet<keyof DbRecord> = new Set<keyof DbRecord>([
   "id",
   "createdAt",
@@ -92,6 +100,7 @@ const NON_EDITABLE_FIELDS: ReadonlySet<keyof DbRecord> = new Set<keyof DbRecord>
   "cachedLastActivityTime",
   "statsComputedAt",
   "cachedUtxoCount",
+  "conflictResolutions",
 ]);
 
 // Derived from the shared fixture, NOT hand-listed: every key on the fully
