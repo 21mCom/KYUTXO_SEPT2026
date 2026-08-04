@@ -18,7 +18,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { describeKeptFieldCounts } from '@/lib/descriptor-import-utils';
 import { useToast } from '@/hooks/use-toast';
 import {
   analyzeRecords,
@@ -478,6 +479,28 @@ export default function BIP329Import() {
                 </div>
               )}
             </div>
+          )}
+          
+          {importResult && describeKeptFieldCounts(importResult.keptFieldCounts).length > 0 && (
+            <Alert data-testid="alert-metadata-kept">
+              <Info className="h-4 w-4" />
+              <AlertTitle>Some existing metadata was kept</AlertTitle>
+              <AlertDescription>
+                <p className="mb-2">
+                  For records that already existed in your vault, the values below were
+                  already set, so your entries were not applied to them (tags and categories
+                  were merged everywhere):
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-sm">
+                  {describeKeptFieldCounts(importResult.keptFieldCounts).map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs">
+                  Use the Bulk Editor if you want to overwrite existing values.
+                </p>
+              </AlertDescription>
+            </Alert>
           )}
           
           {importResult?.errors && importResult.errors.length > 0 && (

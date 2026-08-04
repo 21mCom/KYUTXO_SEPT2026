@@ -14,7 +14,10 @@ import {
   FileJson,
   FileSpreadsheet,
   ShieldCheck,
+  Info,
 } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { describeKeptFieldCounts } from '@/lib/descriptor-import-utils';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -1240,6 +1243,28 @@ export default function WalletImport() {
               </CardContent>
             </Card>
           </div>
+          
+          {describeKeptFieldCounts(importResult.keptFieldCounts).length > 0 && (
+            <Alert data-testid="alert-metadata-kept">
+              <Info className="h-4 w-4" />
+              <AlertTitle>Some existing metadata was kept</AlertTitle>
+              <AlertDescription>
+                <p className="mb-2">
+                  For records that already existed in your vault, the values below were
+                  already set, so your entries were not applied to them (tags and categories
+                  were merged everywhere):
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-sm">
+                  {describeKeptFieldCounts(importResult.keptFieldCounts).map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs">
+                  Use the Bulk Editor if you want to overwrite existing values.
+                </p>
+              </AlertDescription>
+            </Alert>
+          )}
           
           {importResult.errors.length > 0 && (
             <Card>
