@@ -8,8 +8,10 @@
 //
 // Flow (all offline; Electrum is shimmed via window.electronAPI):
 //   1. fresh vault (fresh browser context => empty IndexedDB)
-//   2. seed ONE saved `type: 'address'` record via the Vite-singleton CRUD
-//      module; a second generated address stays record-less
+//   2. seed TWO saved `type: 'address'` records for ONE address (unlabeled
+//      duplicate first, labeled second) via the Vite-singleton CRUD module;
+//      a second generated address stays record-less — this exercises the
+//      getSavedAddressRecordLookup labeled-preference path end-to-end
 //   3. paste both addresses into the Address Checker and run a check
 //      (vault membership is snapshotted per run at Check click)
 //   4. assert the saved row shows the clickable Saved badge, the unsaved
@@ -215,11 +217,18 @@ async function main() {
     await unlockIfNeeded(page);
     step('vault created and app unlocked', true);
 
-    // ── Seed: one saved address record + Electrum node settings ───────────
+    // ── Seed: TWO saved records for the same address (unlabeled duplicate
+    // first, labeled second) + Electrum node settings. This exercises the
+    // getSavedAddressRecordLookup labeled-preference path end-to-end: the
+    // badge must carry the LABELED record's label and open THAT record.
     const seed = await page.evaluate(
       async ({ saved, unsaved, label }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
         const nodeCrud = await import('/src/lib/data/node-settings-crud.ts');
+        const unlabeledRecordId = await recordCrud.createRecord({
+          type: 'address',
+          inputString: saved,
+        });
         const recordId = await recordCrud.createRecord({
           type: 'address',
           inputString: saved,
@@ -239,14 +248,28 @@ async function main() {
           electrumSSL: false,
         });
         const unsavedRecords = await recordCrud.getRecordsByInputString(unsaved);
-        return { recordId, unsavedCount: unsavedRecords.length };
+        // Fixture guard: both duplicates must exist as separate address rows,
+        // otherwise the labeled-preference branch isn't exercised at all.
+        const savedRows = (await recordCrud.getRecordsByInputString(saved)).filter(
+          (r) => r.type === 'address',
+        );
+        return {
+          recordId,
+          unlabeledRecordId,
+          savedAddressRows: savedRows.length,
+          unsavedCount: unsavedRecords.length,
+        };
       },
       { saved: savedAddr, unsaved: unsavedAddr, label: SAVED_LABEL },
     );
     step(
-      'seed: saved address record exists; unsaved address has NO record',
-      typeof seed.recordId === 'number' && seed.unsavedCount === 0,
-      `recordId=${seed.recordId}, records for unsaved addr=${seed.unsavedCount}`,
+      'seed: TWO saved records (unlabeled + labeled) share the address; unsaved address has NO record',
+      typeof seed.recordId === 'number' &&
+        typeof seed.unlabeledRecordId === 'number' &&
+        seed.recordId !== seed.unlabeledRecordId &&
+        seed.savedAddressRows === 2 &&
+        seed.unsavedCount === 0,
+      `labeledId=${seed.recordId}, unlabeledId=${seed.unlabeledRecordId}, savedAddressRows=${seed.savedAddressRows}, records for unsaved addr=${seed.unsavedCount}`,
     );
 
     // ── Navigate to the Address Checker (reload; unlock again if needed) ──
