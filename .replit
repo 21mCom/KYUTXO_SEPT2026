@@ -227,6 +227,10 @@ args = "pof-page-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "aml-participant-cap-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "demo-vault-loader-node-check"
 
 [[workflows.workflow.tasks]]
@@ -2088,6 +2092,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-engine-bridge-shared.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "aml-participant-cap-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/proof-of-funds/aml-screening.participantCap.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
