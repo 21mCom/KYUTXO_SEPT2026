@@ -625,6 +625,13 @@ args = "transactions-entity-filter-engine-browser-check"
 task = "workflow.run"
 args = "vocab-ensure-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backup-compare-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backup-compare-browser-check"
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -2220,6 +2227,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-declaration-prefs-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "backup-compare-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/backup/compare.test.ts client/src/lib/backup/compare.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "backup-compare-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-backup-compare-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

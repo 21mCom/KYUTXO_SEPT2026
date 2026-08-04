@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { getActivityBus } from "@/lib/activity-bus";
-import { Download, Lock, FileJson, AlertCircle, AlertTriangle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip, Tag, Filter } from "lucide-react";
+import { Download, Lock, FileJson, AlertCircle, AlertTriangle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip, Tag, Filter, ArrowLeftRight } from "lucide-react";
+import { BackupCompareDialog } from "@/components/BackupCompareDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -127,6 +128,8 @@ export default function ExportPage() {
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState("");
   const [exportComplete, setExportComplete] = useState(false);
+  // "Compare backups" dialog (read-only diff between two backup files).
+  const [compareOpen, setCompareOpen] = useState(false);
 
   const [recordCount, setRecordCount] = useState(0);
   const [attachmentCount, setAttachmentCount] = useState(0);
@@ -861,6 +864,36 @@ export default function ExportPage() {
             </Button>
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ArrowLeftRight className="h-5 w-5" />
+              Compare Backups
+            </CardTitle>
+            <CardDescription>
+              See exactly what changed between two backup files
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Pick an older and a newer backup to get a read-only report of records
+              added, removed, or edited, transactions and participants gained or lost,
+              and vocabulary or settings differences — without restoring anything or
+              touching your current vault.
+            </p>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => setCompareOpen(true)}
+              data-testid="button-open-compare"
+            >
+              <ArrowLeftRight className="h-4 w-4 mr-2" />
+              Compare Two Backup Files
+            </Button>
+          </CardContent>
+        </Card>
+        <BackupCompareDialog open={compareOpen} onOpenChange={setCompareOpen} />
 
         <Card>
           <CardHeader>
