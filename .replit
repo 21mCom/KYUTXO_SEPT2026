@@ -103,6 +103,10 @@ args = "crud-guards"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "input-string-canonicalization"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "lockfile-urls"
 
 [[workflows.workflow.tasks]]
@@ -1863,6 +1867,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-dashboard-hidden-matches-engine-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "input-string-canonicalization"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-input-string-canonicalization.js"
 
 [workflows.workflow.metadata]
 isValidation = true
