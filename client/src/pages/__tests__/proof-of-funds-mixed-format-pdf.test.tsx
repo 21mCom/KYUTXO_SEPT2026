@@ -26,6 +26,14 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { signatureFormatLabel } from "@/lib/signatureVerify";
+
+// Expected labels derive from the real signatureFormatLabel so a deliberate
+// wording change doesn't cascade into false failures here; the exact wording
+// is pinned once in client/src/lib/signatureVerify.test.ts.
+const LEGACY_LABEL = signatureFormatLabel("legacy");
+const BIP322_LABEL = signatureFormatLabel("bip322");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // A legacy P2PKH address and a mainnet Taproot (P2TR) address.
 const LEGACY_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
@@ -185,12 +193,10 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
     });
 
     // (1) Per-address "Signature Format:" lines — one per scheme, correct label.
-    expect(pdfTextLines).toContain(
-      "Signature Format: Bitcoin Signed Message",
-    );
-    // The label is intentionally just "BIP-322" — it covers both Simple
-    // (single-key) and Full (script-path / multisig) witnesses.
-    expect(pdfTextLines).toContain("Signature Format: BIP-322");
+    expect(pdfTextLines).toContain(`Signature Format: ${LEGACY_LABEL}`);
+    // The BIP-322 label covers both Simple (single-key) and Full
+    // (script-path / multisig) witnesses.
+    expect(pdfTextLines).toContain(`Signature Format: ${BIP322_LABEL}`);
 
     // (2) Appendix signature-box headings switch on format.
     expect(pdfTextLines).toContain("Wallet Signature (base64):");
@@ -200,7 +206,7 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
     const combinedDisclaimer = pdfTextLines.find(
       (l) =>
         l.includes("proof-of-control is included") &&
-        l.includes("Bitcoin Signed Message and BIP-322 signatures"),
+        l.includes(`${LEGACY_LABEL} and ${BIP322_LABEL} signatures`),
     );
     expect(combinedDisclaimer).toBeTruthy();
     // The single-format phrasings must NOT be the one used here.
@@ -208,14 +214,14 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
       pdfTextLines.some(
         (l) =>
           l.includes("proof-of-control is included") &&
-          /via BIP-322 signatures\./.test(l),
+          new RegExp(`via ${escapeRegExp(BIP322_LABEL)} signatures\\.`).test(l),
       ),
     ).toBe(false);
     expect(
       pdfTextLines.some(
         (l) =>
           l.includes("proof-of-control is included") &&
-          /via Bitcoin Signed Message signatures\./.test(l),
+          new RegExp(`via ${escapeRegExp(LEGACY_LABEL)} signatures\\.`).test(l),
       ),
     ).toBe(false);
   });

@@ -29,6 +29,14 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { signatureFormatLabel } from "@/lib/signatureVerify";
+
+// Expected labels derive from the real signatureFormatLabel so a deliberate
+// wording change doesn't cascade into false failures here; the exact wording
+// is pinned once in client/src/lib/signatureVerify.test.ts.
+const LEGACY_LABEL = signatureFormatLabel("legacy");
+const BIP322_LABEL = signatureFormatLabel("bip322");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // A mainnet Taproot (P2TR) address.
 const TAPROOT_ADDR =
@@ -181,12 +189,8 @@ describe("ProofOfFundsDeclaration — Taproot (BIP-322) proof-of-control PDF", (
 
     // (1) Per-address "Signature Format:" line uses the BIP-322 label and the
     //     legacy label must NOT appear anywhere.
-    expect(pdfTextLines).toContain(
-      "Signature Format: BIP-322",
-    );
-    expect(pdfTextLines).not.toContain(
-      "Signature Format: Bitcoin Signed Message",
-    );
+    expect(pdfTextLines).toContain(`Signature Format: ${BIP322_LABEL}`);
+    expect(pdfTextLines).not.toContain(`Signature Format: ${LEGACY_LABEL}`);
 
     // (2) Appendix signature-box heading is the BIP-322 witness heading; the
     //     legacy heading must NOT be present.
@@ -198,21 +202,21 @@ describe("ProofOfFundsDeclaration — Taproot (BIP-322) proof-of-control PDF", (
     const bip322Disclaimer = pdfTextLines.find(
       (l) =>
         l.includes("proof-of-control is included") &&
-        /via BIP-322 signatures\./.test(l),
+        new RegExp(`via ${escapeRegExp(BIP322_LABEL)} signatures\\.`).test(l),
     );
     expect(bip322Disclaimer).toBeTruthy();
     expect(
       pdfTextLines.some(
         (l) =>
           l.includes("proof-of-control is included") &&
-          /via Bitcoin Signed Message signatures\./.test(l),
+          new RegExp(`via ${escapeRegExp(LEGACY_LABEL)} signatures\\.`).test(l),
       ),
     ).toBe(false);
     expect(
       pdfTextLines.some(
         (l) =>
           l.includes("proof-of-control is included") &&
-          l.includes("Bitcoin Signed Message and BIP-322 signatures"),
+          l.includes(`${LEGACY_LABEL} and ${BIP322_LABEL} signatures`),
       ),
     ).toBe(false);
   });

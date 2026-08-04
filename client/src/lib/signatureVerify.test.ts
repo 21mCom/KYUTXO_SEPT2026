@@ -610,9 +610,12 @@ describe('verifyBitcoinSignature routing', () => {
 });
 
 describe('signatureFormatLabel', () => {
-  it('labels BIP-322 and legacy formats', () => {
-    expect(signatureFormatLabel('bip322')).toMatch(/BIP-322/);
-    expect(signatureFormatLabel('legacy')).toMatch(/Bitcoin Signed Message/);
+  // This test is the single place that pins the exact human-readable label
+  // wording. Other tests (PDF/UI) must derive expected labels via
+  // signatureFormatLabel so a deliberate wording change only updates here.
+  it('pins the exact label strings for both formats', () => {
+    expect(signatureFormatLabel('bip322')).toBe('BIP-322');
+    expect(signatureFormatLabel('legacy')).toBe('Bitcoin Signed Message');
   });
 });
 

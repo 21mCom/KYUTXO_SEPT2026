@@ -27,6 +27,13 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { signatureFormatLabel } from "@/lib/signatureVerify";
+
+// Expected label derives from the real signatureFormatLabel so a deliberate
+// wording change doesn't cascade into false failures here; the exact wording
+// is pinned once in client/src/lib/signatureVerify.test.ts.
+const LEGACY_LABEL = signatureFormatLabel("legacy");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Two legacy P2PKH addresses — verifying only the first leaves the second
 // self-declared, so doneRows.length (2) !== verifiedRows.length (1).
@@ -186,7 +193,7 @@ describe("ProofOfFundsDeclaration — partial-verification proof-of-control PDF"
       (l) =>
         l.includes("proof-of-control is included") &&
         l.includes("1 of 2 addresses") &&
-        /via Bitcoin Signed Message signatures\./.test(l) &&
+        new RegExp(`via ${escapeRegExp(LEGACY_LABEL)} signatures\\.`).test(l) &&
         l.includes("The remaining addresses are self-declared"),
     );
     expect(partialDisclaimer).toBeTruthy();

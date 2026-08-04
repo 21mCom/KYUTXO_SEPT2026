@@ -27,6 +27,14 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { signatureFormatLabel } from "@/lib/signatureVerify";
+
+// Expected labels derive from the real signatureFormatLabel so a deliberate
+// wording change doesn't cascade into false failures here; the exact wording
+// is pinned once in client/src/lib/signatureVerify.test.ts.
+const LEGACY_LABEL = signatureFormatLabel("legacy");
+const BIP322_LABEL = signatureFormatLabel("bip322");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // ── Genuine signature fixtures ───────────────────────────────────────────────
 // bc1q BIP-322 Simple witness over "Hello World" for the canonical BIP-322
@@ -120,7 +128,9 @@ describe("ProofOfFundsDeclaration — bc1q signature verification (E2E, real ver
     // The inline verified line shows the BIP-322 (Simple) format label.
     await waitFor(() => {
       expect(
-        screen.getByText(/Signature verified \(BIP-322\)/),
+        screen.getByText(
+          new RegExp(`Signature verified \\(${escapeRegExp(BIP322_LABEL)}\\)`),
+        ),
       ).toBeTruthy();
     });
 
@@ -147,7 +157,9 @@ describe("ProofOfFundsDeclaration — bc1q signature verification (E2E, real ver
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Signature verified \(Bitcoin Signed Message\)/),
+        screen.getByText(
+          new RegExp(`Signature verified \\(${escapeRegExp(LEGACY_LABEL)}\\)`),
+        ),
       ).toBeTruthy();
     });
 
