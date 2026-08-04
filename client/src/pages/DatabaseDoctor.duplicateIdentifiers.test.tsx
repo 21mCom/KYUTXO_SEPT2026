@@ -78,6 +78,24 @@ async function seedVerbatim(inputString: string, label = ""): Promise<number> {
   } as unknown as DbRecord)) as number;
 }
 
+// Seed a sparse row the way createRecord actually stores records created
+// without optional metadata: label/tags/notes/categories are simply absent
+// (undefined), not empty strings/arrays. Real vaults contain such rows and
+// the Resolve dialog crashed on them in a real browser (Task #1891).
+async function seedSparse(inputString: string): Promise<number> {
+  const now = Date.now();
+  return (await db.records.add({
+    type: "address",
+    inputString,
+    inputStringLower: inputString.toLowerCase(),
+    owner: "Pending Review",
+    source: "manual",
+    addressImportance: "manual",
+    createdAt: now,
+    updatedAt: now,
+  } as unknown as DbRecord)) as number;
+}
+
 async function runHealthCheck() {
   render(<DatabaseDoctor />);
   fireEvent.click(screen.getByTestId("button-run-check"));
@@ -162,6 +180,55 @@ describe("guided Resolve flow (Task #1880)", () => {
     expect(await db.records.get(keeperId)).toBeTruthy();
     await waitFor(() => expect(screen.queryByTestId("dialog-resolve-duplicate")).toBeNull());
     expect(screen.queryByTestId("duplicate-group-0")).toBeNull();
+  });
+
+  it("handles sparse rows (no label/tags/notes stored) without crashing (Task #1891)", async () => {
+    // The keeper is a sparse row exactly as createRecord stores it — the
+    // optional metadata fields are absent, not empty. The dupe carries
+    // metadata so the lost-metadata preview must still work against the
+    // sparse keeper.
+    const keeperId = await seedSparse(BECH32);
+    const dupeId = await seedVerbatim(`  ${BECH32.toUpperCase()}  `, "dupe-label");
+    await db.records.update(dupeId, { tags: ["lost-tag"], notes: "lost note" });
+
+    await runHealthCheck();
+
+    fireEvent.click(screen.getByTestId("button-resolve-duplicate-0"));
+    await waitFor(() => expect(screen.getByTestId(`radio-keeper-${keeperId}`)).toBeTruthy());
+
+    // Lost-metadata preview compares against the sparse keeper's undefined
+    // label/tags/notes — everything on the dupe is at risk.
+    const lost = screen.getByTestId("text-resolve-lost-metadata");
+    expect(lost.textContent).toContain("dupe-label");
+    expect(lost.textContent).toContain("lost-tag");
+    expect(lost.textContent).toContain("lost note");
+
+    fireEvent.click(screen.getByTestId("button-resolve-confirm"));
+    await waitFor(async () => {
+      expect(await db.records.get(dupeId)).toBeUndefined();
+    });
+    expect(await db.records.get(keeperId)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByTestId("dialog-resolve-duplicate")).toBeNull());
+  });
+
+  it("handles a group where the sparse row is the loser (undefined metadata on the dupe)", async () => {
+    const keeperId = await seedVerbatim(BECH32, "keeper");
+    const sparseDupeId = await seedSparse(`${BECH32.toUpperCase()}`);
+
+    await runHealthCheck();
+
+    fireEvent.click(screen.getByTestId("button-resolve-duplicate-0"));
+    await waitFor(() => expect(screen.getByTestId(`radio-keeper-${keeperId}`)).toBeTruthy());
+
+    // A sparse loser has nothing to lose — no lost-metadata warning renders,
+    // and it must not crash while computing it.
+    expect(screen.queryByTestId("text-resolve-lost-metadata")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("button-resolve-confirm"));
+    await waitFor(async () => {
+      expect(await db.records.get(sparseDupeId)).toBeUndefined();
+    });
+    expect(await db.records.get(keeperId)).toBeTruthy();
   });
 
   it("lets the user switch the keeper before confirming", async () => {
