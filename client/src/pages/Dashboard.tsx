@@ -334,7 +334,13 @@ export default function Dashboard() {
     }).then(result => {
       if (hiddenMatchVersionRef.current !== version) return;
       setHiddenMatches(result.count > 0 ? result : null);
-    }).catch(e => { console.warn('[Dashboard] Hidden-match count failed:', e); });
+    }).catch(e => {
+      // Deliberately silent (console only): the count is a passive hint the
+      // user never asked for — failing to show it just means no notice, which
+      // is the pre-feature behavior. Contrast with the reveal fetch below,
+      // which is an explicit user action and surfaces a toast on failure.
+      console.warn('[Dashboard] Hidden-match count failed:', e);
+    });
   }, [includeBlockchainDiscovered, searchOrColumnFilterActive, isLoading, buildHiddenMatchPredicate, filteredRecords]);
 
   // The "Show hidden matches" reveal. Runs whenever discovered rows are
@@ -355,8 +361,20 @@ export default function Dashboard() {
     }).then(result => {
       if (revealVersionRef.current !== version) return;
       setRevealedHidden(result.rows.length > 0 ? result : null);
-    }).catch(e => { console.warn('[Dashboard] Hidden-match fetch failed:', e); });
-  }, [includeBlockchainDiscovered, searchOrColumnFilterActive, buildHiddenMatchPredicate]);
+    }).catch(e => {
+      console.warn('[Dashboard] Hidden-match fetch failed:', e);
+      if (revealVersionRef.current !== version) return;
+      // The reveal is an explicit user action — surface the failure instead
+      // of dead-ending on "No records found". Flipping the toggle back off
+      // re-renders the hidden-matches notice so the user can simply retry.
+      setIncludeBlockchainDiscovered(false);
+      toast({
+        title: "Couldn't load hidden matches",
+        description: "Something went wrong while fetching the hidden records. Please try again.",
+        variant: "destructive",
+      });
+    });
+  }, [includeBlockchainDiscovered, searchOrColumnFilterActive, buildHiddenMatchPredicate, toast]);
 
   // Reset to page 1 when filters change
   useEffect(() => {

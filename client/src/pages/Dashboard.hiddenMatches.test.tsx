@@ -134,6 +134,32 @@ vi.mock("@/components/FilterBar", () => ({
   ),
 }));
 
+// Failure injection for the vault-wide reveal fetch: when the flag is set the
+// mocked getHiddenTierMatches rejects, simulating e.g. a transient IndexedDB
+// error on a huge vault. Everything else passes through to the real module.
+let failHiddenFetch = false;
+vi.mock("@/lib/data/record-crud", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/data/record-crud")>();
+  return {
+    ...actual,
+    getHiddenTierMatches: (opts: any) =>
+      failHiddenFetch
+        ? Promise.reject(new Error("simulated IndexedDB failure"))
+        : actual.getHiddenTierMatches(opts),
+  };
+});
+
+// Capture toasts: TestProviders does not mount a Toaster, so assert on the
+// useToast() hook the Dashboard calls directly.
+const toastSpy = vi.fn();
+vi.mock("@/hooks/use-toast", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/use-toast")>();
+  return {
+    ...actual,
+    useToast: () => ({ toast: toastSpy, dismiss: vi.fn(), toasts: [] }),
+  };
+});
+
 testDb = new TestDb(`KYUTXO-dashhidden-${Date.now()}-${Math.random()}`);
 
 const { default: Dashboard } = await import("./Dashboard");
@@ -197,6 +223,8 @@ function tableTextOrEmpty(): string {
 beforeEach(async () => {
   await Promise.all(testDb.tables.map((t) => t.clear()));
   window.history.replaceState({}, "", "/");
+  failHiddenFetch = false;
+  toastSpy.mockClear();
 });
 
 afterEach(() => {
@@ -564,6 +592,64 @@ describe("Dashboard hidden-tier matches", () => {
     );
     // Count and reveal share one predicate: the non-matching hidden row stays out.
     expect(tableText()).not.toContain("bc1qparityhiddenother");
+  }, 60000);
+
+  it("a failed reveal fetch shows an error toast and restores the notice so the user can retry", async () => {
+    await seedRecord({
+      inputString: "bc1qfailfetchhidden000000000000000001",
+      label: "failfetchtoken address",
+      source: "blockchain-sync",
+      addressImportance: "blockchain-discovered",
+    });
+    await seedRecord({
+      inputString: "bc1qfailfetchvisible00000000000000002",
+      label: "Savings",
+    });
+
+    renderDashboard();
+    await waitFor(
+      () => expect(tableText()).toContain("bc1qfailfetchvisible"),
+      { timeout: 15000 },
+    );
+
+    fireEvent.change(screen.getByTestId("input-search"), {
+      target: { value: "failfetchtoken" },
+    });
+    await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 15000,
+    });
+
+    // Break the vault-wide fetch, then click the reveal.
+    failHiddenFetch = true;
+    fireEvent.click(screen.getByTestId("button-show-hidden-matches"));
+
+    // Failure surfaces as a destructive toast, not just console noise...
+    await waitFor(
+      () =>
+        expect(toastSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: "Couldn't load hidden matches",
+            variant: "destructive",
+          }),
+        ),
+      { timeout: 15000 },
+    );
+
+    // ...and the notice comes back (toggle flipped off again) so the user can retry.
+    const notice = await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 15000,
+    });
+    expect(notice.textContent).toContain("1 match is hidden");
+    expect(tableTextOrEmpty()).not.toContain("bc1qfailfetchhidden");
+
+    // Retrying after the transient failure clears succeeds.
+    failHiddenFetch = false;
+    fireEvent.click(screen.getByTestId("button-show-hidden-matches"));
+    await waitFor(
+      () => expect(tableText()).toContain("bc1qfailfetchhidden000000000000000001"),
+      { timeout: 15000 },
+    );
+    expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
   }, 60000);
 
   it("a reveal past the fetch cap shows a 'showing first N' note and never duplicates window rows", async () => {
