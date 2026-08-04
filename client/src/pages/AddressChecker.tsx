@@ -390,7 +390,7 @@ export default function AddressChecker() {
   // "In Vault" column snapshot for the current run: lowercased address →
   // saved record label. Resolved once per run (single batched DB query) and
   // held in state so the memoized rows re-render only when it changes.
-  const [vaultMembership, setVaultMembership] = useState<ReadonlyMap<string, string | null>>(EMPTY_VAULT_MEMBERSHIP);
+  const [vaultMembership, setVaultMembership] = useState<ReadonlyMap<string, SavedAddressRecordMatch>>(EMPTY_VAULT_MEMBERSHIP);
   const cancelledRef = useRef(false);
   // Monotonic run token: each runCheck invocation bumps it and captures its
   // own value. Workers from a superseded run (user cancels then immediately

@@ -131,6 +131,10 @@ args = "poisoning-copy-guard-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "address-reuse-copy-guard-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dusted-mark-all-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1842,6 +1846,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-poisoning-copy-guard-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-reuse-copy-guard-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-reuse-copy-guard-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
