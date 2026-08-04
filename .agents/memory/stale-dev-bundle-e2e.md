@@ -25,6 +25,16 @@ spending time hunting a non-existent bug. Each testing-skill run uses a fresh
 browser context, so a fresh context alone does NOT guarantee a fresh bundle —
 the dev server itself must rebuild.
 
+**Same trap — packaged Electron checks:** `dist/public` can be MONTHS stale
+and `npm run build` can appear to succeed without refreshing it; the asar then
+packages pre-fix JS. Reproduced with the wrong-password packaged check: the
+bundle held an old App gate (`isLoading` without `&& isAuthenticated`), so the
+login screen remounted to "Loading vault..." and swallowed the error, plus
+phantom TrustedHTML crashes — all vanished after a real `npx vite build` +
+electron-builder repackage. Before trusting a packaged failure, grep the
+bundle in `dist/public/assets/index-*.js` for the fixed code (or check the
+file's mtime) and rebuild if stale.
+
 **Same trap, different tool — the `typecheck` workflow:** the registered
 `typecheck` validation step (`npm run check` = `tsc`) can report a phantom
 failure citing code you ALREADY deleted (e.g. errors on a just-removed block)
