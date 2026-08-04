@@ -10,7 +10,27 @@ NOTE_RENDER_CMD="node scripts/check-note-rendering.js"
 TEST_PROVIDERS_CMD="node scripts/check-test-providers.js"
 NO_BUFFER_CMD="node scripts/check-no-buffer-global.js"
 PDF_TEXT_CMD="node scripts/check-pdf-text-sanitized.js"
-POF_PAGE_CMD="npx vitest run client/src/pages/ProofOfFundsDeclaration.documentIntegrity.test.tsx client/src/pages/ProofOfFundsDeclaration.freshnessAnchorValidation.test.tsx client/src/pages/ProofOfFundsDeclaration.nodeUnreachable.test.tsx"
+POF_PAGE_CMD="npx vitest run client/src/pages/ProofOfFundsDeclaration.documentIntegrity.test.tsx client/src/pages/ProofOfFundsDeclaration.freshnessAnchorValidation.test.tsx client/src/pages/ProofOfFundsDeclaration.nodeUnreachable.test.tsx client/src/pages/proof-of-funds/pof-pdf-data.canonicalPayload.test.ts"
+
+# Remove outdated variants of a command (same prefix, different file list) so
+# the hook doesn't accumulate stale duplicate runs when a command is updated.
+remove_stale_variants() {
+  prefix="$1"
+  current="$2"
+
+  if [ -f "$HOOK_FILE" ] && grep -qF "$prefix" "$HOOK_FILE"; then
+    tmp="$HOOK_FILE.tmp"
+    while IFS= read -r line; do
+      case "$line" in
+        "$current") printf '%s\n' "$line" ;;
+        "$prefix"*) echo "Removed stale variant of a hook command." >&2 ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done < "$HOOK_FILE" > "$tmp"
+    mv "$tmp" "$HOOK_FILE"
+    chmod +x "$HOOK_FILE"
+  fi
+}
 
 append_check() {
   cmd="$1"
@@ -30,6 +50,8 @@ append_check() {
     echo "Pre-commit hook installed with $label check."
   fi
 }
+
+remove_stale_variants "npx vitest run client/src/pages/ProofOfFundsDeclaration." "$POF_PAGE_CMD"
 
 append_check "$CRUD_CMD" "CRUD guards"
 append_check "$LOCKFILE_CMD" "lockfile URLs"
