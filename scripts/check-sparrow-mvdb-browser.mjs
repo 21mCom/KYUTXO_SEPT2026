@@ -22,6 +22,11 @@
 //   4. Selects a valid Sparrow JSON export via the same dropzone and asserts
 //      it still parses: "Descriptor Parsed Successfully" alert appears and the
 //      Sparrow guidance error is cleared.
+//   5. Selects a .txt raw-descriptor file and a .bsms file via the same
+//      dropzone and asserts each parses (Descriptor loaded / BSMS file loaded
+//      toast + parsed-descriptor alert). The dropzone accept map routes these
+//      through 'text/plain' — a regression there (e.g. an accept-map edit for
+//      the Sparrow case) only shows up in a real browser.
 //
 // Everything runs offline — no network requests beyond the local dev server.
 //
@@ -72,6 +77,22 @@ const SPARROW_JSON = JSON.stringify({
     'wsh(sortedmulti(2,[aaaaaaaa/48h/0h/0h/2h]xpub6DUcheckaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/0/*,[bbbbbbbb/48h/0h/0h/2h]xpub6DVcheckbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/0/*))',
 });
 
+// Raw multisig descriptor (fake-but-well-formed xpubs — parseDescriptor only
+// pattern-matches keys at this stage). Saved as a .txt file for the raw
+// descriptor file-import path.
+const RAW_DESCRIPTOR =
+  'wsh(sortedmulti(2,[aaaaaaaa/48h/0h/0h/2h]xpub6DUcheckaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/0/*,[bbbbbbbb/48h/0h/0h/2h]xpub6DVcheckbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/0/*))';
+
+// Minimal valid BSMS 1.0 file (BSMS spec: version line, descriptor,
+// path restrictions). Uses the /**-style dual-chain wildcard Sparrow/Nunchuk
+// emit; no first-address line so parsing succeeds without derivation.
+const BSMS_CONTENT =
+  [
+    'BSMS 1.0',
+    'wsh(sortedmulti(2,[aaaaaaaa/48h/0h/0h/2h]xpub6DUcheckaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/**,[bbbbbbbb/48h/0h/0h/2h]xpub6DVcheckbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/**))',
+    '/0/*,/1/*',
+  ].join('\r\n') + '\r\n';
+
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
   try {
@@ -112,6 +133,10 @@ async function main() {
   writeFileSync(mvDbPath, buildMvDbBytes());
   const jsonPath = join(dir, 'sparrow-export.json');
   writeFileSync(jsonPath, SPARROW_JSON);
+  const txtPath = join(dir, 'raw-descriptor.txt');
+  writeFileSync(txtPath, RAW_DESCRIPTOR + '\n');
+  const bsmsPath = join(dir, 'coordinator-export.bsms');
+  writeFileSync(bsmsPath, BSMS_CONTENT);
 
   let devProc = null;
   let startedServer = false;
@@ -320,6 +345,79 @@ async function main() {
       });
     }
 
+    // ── 2b) .txt raw descriptor via the same dropzone (text/plain path) ─────
+    {
+      await page.getByTestId('input-file-descriptor').setInputFiles(txtPath);
+
+      const loadedToast = await page
+        .getByText('Descriptor loaded', { exact: false })
+        .first()
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      steps.push({
+        name: 'txt: "Descriptor loaded" toast appears after selecting the .txt file',
+        passed: loadedToast,
+        detail: loadedToast
+          ? 'Descriptor loaded toast shown for raw-descriptor.txt'
+          : '"Descriptor loaded" toast never appeared for raw-descriptor.txt',
+      });
+
+      const parsed = await page
+        .locator('[role="alert"]', { hasText: 'Descriptor Parsed Successfully' })
+        .first()
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      steps.push({
+        name: 'txt: raw descriptor from a .txt file parses ("Descriptor Parsed Successfully")',
+        passed: parsed,
+        detail: parsed
+          ? 'success alert visible after selecting raw-descriptor.txt'
+          : 'Descriptor Parsed Successfully alert never appeared for the .txt raw descriptor',
+      });
+
+      // Let the toast dismiss so the .bsms scenario asserts a fresh one.
+      await page
+        .getByText('Descriptor loaded', { exact: false })
+        .first()
+        .waitFor({ state: 'hidden', timeout: 20_000 })
+        .catch(() => {});
+    }
+
+    // ── 2c) .bsms file via the same dropzone (text/plain path) ──────────────
+    {
+      await page.getByTestId('input-file-descriptor').setInputFiles(bsmsPath);
+
+      const bsmsToast = await page
+        .getByText('BSMS file loaded', { exact: false })
+        .first()
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      steps.push({
+        name: 'bsms: "BSMS file loaded" toast appears after selecting the .bsms file',
+        passed: bsmsToast,
+        detail: bsmsToast
+          ? 'BSMS file loaded toast shown for coordinator-export.bsms'
+          : '"BSMS file loaded" toast never appeared for coordinator-export.bsms',
+      });
+
+      const parsed = await page
+        .locator('[role="alert"]', { hasText: 'Descriptor Parsed Successfully' })
+        .first()
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      steps.push({
+        name: 'bsms: BSMS descriptor parses ("Descriptor Parsed Successfully")',
+        passed: parsed,
+        detail: parsed
+          ? 'success alert visible after selecting coordinator-export.bsms'
+          : 'Descriptor Parsed Successfully alert never appeared for the .bsms file',
+      });
+    }
+
     // ── 3) Drag-and-drop path: synthetic drop event with a DataTransfer ─────
     // Precondition (asserted above): no guidance alert and no Sparrow toast
     // are visible, so anything asserted below is caused by THIS drop.
@@ -403,7 +501,7 @@ async function main() {
   }
 
   console.log(
-    '[sparrow-mvdb-browser] PASSED: dropping/selecting a real binary .mv.db shows the Sparrow export guidance (toast + inline alert), and a valid Sparrow JSON export still parses.',
+    '[sparrow-mvdb-browser] PASSED: dropping/selecting a real binary .mv.db shows the Sparrow export guidance (toast + inline alert), and valid Sparrow JSON, .txt raw-descriptor, and .bsms files still parse through the dropzone.',
   );
 }
 
