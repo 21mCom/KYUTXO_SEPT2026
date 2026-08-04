@@ -22,7 +22,7 @@ The GitHub remote (`origin`) builds the packaged Windows app via `.github/workfl
 
 ## Token scope caveat
 
-The user's fine-grained PAT has contents read/write (push works) but NOT Actions/checks read — `/actions/runs` and `/commits/<sha>/check-runs` return 403. Build status must be watched on github.com/<owner>/<repo>/actions, not polled from here.
+The user's fine-grained PAT has contents read/write (push works). As of Aug 2026 it CAN read `/actions/runs` and job logs (poll run by `head_sha`, fetch `/actions/jobs/<id>/logs`), but Actions write (workflow_dispatch) and PR creation still return 403, and `GITHUB_PERSONAL_ACCESS_TOKEN2` is bad credentials. So the only way to trigger CI is a push to main (which also publishes a release).
 
 ## Windows runner spawn trap
 
@@ -31,6 +31,10 @@ The build.yml gate scripts (`node scripts/check-*.js`) run on **windows-2022**. 
 **Why:** check-audit.js broke the CI build this way; the failure surfaced only on the GitHub runner, never locally (Linux).
 
 **How to apply:** any "push to GitHub / trigger a build" request: push with the credential-helper recipe, verify by ls-remote SHA match, point the user at the Actions page. Any script added to build.yml that shells out to npm/npx must set `shell: process.platform === 'win32'` (fixed-string args only). Scripts that only run in Replit workflows (Linux) don't need it.
+
+## Native-engine ABI gate in CI
+
+build.yml runs `check-packaged-native-engine.mjs` post-package with `KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON=1`: the extracted worker MUST load under the packaged binary via ELECTRON_RUN_AS_NODE (Electron ABI, npmRebuild on) — no system-Node fallback. Locally (Replit) the same check falls back to Node because upstream Electron binaries can't start (missing shared libs); that fallback is ABI-honest only because the local gate build uses `-c.npmRebuild=false`. Never set REQUIRE mode in Replit runs; never remove it from CI/electron-build.sh.
 
 ## Merge-churn clobber
 
