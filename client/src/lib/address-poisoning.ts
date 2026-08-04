@@ -440,3 +440,39 @@ export async function scanAddressPoisoning(
 
   return { results, scannedAddresses };
 }
+
+/** Default tag the scanner applies to suspect counterparty addresses. */
+export const SUSPECTED_POISONING_TAG = "suspected-poisoning";
+
+/**
+ * User-facing explanation for why a flagged address is dangerous. Shown by
+ * copy/send guards before the user copies or uses the address.
+ */
+export function poisoningWarningText(tags: readonly string[]): string {
+  const names = tags.length > 0 ? tags.join(", ") : SUSPECTED_POISONING_TAG;
+  return (
+    `This address is tagged "${names}" — the Address Poisoning scan flagged it ` +
+    `as a lookalike of one of your own addresses. Attackers plant such ` +
+    `addresses in your history hoping you copy theirs instead of yours. ` +
+    `Verify every character before using it.`
+  );
+}
+
+/** The subset of a record's tags that mark it as a suspected poisoning address. */
+export function getSuspectedPoisoningTags(tags: readonly string[] | null | undefined): string[] {
+  return (tags ?? []).filter(isSuspectedPoisoningTag);
+}
+
+/**
+ * Whether a tag marks an address as a suspected poisoning lookalike.
+ *
+ * Matches any tag mentioning "poison" EXCEPT target-style tags
+ * ("poisoning-target"), which mark the user's own attacked address rather
+ * than the attacker's lookalike.
+ */
+export function isSuspectedPoisoningTag(tag: string): boolean {
+  const t = tag.trim().toLowerCase();
+  if (!t.includes("poison")) return false;
+  if (t.includes("target") || t.includes("victim")) return false;
+  return true;
+}

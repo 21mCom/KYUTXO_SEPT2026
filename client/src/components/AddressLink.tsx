@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Copy, Check, FileText } from "lucide-react";
+import { Copy, Check, FileText, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
@@ -15,6 +15,11 @@ import {
   type HoverMetadataField,
 } from "@/lib/metadata-hover";
 import { type Record as DbRecord } from "@/lib/database";
+import {
+  getSuspectedPoisoningTags,
+  poisoningWarningText,
+} from "@/lib/address-poisoning";
+import { useToast } from "@/hooks/use-toast";
 
 interface AddressLinkProps {
   address: string;
@@ -33,14 +38,24 @@ function MetadataTooltipBody({
   hoverLabel,
   fields,
   isLoading,
+  poisoningTags,
 }: {
   identifier: string;
   hoverLabel: string | null;
   fields: HoverMetadataField[];
   isLoading: boolean;
+  poisoningTags: string[];
 }) {
   return (
     <div className="space-y-1 max-w-[280px]">
+      {poisoningTags.length > 0 && (
+        <p
+          className="text-xs font-medium text-red-500 dark:text-red-400 break-words"
+          data-testid="text-poisoning-warning"
+        >
+          {poisoningWarningText(poisoningTags)}
+        </p>
+      )}
       {hoverLabel && (
         <p className="text-xs font-medium break-words" data-testid="text-hover-label">
           {hoverLabel}
@@ -82,7 +97,19 @@ export function AddressLink({
   const { openRecordPreview, openRecordPreviewByAddress } = useRecordPreview();
   const { copy, isCopied } = useCopyToClipboard();
   const { hoverTooltipPrefs } = useSettings();
+  const { toast } = useToast();
   const copied = isCopied(address);
+
+  // Two-step poisoning copy guard: when the address carries a
+  // suspected-poisoning tag, the first copy click warns instead of copying;
+  // a second click within the arm window copies anyway.
+  const [copyArmed, setCopyArmed] = useState(false);
+  const armTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (armTimerRef.current) clearTimeout(armTimerRef.current);
+    };
+  }, []);
 
   const resolvedRef = useRef<DbRecord | null | undefined>(
     recordId != null ? undefined : getCachedRecord(address)
@@ -126,6 +153,9 @@ export function AddressLink({
 
   const showIndicator = showMetadataIndicator && recordHasMeta;
 
+  const poisoningTags =
+    tooltipRecord != null ? getSuspectedPoisoningTags(tooltipRecord.tags) : [];
+
   const handleTooltipOpen = useCallback(
     async (open: boolean) => {
       setTooltipOpen(open);
@@ -151,11 +181,43 @@ export function AddressLink({
   );
 
   const handleCopy = useCallback(
-    (e: React.MouseEvent) => {
+    async (e: React.MouseEvent) => {
       e.stopPropagation();
+
+      // Resolve the record before copying so the guard also works when the
+      // user copies without ever hovering (cache may be cold).
+      let record = resolvedRef.current;
+      if (record === undefined) {
+        record = getCachedRecord(address);
+        if (record === undefined) {
+          try {
+            record = await resolveIdentifier(address);
+          } catch {
+            record = null;
+          }
+        }
+        resolvedRef.current = record;
+        setTooltipRecord(record);
+      }
+
+      const poisonTags = record != null ? getSuspectedPoisoningTags(record.tags) : [];
+      if (poisonTags.length > 0 && !copyArmed) {
+        setCopyArmed(true);
+        if (armTimerRef.current) clearTimeout(armTimerRef.current);
+        armTimerRef.current = setTimeout(() => setCopyArmed(false), 6000);
+        toast({
+          title: "Suspected address-poisoning address",
+          description: `${poisoningWarningText(poisonTags)} Click copy again to copy anyway.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (armTimerRef.current) clearTimeout(armTimerRef.current);
+      setCopyArmed(false);
       copy(address, { label: "Address" });
     },
-    [address, copy]
+    [address, copy, copyArmed, toast]
   );
 
   const handleClick = useCallback(
@@ -201,6 +263,12 @@ export function AddressLink({
             ) : (
               <span>{displayAddress}</span>
             )}
+            {poisoningTags.length > 0 && (
+              <ShieldAlert
+                className="h-3 w-3 text-red-500 shrink-0"
+                data-testid={`icon-poisoning-warning-${address.slice(0, 8)}`}
+              />
+            )}
             {showIndicator && (
               <FileText className="h-3 w-3 text-orange-500 shrink-0" />
             )}
@@ -212,6 +280,7 @@ export function AddressLink({
             hoverLabel={hoverLabel}
             fields={computedFields}
             isLoading={isResolving}
+            poisoningTags={poisoningTags}
           />
         </TooltipContent>
       </Tooltip>
@@ -228,13 +297,21 @@ export function AddressLink({
             >
               {copied ? (
                 <Check className="h-3 w-3 text-green-600" />
+              ) : copyArmed ? (
+                <ShieldAlert className="h-3 w-3 text-red-500" />
               ) : (
                 <Copy className="h-3 w-3" />
               )}
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            <p>{copied ? "Copied!" : "Copy address"}</p>
+            <p>
+              {copied
+                ? "Copied!"
+                : copyArmed
+                  ? "Suspected poisoning address — click again to copy anyway"
+                  : "Copy address"}
+            </p>
           </TooltipContent>
         </Tooltip>
       )}

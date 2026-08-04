@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { clearSavedPsbts, getAllSavedPsbts } from '@/lib/data/saved-psbts-crud';
+import { createRecord, clearAllRecords } from '@/lib/data/record-crud';
 import { BuildPsbtDialog } from './BuildPsbtDialog';
 import type { UTXO } from '@/pages/UTXOs';
 import type { Record as DbRecord } from '@/lib/database';
@@ -64,6 +65,7 @@ function renderDialog(props: Partial<Parameters<typeof BuildPsbtDialog>[0]> = {}
 
 beforeEach(async () => {
   await clearSavedPsbts();
+  await clearAllRecords();
 });
 
 afterEach(() => {
@@ -199,6 +201,58 @@ describe('BuildPsbtDialog', () => {
     await waitFor(() => {
       expect((screen.getByTestId('input-change-address') as HTMLInputElement).value).toBe(ADDR_CHANGE0);
     });
+  });
+
+  it('warns when the destination address is tagged as suspected poisoning', async () => {
+    await createRecord({
+      type: 'address',
+      inputString: ADDR_W1,
+      label: '',
+      tags: ['suspected-poisoning'],
+      categories: [],
+    });
+
+    renderDialog();
+    await screen.findByTestId('text-selected-total');
+    fireEvent.change(screen.getByTestId('input-destination'), {
+      target: { value: ADDR_W1 },
+    });
+
+    const warning = await screen.findByTestId('warning-poisoned-destination');
+    expect(warning.textContent).toMatch(/suspected-poisoning/);
+    expect(warning.textContent).toMatch(/lookalike of one of your own addresses/i);
+
+    // A clean destination shows no warning.
+    fireEvent.change(screen.getByTestId('input-destination'), {
+      target: { value: ADDR_CHANGE0 },
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('warning-poisoned-destination')).toBeNull();
+    });
+  });
+
+  it('warns when the change address is tagged as suspected poisoning', async () => {
+    await createRecord({
+      type: 'address',
+      inputString: ADDR_CHANGE0,
+      label: '',
+      tags: ['suspected-poisoning'],
+      categories: [],
+    });
+
+    renderDialog();
+    await screen.findByTestId('text-selected-total');
+    fireEvent.click(screen.getByTestId('switch-send-max'));
+    fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '100000' } });
+    fireEvent.change(screen.getByTestId('input-destination'), {
+      target: { value: ADDR_W1 },
+    });
+    fireEvent.change(screen.getByTestId('input-change-address'), {
+      target: { value: ADDR_CHANGE0 },
+    });
+
+    const warning = await screen.findByTestId('warning-poisoned-change');
+    expect(warning.textContent).toMatch(/lookalike of one of your own addresses/i);
   });
 
   it('rejects a fee rate below the relay minimum', async () => {

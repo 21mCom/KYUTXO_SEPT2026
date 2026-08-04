@@ -41,6 +41,11 @@ import { getAllDerivationTemplates } from "@/lib/data/derivation-templates-crud"
 import { savePsbt } from "@/lib/data/saved-psbts-crud";
 import { downloadBlob } from "@/lib/backup/sink";
 import { validateAddress } from "@/lib/bitcoin";
+import { getRecordsByInputStrings } from "@/lib/data/record-crud";
+import {
+  getSuspectedPoisoningTags,
+  poisoningWarningText,
+} from "@/lib/address-poisoning";
 import type { UTXO } from "@/pages/UTXOs";
 import type { Record as DbRecord } from "@/lib/database";
 
@@ -85,6 +90,42 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
   const [saving, setSaving] = useState(false);
 
   const totalSats = useMemo(() => utxos.reduce((sum, u) => sum + u.amountSats, 0), [utxos]);
+
+  // Poisoning guard: warn when the destination or change address carries a
+  // suspected-poisoning tag (applied by the Address Poisoning scanner) before
+  // the user builds/copies a transaction paying it.
+  const [poisonedAddresses, setPoisonedAddresses] = useState<Map<string, string[]>>(new Map());
+  useEffect(() => {
+    if (!open) return;
+    const candidates = [destination.trim(), changeAddress.trim()].filter(Boolean);
+    if (candidates.length === 0) {
+      setPoisonedAddresses(new Map());
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const records = await getRecordsByInputStrings(candidates);
+        if (cancelled) return;
+        const flagged = new Map<string, string[]>();
+        for (const rec of records) {
+          const tags = getSuspectedPoisoningTags(rec.tags);
+          if (tags.length > 0 && !flagged.has(rec.inputString)) {
+            flagged.set(rec.inputString, tags);
+          }
+        }
+        setPoisonedAddresses(flagged);
+      } catch (error) {
+        console.error("Failed to check addresses for poisoning tags:", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, destination, changeAddress]);
+
+  const destinationPoisonTags = poisonedAddresses.get(destination.trim());
+  const changePoisonTags = poisonedAddresses.get(changeAddress.trim());
 
   // Resolve input metadata (script types, BIP-32 derivation) and a suggested
   // fresh change address each time the dialog opens with a new selection.
@@ -328,6 +369,15 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
                 className="font-mono text-sm"
                 data-testid="input-destination"
               />
+              {destinationPoisonTags && (
+                <div
+                  className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  data-testid="warning-poisoned-destination"
+                >
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>{poisoningWarningText(destinationPoisonTags)}</span>
+                </div>
+              )}
             </div>
 
             <div className="flex items-end gap-4 flex-wrap">
@@ -412,6 +462,15 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
                 className="font-mono text-sm"
                 data-testid="input-change-address"
               />
+              {changePoisonTags && !sendMax && (
+                <div
+                  className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  data-testid="warning-poisoned-change"
+                >
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>{poisoningWarningText(changePoisonTags)}</span>
+                </div>
+              )}
               {suggestedChange && changeAddress === suggestedChange && !sendMax && (
                 <p className="text-xs text-muted-foreground" data-testid="text-change-suggestion">
                   {changeWalletXpub

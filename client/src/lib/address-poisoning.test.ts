@@ -9,6 +9,10 @@ import {
   addressFamily,
   computeLookalikeMatch,
   scanAddressPoisoning,
+  isSuspectedPoisoningTag,
+  getSuspectedPoisoningTags,
+  poisoningWarningText,
+  SUSPECTED_POISONING_TAG,
   DEFAULT_DUST_THRESHOLD_SATS,
   DEFAULT_MATCH_LENGTH,
 } from "./address-poisoning";
@@ -40,6 +44,35 @@ async function seedVault() {
     walletName: "WalletA",
   });
 }
+
+describe("suspected-poisoning tag detection", () => {
+  it("matches the scanner's default suspect tag", () => {
+    expect(isSuspectedPoisoningTag(SUSPECTED_POISONING_TAG)).toBe(true);
+    expect(isSuspectedPoisoningTag("Suspected-Poisoning")).toBe(true);
+    expect(isSuspectedPoisoningTag("  address-poisoning ")).toBe(true);
+  });
+
+  it("never matches target/victim tags (the user's own address) or unrelated tags", () => {
+    expect(isSuspectedPoisoningTag("poisoning-target")).toBe(false);
+    expect(isSuspectedPoisoningTag("poisoning-victim")).toBe(false);
+    expect(isSuspectedPoisoningTag("exchange")).toBe(false);
+    expect(isSuspectedPoisoningTag("dusted")).toBe(false);
+  });
+
+  it("filters a record's tags down to the poisoning subset", () => {
+    expect(
+      getSuspectedPoisoningTags(["exchange", "suspected-poisoning", "poisoning-target"]),
+    ).toEqual(["suspected-poisoning"]);
+    expect(getSuspectedPoisoningTags(undefined)).toEqual([]);
+    expect(getSuspectedPoisoningTags(null)).toEqual([]);
+  });
+
+  it("warning text names the tags and explains the lookalike risk", () => {
+    const text = poisoningWarningText(["suspected-poisoning"]);
+    expect(text).toContain('"suspected-poisoning"');
+    expect(text).toContain("lookalike of one of your own addresses");
+  });
+});
 
 describe("addressFamily", () => {
   it("classifies common script families", () => {
