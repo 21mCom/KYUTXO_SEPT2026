@@ -46,6 +46,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { buildEngineBridgeInitScript } from './engine-bridge-mock.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -59,74 +60,16 @@ const ADDR_HIDDEN = 'bc1qdehidden0000000000001checkaddr';
 const HIDDEN_TOKEN = 'dehiddenenginetoken';
 const FILLER_COUNT = 5_100;
 
-// Injected before any app script on every navigation. Inert until the page
-// sets localStorage.__engineMockEnabled = '1' (i.e. never during vault
+// Injected before any app script on every navigation (shared scaffolding in
+// scripts/engine-bridge-mock.mjs). Inert until the page sets
+// localStorage.__engineMockEnabled = '1' (i.e. never during vault
 // creation/seeding), so the app's first run is a plain browser session.
 // The bridge implements ONLY the closed set of calls the records read path
 // uses; every other query returns a failure envelope, which the production
 // code treats as "fall back to Dexie" — exactly like a real engine error.
-const ENGINE_BRIDGE_INIT = `(() => {
-  let enabled = false;
-  try { enabled = localStorage.getItem('__engineMockEnabled') === '1'; } catch {}
-  if (!enabled) return;
-
-  const state = { pageReads: 0, pageCalls: [], fingerprintReads: 0, queryErrors: [] };
-  window.__engineMock = state;
-
-  const env = (result) => ({ ok: true, result });
-  const errEnv = (error) => ({ ok: false, error });
-  const snapshot = () => ({ state: 'READY', ready: true });
-
-  function openIdb() {
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open('KYUTXODatabase');
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error || new Error('mock: IndexedDB open failed'));
-      req.onblocked = () => reject(new Error('mock: IndexedDB open blocked'));
-    });
-  }
-
-  async function withDb(fn) {
-    const idb = await openIdb();
-    try { return await fn(idb); } finally { idb.close(); }
-  }
-
-  function cursorMax(source, extract) {
-    return new Promise((resolve, reject) => {
-      const req = source.openCursor(null, 'prev');
-      req.onsuccess = () => {
-        const c = req.result;
-        resolve(c ? extract(c) : 0);
-      };
-      req.onerror = () => reject(req.error || new Error('mock: cursor failed'));
-    });
-  }
-
-  function storeCount(store) {
-    return new Promise((resolve, reject) => {
-      const req = store.count();
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error || new Error('mock: count failed'));
-    });
-  }
-
-  // Same fields getRecordsFingerprint (Dexie side) reports, computed straight
-  // from the SAME IndexedDB — so the mirror is fresh by construction, like a
-  // mirror that finished seeding an instant ago with no writes since.
-  async function recordsFingerprint() {
-    return withDb(async (idb) => {
-      if (!idb.objectStoreNames.contains('records')) throw new Error('mock: no records store');
-      const tx = idb.transaction('records', 'readonly');
-      const store = tx.objectStore('records');
-      const [count, maxId, maxUpdatedAt] = await Promise.all([
-        storeCount(store),
-        cursorMax(store, (c) => Number(c.value?.id ?? c.primaryKey) || 0),
-        cursorMax(store.index('updatedAt'), (c) => Number(c.value?.updatedAt) || 0),
-      ]);
-      return { count, maxId, maxUpdatedAt };
-    });
-  }
-
+const ENGINE_BRIDGE_INIT = buildEngineBridgeInitScript({
+  stateFields: `pageReads: 0, pageCalls: [], fingerprintReads: 0,`,
+  helpers: `
   // updatedAt DESC, id DESC (IDB 'prev' iterates descending key, then
   // descending primary key within equal keys) — the engine query's order.
   function recordPageByUpdatedAt(opts) {
@@ -160,23 +103,8 @@ const ENGINE_BRIDGE_INIT = `(() => {
       req.onerror = () => reject(req.error || new Error('mock: page cursor failed'));
     }));
   }
-
-  const engine = {
-    init: async () => env(snapshot()),
-    status: async () => env(snapshot()),
-    dbInfo: async () => env({ portableMode: false }),
-    // Seed calls are accepted as no-ops so an incidental seedAll (e.g. a
-    // maintenance surface) can never wedge; the mirror is live-IDB-backed.
-    seedBegin: async () => env(null),
-    seedBatch: async () => env(null),
-    seedFinish: async () => env(null),
-    clear: async () => env(snapshot()),
-    query: async (name, opts) => {
-      try {
-        if (name === 'getEngineSchemaVersion') {
-          const v = localStorage.getItem('__engineMockSchemaVersion');
-          return env(v === null ? -1 : Number(v));
-        }
+`,
+  queryHandlers: `
         if (name === 'getRecordsFingerprint') {
           state.fingerprintReads++;
           return env(await recordsFingerprint());
@@ -213,19 +141,8 @@ const ENGINE_BRIDGE_INIT = `(() => {
               : { count: 0, maxId: 0, resolvedPrevoutCount: 0 },
           );
         }
-        return errEnv('mock: query not implemented: ' + name);
-      } catch (e) {
-        state.queryErrors.push(String((e && e.message) || e));
-        return errEnv('mock: ' + String((e && e.message) || e));
-      }
-    },
-  };
-
-  // Deliberately NO isElectron flag: isEngineAvailable() only needs
-  // window.electronAPI.engine, while isElectron() checks the flag — so no
-  // other desktop-only code path (attachments, routing, ...) is activated.
-  window.electronAPI = { engine };
-})();`;
+`,
+});
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
