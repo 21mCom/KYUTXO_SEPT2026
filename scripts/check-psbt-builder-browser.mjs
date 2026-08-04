@@ -12,6 +12,12 @@
 //      conversion and bip32 derivation run in the browser), enters a
 //      destination, and asserts the live fee math (2 P2WPKH inputs + 1 output
 //      = 178 vB at 5 sats/vB = 890 sats),
+//   3b. poisoning guard: a seeded record tagged "suspected-poisoning" must
+//      surface the red warning banners (warning-poisoned-destination /
+//      warning-poisoned-change) when its address is entered as destination
+//      or (with send-max off) as change — in a REAL DOM under Trusted Types,
+//      which the jsdom tests in BuildPsbtDialog.test.tsx cannot verify —
+//      and the banners must clear once clean addresses are restored,
 //   4. saves the PSBT, then opens Saved PSBTs and asserts the entry exists with
 //      its decoded components and that the stored base64 round-trips through
 //      bitcoinjs-lib IN THE BROWSER (this is what catches a Buffer-global
@@ -44,6 +50,10 @@ const ADDR_CHANGE0 = 'bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el'; // m/84'/0'/0
 const ADDR_W0_PUBKEY = '0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c';
 const MASTER_FINGERPRINT = '73c5da0a';
 const EXPECTED_DERIVATION_PATH = "m/84'/0'/0'/0/0";
+// A lookalike address tagged "suspected-poisoning" — must NOT collide with
+// the owned/destination/change addresses above.
+const POISONED_ADDR = 'bc1qpsbtpoisonlookalike000000000000000xyz';
+const POISON_TAG = 'suspected-poisoning';
 const TX_A = 'aa'.repeat(32);
 const TX_B = 'bb'.repeat(32);
 const SATS_A = 100_000;
@@ -192,7 +202,7 @@ async function main() {
     // zpub→xpub conversion, bip32 derivation resolution, and the fresh
     // change-address suggestion.
     const seed = await page.evaluate(
-      async ({ addr, txA, txB, satsA, satsB, zpub, fingerprint, derivationPath }) => {
+      async ({ addr, txA, txB, satsA, satsB, zpub, fingerprint, derivationPath, poisonedAddr, poisonTag }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
         const txCrud = await import('/src/lib/data/transaction-crud.ts');
         const templateCrud = await import('/src/lib/data/derivation-templates-crud.ts');
@@ -216,7 +226,15 @@ async function main() {
         await txCrud.addTransaction({ txid: txB, blockHeight: 800100, blockTime: now - 86400, fee: 100, feeRate: 1, syncedAt: Date.now() });
         await txCrud.addParticipant({ txid: txA, role: 'output', address: addr, amount: satsA, vout: 0, recordId });
         await txCrud.addParticipant({ txid: txB, role: 'output', address: addr, amount: satsB, vout: 1, recordId });
-        return { recordId };
+        // Lookalike record tagged suspected-poisoning: the Build PSBT dialog
+        // must banner-warn when this address is entered as destination/change.
+        const poisonedRecordId = await recordCrud.createRecord({
+          type: 'address',
+          inputString: poisonedAddr,
+          label: 'Suspected poisoning lookalike',
+          tags: [poisonTag],
+        });
+        return { recordId, poisonedRecordId };
       },
       {
         addr: ADDR_W0,
@@ -227,12 +245,18 @@ async function main() {
         zpub: ZPUB,
         fingerprint: MASTER_FINGERPRINT,
         derivationPath: EXPECTED_DERIVATION_PATH,
+        poisonedAddr: POISONED_ADDR,
+        poisonTag: POISON_TAG,
       },
     );
     steps.push({
-      name: 'seeded one owned address with two confirmed outputs',
-      passed: Number.isInteger(seed.recordId) && seed.recordId > 0,
-      detail: `recordId=${seed.recordId}`,
+      name: 'seeded one owned address with two confirmed outputs + a suspected-poisoning record',
+      passed:
+        Number.isInteger(seed.recordId) &&
+        seed.recordId > 0 &&
+        Number.isInteger(seed.poisonedRecordId) &&
+        seed.poisonedRecordId > 0,
+      detail: `recordId=${seed.recordId} poisonedRecordId=${seed.poisonedRecordId}`,
     });
 
     // ── UTXOs page: expand the group and select both UTXOs ──────────────────
@@ -281,6 +305,64 @@ async function main() {
       passed: prefilled === ADDR_CHANGE0,
       detail: `change input: "${prefilled}"`,
     });
+
+    // ── Poisoning banners: destination tagged suspected-poisoning ───────────
+    // Enter the tagged lookalike as the destination and assert the red
+    // warning banner renders in the real DOM (Radix + Trusted Types path the
+    // jsdom tests cannot cover).
+    const destInput = page.getByTestId('input-destination');
+    await destInput.fill(POISONED_ADDR);
+    const destBanner = page.getByTestId('warning-poisoned-destination');
+    const destBannerVisible = await destBanner
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    const destBannerText = destBannerVisible ? ((await destBanner.textContent()) ?? '').trim() : '';
+    steps.push({
+      name: 'destination poisoning warning banner renders for the tagged address',
+      passed: destBannerVisible && destBannerText.toLowerCase().includes(POISON_TAG),
+      detail: `visible=${destBannerVisible}, text="${destBannerText}"`,
+    });
+
+    // ── Poisoning banner: change address (only shown when send-max is off) ──
+    await page.getByTestId('switch-send-max').click();
+    const changeInputForPoison = page.getByTestId('input-change-address');
+    const originalChange = (await changeInputForPoison.inputValue()) ?? '';
+    await changeInputForPoison.fill(POISONED_ADDR);
+    const changeBanner = page.getByTestId('warning-poisoned-change');
+    const changeBannerVisible = await changeBanner
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    const changeBannerText = changeBannerVisible
+      ? ((await changeBanner.textContent()) ?? '').trim()
+      : '';
+    steps.push({
+      name: 'change-address poisoning warning banner renders for the tagged address',
+      passed: changeBannerVisible && changeBannerText.toLowerCase().includes(POISON_TAG),
+      detail: `visible=${changeBannerVisible}, text="${changeBannerText}"`,
+    });
+
+    // Restore clean values and assert both banners clear.
+    await changeInputForPoison.fill(originalChange);
+    await destInput.fill(ADDR_W1);
+    const destBannerGone = await destBanner
+      .waitFor({ state: 'detached', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    const changeBannerGone = await changeBanner
+      .waitFor({ state: 'detached', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    steps.push({
+      name: 'poisoning banners clear once clean destination/change are restored',
+      passed: destBannerGone && changeBannerGone,
+      detail: `destination cleared=${destBannerGone}, change cleared=${changeBannerGone}`,
+    });
+    // Back to send-max on for the original fee-math flow; clear the
+    // destination so the later fill starts from the untouched state.
+    await page.getByTestId('switch-send-max').click();
+    await destInput.fill('');
 
     // Toggle send-max off: the "fresh unused change address" hint must appear
     // (it only renders when the pre-fill matches the suggestion), then back on
