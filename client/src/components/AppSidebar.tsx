@@ -43,7 +43,8 @@ import {
   CalendarRange,
   Search,
   Droplets,
-  KeyRound
+  KeyRound,
+  Biohazard
 } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -125,6 +126,7 @@ const navGroups: NavGroup[] = [
       { title: "Annual Activity", url: "/annual-activity", icon: CalendarRange },
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },
       { title: "Dusted", url: "/dusted", icon: Droplets },
+      { title: "Address Poisoning", url: "/address-poisoning", icon: Biohazard },
     ]
   },
   {

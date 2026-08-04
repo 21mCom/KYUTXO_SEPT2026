@@ -70,6 +70,7 @@ import AddressChecker from "@/pages/AddressChecker";
 import AddressDeriver from "@/pages/AddressDeriver";
 import ProofOfFundsDeclaration from "@/pages/ProofOfFundsDeclaration";
 import DustedPage from "@/pages/DustedPage";
+import AddressPoisoning from "@/pages/AddressPoisoning";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -128,6 +129,7 @@ function AppRoutes() {
       <Route path="/address-deriver" component={AddressDeriver} />
       <Route path="/proof-of-funds" component={ProofOfFundsDeclaration} />
       <Route path="/dusted" component={DustedPage} />
+      <Route path="/address-poisoning" component={AddressPoisoning} />
       <Route component={NotFound} />
     </Switch>
   );
