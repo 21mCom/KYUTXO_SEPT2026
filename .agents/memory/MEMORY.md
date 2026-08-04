@@ -106,3 +106,4 @@
 - [Detail-panel click races](detail-panel-click-races.md) — async badges (e.g. conflict count) shift layout mid-click and steal coordinate clicks in browser checks; dispatchEvent('click') + recover if URL changed.
 - [Optional Record fields in real vaults](optional-record-fields-real-vault.md) — rows created without tags/label store UNDEFINED; jsdom fixtures that always set them hide browser-only `.length` crashes.
 - [Workflow-runner phantom rg entries](workflow-runner-phantom-rg.md) — runner rg scan can hit dangling .local/skills mounts invisible shell-side; ignores/renames useless; consent + kill 1 rebuilds.
+- [Balance page vs seeded cached stats](balance-page-seeded-stats.md) — pre-set balanceFormulaVersion=2 or the page's one-time recompute wipes seeded cached stats to zero.

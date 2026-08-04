@@ -214,7 +214,7 @@ function GroupAddressRows({
   const virtualItems = virtualizer.getVirtualItems();
 
   return (
-    <div ref={scrollRef} className="max-h-96 overflow-auto px-4 py-2">
+    <div ref={scrollRef} className="max-h-96 overflow-auto px-4 py-2" data-testid="scroll-group-address-rows">
       <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
         {virtualItems.map((vi) => {
           const addr = rows[vi.index];

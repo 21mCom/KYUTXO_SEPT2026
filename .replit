@@ -355,6 +355,10 @@ args = "heuristic-list-virtualized-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "group-address-rows-virtualized-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "descriptor-import-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2101,6 +2105,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-heuristic-list-virtualized-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "group-address-rows-virtualized-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-group-address-rows-virtualized-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
