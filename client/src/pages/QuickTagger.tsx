@@ -34,14 +34,14 @@ import {
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
-import { useTags, createTag } from "@/hooks/use-tags";
-import { useCategories, createCategory } from "@/hooks/use-categories";
+import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
 import { createRecord, updateRecord, lookupRecordsByInputStrings } from "@/hooks/use-records";
-import { useOwners, createOwner } from "@/hooks/use-owners";
-import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
-import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
-import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
-import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, captureMergeOrigin, getRecord } from "@/lib/dataFacade";
+import { useOwners } from "@/hooks/use-owners";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useSeedNames } from "@/hooks/use-seed-names";
+import { useWalletSoftware } from "@/hooks/use-wallet-software";
+import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, captureMergeOrigin, getRecord, ensureTag, ensureCategory, ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { validateBitcoinInput, canonicalizeRecordIdentifier, isMixedCaseBech32 } from "@/lib/bitcoin";
 import {
@@ -149,7 +149,7 @@ export default function QuickTagger() {
     if (newOwner.trim()) {
       const name = newOwner.trim();
       setOwner(name);
-      createOwner(name);
+      void ensureOwner(name);
       setNewOwner("");
       setOwnerOpen(false);
     }
@@ -159,7 +159,7 @@ export default function QuickTagger() {
     if (newWalletName.trim()) {
       const name = newWalletName.trim();
       setWalletName(name);
-      createWalletName(name);
+      void ensureWalletName(name);
       setNewWalletName("");
       setWalletNameOpen(false);
     }
@@ -169,7 +169,7 @@ export default function QuickTagger() {
     if (newSeedName.trim()) {
       const name = newSeedName.trim();
       setSeedName(name);
-      createSeedName(name);
+      void ensureSeedName(name);
       setNewSeedName("");
       setSeedNameOpen(false);
     }
@@ -179,7 +179,7 @@ export default function QuickTagger() {
     if (newWalletSoftware.trim()) {
       const name = newWalletSoftware.trim();
       setWalletSoftware(name);
-      createWalletSoftware(name);
+      void ensureWalletSoftware(name);
       setNewWalletSoftware("");
       setWalletSoftwareOpen(false);
     }
@@ -324,12 +324,14 @@ export default function QuickTagger() {
 
     beginBulkOperation();
     try {
-      // Sync new tags and categories
+      // Sync new tags and categories. The hooks' existing* lists can lag the
+      // DB, so use the tolerant ensure* helpers — a vocabulary duplicate must
+      // never abort the bulk apply.
       if (selectedTags.length > 0) {
         const existingTagNames = tags.map(t => t.name);
         for (const tagName of selectedTags) {
           if (!existingTagNames.includes(tagName)) {
-            await createTag(tagName);
+            await ensureTag(tagName);
           }
         }
         await syncTagsToMaster(selectedTags);
@@ -339,7 +341,7 @@ export default function QuickTagger() {
         const existingCatNames = categories.map(c => c.name);
         for (const catName of selectedCategories) {
           if (!existingCatNames.includes(catName)) {
-            await createCategory(catName);
+            await ensureCategory(catName);
           }
         }
         await syncCategoriesToMaster(selectedCategories);
@@ -347,32 +349,19 @@ export default function QuickTagger() {
 
       // Ensure owner exists
       if (owner && !owners.find(o => o.name === owner)) {
-        await createOwner(owner);
+        await ensureOwner(owner);
       }
 
       // Wallet/seed/software vocab only applies in Addresses mode
       if (mode === 'address') {
-        // Ensure wallet name exists
         if (walletName && !walletNames.find(w => w.name === walletName)) {
-          await createWalletName(walletName);
+          await ensureWalletName(walletName);
         }
-
-        // Ensure seed name exists
         if (seedName && !seedNames.find(s => s.name === seedName)) {
-          try {
-            await createSeedName(seedName);
-          } catch {
-            // May already exist
-          }
+          await ensureSeedName(seedName);
         }
-
-        // Ensure wallet software exists
         if (walletSoftware && !walletSoftwareList.find(w => w.name === walletSoftware)) {
-          try {
-            await createWalletSoftware(walletSoftware);
-          } catch {
-            // May already exist
-          }
+          await ensureWalletSoftware(walletSoftware);
         }
       }
 
@@ -796,7 +785,7 @@ export default function QuickTagger() {
                       onChange={setSelectedTags}
                       placeholder="Select or create tags..."
                       onAddNew={(name) => {
-                        createTag(name);
+                        void ensureTag(name);
                       }}
                     />
                   </div>
@@ -809,7 +798,7 @@ export default function QuickTagger() {
                       onChange={setSelectedCategories}
                       placeholder="Select or create categories..."
                       onAddNew={(name) => {
-                        createCategory(name);
+                        void ensureCategory(name);
                       }}
                     />
                   </div>

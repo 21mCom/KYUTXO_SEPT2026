@@ -361,7 +361,7 @@ export async function syncTagsToMaster(tagNames: string[]): Promise<void> {
   for (const name of tagNames) {
     const trimmedName = name.trim();
     if (trimmedName && !existingNames.has(trimmedName.toLowerCase())) {
-      await createTag(trimmedName);
+      await ensureTag(trimmedName);
       existingNames.add(trimmedName.toLowerCase());
     }
   }
@@ -378,7 +378,7 @@ export async function syncCategoriesToMaster(categoryNames: string[]): Promise<v
   for (const name of categoryNames) {
     const trimmedName = name.trim();
     if (trimmedName && !existingNames.has(trimmedName.toLowerCase())) {
-      await createCategory(trimmedName);
+      await ensureCategory(trimmedName);
       existingNames.add(trimmedName.toLowerCase());
     }
   }
@@ -394,6 +394,22 @@ function isExpectedVocabularyError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message;
   return EXPECTED_VOCABULARY_ERRORS.some(pattern => msg.includes(pattern));
+}
+
+export async function ensureTag(name: string, color?: string): Promise<void> {
+  try {
+    await createTag(name, color);
+  } catch (err) {
+    if (!isExpectedVocabularyError(err)) throw err;
+  }
+}
+
+export async function ensureCategory(name: string): Promise<void> {
+  try {
+    await createCategory(name);
+  } catch (err) {
+    if (!isExpectedVocabularyError(err)) throw err;
+  }
 }
 
 export async function ensureOwner(name: string): Promise<void> {

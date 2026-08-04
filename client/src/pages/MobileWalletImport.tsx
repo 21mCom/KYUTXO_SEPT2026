@@ -38,10 +38,11 @@ import { MultiSelectCombobox } from '@/components/ui/multi-select-combobox';
 import { useToast } from '@/hooks/use-toast';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/database';
-import { useSeedNames, createSeedName, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
-import { useOwners, createOwner } from '@/hooks/use-owners';
-import { useWalletNames, createWalletName } from '@/hooks/use-wallet-names';
-import { useWalletSoftware, createWalletSoftware } from '@/hooks/use-wallet-software';
+import { useSeedNames, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
+import { useOwners } from '@/hooks/use-owners';
+import { useWalletNames } from '@/hooks/use-wallet-names';
+import { useWalletSoftware } from '@/hooks/use-wallet-software';
+import { ensureOwner, ensureWalletName, ensureSeedName } from '@/lib/data/vocabulary-crud';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Check, ChevronsUpDown, Wallet } from 'lucide-react';
@@ -605,7 +606,7 @@ export default function MobileWalletImport() {
                                 const input = document.querySelector<HTMLInputElement>('[cmdk-input]');
                                 const value = input?.value;
                                 if (value) {
-                                  await createOwner(value);
+                                  await ensureOwner(value);
                                   setOwnerInput(value);
                                 }
                               }}
@@ -658,7 +659,7 @@ export default function MobileWalletImport() {
                                 const input = document.querySelector<HTMLInputElement>('[cmdk-input]');
                                 const value = input?.value;
                                 if (value) {
-                                  await createWalletName(value);
+                                  await ensureWalletName(value);
                                   setWalletNameInput(value);
                                 }
                               }}
@@ -723,7 +724,7 @@ export default function MobileWalletImport() {
                                 const input = document.querySelector<HTMLInputElement>('[cmdk-input]');
                                 const value = input?.value;
                                 if (value && value.length <= SEED_NAME_MAX_LENGTH) {
-                                  await createSeedName(value);
+                                  await ensureSeedName(value);
                                   setSelectedSeedName(value);
                                 }
                               }}

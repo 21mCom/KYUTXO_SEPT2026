@@ -3,7 +3,7 @@ import {
   bulkUpdateRecords,
   getRecordsByInputStrings,
 } from "./record-crud";
-import { createTag, syncTagsToMaster } from "./vocabulary-crud";
+import { ensureTag, syncTagsToMaster } from "./vocabulary-crud";
 import { canonicalizeRecordIdentifier } from "../bitcoin";
 
 // ── Address-poisoning tag application ────────────────────────────────────────
@@ -55,11 +55,7 @@ function isAlreadyExistsError(err: unknown): boolean {
  */
 export async function ensurePoisoningTags(tagNames: string[]): Promise<void> {
   for (const name of tagNames) {
-    try {
-      await createTag(name);
-    } catch (err) {
-      if (!isAlreadyExistsError(err)) throw err;
-    }
+    await ensureTag(name);
   }
   try {
     await syncTagsToMaster(tagNames);

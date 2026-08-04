@@ -77,7 +77,7 @@ import {
   computePrivacyHistoryScopeLabel,
 } from "@/lib/privacy-history-export";
 import { formatScoreDelta } from "@/lib/privacy-report-export";
-import { createTag } from "@/lib/data/vocabulary-crud";
+import { ensureTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
 import { getTransactionByTxid, getParticipantsByTxids } from "@/lib/data/transaction-crud";
 import { useSettings, updatePeelChainViewMode, updateShowScoreBreakdown } from "@/hooks/use-settings";
@@ -570,11 +570,7 @@ export default function PrivacyAudit() {
           const color = match
             ? getProximityTagColor(match[1] as Parameters<typeof getProximityTagColor>[0])
             : "#64748b";
-          try {
-            await createTag(tagName, color);
-          } catch {
-            // Already exists — safe to ignore
-          }
+          await ensureTag(tagName, color);
         }
       }
 
@@ -653,7 +649,9 @@ export default function PrivacyAudit() {
       const existingTagNames = new Set(tags.map((t) => t.name));
       for (const info of Object.values(PRIVACY_TAG_MAP)) {
         if (info && !existingTagNames.has(info.tagName)) {
-          await createTag(info.tagName, info.color);
+          // Tolerant: the hook's tag snapshot can lag the DB; a duplicate
+          // tag must never abort the bulk tagging run.
+          await ensureTag(info.tagName, info.color);
         }
       }
 

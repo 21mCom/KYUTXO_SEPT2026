@@ -20,7 +20,7 @@ import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { beginBulkOperation, endBulkOperation, notifyDbChange } from "@/lib/database";
-import { createTag } from "@/lib/data/vocabulary-crud";
+import { ensureTag } from "@/lib/data/vocabulary-crud";
 import { bulkUpdateRecords, getRecordsByType } from "@/lib/data/record-crud";
 import { getInputParticipants } from "@/lib/data/transaction-crud";
 import { useTags } from "@/hooks/use-tags";
@@ -246,15 +246,9 @@ export default function QuantumRiskScanner() {
         const existingTagNames = new Set(tags.map(t => t.name));
         for (const level of RISK_LEVELS) {
           if (!selectedLevels.has(level.key) || existingTagNames.has(level.tagName)) continue;
-          try {
-            await createTag(level.tagName, level.color);
-          } catch (error) {
-            // The hook's tag snapshot can lag a concurrent creator; an
-            // already-existing tag is fine, anything else is a real failure.
-            if (!(error instanceof Error && /already exists/i.test(error.message))) {
-              throw error;
-            }
-          }
+          // The hook's tag snapshot can lag a concurrent creator; an
+          // already-existing tag is fine, anything else is a real failure.
+          await ensureTag(level.tagName, level.color);
         }
 
         beginBulkOperation();

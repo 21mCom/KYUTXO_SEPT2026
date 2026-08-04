@@ -57,14 +57,22 @@ import { useToast } from "@/hooks/use-toast";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useGuardedAddressCopy } from "@/hooks/use-guarded-address-copy";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
-import { useTags, createTag as createTagHook } from "@/hooks/use-tags";
-import { useCategories, createCategory as createCategoryHook } from "@/hooks/use-categories";
+import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
 import { saveDescriptorAddresses, type DescriptorSaveResult } from "@/pages/descriptor-import/save-addresses";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
-import { useOwners, createOwner } from "@/hooks/use-owners";
-import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
-import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
-import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
+import { useOwners } from "@/hooks/use-owners";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useSeedNames } from "@/hooks/use-seed-names";
+import { useWalletSoftware } from "@/hooks/use-wallet-software";
+import {
+  ensureTag,
+  ensureCategory,
+  ensureOwner,
+  ensureWalletName,
+  ensureSeedName,
+  ensureWalletSoftware,
+} from "@/lib/data/vocabulary-crud";
 import { 
   deriveMultisigDualChain,
   deriveTaprootDualChain,
@@ -1015,7 +1023,7 @@ export default function DescriptorImport() {
                                 variant="ghost"
                                 className="w-full justify-start"
                                 onClick={async () => {
-                                  await createOwner(newOwner);
+                                  await ensureOwner(newOwner);
                                   setOwnerInput(newOwner);
                                   setNewOwner("");
                                   setOwnerOpen(false);
@@ -1076,7 +1084,7 @@ export default function DescriptorImport() {
                                 variant="ghost"
                                 className="w-full justify-start"
                                 onClick={async () => {
-                                  await createWalletName(newWalletName);
+                                  await ensureWalletName(newWalletName);
                                   setWalletNameInput(newWalletName);
                                   setNewWalletName("");
                                   setWalletNameOpen(false);
@@ -1139,7 +1147,7 @@ export default function DescriptorImport() {
                                 variant="ghost"
                                 className="w-full justify-start"
                                 onClick={async () => {
-                                  await createSeedName(newSeedName);
+                                  await ensureSeedName(newSeedName);
                                   setSeedName(newSeedName);
                                   setNewSeedName("");
                                   setSeedOpen(false);
@@ -1200,7 +1208,7 @@ export default function DescriptorImport() {
                                 variant="ghost"
                                 className="w-full justify-start"
                                 onClick={async () => {
-                                  await createWalletSoftware(newWalletSoftware);
+                                  await ensureWalletSoftware(newWalletSoftware);
                                   setWalletSoftware(newWalletSoftware);
                                   setNewWalletSoftware("");
                                   setWalletOpen(false);
@@ -1241,7 +1249,7 @@ export default function DescriptorImport() {
                     values={selectedTags}
                     onChange={setSelectedTags}
                     onAddNew={async (value) => {
-                      await createTagHook(value);
+                      await ensureTag(value);
                       setSelectedTags([...selectedTags, value]);
                     }}
                     placeholder="Select tags..."
@@ -1256,7 +1264,7 @@ export default function DescriptorImport() {
                     values={selectedCategories}
                     onChange={setSelectedCategories}
                     onAddNew={async (value) => {
-                      await createCategoryHook(value);
+                      await ensureCategory(value);
                       setSelectedCategories([...selectedCategories, value]);
                     }}
                     placeholder="Select categories..."

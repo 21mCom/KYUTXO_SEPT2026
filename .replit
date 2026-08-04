@@ -589,6 +589,10 @@ args = "address-checker-invault-node-check"
 task = "workflow.run"
 args = "transactions-entity-filter-engine-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "vocab-ensure-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -2118,6 +2122,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/pages/proof-of-funds/aml-screening.participantCap.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "vocab-ensure-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/vocabulary-crud.ensure.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
