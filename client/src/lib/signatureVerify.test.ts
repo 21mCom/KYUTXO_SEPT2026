@@ -793,6 +793,71 @@ describe("BIP-322 Full rejects structurally-valid-but-insufficient multisig (P2T
   });
 });
 
+describe("BIP-322 P2SH-P2WSH rejects structurally-valid-but-insufficient wrapped multisig", () => {
+  // verifyBip322P2SH reconstructs the redeem script from the untouched
+  // witnessScript (last item), so all of these mutated witnesses still pass the
+  // hash160(redeemScript) address check and must fail in SIGNATURE validation —
+  // never in the "does not correspond" redeem-mismatch branch.
+  // P2SH_P2WSH_2OF3 stack: [<empty dummy>, sigA, sigB, <witnessScript>].
+  const twoOfThree = splitWitness(P2SH_P2WSH_2OF3_SIG);
+  // P2SH_P2WSH_2OF2 stack: [<empty dummy>, sigA, sigB, <witnessScript>].
+  const twoOfTwo = splitWitness(P2SH_P2WSH_2OF2_SIG);
+
+  it("rejects a wrapped 2-of-3 with one signature dropped (too few sigs)", async () => {
+    const tooFew = joinWitness([twoOfThree[0], twoOfThree[1], twoOfThree[3]]);
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF3_ADDR, FULL_MSG, tooFew);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/does not correspond/i);
+  });
+
+  it("rejects a wrapped 2-of-3 where one signature is tampered", async () => {
+    // Flip a byte inside the r-value: the DER stays structurally parseable but
+    // the signature no longer verifies against any cosigner key.
+    const badSig = flipByte(twoOfThree[1], 10);
+    const tampered = joinWitness([twoOfThree[0], badSig, twoOfThree[2], twoOfThree[3]]);
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF3_ADDR, FULL_MSG, tampered);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/does not correspond/i);
+  });
+
+  it("rejects a wrapped 2-of-3 with the cosigner signatures swapped", async () => {
+    // OP_CHECKMULTISIG matches sigs to keys sequentially in script order, so
+    // swapping the two valid sigs makes the second one run out of keys.
+    const swapped = joinWitness([twoOfThree[0], twoOfThree[2], twoOfThree[1], twoOfThree[3]]);
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF3_ADDR, FULL_MSG, swapped);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/does not correspond/i);
+  });
+
+  it("rejects a wrapped 2-of-2 with one signature dropped (too few sigs)", async () => {
+    const tooFew = joinWitness([twoOfTwo[0], twoOfTwo[1], twoOfTwo[3]]);
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF2_ADDR, FULL_MSG, tooFew);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/does not correspond/i);
+  });
+
+  it("rejects a wrapped 2-of-2 where one of the two signatures is tampered", async () => {
+    const badSig = flipByte(twoOfTwo[2], 10);
+    const tampered = joinWitness([twoOfTwo[0], twoOfTwo[1], badSig, twoOfTwo[3]]);
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF2_ADDR, FULL_MSG, tampered);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/does not correspond/i);
+  });
+
+  it("rejects a wrapped 2-of-2 with the cosigner signatures swapped", async () => {
+    const swapped = joinWitness([twoOfTwo[0], twoOfTwo[2], twoOfTwo[1], twoOfTwo[3]]);
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF2_ADDR, FULL_MSG, swapped);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/does not correspond/i);
+  });
+});
+
 describe("challenge message helpers", () => {
   it("builds a deterministic challenge embedding the address and nonce", () => {
     const msg = buildChallengeMessage({
