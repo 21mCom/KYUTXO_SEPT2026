@@ -207,6 +207,10 @@ args = "pof-empty-exclusion-live-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "pof-node-unreachable-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "adversary-view-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2058,6 +2062,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-heuristic-list-virtualized-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-node-unreachable-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-node-unreachable-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
