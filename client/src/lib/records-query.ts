@@ -2,6 +2,7 @@ import type Dexie from "dexie";
 import type { ColumnFilter } from "@/components/RecordFilters";
 import { db, type Record as DbRecord, type AddressImportance } from "@/lib/database";
 import { isHiddenDiscoveryTier } from "@/lib/db-types";
+import { canonicalizeRecordIdentifier } from "@/lib/bitcoin";
 
 export const USER_TIERS: AddressImportance[] = [
   "verified",
@@ -126,20 +127,29 @@ function classifyFilter(f: ColumnFilter): { narrow: IndexedNarrowing; priority: 
         return { narrow: { kind: "startsWith", field: f.field, value: trimmed }, priority };
       }
       return null;
-    case "inputString":
+    case "inputString": {
+      // Records store canonical identifiers (canonicalizeRecordIdentifier:
+      // trimmed; bech32/txid lowercased; base58 verbatim) and the
+      // inputStringLower index stores the lowercase of that canonical form.
+      // Canonicalize the lookup key BEFORE lowering so padded / uppercase /
+      // mixed-case identifier inputs always hit their canonical rows — and so
+      // any future change to canonicalization automatically flows into this
+      // planner path instead of silently diverging from the write path.
+      const canonicalKey = canonicalizeRecordIdentifier(trimmed).toLowerCase();
       if (f.operator === "equals") {
         return {
-          narrow: { kind: "equals", field: "inputStringLower", value: trimmed.toLowerCase() },
+          narrow: { kind: "equals", field: "inputStringLower", value: canonicalKey },
           priority,
         };
       }
       if (f.operator === "startsWith") {
         return {
-          narrow: { kind: "startsWith", field: "inputStringLower", value: trimmed.toLowerCase() },
+          narrow: { kind: "startsWith", field: "inputStringLower", value: canonicalKey },
           priority,
         };
       }
       return null;
+    }
     default:
       return null;
   }
@@ -268,7 +278,8 @@ export function buildRecordsCollection(
 
 // Conservative, dependency-free detection of a complete Bitcoin identifier
 // (full address or 64-hex txid) pasted into the global search box. Kept free of
-// bitcoinjs-lib so this stays a pure, fast, easily-tested query module.
+// bitcoinjs-lib parsing so this stays a pure, fast, easily-tested predicate
+// (the module imports only the regex-based canonicalizeRecordIdentifier).
 //
 // Returns the trimmed identifier when the search looks like a complete address
 // or txid, else null. The patterns require a FULL identifier (anchored, with

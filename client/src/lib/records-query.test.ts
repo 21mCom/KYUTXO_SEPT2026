@@ -470,6 +470,121 @@ describe("buildIdentifierSearchCollection", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Task #1877 — identifier canonicalization inside the query planner.
+//
+// Records store canonical identifiers (canonicalizeRecordIdentifier) and the
+// inputStringLower index stores the lowercase of that canonical form. The
+// static guard (scripts/check-input-string-canonicalization.js) cannot see
+// dynamic-field narrows (`db.records.where(n.field)`), so these tests prove
+// that identifier-shaped inputs entering records-query narrows are
+// canonicalized: padded / uppercase / mixed-case bech32 and txid inputs must
+// still resolve to their canonical (lowercased, trimmed) index keys.
+// ---------------------------------------------------------------------------
+describe("planner narrows canonicalize identifier keys", () => {
+  const noop = () => true;
+  const bech32Canonical = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+  const txidCanonical =
+    "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b";
+
+  it("padded + uppercase bech32 equals filter hits the canonical inputStringLower key", () => {
+    buildRecordsCollection(
+      {
+        search: "",
+        columnFilters: [
+          {
+            field: "inputString",
+            operator: "equals",
+            value: `  ${bech32Canonical.toUpperCase()}  `,
+          },
+        ],
+        includeBlockchainDiscovered: false,
+      },
+      noop,
+    );
+    expect(whereSpy).toHaveBeenCalledWith("inputStringLower");
+    expect(equalsSpy).toHaveBeenCalledWith("where(inputStringLower)", bech32Canonical);
+  });
+
+  it("uppercase txid equals filter hits the canonical lowercase txid key", () => {
+    buildRecordsCollection(
+      {
+        search: "",
+        columnFilters: [
+          { field: "inputString", operator: "equals", value: txidCanonical.toUpperCase() },
+        ],
+        includeBlockchainDiscovered: true,
+      },
+      noop,
+    );
+    expect(whereSpy).toHaveBeenCalledWith("inputStringLower");
+    expect(equalsSpy).toHaveBeenCalledWith("where(inputStringLower)", txidCanonical);
+  });
+
+  it("mixed-case bech32 prefix startsWith filter lowers the prefix for the lowered index", () => {
+    buildRecordsCollection(
+      {
+        search: "",
+        columnFilters: [
+          { field: "inputString", operator: "startsWith", value: " Bc1QAr0sRRr7 " },
+        ],
+        includeBlockchainDiscovered: true,
+      },
+      noop,
+    );
+    expect(whereSpy).toHaveBeenCalledWith("inputStringLower");
+    expect(startsWithIgnoreCaseSpy).toHaveBeenCalledWith(
+      "where(inputStringLower)",
+      "bc1qar0srrr7",
+    );
+  });
+
+  it("base58 equals filter keeps the characters verbatim (only lowered for the index)", () => {
+    // Base58 is case-sensitive; canonicalization must NOT alter the characters
+    // beyond trimming. The value is lowered only because the inputStringLower
+    // index stores lowered strings for case-insensitive matching.
+    const base58 = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
+    buildRecordsCollection(
+      {
+        search: "",
+        columnFilters: [{ field: "inputString", operator: "equals", value: `  ${base58}` }],
+        includeBlockchainDiscovered: true,
+      },
+      noop,
+    );
+    expect(equalsSpy).toHaveBeenCalledWith("where(inputStringLower)", base58.toLowerCase());
+  });
+
+  it("uppercase pasted identifier via the search fast path resolves to the canonical key", () => {
+    buildIdentifierSearchCollection(
+      bech32Canonical.toUpperCase(),
+      {
+        search: bech32Canonical.toUpperCase(),
+        columnFilters: [],
+        includeBlockchainDiscovered: false,
+      },
+      noop,
+    );
+    expect(whereSpy).toHaveBeenCalledWith("inputStringLower");
+    expect(equalsSpy).toHaveBeenCalledWith("where(inputStringLower)", bech32Canonical);
+    expect(anyOfSpy).not.toHaveBeenCalled();
+    expect(toCollectionSpy).not.toHaveBeenCalled();
+  });
+
+  it("pickPrimaryNarrowing emits a canonicalized narrow descriptor for uppercase txid", () => {
+    const s = pickPrimaryNarrowing(
+      "",
+      [{ field: "inputString", operator: "equals", value: ` ${txidCanonical.toUpperCase()} ` }],
+      true,
+    );
+    expect(s.narrowing).toEqual({
+      kind: "equals",
+      field: "inputStringLower",
+      value: txidCanonical,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task #1740 — dynamic visible-tier narrowing.
 //
 // The default-view (exclude blockchain-discovered) Dexie narrowing used to be

@@ -21,10 +21,11 @@
 //   - fails when a NEW raw call site appears, or when the ratchet is stale
 //     (fewer raw sites than expected -> tighten the ratchet).
 //
-// Known limitation (documented, accepted): dynamic field names
-// (e.g. `where(n.field)` in records-query.ts) and the records-query narrow
-// descriptors are not literal matches and are covered by the
-// records-search-visibility unit suites instead.
+// Dynamic-field call sites (e.g. `where(n.field)` in records-query.ts) are
+// covered two ways: the narrow DESCRIPTORS that feed them
+// (`{ ..., field: "inputString"|"inputStringLower", value: <expr> }`) are
+// scanned here with the same canonical-mention heuristic, and the
+// records-search-visibility / records-query unit suites prove the behavior.
 //
 // Test files (*.test.ts / *.test.tsx, client/src/test/) are excluded: tests
 // intentionally seed and look up rows verbatim to emulate
@@ -149,6 +150,16 @@ const OBJECT_PATTERN = new RegExp(
   String.raw`\.(where|get)\(\s*\{[^}]*\binputString(?:Lower)?\s*:`,
   'g'
 );
+// Query-planner narrow descriptors (records-query.ts style): an object literal
+// that targets the inputString/inputStringLower index by name and carries the
+// lookup key in a sibling `value:` property. These descriptors are executed
+// later via a dynamic `db.records.where(n.field)`, which the WHERE_PATTERN can
+// never see — so the canonicalization heuristic is applied to the value
+// expression here instead.
+const NARROW_DESCRIPTOR_PATTERN = new RegExp(
+  String.raw`\bfield:\s*["'\`](inputString|inputStringLower)["'\`]\s*,\s*value:\s*([^,}\r\n]+)`,
+  'g'
+);
 
 function lineOf(src, index) {
   return src.slice(0, index).split('\n').length;
@@ -191,6 +202,19 @@ for (const file of files) {
       rawHits.push({
         line: lineOf(src, m.index),
         snippet: window.split('\n')[0].trim(),
+      });
+    }
+  }
+
+  NARROW_DESCRIPTOR_PATTERN.lastIndex = 0;
+  while ((m = NARROW_DESCRIPTOR_PATTERN.exec(src)) !== null) {
+    const valueExpr = m[2];
+    if (/canonical/i.test(valueExpr)) {
+      canonicalizedSites++;
+    } else {
+      rawHits.push({
+        line: lineOf(src, m.index),
+        snippet: m[0].replace(/\s+/g, ' ').trim().slice(0, 120),
       });
     }
   }
