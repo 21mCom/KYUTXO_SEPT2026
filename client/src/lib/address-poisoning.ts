@@ -317,7 +317,28 @@ export async function scanAddressPoisoning(
 
   if (signal.aborted) return null;
 
-  // ── Lookalike matching: each candidate vs every scoped address ───────────
+  // ── Lookalike matching: each candidate vs the pre-bucketed scoped set ────
+  //
+  // A lookalike match requires BOTH a shared leading run and a shared
+  // trailing run of at least minMatch characters, which means the suspect and
+  // target must agree exactly on their first minMatch and last minMatch
+  // characters. Bucketing the scoped addresses by that prefix+suffix key
+  // turns the former O(candidates x scoped) pairwise loop into a hash lookup
+  // plus a (typically tiny) bucket scan — the shared bech32 "bc1q…" prefix
+  // alone can't blow the bucket up because the suffix half of the key stays
+  // diverse. computeLookalikeMatch still performs the full check (family,
+  // exact-match exclusion, overlap-aware run lengths), so this is purely a
+  // superset pre-filter and cannot change results.
+  const bucketKey = (addr: string) =>
+    `${addr.slice(0, minMatch)}\u0000${addr.slice(-minMatch)}`;
+  const targetsByAffix = new Map<string, string[]>();
+  for (const target of scopedList) {
+    const key = bucketKey(target);
+    const list = targetsByAffix.get(key);
+    if (list) list.push(target);
+    else targetsByAffix.set(key, [target]);
+  }
+
   interface RawMatch {
     suspectAddress: string;
     targetAddress: string;
@@ -328,9 +349,20 @@ export async function scanAddressPoisoning(
   const rawMatches: RawMatch[] = [];
   const seenMatch = new Set<string>();
 
-  for (const cand of candidates) {
+  // Even with bucketing, keep this loop cooperative: yield to the event loop
+  // and honour cancellation every LOOKALIKE_YIELD candidates so a huge dust
+  // set can never freeze the UI.
+  const LOOKALIKE_YIELD = 2000;
+  for (let ci = 0; ci < candidates.length; ci++) {
+    if (ci > 0 && ci % LOOKALIKE_YIELD === 0) {
+      if (signal.aborted) return null;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const cand = candidates[ci];
+    const bucket = targetsByAffix.get(bucketKey(cand.suspectAddress));
+    if (!bucket) continue;
     let best: { target: string; leading: number; trailing: number } | null = null;
-    for (const target of scopedList) {
+    for (const target of bucket) {
       const m = computeLookalikeMatch(cand.suspectAddress, target, minMatch);
       if (!m) continue;
       if (!best || m.leading + m.trailing > best.leading + best.trailing) {
