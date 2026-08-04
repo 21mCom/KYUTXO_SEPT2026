@@ -76,6 +76,7 @@ export default function AddressPoisoning() {
   const [selectedTags, setSelectedTags] = useState<string[]>(["suspected-poisoning"]);
   const [targetTags, setTargetTags] = useState<string[]>(["poisoning-target"]);
   const [tagBusy, setTagBusy] = useState<string | null>(null);
+  const [tagProgress, setTagProgress] = useState<{ done: number; total: number } | null>(null);
   const [taggingAll, setTaggingAll] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -209,8 +210,11 @@ export default function AddressPoisoning() {
         return;
       }
       setTagBusy(busyKey);
+      setTagProgress(null);
       try {
-        const summary = await applyPoisoningTags(entries, selectedTags);
+        const summary = await applyPoisoningTags(entries, selectedTags, {
+          onProgress: (done, total) => setTagProgress({ done, total }),
+        });
         toast({
           title: "Tags applied",
           description:
@@ -227,6 +231,7 @@ export default function AddressPoisoning() {
         });
       } finally {
         setTagBusy(null);
+        setTagProgress(null);
       }
     },
     [selectedTags, toast],
@@ -239,8 +244,11 @@ export default function AddressPoisoning() {
         return;
       }
       setTagBusy(busyKey);
+      setTagProgress(null);
       try {
-        const summary = await applyPoisoningTags(entries, targetTags);
+        const summary = await applyPoisoningTags(entries, targetTags, {
+          onProgress: (done, total) => setTagProgress({ done, total }),
+        });
         toast({
           title: "Target tags applied",
           description:
@@ -257,6 +265,7 @@ export default function AddressPoisoning() {
         });
       } finally {
         setTagBusy(null);
+        setTagProgress(null);
       }
     },
     [targetTags, toast],
@@ -541,12 +550,19 @@ export default function AddressPoisoning() {
                   disabled={taggingAll || untaggedSuspects.length === 0 || selectedTags.length === 0}
                   data-testid="button-tag-all-suspects"
                 >
-                  {taggingAll ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                  {taggingAll && tagBusy === "all-suspects" ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                      {tagProgress
+                        ? `Tagging ${tagProgress.done.toLocaleString()} / ${tagProgress.total.toLocaleString()}…`
+                        : "Tagging…"}
+                    </>
                   ) : (
-                    <Tag className="h-4 w-4 mr-1" />
+                    <>
+                      <Tag className="h-4 w-4 mr-1" />
+                      Tag all suspects ({untaggedSuspects.length})
+                    </>
                   )}
-                  Tag all suspects ({untaggedSuspects.length})
                 </Button>
 
                 <MultiSelectCombobox
@@ -567,12 +583,19 @@ export default function AddressPoisoning() {
                   disabled={taggingAll || untaggedTargets.length === 0 || targetTags.length === 0}
                   data-testid="button-tag-all-targets"
                 >
-                  {taggingAll ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                  {taggingAll && tagBusy === "all-targets" ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                      {tagProgress
+                        ? `Tagging ${tagProgress.done.toLocaleString()} / ${tagProgress.total.toLocaleString()}…`
+                        : "Tagging…"}
+                    </>
                   ) : (
-                    <Tag className="h-4 w-4 mr-1" />
+                    <>
+                      <Tag className="h-4 w-4 mr-1" />
+                      Tag all targets ({untaggedTargets.length})
+                    </>
                   )}
-                  Tag all targets ({untaggedTargets.length})
                 </Button>
               </div>
             </div>
