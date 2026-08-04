@@ -61,6 +61,7 @@ import {
   type DetectionResult,
 } from '@/lib/wallet-import/import-manager';
 import { getImportSummary } from '@/lib/wallet-import/merge-utils';
+import { describeKeptFieldCounts } from '@/lib/descriptor-import-utils';
 
 type WizardStep = 'upload' | 'setup' | 'preview' | 'import';
 
@@ -933,6 +934,28 @@ export default function MobileWalletImport() {
                 </div>
               </div>
               
+              {describeKeptFieldCounts(importResult.keptFieldCounts).length > 0 && (
+                <Alert data-testid="alert-metadata-kept">
+                  <Info className="h-4 w-4" />
+                  <AlertTitle>Some existing metadata was kept</AlertTitle>
+                  <AlertDescription>
+                    <p className="mb-2">
+                      For records that already existed in your vault, the values below were
+                      already set, so your entries were not applied to them (tags and categories
+                      were merged everywhere):
+                    </p>
+                    <ul className="list-disc list-inside space-y-1 text-sm">
+                      {describeKeptFieldCounts(importResult.keptFieldCounts).map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs">
+                      Use the Bulk Editor if you want to overwrite existing values.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              )}
+
               {importResult.errors.length > 0 && (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />

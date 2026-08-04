@@ -5,6 +5,12 @@ import { IMPORTANCE_TIERS } from '../provenance';
 import { expandLabelTokens } from '../label-tokens';
 import { isUserCuratedImportance } from '../db-types';
 import { canonicalizeRecordIdentifier } from '../bitcoin';
+import {
+  computeExistingRecordMerge,
+  type MetadataFieldKey,
+} from '../descriptor-import-utils';
+
+export type { MetadataFieldKey };
 
 // Determine if the incoming importance should upgrade the existing one
 // Returns the new importance if it should be upgraded, or undefined if no change
@@ -74,7 +80,25 @@ export async function checkForDuplicates(
   });
 }
 
-export function mergeRecordData(
+export interface MergeRecordReport {
+  data: Partial<DBRecord>;
+  /** User entered a value but the record's existing value was kept. */
+  keptFields: MetadataFieldKey[];
+  /** User's entry filled a previously blank field. */
+  appliedFields: MetadataFieldKey[];
+}
+
+/**
+ * Merge policy for an existing record, PLUS a report of which user-entered
+ * scalar fields were kept-as-existing vs applied — the same transparency
+ * contract Descriptor Import uses (computeExistingRecordMerge), so the UI can
+ * tell the user instead of silently dropping their input.
+ *
+ * walletName is deliberately NOT part of the kept/applied report: an explicit
+ * wallet-file import is authoritative for walletName (re-attribution), and
+ * that move is already surfaced separately via reattributedRecords.
+ */
+export function mergeRecordDataWithReport(
   existing: DBRecord,
   incoming: ParsedRecord,
   options: {
@@ -90,17 +114,33 @@ export function mergeRecordData(
     privateKeyStatus?: string;
     vault?: VaultMetadata;
   }
-): Partial<DBRecord> {
-  const existingTags = existing.tags || [];
-  const existingCategories = existing.categories || [];
-  
-  // Only apply tags/categories to input addresses (addresses you control)
+): MergeRecordReport {
+  // Only apply tags/categories/wallet metadata to input addresses
+  // (addresses you control)
   const isInput = incoming.isInputAddress === true || incoming.direction === 'incoming';
-  const incomingTags = isInput ? (options.defaultTags || []) : [];
-  const incomingCategories = isInput ? (options.defaultCategories || []) : [];
-  
-  const mergedTags = Array.from(new Set([...existingTags, ...incomingTags]));
-  const mergedCategories = Array.from(new Set([...existingCategories, ...incomingCategories]));
+
+  // Shared merge policy (same as Descriptor Import): tags/categories are
+  // unioned, scalar metadata keeps the existing value, and the user is told
+  // which of their entries were kept-as-existing vs applied.
+  const scalarMerge = computeExistingRecordMerge(
+    {
+      owner: existing.owner,
+      seedName: existing.seedName,
+      walletSoftware: existing.walletSoftware,
+      tags: existing.tags || [],
+      categories: existing.categories || [],
+    },
+    {
+      owner: isInput ? options.owner : undefined,
+      seedName: isInput ? options.seedName : undefined,
+      walletSoftware: isInput ? options.walletSoftware : undefined,
+      tags: isInput ? (options.defaultTags || []) : [],
+      categories: isInput ? (options.defaultCategories || []) : [],
+    },
+  );
+
+  const mergedTags = scalarMerge.tags;
+  const mergedCategories = scalarMerge.categories;
   
   let mergedLabel = existing.label;
   if (incoming.label && incoming.label !== existing.label) {
@@ -145,10 +185,11 @@ export function mergeRecordData(
     date: existing.date ?? incoming.date,
     source: mergedSource,
     // Only apply wallet-origin metadata to input addresses (user-controlled)
-    // Third-party outputs should not inherit seed/wallet info
-    walletSoftware: existing.walletSoftware || (isInput ? options.walletSoftware : undefined),
-    seedName: existing.seedName || (isInput ? options.seedName : undefined),
-    owner: existing.owner || (isInput ? options.owner : undefined),
+    // Third-party outputs should not inherit seed/wallet info.
+    // Scalars come from the shared merge policy: existing values win.
+    walletSoftware: scalarMerge.fields.walletSoftware,
+    seedName: scalarMerge.fields.seedName,
+    owner: scalarMerge.fields.owner,
     // An explicit import into a named wallet is authoritative: the incoming
     // walletName wins over any inherited one (sync stamps the parent wallet's
     // name on auto-created counterparty rows). Without an explicit walletName
@@ -172,8 +213,21 @@ export function mergeRecordData(
       vaultNotes: options.vault.vaultNotes,
     };
   }
-  
-  return result;
+
+  return {
+    data: result,
+    keptFields: scalarMerge.keptFields,
+    appliedFields: scalarMerge.appliedFields,
+  };
+}
+
+/** Back-compat wrapper: merge data only, without the kept/applied report. */
+export function mergeRecordData(
+  existing: DBRecord,
+  incoming: ParsedRecord,
+  options: Parameters<typeof mergeRecordDataWithReport>[2],
+): Partial<DBRecord> {
+  return mergeRecordDataWithReport(existing, incoming, options).data;
 }
 
 export function createNewRecordData(

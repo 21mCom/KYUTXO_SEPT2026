@@ -16,7 +16,7 @@ import { myceliumAdapter } from './adapters/mycelium';
 import { phoenixAdapter } from './adapters/phoenix';
 import { walletOfSatoshiAdapter } from './adapters/wallet-of-satoshi';
 import { nunchukAdapter } from './adapters/nunchuk';
-import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
+import { checkForDuplicates, mergeRecordDataWithReport, createNewRecordData } from './merge-utils';
 import { createRecord, updateRecord, createRecordOrigin, captureMergeOrigin } from '../dataFacade';
 import { beginBulkOperation, endBulkOperation } from '../database';
 
@@ -164,6 +164,8 @@ export async function executeImport(
     skippedRecords: 0,
     failedRecords: 0,
     reattributedRecords: 0,
+    keptFieldCounts: {},
+    appliedFieldCounts: {},
     errors: [],
   };
   
@@ -219,7 +221,7 @@ export async function executeImport(
         
         result.newRecords++;
       } else if (existingRecord?.id) {
-        const mergedData = mergeRecordData(existingRecord, parsedRecord, {
+        const { data: mergedData, keptFields, appliedFields } = mergeRecordDataWithReport(existingRecord, parsedRecord, {
           defaultTags: options.defaultTags,
           defaultCategories: options.defaultCategories,
           sourceName: options.sourceName,
@@ -237,6 +239,16 @@ export async function executeImport(
         });
         
         await updateRecord(existingRecord.id, mergedData);
+
+        // Transparent merge reporting (same contract as Descriptor Import):
+        // count, per field, where the user's entry was kept-as-existing vs
+        // applied to a blank field, so the completion screen can say so.
+        for (const key of keptFields) {
+          result.keptFieldCounts[key] = (result.keptFieldCounts[key] || 0) + 1;
+        }
+        for (const key of appliedFields) {
+          result.appliedFieldCounts[key] = (result.appliedFieldCounts[key] || 0) + 1;
+        }
 
         // An explicit import into a named wallet re-attributes records that
         // sat under a different wallet name (e.g. discovery-stamped rows that

@@ -1,4 +1,5 @@
 import type { Record as DBRecord } from '../database';
+import type { MetadataFieldKey } from '../descriptor-import-utils';
 
 export type WalletType = 'trezor' | 'sparrow' | 'sparrow-bip329' | 'mycelium' | 'phoenix' | 'wallet-of-satoshi' | 'nunchuk' | 'unknown';
 export type FileFormat = 'csv' | 'json' | 'jsonl' | 'bsms';
@@ -67,6 +68,12 @@ export interface ImportResult {
   /** Merged records whose walletName moved from a different, non-empty wallet
    *  name to the explicitly imported one (re-attribution is never silent). */
   reattributedRecords: number;
+  /** Per-field counts of merged records where the user entered a value but
+   *  the existing value was kept (same transparency as Descriptor Import). */
+  keptFieldCounts: Partial<Record<MetadataFieldKey, number>>;
+  /** Per-field counts where the user's entry filled a previously blank field
+   *  on an existing record. */
+  appliedFieldCounts: Partial<Record<MetadataFieldKey, number>>;
   errors: string[];
 }
 
