@@ -1115,6 +1115,12 @@ export async function verifyBip322Full(
  *                   is `OP_0 <32-byte sha256(witnessScript)>`
  *   - P2SH-P2WPKH : a wrapped single key — the redeem script is
  *                   `OP_0 <20-byte hash160(pubkey)>`
+ *   - bare P2SH   : a pre-SegWit multisig — the redeem script is the raw
+ *                   `OP_m <pubkeys…> OP_n OP_CHECKMULTISIG` script itself,
+ *                   spent through a legacy scriptSig (no witness), so the
+ *                   proof is either a stack container or the serialized
+ *                   BIP-322 to_sign transaction and signatures commit to the
+ *                   legacy (pre-BIP-143) sighash
  *
  * For a P2SH-wrapped SegWit input the redeem script *is* the native witness
  * program, so we reconstruct it from the witness, confirm
@@ -1125,8 +1131,8 @@ export async function verifyBip322Full(
  * to_sign BIP-143 sighash. The redeem-script push in the to_sign scriptSig does
  * not enter the BIP-143 sighash, so it is irrelevant to verification.
  *
- * Genuinely invalid signatures, mismatched scripts, and bare (non-SegWit) P2SH
- * spends all produce clear errors rather than a silent pass.
+ * Genuinely invalid signatures, mismatched scripts, and unsupported script
+ * forms all produce clear errors rather than a silent pass.
  */
 export async function verifyBip322P2SH(
   address: string,
@@ -1156,14 +1162,35 @@ export async function verifyBip322P2SH(
     return { verified: false, error: 'Signature is not valid base64.' };
   }
 
+  // The proof is normally a serialized witness stack (the wrapped-SegWit
+  // forms). Bare (pre-SegWit) P2SH multisig cannot produce a witness — it
+  // spends through a legacy scriptSig — so BIP-322 proofs for those wallets
+  // are the serialized to_sign TRANSACTION ("Full"/legacy form). Accept both:
+  // if the payload parses as a transaction, lift the scriptSig pushes into the
+  // same stack shape ([…sigs, redeemScript]) the bare path below expects.
   let witness: Uint8Array[];
   try {
     witness = parseWitnessStack(witnessBytes);
   } catch {
-    return {
-      verified: false,
-      error: 'Could not parse the BIP-322 witness. Paste the full base64 signature from your wallet.',
-    };
+    let fromTx: Uint8Array[] | null = null;
+    try {
+      const tx = bitcoin.Transaction.fromBuffer(witnessBytes);
+      if (tx.ins.length >= 1 && tx.ins[0].script.length > 0) {
+        const ops = tokenizeScript(new Uint8Array(tx.ins[0].script));
+        if (ops.every((o) => o.data !== undefined)) {
+          fromTx = ops.map((o) => o.data!);
+        }
+      }
+    } catch {
+      fromTx = null;
+    }
+    if (!fromTx || fromTx.length === 0) {
+      return {
+        verified: false,
+        error: 'Could not parse the BIP-322 witness. Paste the full base64 signature from your wallet.',
+      };
+    }
+    witness = fromTx;
   }
 
   if (witness.length < 1) {
@@ -1298,12 +1325,47 @@ export async function verifyBip322P2SH(
     }
   }
 
+  // Bare (pre-SegWit) P2SH: the last stack item is the redeem script itself
+  // and hash160(redeemScript) must match the address. These spend through a
+  // legacy scriptSig, so signatures commit to the legacy (pre-BIP-143)
+  // sighash with the redeem script as the scriptCode.
+  const redeemScript = witness[witness.length - 1];
+  let bareRedeemHash: Uint8Array;
+  try {
+    bareRedeemHash = new Uint8Array(bitcoin.crypto.hash160(redeemScript));
+  } catch {
+    bareRedeemHash = new Uint8Array(0);
+  }
+  if (bytesEqual(bareRedeemHash, scriptHash)) {
+    const inputStack = witness.slice(0, witness.length - 1);
+    const computeSighash = (hashType: number): Uint8Array =>
+      new Uint8Array(toSign.hashForSignature(0, redeemScript as Buffer, hashType));
+    let ok: boolean;
+    try {
+      ok = execWitnessScriptV0(redeemScript, inputStack, computeSighash);
+    } catch (err) {
+      return {
+        verified: false,
+        error: `BIP-322 (bare P2SH) verification failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+    if (ok) return { verified: true, format: 'bip322' };
+    return {
+      verified: false,
+      error:
+        'The BIP-322 (bare P2SH multisig) signature did not verify against this address. ' +
+        'Make sure the message matches exactly and that enough cosigners signed.',
+    };
+  }
+
   return {
     verified: false,
     error:
       'The witness does not correspond to this P2SH address. ' +
-      'BIP-322 verification supports P2SH-wrapped SegWit (P2SH-P2WSH multisig / P2SH-P2WPKH) vaults; ' +
-      'bare (non-SegWit) P2SH multisig is not supported. ' +
+      'BIP-322 verification supports P2SH-wrapped SegWit (P2SH-P2WSH / P2SH-P2WPKH) vaults ' +
+      'and bare (legacy) P2SH multisig. ' +
       'Make sure you signed with the wallet that holds this exact address.',
   };
 }

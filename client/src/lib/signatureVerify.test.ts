@@ -365,6 +365,73 @@ describe('BIP-322 Full verification (P2SH-wrapped multisig)', () => {
   });
 });
 
+/**
+ * BIP-322 vectors for BARE (pre-SegWit) P2SH multisig — the raw
+ * `OP_m <pubkeys…> OP_n OP_CHECKMULTISIG` redeem script hashed directly into
+ * a "3…" address, spent through a legacy scriptSig with no witness. These
+ * proofs carry the legacy-format artefact: either a stack container
+ * ([dummy, sigs…, redeemScript]) or the full serialized BIP-322 to_sign
+ * transaction whose scriptSig holds the same pushes. Signatures are
+ * deterministic (RFC-6979) ECDSA over the legacy (pre-BIP-143) sighash with
+ * the redeem script as scriptCode.
+ */
+const BARE_P2SH_2OF2_ADDR = '37mwvhnNzuu6Tm4MwDMmi1imo5ru3QMYrZ';
+const BARE_P2SH_2OF2_STACK_SIG =
+  'BABIMEUCIQDgcLHjoaAdGs+M315lDVo+TbFcFkB/cCfmHN7/LfFVUAIgRZGM/aeIRnpUOtaG0RiNrkbD6llhbKUgXsQNy2dr3/EBRzBEAiA8ZMUuz1h6UbWmWNHozVt3MH+2aSl1o+ILLLh3Hjgw+gIgQyjjt6NQ+S2HM3lXUCYn+MRwF0jxBwLqi6sX0vbyAeYBR1IhA9796kzbZ3dQpCD+6AfqzyHrmJiuebl2h2bk+qBKLUo0IQJWAVcMtH8jjSsChttKmQ+g87oo0aMZ9efPVcKiRE2nzFKu';
+const BARE_P2SH_2OF2_TX_SIG =
+  'AAAAAAHXHxN3iSLIntt7AeRyixEvp4hd9USKhgZ2+0UMfz6lcAAAAADaAEgwRQIhAOBwseOhoB0az4zfXmUNWj5NsVwWQH9wJ+Yc3v8t8VVQAiBFkYz9p4hGelQ61obRGI2uRsPqWWFspSBexA3LZ2vf8QFHMEQCIDxkxS7PWHpRtaZY0ejNW3cwf7ZpKXWj4gssuHceODD6AiBDKOO3o1D5LYczeVdQJif4xHAXSPEHAuqLqxfS9vIB5gFHUiED3v3qTNtnd1CkIP7oB+rPIeuYmK55uXaHZuT6oEotSjQhAlYBVwy0fyONKwKG20qZD6DzuijRoxn1589VwqJETafMUq4AAAAAAQAAAAAAAAAAAWoAAAAA';
+
+const BARE_P2SH_2OF3_ADDR = '33tZmFdJAqDKaZ43WvyYSQrGaHUxz3zKpK';
+const BARE_P2SH_2OF3_STACK_SIG =
+  'BABHMEQCICcl+YcN2BfIMzdrAlb1oiQk5GzzqETYN7Ge/7olk4w5AiABPpMIu4SneSYwSuwBcwIHunfvceERaqRKxjCE5rL3SwFIMEUCIQD6VI8Z+i38ggFABa18/YSqJVY/K1Kq7PhIf63B727/8gIgNqHI5+B/wLSYfI6inkNkMO4KmuN/wtYeSvnDQEzWBHIBaVIhA9796kzbZ3dQpCD+6AfqzyHrmJiuebl2h2bk+qBKLUo0IQJWAVcMtH8jjSsChttKmQ+g87oo0aMZ9efPVcKiRE2nzCECK06gp5ekQ9KT71z/RE9JefBqz+vX6G0ndHVlYTg4W2xTrg==';
+const BARE_P2SH_2OF3_TX_SIG =
+  'AAAAAAFxr/qnPauOAuQd90YhAeABWOEFVQN7gEAsWjsZbbC8fAAAAAD9/QAARzBEAiAnJfmHDdgXyDM3awJW9aIkJORs86hE2Dexnv+6JZOMOQIgAT6TCLuEp3kmMErsAXMCB7p373HhEWqkSsYwhOay90sBSDBFAiEA+lSPGfot/IIBQAWtfP2EqiVWPytSquz4SH+twe9u//ICIDahyOfgf8C0mHyOop5DZDDuCprjf8LWHkr5w0BM1gRyAUxpUiED3v3qTNtnd1CkIP7oB+rPIeuYmK55uXaHZuT6oEotSjQhAlYBVwy0fyONKwKG20qZD6DzuijRoxn1589VwqJETafMIQIrTqCnl6RD0pPvXP9ET0l58GrP69fobSd0dWVhODhbbFOuAAAAAAEAAAAAAAAAAAFqAAAAAA==';
+
+describe('BIP-322 verification (bare P2SH multisig)', () => {
+  it('verifies a 2-of-2 bare P2SH multisig proof (stack container)', async () => {
+    const result = await verifyBip322P2SH(BARE_P2SH_2OF2_ADDR, FULL_MSG, BARE_P2SH_2OF2_STACK_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('verifies a 2-of-2 bare P2SH multisig proof (serialized to_sign transaction)', async () => {
+    const result = await verifyBip322P2SH(BARE_P2SH_2OF2_ADDR, FULL_MSG, BARE_P2SH_2OF2_TX_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('verifies a 2-of-3 bare P2SH multisig (two of three cosigners, both containers)', async () => {
+    const stack = await verifyBip322P2SH(BARE_P2SH_2OF3_ADDR, FULL_MSG, BARE_P2SH_2OF3_STACK_SIG);
+    expect(stack.verified).toBe(true);
+    const tx = await verifyBip322P2SH(BARE_P2SH_2OF3_ADDR, FULL_MSG, BARE_P2SH_2OF3_TX_SIG);
+    expect(tx.verified).toBe(true);
+  });
+
+  it('rejects a bare-multisig proof against the wrong message', async () => {
+    const result = await verifyBip322P2SH(BARE_P2SH_2OF2_ADDR, 'Goodbye World', BARE_P2SH_2OF2_STACK_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
+
+  it('rejects a bare-multisig transaction proof against the wrong message', async () => {
+    const result = await verifyBip322P2SH(BARE_P2SH_2OF2_ADDR, 'Goodbye World', BARE_P2SH_2OF2_TX_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('rejects a bare-multisig proof against a different P2SH address', async () => {
+    const result = await verifyBip322P2SH(BARE_P2SH_2OF3_ADDR, FULL_MSG, BARE_P2SH_2OF2_STACK_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/does not correspond/i);
+  });
+
+  it('routes a bare P2SH proof through verifyBitcoinSignature', async () => {
+    const result = await verifyBitcoinSignature(BARE_P2SH_2OF2_ADDR, FULL_MSG, BARE_P2SH_2OF2_TX_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+});
+
 describe('verifyBitcoinSignature routing (BIP-322 Full)', () => {
   it('routes a P2WSH (bc1q 32-byte) address to the Full verifier', async () => {
     const result = await verifyBitcoinSignature(P2WSH_2OF2_ADDR, FULL_MSG, P2WSH_2OF2_SIG);
