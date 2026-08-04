@@ -117,6 +117,17 @@ export class MergeClassifier {
   // Participant exact-keys already classified as insert this stream, so the
   // incoming stream never duplicates itself across batches.
   private addedParticipantKeys = new Set<string>();
+  // Match keys (outpoint/vout identities) of participants already classified
+  // as insert this stream. Used by the blank-input ordinal pairing so a later
+  // batch never pairs a blank live row with an outpoint the stream already
+  // decided to insert.
+  private addedParticipantMatchKeys = new Set<string>();
+  // Live ids of fully-blank input rows already consumed by ordinal pairing in
+  // an earlier batch. The analysis never writes, so without this a later batch
+  // for the same txid would re-load the same (still-blank) rows and could pair
+  // them twice; the restore benefits too when its enrichment produced no
+  // visible change.
+  private pairedBlankLiveIds = new Set<number>();
 
   // records ------------------------------------------------------------------
 
@@ -233,6 +244,15 @@ export class MergeClassifier {
     );
     const liveByMatchKey = new Map<string, TransactionParticipant>();
     const liveByExactKey = new Map<string, TransactionParticipant>();
+    // FULLY-BLANK live inputs per txid: rows with only txid+role='input' (no
+    // address AND no resolved prevout). They have no stable identity of their
+    // own — a richer backup input carrying prevTxid/prevVout can never match
+    // them by key — so without extra care the backup input is classified as
+    // insert, leaving two rows for the same logical spend. Collected here (NOT
+    // via liveByExactKey, which collapses all blanks for a txid onto one exact
+    // key) for the ordinal-pairing pass below. Kept in load order; sorted by
+    // id before pairing. Mirrors the legacy restore's ordinal-pairing block.
+    const blankLiveInputsByTxid = new Map<string, TransactionParticipant[]>();
     if (batchTxids.length) {
       for (const lp of await getParticipantsByTxids(batchTxids)) {
         if (!liveByExactKey.has(participantKey(lp))) {
@@ -240,8 +260,68 @@ export class MergeClassifier {
         }
         const mk = participantMatchKey(lp);
         if (mk && !liveByMatchKey.has(mk)) liveByMatchKey.set(mk, lp);
+        const addrBlank =
+          lp.address === undefined || lp.address === null || String(lp.address).trim() === "";
+        if (
+          lp.role === "input" &&
+          mk === null &&
+          addrBlank &&
+          typeof lp.id === "number" &&
+          !this.pairedBlankLiveIds.has(lp.id)
+        ) {
+          const list = blankLiveInputsByTxid.get(lp.txid);
+          if (list) list.push(lp);
+          else blankLiveInputsByTxid.set(lp.txid, [lp]);
+        }
       }
     }
+
+    // Ordinal pairing for fully-blank live inputs: there is no persisted vin
+    // index, so pairing is only safe when it is UNAMBIGUOUS — for a txid, when
+    // the number of blank live inputs exactly equals the number of DISTINCT
+    // backup input outpoints (in this batch) that matched no live participant
+    // and were not already inserted earlier this stream, each blank row must
+    // correspond to one of those spends (a tx's inputs are a fixed set — the
+    // backup simply resolved what sync had not). Both sides preserve vin order
+    // in practice (sync inserts inputs in vin order → ascending ids; the backup
+    // stream keeps export order), so they are paired ordinally: i-th blank live
+    // input (by id) ↔ i-th unmatched backup outpoint (by first appearance).
+    // When the counts differ (including a txid's inputs split across batches)
+    // the pairing IS ambiguous, so the backup input is inserted as before —
+    // the documented, deliberate fallback.
+    if (blankLiveInputsByTxid.size > 0) {
+      const unmatchedBackupInputKeysByTxid = new Map<string, string[]>();
+      const seenUnmatchedKeys = new Set<string>();
+      for (const p of rows) {
+        if (!p.txid || p.role !== "input" || !blankLiveInputsByTxid.has(p.txid)) continue;
+        const mk = participantMatchKey(p);
+        if (
+          !mk ||
+          liveByMatchKey.has(mk) ||
+          seenUnmatchedKeys.has(mk) ||
+          this.addedParticipantMatchKeys.has(mk)
+        ) {
+          continue;
+        }
+        seenUnmatchedKeys.add(mk);
+        const list = unmatchedBackupInputKeysByTxid.get(p.txid);
+        if (list) list.push(mk);
+        else unmatchedBackupInputKeysByTxid.set(p.txid, [mk]);
+      }
+      for (const [txid, blanks] of blankLiveInputsByTxid) {
+        const keys = unmatchedBackupInputKeysByTxid.get(txid);
+        if (!keys || keys.length !== blanks.length) continue;
+        const ordered = [...blanks].sort((a, b) => (a.id as number) - (b.id as number));
+        for (let i = 0; i < keys.length; i++) {
+          // Registering the blank row under the backup outpoint's match key
+          // makes the loop below classify it as ENRICH (the restore fills
+          // prevTxid/prevVout/address/amount/recordId) instead of insert.
+          liveByMatchKey.set(keys[i], ordered[i]);
+          this.pairedBlankLiveIds.add(ordered[i].id as number);
+        }
+      }
+    }
+
     const decisions: ParticipantRowDecision[] = [];
     for (const p of rows) {
       const mk = participantMatchKey(p);
@@ -257,6 +337,7 @@ export class MergeClassifier {
         continue;
       }
       this.addedParticipantKeys.add(k);
+      if (mk) this.addedParticipantMatchKeys.add(mk);
       decisions.push({ kind: "insert" });
     }
     return decisions;
