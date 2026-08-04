@@ -31,6 +31,13 @@
 //     - one aborted request sandwiched between successes
 //     - all addresses attempted, per-row Error surfaces, NO banner
 //
+//   CASE 4 — node accepts the connection but never responds (silent hang):
+//     - the first /address/ request is stalled indefinitely (never fulfilled)
+//     - the NODE_PROBE_TIMEOUT_MS (5s) probe cap on the FIRST address must
+//       abort the hung fetch and surface the same "Node unreachable" banner
+//       within ~NODE_PROBE_TIMEOUT_MS — NOT hang for the full request timeout
+//     - only the first address is attempted, rows reset, Cancel button gone
+//
 // The network is fully stubbed (Playwright `route`); nothing leaves the machine.
 //
 // Usage: node scripts/check-pof-node-unreachable-browser.mjs
@@ -51,6 +58,11 @@ const SETUP_PASSWORD = 'pof-node-outage-check-123';
 
 // Mirrors NODE_UNREACHABLE_CONSECUTIVE_LIMIT in client/src/lib/blockchain-api.ts.
 const CONSECUTIVE_LIMIT = 3;
+// Mirrors NODE_PROBE_TIMEOUT_MS in client/src/lib/blockchain-api.ts.
+const PROBE_TIMEOUT_MS = 5000;
+// Generous slack for headless-Chromium scheduling + React render latency; still
+// far below the full per-request timeout a hung fetch would otherwise take.
+const PROBE_SLACK_MS = 7000;
 
 // Valid mainnet addresses (same fixtures as the jsdom suite).
 const ADDR_A = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
@@ -174,10 +186,15 @@ async function main() {
     //   'fail-all'  : abort every /address/ request (node down from the start)
     //   'fail-after': fulfill ADDR_A, abort everything else (node drops mid-check)
     //   'blip'      : abort only ADDR_B, fulfill the rest (isolated transient)
+    //   'stall'     : never respond to /address/ requests at all — the
+    //                 connection is accepted but the response never arrives
+    //                 (silent-hang outage shape); the page's own probe cap must
+    //                 abort the fetch.
     // Aborted routes surface in the page as the browser's real "Failed to
     // fetch" TypeError — exactly what a dead node produces.
     let mode = 'fail-all';
     let addressAttempts = [];
+    const stalledRoutes = [];
     await context.route(ESPLORA_HOST_GLOB, async (route) => {
       const url = route.request().url();
       if (url.includes('/blocks/tip/height')) {
@@ -188,6 +205,13 @@ async function main() {
       if (m) {
         const address = m[1];
         addressAttempts.push(address);
+        if (mode === 'stall') {
+          // Hold the request open forever: never fulfill, never abort. The
+          // page's AbortController (probe cap) is the only thing that can end
+          // it. Keep a handle so cleanup can abort any still-pending routes.
+          stalledRoutes.push(route);
+          return;
+        }
         const shouldFail =
           mode === 'fail-all' ||
           (mode === 'fail-after' && address !== ADDR_A) ||
@@ -355,6 +379,77 @@ async function main() {
         detail: `rows="${rowsText.slice(0, 200)}" bannerVisible=${bannerVisible}`,
       });
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CASE 4 — silently hanging node: connection accepted, response never
+    // arrives. The FIRST-address probe cap (NODE_PROBE_TIMEOUT_MS) must abort
+    // the hung fetch and surface the banner fast — not freeze for the full
+    // per-request timeout.
+    // ════════════════════════════════════════════════════════════════════════
+    await resetIfPossible();
+    mode = 'stall';
+    addressAttempts = [];
+    const stallStart = Date.now();
+    await runLiveCheck([ADDR_A, ADDR_B, ADDR_C]);
+
+    // The banner must appear within ~NODE_PROBE_TIMEOUT_MS. The waitFor
+    // timeout itself is the hard gate: PROBE_TIMEOUT_MS + slack is still far
+    // below the full request timeout a hung fetch would otherwise consume.
+    let stallBannerElapsedMs = null;
+    let stallBannerErr = null;
+    try {
+      await settingsLink.waitFor({
+        state: 'visible',
+        timeout: PROBE_TIMEOUT_MS + PROBE_SLACK_MS,
+      });
+      stallBannerElapsedMs = Date.now() - stallStart;
+    } catch (err) {
+      stallBannerErr = err;
+    }
+    const case4Text = stallBannerErr ? '' : await bodyText();
+    steps.push({
+      name: `case4: banner + settings link appear within ~${PROBE_TIMEOUT_MS}ms probe cap on a silently hanging node`,
+      passed:
+        stallBannerElapsedMs !== null &&
+        /node unreachable/i.test(case4Text) &&
+        /check node connection settings/i.test(case4Text),
+      detail: stallBannerErr
+        ? `banner did NOT appear within ${PROBE_TIMEOUT_MS + PROBE_SLACK_MS}ms: ${stallBannerErr.message}`
+        : `elapsed=${stallBannerElapsedMs}ms (cap ${PROBE_TIMEOUT_MS}ms + slack ${PROBE_SLACK_MS}ms)`,
+    });
+    steps.push({
+      name: 'case4: probe-cap fail is fast (elapsed >= probe cap, < cap + slack)',
+      passed:
+        stallBannerElapsedMs !== null &&
+        stallBannerElapsedMs >= PROBE_TIMEOUT_MS - 250 &&
+        stallBannerElapsedMs < PROBE_TIMEOUT_MS + PROBE_SLACK_MS,
+      detail: `elapsed=${stallBannerElapsedMs}ms`,
+    });
+    // Give any (incorrect) continued grinding a moment to show up.
+    await page.waitForTimeout(1500);
+    steps.push({
+      name: 'case4: only the first address was attempted (later ones skipped)',
+      passed: addressAttempts.length === 1 && addressAttempts[0] === ADDR_A,
+      detail: `attempts=${JSON.stringify(addressAttempts)} (expected only ${ADDR_A})`,
+    });
+    {
+      const rowsText = (
+        await page.locator('[data-testid^="row-address-"]').allTextContents()
+      ).join(' ');
+      const cancelGone = !(await page
+        .getByTestId('button-cancel-check')
+        .isVisible()
+        .catch(() => false));
+      steps.push({
+        name: 'case4: rows reset (none stuck on "Checking"), Cancel button gone',
+        passed: !/Checking\b/.test(rowsText) && cancelGone,
+        detail: `rows="${rowsText.slice(0, 200)}" cancelVisible=${!cancelGone}`,
+      });
+    }
+    // Release any still-held stalled routes so shutdown doesn't hang.
+    for (const r of stalledRoutes) {
+      await r.abort('timedout').catch(() => {});
+    }
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -383,7 +478,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    '[pof-node-unreachable] PASSED: node-outage fast-fail, mid-check short-circuit, and isolated-blip behavior all hold in a real browser.',
+    '[pof-node-unreachable] PASSED: node-outage fast-fail, mid-check short-circuit, isolated-blip, and silent-hang probe-cap behavior all hold in a real browser.',
   );
 }
 
