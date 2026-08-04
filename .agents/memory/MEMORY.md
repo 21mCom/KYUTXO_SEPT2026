@@ -100,3 +100,4 @@
 - [Radix toast vs Playwright strict](radix-toast-playwright-strict.md) — toast text duplicates into aria-live; getByText needs .first(); gate cancel asserts on a streamed phase, not first progress.
 - [Corrupted test-file repair](corrupted-test-repair.md) — restore mangled tests' original intent from git history; a "repair" that deletes them leaves green workflows with zero coverage.
 - [Detail-panel click races](detail-panel-click-races.md) — async badges (e.g. conflict count) shift layout mid-click and steal coordinate clicks in browser checks; dispatchEvent('click') + recover if URL changed.
+- [Workflow-runner phantom rg entries](workflow-runner-phantom-rg.md) — runner rg scan can hit dangling .local/skills mounts invisible shell-side; ignores/renames useless; consent + kill 1 rebuilds.
