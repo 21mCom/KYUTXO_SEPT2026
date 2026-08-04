@@ -354,6 +354,60 @@ describe("Electrum TLS: self-signed certificates require explicit trust (TOFU)",
     ({ server: tlsServer, port: tlsPort } = await startTlsElectrumServer(SELFSIGNED_A, tlsPort));
   });
 
+  it("revoking a pinned certificate makes the next real TLS connection fail with CERT_UNTRUSTED", async () => {
+    // Full packaged-flow journey through the actual IPC handlers against a
+    // live TLS socket: pin -> connect OK -> revoke -> reconnect must fail.
+    // The pin for SELFSIGNED_A still exists from the earlier trust test and
+    // the server is back on cert A, so a connection succeeds first.
+    const connected = await ipc.invoke("electrum-test", {
+      host: "127.0.0.1",
+      port: tlsPort,
+      useSSL: true,
+      timeout: 5000,
+    });
+    expect(connected.success).toBe(true);
+    expect(connected.certificate?.trust).toBe("pinned");
+    const pinnedFingerprint = connected.certificate.fingerprint;
+
+    const revoke = await ipc.invoke("electrum-revoke-certificate", {
+      host: "127.0.0.1",
+      port: tlsPort,
+    });
+    expect(revoke.success).toBe(true);
+    expect(revoke.revoked).toBe(true);
+
+    // The revoke handler must also have dropped the pooled connection, so
+    // this re-test opens a FRESH socket and hits the certificate check —
+    // no manual pool cleanup here on purpose.
+    const result = await ipc.invoke("electrum-test", {
+      host: "127.0.0.1",
+      port: tlsPort,
+      useSSL: true,
+      timeout: 5000,
+    });
+    expect(result.success).toBe(false);
+    expect(result.errorCode).toBe("CERT_UNTRUSTED");
+    expect(result.error).toMatch(/not signed by a trusted certificate authority/);
+    expect(result.certificate?.fingerprint).toBe(pinnedFingerprint);
+    expect(result.certificate?.selfSigned).toBe(true);
+    expect(result.certificate?.trust).toBeUndefined();
+
+    // And the trust store agrees: nothing is pinned any more.
+    const trust = await ipc.invoke("electrum-get-certificate-trust", {
+      host: "127.0.0.1",
+      port: tlsPort,
+    });
+    expect(trust.pinned).toBeNull();
+
+    // Re-pin cert A so any later tests in this suite see consistent state.
+    const repin = await ipc.invoke("electrum-trust-certificate", {
+      host: "127.0.0.1",
+      port: tlsPort,
+      certificate: result.certificate,
+    });
+    expect(repin.success).toBe(true);
+  });
+
   it("strictly rejects a self-signed certificate for the WRONG host — before AND after pinning", async () => {
     // Node reports DEPTH_ZERO_SELF_SIGNED_CERT before hostname mismatches, so
     // without an independent identity check this cert would slip into the
