@@ -68,6 +68,82 @@ describe('BIP-322 Simple verification (Taproot)', () => {
 });
 
 /**
+ * Malformed / tampered witness-stack cases for verifyBip322Simple.
+ *
+ * The base64 decodes fine but the serialized witness stack itself is broken,
+ * or the single Schnorr signature item is tampered/mis-sized. Every case must
+ * fail closed with a clear string error — never crash, never verify.
+ */
+describe('BIP-322 Simple — malformed and tampered witnesses (Taproot)', () => {
+  // The authoritative vector's stack: [65-byte Schnorr sig (64 + SIGHASH_ALL)].
+  const helloItems = () => splitWitness(HELLO_WORLD_SIG);
+
+  it('rejects an empty witness stack (zero items)', async () => {
+    const result = await verifyBip322Simple(P2TR_ADDR, 'Hello World', joinWitness([]));
+    expect(result.verified).toBe(false);
+    expect(typeof result.error).toBe('string');
+  });
+
+  it('rejects a truncated witness (item length exceeds available data)', async () => {
+    const bytes = b64ToBytes(HELLO_WORLD_SIG);
+    const truncated = bytes.subarray(0, bytes.length - 10);
+    const result = await verifyBip322Simple(P2TR_ADDR, 'Hello World', bytesToB64(truncated));
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/witness/i);
+  });
+
+  it('rejects trailing garbage bytes after the witness stack', async () => {
+    const bytes = b64ToBytes(HELLO_WORLD_SIG);
+    const padded = new Uint8Array(bytes.length + 4);
+    padded.set(bytes, 0);
+    padded.set([0xde, 0xad, 0xbe, 0xef], bytes.length);
+    const result = await verifyBip322Simple(P2TR_ADDR, 'Hello World', bytesToB64(padded));
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/witness/i);
+  });
+
+  it('rejects a bit-flipped Schnorr signature (tampered witness)', async () => {
+    const [sig] = helloItems();
+    const bad = flipByte(sig, 10);
+    const result = await verifyBip322Simple(P2TR_ADDR, 'Hello World', joinWitness([bad]));
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
+
+  it('rejects a signature of unexpected length (63 bytes)', async () => {
+    const [sig] = helloItems();
+    const short = sig.subarray(0, 63);
+    const result = await verifyBip322Simple(P2TR_ADDR, 'Hello World', joinWitness([short]));
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/length/i);
+  });
+
+  it('rejects when the sighash-type byte is altered (sighash binding)', async () => {
+    // The 65th byte (SIGHASH_ALL = 0x01) participates in the sighash the
+    // Schnorr signature commits to; changing it to SIGHASH_NONE must fail.
+    const [sig] = helloItems();
+    const mutated = sig.slice();
+    mutated[64] = 0x02; // SIGHASH_NONE
+    const result = await verifyBip322Simple(P2TR_ADDR, 'Hello World', joinWitness([mutated]));
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('fails gracefully on a multi-item witness that is not a valid Full spend', async () => {
+    // Two copies of the key-path signature form a bogus "script-path" stack;
+    // the Full verifier must reject it with a clear error, not crash.
+    const [sig] = helloItems();
+    const result = await verifyBip322Simple(
+      P2TR_ADDR,
+      'Hello World',
+      joinWitness([sig, sig]),
+    );
+    expect(result.verified).toBe(false);
+    expect(typeof result.error).toBe('string');
+  });
+});
+
+/**
  * BIP-322 Simple test vector for a native SegWit P2WPKH (bc1q…) address.
  *
  * This uses the canonical BIP-322 reference key/address (the same fixture used
