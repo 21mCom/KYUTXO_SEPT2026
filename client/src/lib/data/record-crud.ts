@@ -920,6 +920,73 @@ export interface HiddenTierMatchCount {
   scanCapped: boolean;
 }
 
+export interface HiddenTierMatchRows {
+  /** Matching hidden-tier rows, in scan order, up to matchCap. */
+  rows: Record[];
+  /** True when the fetch stopped at matchCap — more matches exist than rows. */
+  capped: boolean;
+  /** True when the scan cap was hit before matchCap — the set is partial. */
+  scanCapped: boolean;
+}
+
+export interface HiddenTierMatchScanOptions {
+  matches: (record: Record) => boolean;
+  identifier?: string | null;
+  matchCap?: number;
+  scanCap?: number;
+  isCancelled?: () => boolean;
+}
+
+/**
+ * Single bounded hidden-tier scan shared by countHiddenTierMatches and
+ * getHiddenTierMatches, so the "N matches are hidden" count and the rows the
+ * one-click reveal surfaces can never drift apart: same tier narrowing, same
+ * predicate, same match/scan caps, same cancellation contract. `onMatch`
+ * collects rows when the caller wants them; otherwise only the count is
+ * computed (the identifier fast path then stays a pure indexed `.count()`).
+ */
+async function scanHiddenTierMatches(
+  opts: HiddenTierMatchScanOptions,
+  onMatch?: (record: Record) => void,
+): Promise<HiddenTierMatchCount> {
+  const matchCap = opts.matchCap ?? 1000;
+  const scanCap = opts.scanCap ?? 200_000;
+
+  if (opts.identifier) {
+    const query = db.records
+      .where('inputStringLower')
+      .equals(opts.identifier.toLowerCase())
+      .filter((r) => isHiddenDiscoveryTier(r.addressImportance) && opts.matches(r));
+    if (onMatch) {
+      const rows = await query.toArray();
+      rows.forEach(onMatch);
+      return { count: rows.length, capped: false, scanCapped: false };
+    }
+    const count = await query.count();
+    return { count, capped: false, scanCapped: false };
+  }
+
+  let scanned = 0;
+  let count = 0;
+  await db.records
+    .where('addressImportance')
+    .anyOf([...HIDDEN_DISCOVERY_TIERS])
+    .until(() => count >= matchCap || scanned >= scanCap || (opts.isCancelled?.() ?? false))
+    .each((r) => {
+      scanned++;
+      if (opts.matches(r)) {
+        count++;
+        onMatch?.(r);
+      }
+    });
+
+  return {
+    count: Math.min(count, matchCap),
+    capped: count >= matchCap,
+    scanCapped: scanned >= scanCap && count < matchCap,
+  };
+}
+
 /**
  * Count blockchain-discovered / pending-review rows that match the current
  * Records-page filters (minus the tier exclusion itself). Powers the
@@ -934,41 +1001,30 @@ export interface HiddenTierMatchCount {
  * walk early. When `identifier` is set (the exact address/txid fast path) the
  * count uses the inputStringLower index instead of walking hidden rows.
  */
-export async function countHiddenTierMatches(opts: {
-  matches: (record: Record) => boolean;
-  identifier?: string | null;
-  matchCap?: number;
-  scanCap?: number;
-  isCancelled?: () => boolean;
-}): Promise<HiddenTierMatchCount> {
-  const matchCap = opts.matchCap ?? 1000;
-  const scanCap = opts.scanCap ?? 200_000;
+export async function countHiddenTierMatches(
+  opts: HiddenTierMatchScanOptions,
+): Promise<HiddenTierMatchCount> {
+  return scanHiddenTierMatches(opts);
+}
 
-  if (opts.identifier) {
-    const count = await db.records
-      .where('inputStringLower')
-      .equals(opts.identifier.toLowerCase())
-      .filter((r) => isHiddenDiscoveryTier(r.addressImportance) && opts.matches(r))
-      .count();
-    return { count, capped: false, scanCapped: false };
-  }
-
-  let scanned = 0;
-  let count = 0;
-  await db.records
-    .where('addressImportance')
-    .anyOf([...HIDDEN_DISCOVERY_TIERS])
-    .until(() => count >= matchCap || scanned >= scanCap || (opts.isCancelled?.() ?? false))
-    .each((r) => {
-      scanned++;
-      if (opts.matches(r)) count++;
-    });
-
-  return {
-    count: Math.min(count, matchCap),
-    capped: count >= matchCap,
-    scanCapped: scanned >= scanCap && count < matchCap,
-  };
+/**
+ * Row-returning sibling of countHiddenTierMatches: fetches the actual
+ * hidden-tier rows matching the current filters (up to matchCap) instead of
+ * counting them. Powers the Dashboard's "Show hidden matches" reveal, which
+ * must surface rows that fall outside the loaded 5,000-record window —
+ * flipping the discovered-records toggle alone only reloads that same window.
+ *
+ * Shares the exact scan/predicate/cap implementation with the count via
+ * scanHiddenTierMatches, so the notice and the reveal can never disagree.
+ */
+export async function getHiddenTierMatches(
+  opts: HiddenTierMatchScanOptions,
+): Promise<HiddenTierMatchRows> {
+  const rows: Record[] = [];
+  const { capped, scanCapped } = await scanHiddenTierMatches(opts, (r) => {
+    rows.push(r);
+  });
+  return { rows, capped, scanCapped };
 }
 
 export async function countRecordsByType(type: string): Promise<number> {

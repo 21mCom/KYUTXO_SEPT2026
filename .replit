@@ -411,6 +411,10 @@ args = "records-search-visibility-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "dashboard-hidden-matches-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "server-response-hygiene-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1765,6 +1769,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/address-poisoning.test.ts client/src/pages/AddressPoisoning.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dashboard-hidden-matches-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dashboard-hidden-matches-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

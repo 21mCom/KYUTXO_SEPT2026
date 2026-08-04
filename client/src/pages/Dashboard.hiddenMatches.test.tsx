@@ -158,8 +158,40 @@ function renderDashboard() {
   );
 }
 
+// Bulk fixture builder for scale tests — createRecord per row is far too slow
+// for thousands of rows. Mirrors buildFullRecord's defaults (a recognized
+// tier, synced search key, timestamps) so the rows behave like CRUD-inserted
+// ones. Seeded via the test-only Dexie instance (CRUD-helper seed path).
+function bulkRows(
+  count: number,
+  mk: (i: number) => Partial<DbRecord> & { inputString: string; label: string },
+) {
+  const base = 2_000_000;
+  const rows: Array<Partial<DbRecord>> = [];
+  for (let i = 0; i < count; i++) {
+    const f = mk(i);
+    rows.push({
+      type: "address",
+      tags: [],
+      categories: [],
+      source: "manual",
+      addressImportance: "manual",
+      ...f,
+      inputStringLower: f.inputString.toLowerCase(),
+      createdAt: f.createdAt ?? base + i,
+      updatedAt: f.updatedAt ?? base + i,
+    });
+  }
+  return rows;
+}
+
 function tableText(): string {
   return screen.getByTestId("stub-record-table").textContent ?? "";
+}
+
+// Null-safe variant: the empty state ("No records found") unmounts the table.
+function tableTextOrEmpty(): string {
+  return screen.queryByTestId("stub-record-table")?.textContent ?? "";
 }
 
 beforeEach(async () => {
@@ -413,4 +445,168 @@ describe("Dashboard hidden-tier matches", () => {
     expect(tableText()).not.toContain("bc1qdefaulthidden");
     expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
   }, 60000);
+
+  it("reveal fetches a hidden match outside the loaded 5,000-record window, and re-searching re-reveals it", async () => {
+    // 5,001 visible rows, all newer than the hidden match: the hidden row can
+    // never be in the DEFAULT_RECORDS_LIMIT (5,000) most-recently-updated
+    // window that useFilteredRecords loads — the exact large-vault dead end
+    // where clicking "Show hidden matches" used to show "No records found".
+    await testDb.records.bulkAdd(
+      bulkRows(5001, (i) => ({
+        inputString: `bc1qfiller${String(i).padStart(6, "0")}windowfillerrow`,
+        label: `Filler ${i}`,
+      })) as DbRecord[],
+    );
+    await seedRecord({
+      inputString: "bc1qbeyondwindowhiddenmatch0000000001",
+      label: "beyondwindowtoken address",
+      walletName: "beyondwindowtoken",
+      source: "blockchain-sync",
+      addressImportance: "blockchain-discovered",
+      createdAt: 1_000_000,
+      updatedAt: 1_000_000,
+    });
+
+    renderDashboard();
+    await waitFor(
+      () => expect(tableText()).toContain("bc1qfiller"),
+      { timeout: 30000 },
+    );
+    expect(tableText()).not.toContain("bc1qbeyondwindowhiddenmatch");
+
+    fireEvent.change(screen.getByTestId("input-search"), {
+      target: { value: "beyondwindowtoken" },
+    });
+
+    const notice = await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 30000,
+    });
+    expect(notice.textContent).toContain("1 match is hidden");
+    expect(screen.getByText(/No records found/i)).toBeTruthy();
+
+    // The reveal must fetch the out-of-window row vault-wide, not just reload
+    // the same window with discovered tiers included.
+    fireEvent.click(screen.getByTestId("button-show-hidden-matches"));
+    await waitFor(
+      () => expect(tableText()).toContain("bc1qbeyondwindowhiddenmatch0000000001"),
+      { timeout: 30000 },
+    );
+    expect(screen.queryByTestId("notice-hidden-matches")).toBeNull();
+
+    // Searching something else clears the reveal...
+    fireEvent.change(screen.getByTestId("input-search"), {
+      target: { value: "zzz-no-such-match" },
+    });
+    await waitFor(
+      () => expect(screen.getByText(/No records found/i)).toBeTruthy(),
+      { timeout: 30000 },
+    );
+    expect(tableTextOrEmpty()).not.toContain("bc1qbeyondwindowhiddenmatch");
+
+    // ...and re-searching the revealed term shows the matches again — no
+    // blank dead end and no app restart (the reveal re-fetches under the
+    // already-flipped discovered toggle).
+    fireEvent.change(screen.getByTestId("input-search"), {
+      target: { value: "beyondwindowtoken" },
+    });
+    await waitFor(
+      () => expect(tableText()).toContain("bc1qbeyondwindowhiddenmatch0000000001"),
+      { timeout: 30000 },
+    );
+  }, 120000);
+
+  it("small vault: the reveal shows exactly the rows the notice counted — no more, no less", async () => {
+    await seedRecord({
+      inputString: "bc1qparityhiddenmatch1000000000000001",
+      label: "paritytoken address one",
+      source: "blockchain-sync",
+      addressImportance: "blockchain-discovered",
+    });
+    await seedRecord({
+      inputString: "bc1qparityhiddenmatch2000000000000002",
+      label: "paritytoken address two",
+      source: "blockchain-sync",
+      addressImportance: "pending-review",
+    });
+    // Hidden row that does NOT match the search — the reveal must not surface it.
+    await seedRecord({
+      inputString: "bc1qparityhiddenother0000000000000003",
+      label: "unrelated hidden row",
+      source: "blockchain-sync",
+      addressImportance: "blockchain-discovered",
+    });
+    await seedRecord({
+      inputString: "bc1qparityvisible0000000000000000000004",
+      label: "Savings",
+    });
+
+    renderDashboard();
+    await waitFor(
+      () => expect(tableText()).toContain("bc1qparityvisible"),
+      { timeout: 15000 },
+    );
+
+    fireEvent.change(screen.getByTestId("input-search"), {
+      target: { value: "paritytoken" },
+    });
+    const notice = await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 15000,
+    });
+    expect(notice.textContent).toContain("2 matches are hidden");
+
+    fireEvent.click(screen.getByTestId("button-show-hidden-matches"));
+    await waitFor(
+      () => {
+        expect(tableText()).toContain("bc1qparityhiddenmatch1000000000000001");
+        expect(tableText()).toContain("bc1qparityhiddenmatch2000000000000002");
+      },
+      { timeout: 15000 },
+    );
+    // Count and reveal share one predicate: the non-matching hidden row stays out.
+    expect(tableText()).not.toContain("bc1qparityhiddenother");
+  }, 60000);
+
+  it("a reveal past the fetch cap shows a 'showing first N' note and never duplicates window rows", async () => {
+    // 1,001 hidden matches: the shared scan stops at the 1,000 match cap, so
+    // the notice reads "1,000+" and the reveal must say what it is showing.
+    await testDb.records.bulkAdd(
+      bulkRows(1001, (i) => ({
+        inputString: `bc1qcapped${String(i).padStart(6, "0")}cappedtokenrow`,
+        label: `cappedtoken row ${i}`,
+        source: "blockchain-sync",
+        addressImportance: "blockchain-discovered",
+      })) as DbRecord[],
+    );
+
+    renderDashboard();
+    await screen.findByTestId("input-search", undefined, { timeout: 15000 });
+
+    fireEvent.change(screen.getByTestId("input-search"), {
+      target: { value: "cappedtoken" },
+    });
+    const notice = await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 30000,
+    });
+    // Count hit the 1,000 match cap → "cap+" semantics.
+    expect(notice.textContent).toMatch(/1[,\s]?000\+/);
+
+    fireEvent.click(screen.getByTestId("button-show-hidden-matches"));
+    await waitFor(
+      () => expect(tableText()).toContain("cappedtoken"),
+      { timeout: 30000 },
+    );
+
+    const capNote = await screen.findByTestId("notice-revealed-hidden-cap", undefined, {
+      timeout: 30000,
+    });
+    expect(capNote.textContent).toMatch(/Showing the first 1[,\s]?000 hidden matches/);
+
+    // Dedup: with only 1,001 rows in the vault every revealed row is also in
+    // the post-toggle window — the union must not double them, so the footer
+    // total stays 1,001 (a duplicate union would read 2,001).
+    await waitFor(
+      () => expect(screen.getByText(/of\s+1001\s+records/)).toBeTruthy(),
+      { timeout: 15000 },
+    );
+  }, 90000);
 });

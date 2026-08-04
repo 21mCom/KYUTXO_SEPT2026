@@ -1,5 +1,6 @@
 - [Large-vault startup migrations](large-vault-startup-migrations.md) — batched once-only startup repairs run in background; fresh-vault skip only when empty; file-decrypt resume freezes-not-breaks.
 - [Records deferred counts](records-load-defer-counts.md) — never start count queries before the first page renders; superseded loads must spawn no counts; guard every count setter by load version.
+- [Dashboard 5k search window](dashboard-search-window.md) — client-side search covers only the 5k-row updatedAt window; vault-wide hints must pair with a vault-wide fetch sharing one predicate, or hint and reveal disagree.
 - [Backup streaming guards](backup-streaming-guards.md) — fflate onEntry is sync (manifest-order via a flag); memory-export OOM guard must aggregate all streamed-table counts.
 - [Restore cancellation contract](restore-cancel-contract.md) — cancel before clear keeps vault intact; after clear resets to verified-empty; if cleanup fails, fail closed with a distinct hard error (never claim clean).
 - [Lockfile firewall URLs](lockfile-firewall-urls.md) — firewall URLs break external npm ci; rewrite needs the /-/ tarball form (host-only rewrites 404 and sneak past a firewall-string gate).

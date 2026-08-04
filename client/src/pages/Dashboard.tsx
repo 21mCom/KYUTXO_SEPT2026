@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
@@ -45,7 +45,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAddressStatsWithLoading } from "@/hooks/use-address-stats";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
-import { countHiddenTierMatches, type HiddenTierMatchCount } from "@/lib/data/record-crud";
+import { countHiddenTierMatches, getHiddenTierMatches, type HiddenTierMatchCount, type HiddenTierMatchRows } from "@/lib/data/record-crud";
 import type { Record } from "@/lib/database";
 import type { Attachment } from "@/lib/database";
 import { searchPendingClass } from "@/lib/search-pending-class";
@@ -107,6 +107,15 @@ export default function Dashboard() {
   // dead-ending on "No records found". Computed as a deferred, bounded count.
   const [hiddenMatches, setHiddenMatches] = useState<HiddenTierMatchCount | null>(null);
   const hiddenMatchVersionRef = useRef(0);
+
+  // Hidden-tier rows fetched vault-wide by the "Show hidden matches" reveal.
+  // Flipping includeBlockchainDiscovered alone only reloads the same
+  // 5,000-record window (now including discovered tiers) — on any vault
+  // larger than the window the matching hidden rows are almost never in it,
+  // so the click used to land on a blank "No records found" page. These rows
+  // are unioned (deduped by id) into the filtered-results pipeline below.
+  const [revealedHidden, setRevealedHidden] = useState<HiddenTierMatchRows | null>(null);
+  const revealVersionRef = useRef(0);
 
   const hasClientSideFilters = debouncedSearch.trim() !== '' ||
     (filter.type !== undefined && filter.type !== 'all') || 
@@ -207,7 +216,16 @@ export default function Dashboard() {
   // Note: blockchain-discovered filtering is now done at the DATABASE level via useFilteredRecords
   useEffect(() => {
     const applyFiltersAsync = async () => {
-      const enrichedRecords = records.map(r => {
+      // Union the revealed hidden-tier rows (fetched vault-wide) into the
+      // loaded window, deduped by id, so out-of-window matches render and
+      // sort with the rest without duplicating rows already in the window.
+      let baseRecords = records;
+      const revealedRows = revealedHidden?.rows;
+      if (revealedRows && revealedRows.length > 0) {
+        const windowIds = new Set(records.map(r => r.id));
+        baseRecords = [...records, ...revealedRows.filter(r => !windowIds.has(r.id))];
+      }
+      const enrichedRecords = baseRecords.map(r => {
         const stats = allAddressStats.get(String(r.id));
         return {
           ...r,
@@ -258,7 +276,7 @@ export default function Dashboard() {
     };
 
     applyFiltersAsync();
-  }, [debouncedSearch, filter, records, includeBlockchainDiscovered, columnFilters, allAddressStats]);
+  }, [debouncedSearch, filter, records, includeBlockchainDiscovered, columnFilters, allAddressStats, revealedHidden]);
 
   // Deferred hidden-matches count (parity with the Records page): when a
   // search or column filter runs over the default view (discovered hidden),
@@ -275,15 +293,14 @@ export default function Dashboard() {
     (filter.type !== undefined && filter.type !== 'all') ||
     filter.tags.length > 0 ||
     filter.categories.length > 0;
-  useEffect(() => {
-    const version = ++hiddenMatchVersionRef.current;
-    setHiddenMatches(null);
-    if (includeBlockchainDiscovered || !searchOrColumnFilterActive || isLoading) {
-      return;
-    }
+
+  // One predicate shared by the hidden-match count below and the reveal fetch
+  // further down, so the notice and the rows the button surfaces can never
+  // disagree. Same predicate as the visible pipeline above, minus the tier
+  // exclusion.
+  const buildHiddenMatchPredicate = useCallback((): ((record: Record) => boolean) => {
     const lowerQuery = debouncedSearch.trim().toLowerCase();
-    // Same predicate as the visible pipeline above, minus the tier exclusion.
-    const matches = (record: Record): boolean => {
+    return (record: Record): boolean => {
       if (applyColumnFilters([record] as unknown as Array<{ [key: string]: unknown }>, columnFilters).length === 0) {
         return false;
       }
@@ -303,14 +320,43 @@ export default function Dashboard() {
       }
       return true;
     };
+  }, [debouncedSearch, filter, columnFilters]);
+
+  useEffect(() => {
+    const version = ++hiddenMatchVersionRef.current;
+    setHiddenMatches(null);
+    if (includeBlockchainDiscovered || !searchOrColumnFilterActive || isLoading) {
+      return;
+    }
     countHiddenTierMatches({
-      matches,
+      matches: buildHiddenMatchPredicate(),
       isCancelled: () => hiddenMatchVersionRef.current !== version,
     }).then(result => {
       if (hiddenMatchVersionRef.current !== version) return;
       setHiddenMatches(result.count > 0 ? result : null);
     }).catch(e => { console.warn('[Dashboard] Hidden-match count failed:', e); });
-  }, [includeBlockchainDiscovered, searchOrColumnFilterActive, isLoading, debouncedSearch, filter, columnFilters, filteredRecords]);
+  }, [includeBlockchainDiscovered, searchOrColumnFilterActive, isLoading, buildHiddenMatchPredicate, filteredRecords]);
+
+  // The "Show hidden matches" reveal. Runs whenever discovered rows are
+  // included while a search/filter is active — not only right after the
+  // button click — so re-searching a previously-revealed term re-fetches its
+  // matches instead of dead-ending on a blank page (the notice is suppressed
+  // once the toggle is on, by design). Version-guarded like the count effect:
+  // a superseded search/filter change cancels the walk and never sets state.
+  useEffect(() => {
+    const version = ++revealVersionRef.current;
+    setRevealedHidden(null);
+    if (!includeBlockchainDiscovered || !searchOrColumnFilterActive) {
+      return;
+    }
+    getHiddenTierMatches({
+      matches: buildHiddenMatchPredicate(),
+      isCancelled: () => revealVersionRef.current !== version,
+    }).then(result => {
+      if (revealVersionRef.current !== version) return;
+      setRevealedHidden(result.rows.length > 0 ? result : null);
+    }).catch(e => { console.warn('[Dashboard] Hidden-match fetch failed:', e); });
+  }, [includeBlockchainDiscovered, searchOrColumnFilterActive, buildHiddenMatchPredicate]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -463,6 +509,20 @@ export default function Dashboard() {
         >
           Show hidden matches
         </Button>
+      </div>
+    ) : null;
+
+  // "Showing first N" note for the reveal when the bounded fetch hit a cap —
+  // mirrors the count notice's capped semantics ("cap+" / "at least").
+  const revealedCapNotice =
+    revealedHidden && revealedHidden.rows.length > 0 && (revealedHidden.capped || revealedHidden.scanCapped) ? (
+      <div
+        className="mt-3 text-center text-sm text-muted-foreground"
+        data-testid="notice-revealed-hidden-cap"
+      >
+        {revealedHidden.capped
+          ? `Showing the first ${revealedHidden.rows.length.toLocaleString()} hidden matches — refine your search to narrow down further.`
+          : "Some hidden matches may not be shown (large discovered set, partially checked)."}
       </div>
     ) : null;
 
@@ -1194,8 +1254,11 @@ export default function Dashboard() {
               </>
             )}
 
-            {hiddenMatchesNotice && (
-              <div className="border-t pt-4 mt-4">{hiddenMatchesNotice}</div>
+            {(hiddenMatchesNotice || revealedCapNotice) && (
+              <div className="border-t pt-4 mt-4">
+                {hiddenMatchesNotice}
+                {revealedCapNotice}
+              </div>
             )}
 
             {/* Pagination Controls */}
