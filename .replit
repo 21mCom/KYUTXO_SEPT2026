@@ -431,6 +431,18 @@ args = "dashboard-hidden-matches-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "poisoning-copy-guard-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dashboard-hidden-matches-engine-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-poisoning-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "server-response-hygiene-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1843,3 +1855,14 @@ isValidation = true
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-address-poisoning-scale-browser.mjs"
+
+[[workflows.workflow]]
+name = "dashboard-hidden-matches-engine-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dashboard-hidden-matches-engine-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
