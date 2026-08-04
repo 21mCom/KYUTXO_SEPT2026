@@ -69,6 +69,42 @@ function scoreRecordMetadata(record: DbRecord): number {
   return score;
 }
 
+// Type-specific metadata clearing when a record's Type is switched.
+//
+// The edit form only renders the metadata section matching the current type
+// (RecordFormDialog: "Transaction Details" for 'transaction', "Acquisition &
+// Provenance" for 'address', neither for 'other'), so after a Type switch the
+// now-hidden fields would silently persist and could surface in reports and
+// exports. Mirror the form's per-type field groupings here and clear whatever
+// the new type can no longer show/edit:
+//   - transaction-only: flowType, dispositionType
+//   - address-only:     counterpartyType, counterpartyName
+//   - shared by address AND transaction (intentionally retained across a
+//     switch between those two): acquisitionMethod, costBasisUsd — both
+//     sections render these fields, so the value stays visible and editable.
+//   - 'other' renders none of them, so all six are cleared.
+// Returned undefined values overwrite the merged row in updateRecord and are
+// dropped by IndexedDB's structured clone, i.e. the fields are truly removed.
+export function getTypeSwitchClears(
+  newType: DbRecord["type"],
+): Partial<Pick<DbRecord, "flowType" | "acquisitionMethod" | "dispositionType" | "costBasisUsd" | "counterpartyType" | "counterpartyName">> {
+  if (newType === "transaction") {
+    return { counterpartyType: undefined, counterpartyName: undefined };
+  }
+  if (newType === "address") {
+    return { flowType: undefined, dispositionType: undefined };
+  }
+  // 'other' has no type-specific metadata sections at all.
+  return {
+    flowType: undefined,
+    acquisitionMethod: undefined,
+    dispositionType: undefined,
+    costBasisUsd: undefined,
+    counterpartyType: undefined,
+    counterpartyName: undefined,
+  };
+}
+
 // Select the best record from a list of duplicates based on metadata richness
 function selectBestRecord(records: DbRecord[]): DbRecord {
   if (records.length === 1) return records[0];
@@ -480,6 +516,12 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
 
       const previousInputString = editingRecord.inputString || "";
 
+      // When the Type changes, clear the metadata fields the new type's form
+      // no longer renders (see getTypeSwitchClears) so stale values can't
+      // silently persist and leak into reports/exports.
+      const typeSwitchClears =
+        data.type !== editingRecord.type ? getTypeSwitchClears(data.type) : {};
+
       await updateRecord(editingRecord.id, {
         type: data.type,
         vault: data.vault,
@@ -504,6 +546,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         costBasisUsd: data.costBasisUsd,
         counterpartyType: data.counterpartyType,
         counterpartyName: data.counterpartyName,
+        ...typeSwitchClears,
       });
 
       // Upload any new files for the existing record
