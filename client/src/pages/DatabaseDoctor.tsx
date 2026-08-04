@@ -69,6 +69,7 @@ import {
   setCanonicalInputStringsRepaired,
 } from "@/lib/vault";
 import { canonicalizeRecordIdentifier } from "@/lib/bitcoin";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { isEncryptedPlaceholder } from "@/lib/legacy-decrypt";
 import {
   detectStaleCachedBalances,
@@ -132,6 +133,29 @@ interface RecordStats {
   canonicalIdentifierCollision: number;
 }
 
+// One record participating in a canonical-identifier collision, as listed in
+// the "Duplicate identifier records" card. Lightweight on purpose — the full
+// record opens in the shared detail panel on click.
+export interface CollisionRow {
+  id: number;
+  inputString: string;
+  label: string;
+  type: string;
+  /** True when this row's stored value differs from the canonical form. */
+  nonCanonical: boolean;
+}
+
+export interface CollisionGroup {
+  /** The canonical identifier every row in this group resolves to. */
+  canonical: string;
+  rows: CollisionRow[];
+}
+
+// Bounds for the collision-detail pass so a pathological vault can't blow up
+// memory: collisions are normally a handful of rows.
+const MAX_COLLISION_GROUPS = 500;
+const MAX_ROWS_PER_GROUP = 25;
+
 interface SampleRow {
   id: number | string;
   type: string;
@@ -152,6 +176,10 @@ interface DoctorResult {
   recordStats: RecordStats;
   samples: SampleRow[];
   flags: MigrationFlags;
+  /** Detail behind canonicalIdentifierCollision: the actual colliding groups. */
+  collisionGroups: CollisionGroup[];
+  /** True when the group/row caps trimmed the collected detail. */
+  collisionGroupsTruncated: boolean;
 }
 
 type RawRow = globalThis.Record<string, unknown>;
@@ -377,11 +405,69 @@ export default function DatabaseDoctor() {
         (key) => (canonicalKeyCounts.get(key) ?? 0) > 1,
       ).length;
 
+      // Second bounded pass (only when collisions exist — normally never):
+      // collect the actual colliding rows per canonical key so the user can
+      // open and merge them, instead of dead-ending on a bare count.
+      const collisionKeys = new Set(
+        nonCanonicalKeys.filter((key) => (canonicalKeyCounts.get(key) ?? 0) > 1),
+      );
+      const groupMap = new Map<string, CollisionRow[]>();
+      let collisionGroupsTruncated = false;
+      if (collisionKeys.size > 0) {
+        setProgress("Collecting duplicate identifier details…");
+        let collisionLastId = 0;
+        for (;;) {
+          const chunk = (await db.records
+            .where("id")
+            .above(collisionLastId)
+            .limit(BATCH_SIZE)
+            .toArray()) as unknown as RawRow[];
+          if (chunk.length === 0) break;
+          collisionLastId = Number(chunk[chunk.length - 1].id);
+
+          for (const row of chunk) {
+            const inputVal = row["inputString"];
+            if (typeof inputVal !== "string" || !inputVal) continue;
+            const canonical = canonicalizeRecordIdentifier(inputVal);
+            if (!collisionKeys.has(canonical)) continue;
+            let rows = groupMap.get(canonical);
+            if (!rows) {
+              if (groupMap.size >= MAX_COLLISION_GROUPS) {
+                collisionGroupsTruncated = true;
+                continue;
+              }
+              rows = [];
+              groupMap.set(canonical, rows);
+            }
+            if (rows.length >= MAX_ROWS_PER_GROUP) {
+              collisionGroupsTruncated = true;
+              continue;
+            }
+            rows.push({
+              id: Number(row["id"]),
+              inputString: inputVal,
+              label: typeof row["label"] === "string" ? (row["label"] as string) : "",
+              type: typeof row["type"] === "string" ? (row["type"] as string) : "—",
+              nonCanonical: canonical !== inputVal,
+            });
+          }
+
+          if (chunk.length < BATCH_SIZE) break;
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
+      const collisionGroups: CollisionGroup[] = Array.from(
+        groupMap,
+        ([canonical, rows]) => ({ canonical, rows }),
+      );
+
       setResult({
         tableCounts,
         recordStats,
         samples,
         flags: { legacyDecryptComplete, completedTables, inputStringLowerRepaired },
+        collisionGroups,
+        collisionGroupsTruncated,
       });
       setPhase("done");
     } catch (err) {
@@ -464,6 +550,12 @@ export default function DatabaseDoctor() {
           <>
             <RecordHealthCard stats={result.recordStats} flags={result.flags} />
             <RepairToolsCard stats={result.recordStats} onRepairComplete={runCheck} />
+            {result.collisionGroups.length > 0 && (
+              <DuplicateIdentifierCard
+                groups={result.collisionGroups}
+                truncated={result.collisionGroupsTruncated}
+              />
+            )}
             <SamplesCard samples={result.samples} />
             <TableCountsCard tableCounts={result.tableCounts} />
             <MigrationStatusCard flags={result.flags} />
@@ -530,7 +622,7 @@ function Verdict({ result }: { result: DoctorResult }) {
       );
       if (recordStats.canonicalIdentifierCollision > 0) {
         lines.push(
-          `${recordStats.canonicalIdentifierCollision.toLocaleString()} of those records were left untouched because normalizing them would duplicate another record that already stores the same address/transaction ID. The repair never merges records on its own — review and merge these duplicates yourself.`,
+          `${recordStats.canonicalIdentifierCollision.toLocaleString()} of those records were left untouched because normalizing them would duplicate another record that already stores the same address/transaction ID. The repair never merges records on its own — see the "Duplicate identifier records" list below to review and merge each pair yourself.`,
         );
       }
     }
@@ -927,6 +1019,119 @@ function RepairToolsCard({
           <p className="text-sm text-muted-foreground" data-testid="text-repair-progress">
             {repairProgress}
           </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Duplicate identifier records (Task #1869): the detail behind the
+ * "Normalization skipped (would duplicate another record)" count. Each group
+ * is one canonical identifier claimed by 2+ records — the canonical-identifier
+ * repair deliberately skips these (report, never merge). Every row opens in
+ * the shared record detail panel so the user can compare, copy metadata across,
+ * and delete the redundant record; the list is paginated for large vaults.
+ */
+export function DuplicateIdentifierCard({
+  groups,
+  truncated,
+}: {
+  groups: CollisionGroup[];
+  truncated: boolean;
+}) {
+  const { openRecordPreview } = useRecordPreview();
+  const [page, setPage] = useState(0);
+  const GROUPS_PER_PAGE = 10;
+  const pageCount = Math.max(1, Math.ceil(groups.length / GROUPS_PER_PAGE));
+  const clampedPage = Math.min(page, pageCount - 1);
+  const visible = groups.slice(
+    clampedPage * GROUPS_PER_PAGE,
+    (clampedPage + 1) * GROUPS_PER_PAGE,
+  );
+
+  return (
+    <Card data-testid="card-duplicate-identifiers">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ListChecks className="h-5 w-5" />
+          Duplicate identifier records
+        </CardTitle>
+        <CardDescription>
+          Each group below is one address or transaction ID stored by more than one record. The
+          normalization repair skipped these on purpose — it never merges records. To resolve a
+          group: open each record, pick the one to keep, copy over any labels, tags, or notes you
+          want from the others, then delete the redundant record(s) from their detail view. Once a
+          group has a single record left, run "Rebuild search keys" again — the survivor is
+          normalized automatically and this list empties.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {truncated && (
+          <p className="text-xs text-muted-foreground" data-testid="text-duplicates-truncated">
+            The list was trimmed to keep this page responsive — resolve the groups shown, then
+            re-run the health check to see the rest.
+          </p>
+        )}
+        <div className="space-y-3">
+          {visible.map((group, i) => (
+            <div
+              key={group.canonical}
+              className="rounded-md border p-3 space-y-2"
+              data-testid={`duplicate-group-${clampedPage * GROUPS_PER_PAGE + i}`}
+            >
+              <div className="text-xs text-muted-foreground">
+                Canonical form:{" "}
+                <span className="font-mono break-all text-foreground">{group.canonical}</span>
+              </div>
+              <div className="space-y-1">
+                {group.rows.map((row) => (
+                  <button
+                    key={row.id}
+                    type="button"
+                    onClick={() => void openRecordPreview(row.id)}
+                    className="w-full flex items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left text-sm hover-elevate"
+                    data-testid={`button-open-duplicate-${row.id}`}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="font-mono text-xs break-all">{row.inputString}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        #{row.id} · {row.type}
+                        {row.label ? ` · ${row.label}` : ""}
+                        {row.nonCanonical ? " · stored non-canonically" : ""}
+                      </span>
+                    </span>
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {pageCount > 1 && (
+          <div className="flex items-center justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={clampedPage === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              data-testid="button-duplicates-prev"
+            >
+              Previous
+            </Button>
+            <span className="text-xs text-muted-foreground" data-testid="text-duplicates-page">
+              Page {clampedPage + 1} of {pageCount} · {groups.length.toLocaleString()} groups
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={clampedPage >= pageCount - 1}
+              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+              data-testid="button-duplicates-next"
+            >
+              Next
+            </Button>
+          </div>
         )}
       </CardContent>
     </Card>

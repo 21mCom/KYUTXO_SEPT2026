@@ -525,6 +525,10 @@ args = "ipc-sanitization-guard-tests"
 task = "workflow.run"
 args = "trusted-types-csp-sync-tests"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "duplicate-identifiers-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1878,6 +1882,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-input-string-canonicalization.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "duplicate-identifiers-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/DatabaseDoctor.duplicateIdentifiers.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
