@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { RefreshCw, Loader2 } from "lucide-react";
+import { RefreshCw, Loader2, X } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -454,7 +454,19 @@ export function MaintenanceToolsSection() {
               </div>
               {backfillResult && !isBackfilling && !backfillResult.deferred && (
                 <div className="rounded-md border bg-muted/40 px-4 py-3 space-y-1 text-sm" data-testid="rebuild-result-summary">
-                  <div className="font-medium text-foreground">Last rebuild result</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-medium text-foreground">Last rebuild result</div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 shrink-0 text-muted-foreground"
+                      onClick={() => setBackfillResult(null)}
+                      aria-label="Dismiss rebuild result"
+                      data-testid="button-dismiss-rebuild-result"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
                   <div className="text-muted-foreground space-y-0.5">
                     {backfillResult.orphansFound === 0 ? (
                       <p>No orphaned transactions found — everything is up to date.</p>
