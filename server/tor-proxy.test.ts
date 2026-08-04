@@ -444,6 +444,42 @@ describe("/api/tor endpoints", () => {
     expect(body.data.height).toBe(850001);
   });
 
+  it("dev-only /settings/reset drops the pushed settings (simulated restart hook)", async () => {
+    const configured = await post(
+      "/api/tor/settings",
+      { customProviderUrl: "https://esplora.example.org" },
+      authHeader(),
+    );
+    expect(configured.status).toBe(200);
+
+    // Without the loopback settings token the hook is unusable.
+    const unauthorized = await post("/api/tor/settings/reset", {});
+    expect(unauthorized.status).toBe(403);
+    // The rejected call must not have touched the settings.
+    const stillOk = isAllowedUrl("https://esplora.example.org/api/blocks/tip/height");
+    expect(stillOk.allowed).toBe(true);
+
+    // With the token it resets to the uninitialized (post-restart) state.
+    const reset = await post("/api/tor/settings/reset", {}, authHeader());
+    expect(reset.status).toBe(200);
+    const after = await post("/api/tor/request", { url: "https://esplora.example.org/api/blocks/tip/height" });
+    expect(after.status).toBe(428);
+    const body = await after.json();
+    expect(body.errorCode).toBe("TOR_SETTINGS_NOT_INITIALIZED");
+  });
+
+  it("/settings/reset is hidden (404) in production", async () => {
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const res = await post("/api/tor/settings/reset", {}, authHeader());
+      expect(res.status).toBe(404);
+    } finally {
+      if (prevEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prevEnv;
+    }
+  });
+
   it("bounds concurrency and rejects overflow with 429", async () => {
     // Stub the upstream to be slow (200ms): active slots stay occupied long
     // enough that the arrival burst fills the queue and overflows, while every

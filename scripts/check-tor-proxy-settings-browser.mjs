@@ -22,6 +22,11 @@
 //      (no Tor in this environment → "Tor Not Available", not a crash/403).
 //   6. The Test Tor sync does not clobber the allowlist: the configured
 //      provider is still reachable through the proxy afterwards.
+//   7. Server-restart recovery: after the dev-only /api/tor/settings/reset
+//      hook drops the pushed settings (simulating a restart), a proxied
+//      request issued through the client provider library recovers via the
+//      428 → invalidateTorProxySettingsSync → re-push → retry-once loop
+//      instead of surfacing the 428 to the caller.
 //
 // Usage: node scripts/check-tor-proxy-settings-browser.mjs
 // Requires: a `chromium` binary on PATH (Nix) and `playwright-core`.
@@ -199,7 +204,7 @@ async function main() {
     const torCalls = [];
     page.on('response', (res) => {
       const url = res.url();
-      if (url.includes('/api/tor/settings') || url.includes('/api/tor/test')) {
+      if (url.includes('/api/tor/settings') || url.includes('/api/tor/test') || url.includes('/api/tor/request')) {
         torCalls.push({
           url,
           method: res.request().method(),
@@ -396,6 +401,90 @@ async function main() {
         stillAllowed.success === true &&
         String(stillAllowed.data) === UPSTREAM_TIP_HEIGHT,
       `status=${stillAllowed.status}, success=${stillAllowed.success}, data=${JSON.stringify(stillAllowed.data)}`,
+    );
+
+    // ── Server-restart recovery through the CLIENT retry path ─────────────
+    // Warm the client library's dedup cache with a successful provider call,
+    // drop the server-side settings via the dev-only reset hook (simulated
+    // restart), then call the SAME provider again. Because the payload is
+    // deduped, the client won't re-push up front: the request must hit the
+    // 428, invalidate the sync cache, force a re-push, and retry to success —
+    // exactly the first-sync-after-restart scenario.
+    const callsBeforeRecovery = torCalls.length;
+    const recovery = await page.evaluate(
+      async ({ customUrl, expectedHeight }) => {
+        const { CustomElectrsProvider } = await import('/src/lib/providers/custom-electrs.ts');
+        // useTor:true routes through /api/tor/request; the trusted local host
+        // makes the proxy take its direct-request path (no Tor daemon needed).
+        const provider = new CustomElectrsProvider(`${customUrl}/api`, 30000, true, undefined, ['127.0.0.1']);
+
+        const out = { baselineHeight: null, resetStatus: null, rawStatus: null, rawErrorCode: null, recoveredHeight: null, error: null };
+        try {
+          out.baselineHeight = await provider.getBlockHeight();
+
+          // Simulate a server restart: drop the pushed settings server-side.
+          const tokenRes = await fetch('/api/tor/settings-token');
+          const tokenBody = await tokenRes.json().catch(() => null);
+          const resetRes = await fetch('/api/tor/settings/reset', {
+            method: 'POST',
+            headers: { 'x-tor-settings-token': tokenBody?.token ?? '' },
+          });
+          out.resetStatus = resetRes.status;
+
+          // Sanity: a raw proxied request (outside the client retry path) now
+          // gets the 428 not-initialized answer.
+          const raw = await fetch('/api/tor/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: `${customUrl}/api/blocks/tip/height`, method: 'GET' }),
+          });
+          out.rawStatus = raw.status;
+          out.rawErrorCode = (await raw.json().catch(() => null))?.errorCode ?? null;
+
+          // The provider call must recover, not throw the 428 at the caller.
+          out.recoveredHeight = await provider.getBlockHeight();
+        } catch (err) {
+          out.error = String(err && err.message ? err.message : err);
+        }
+        return out;
+      },
+      { customUrl: CUSTOM_PROVIDER_URL, expectedHeight: Number(UPSTREAM_TIP_HEIGHT) },
+    );
+    step(
+      'reset hook simulated a server restart (baseline request OK, then 428 TOR_SETTINGS_NOT_INITIALIZED)',
+      recovery.baselineHeight === Number(UPSTREAM_TIP_HEIGHT) &&
+        recovery.resetStatus === 200 &&
+        recovery.rawStatus === 428 &&
+        recovery.rawErrorCode === 'TOR_SETTINGS_NOT_INITIALIZED',
+      `baseline=${recovery.baselineHeight}, reset=${recovery.resetStatus}, raw=${recovery.rawStatus}/${recovery.rawErrorCode}, error=${recovery.error}`,
+    );
+    step(
+      'client provider call right after the restart recovered to success (no 428 surfaced)',
+      recovery.error === null && recovery.recoveredHeight === Number(UPSTREAM_TIP_HEIGHT),
+      `recoveredHeight=${recovery.recoveredHeight}, error=${recovery.error}`,
+    );
+
+    // Prove the recovery went through the retry loop: among the calls made
+    // during the scenario there must be a 428 on /api/tor/request, then a
+    // POST /api/tor/settings re-push (200), then a 200 on /api/tor/request.
+    const recoveryCalls = torCalls.slice(callsBeforeRecovery);
+    const got428 = recoveryCalls.find((c) => c.url.includes('/api/tor/request') && c.status === 428);
+    const rePush = recoveryCalls.find(
+      (c) =>
+        c.method === 'POST' &&
+        c.url.includes('/api/tor/settings') &&
+        !c.url.includes('settings-token') &&
+        !c.url.includes('/settings/reset') &&
+        c.status === 200 &&
+        (!got428 || c.at >= got428.at),
+    );
+    const retryOk = recoveryCalls.find(
+      (c) => c.url.includes('/api/tor/request') && c.status === 200 && rePush && c.at >= rePush.at,
+    );
+    step(
+      'recovery sequence observed on the wire: 428 → settings re-push (200) → retried request (200)',
+      !!got428 && !!rePush && !!retryOk,
+      `428=${!!got428}, rePush=${!!rePush}, retry200=${!!retryOk}`,
     );
   } finally {
     await browser.close().catch(() => {});

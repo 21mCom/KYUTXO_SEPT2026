@@ -633,6 +633,25 @@ router.post("/settings", (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
+// Test-only hook (disabled in production builds): drop the pushed settings to
+// simulate a server restart, so a real-browser check can drive the client's
+// 428 → invalidate → re-push → retry-once recovery loop without bouncing the
+// dev-server process. Guarded by the same loopback-only settings token as
+// /settings, and hidden (404) when NODE_ENV=production.
+router.post("/settings/reset", (req: Request, res: Response) => {
+  if (process.env.NODE_ENV === "production") {
+    return res.status(404).json({ success: false, error: "Not found" });
+  }
+  if (!hasValidSettingsToken(req)) {
+    return res.status(403).json({
+      success: false,
+      error: "Missing or invalid settings token. Tor proxy settings can only be managed by the local application.",
+    });
+  }
+  resetTorProxySettings();
+  res.json({ success: true });
+});
+
 router.post("/request", async (req: Request, res: Response) => {
   // Bound the incoming envelope (the global JSON parser applies its own cap
   // too; this gives a clean, explicit 413 for the proxy route).
