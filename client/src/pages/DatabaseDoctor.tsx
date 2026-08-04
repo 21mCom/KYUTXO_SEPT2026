@@ -60,7 +60,20 @@ import {
   repairInputStringLower,
   repairAddressImportanceTiers,
   repairCanonicalInputStrings,
+  getRecordsByIds,
+  deleteRecord,
 } from "@/lib/data/record-crud";
+import type { Record as VaultRecord } from "@/lib/db-types";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
 import {
   isLegacyDecryptComplete,
   getLegacyDecryptCompletedTables,
@@ -1034,7 +1047,7 @@ function RepairToolsCard({
  * and delete the redundant record; the list is paginated for large vaults.
  */
 export function DuplicateIdentifierCard({
-  groups,
+  groups: allGroups,
   truncated,
 }: {
   groups: CollisionGroup[];
@@ -1042,6 +1055,11 @@ export function DuplicateIdentifierCard({
 }) {
   const { openRecordPreview } = useRecordPreview();
   const [page, setPage] = useState(0);
+  // Groups the guided Resolve flow already cleared this session — hidden
+  // immediately so the user sees progress without re-running the whole scan.
+  const [resolvedCanonicals, setResolvedCanonicals] = useState<Set<string>>(new Set());
+  const [resolvingGroup, setResolvingGroup] = useState<CollisionGroup | null>(null);
+  const groups = allGroups.filter((g) => !resolvedCanonicals.has(g.canonical));
   const GROUPS_PER_PAGE = 10;
   const pageCount = Math.max(1, Math.ceil(groups.length / GROUPS_PER_PAGE));
   const clampedPage = Math.min(page, pageCount - 1);
@@ -1105,9 +1123,33 @@ export function DuplicateIdentifierCard({
                   </button>
                 ))}
               </div>
+              <div className="flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setResolvingGroup(group)}
+                  data-testid={`button-resolve-duplicate-${clampedPage * GROUPS_PER_PAGE + i}`}
+                >
+                  Resolve…
+                </Button>
+              </div>
             </div>
           ))}
         </div>
+        {resolvingGroup && (
+          <ResolveDuplicateDialog
+            group={resolvingGroup}
+            onClose={() => setResolvingGroup(null)}
+            onResolved={(canonical) => {
+              setResolvedCanonicals((prev) => {
+                const next = new Set(prev);
+                next.add(canonical);
+                return next;
+              });
+              setResolvingGroup(null);
+            }}
+          />
+        )}
         {pageCount > 1 && (
           <div className="flex items-center justify-between">
             <Button
@@ -1135,6 +1177,215 @@ export function DuplicateIdentifierCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Guided keep-and-delete flow for one duplicate identifier group (Task #1880).
+ *
+ * Still user-driven end to end — the "report, never merge" rule only forbids
+ * AUTOMATIC merging. The user explicitly picks the record to keep, sees exactly
+ * which labels/tags/notes the other record(s) carry (i.e. what would be lost —
+ * nothing is copied over automatically), and confirms before the redundant
+ * records are deleted through the normal CRUD layer (deleteRecord archives
+ * attachments recoverably, never destroys files). Afterwards the group is
+ * hidden and the user is prompted to re-run "Rebuild search keys" so the
+ * surviving record is normalized to its canonical form.
+ */
+function ResolveDuplicateDialog({
+  group,
+  onClose,
+  onResolved,
+}: {
+  group: CollisionGroup;
+  onClose: () => void;
+  onResolved: (canonical: string) => void;
+}) {
+  const { toast } = useToast();
+  const [records, setRecords] = useState<VaultRecord[] | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [keeperId, setKeeperId] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = await getRecordsByIds(group.rows.map((r) => r.id));
+        if (cancelled) return;
+        if (rows.length < 2) {
+          // Someone already deleted the redundant record(s) elsewhere (e.g. via
+          // the detail panel). Nothing left to resolve — report it stale.
+          setLoadError(true);
+          setRecords(rows);
+          return;
+        }
+        setRecords(rows);
+        setKeeperId(rows[0]?.id ?? null);
+      } catch {
+        if (!cancelled) setLoadError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [group]);
+
+  const keeper = records?.find((r) => r.id === keeperId);
+  const losers = records?.filter((r) => r.id !== keeperId) ?? [];
+
+  // Metadata the redundant record(s) carry, shown so the user can copy anything
+  // they care about BEFORE confirming. Values also present verbatim on the
+  // keeper are not "lost", so they are filtered out of the warning.
+  function lostMetadata(loser: VaultRecord): { field: string; value: string }[] {
+    if (!keeper) return [];
+    const lost: { field: string; value: string }[] = [];
+    if (loser.label.trim() && loser.label.trim() !== keeper.label.trim()) {
+      lost.push({ field: "Label", value: loser.label.trim() });
+    }
+    const keeperTags = new Set(keeper.tags.map((t) => t.toLowerCase()));
+    const missingTags = loser.tags.filter((t) => !keeperTags.has(t.toLowerCase()));
+    if (missingTags.length > 0) {
+      lost.push({ field: "Tags", value: missingTags.join(", ") });
+    }
+    const loserNotes = (loser.notes ?? "").trim();
+    if (loserNotes && loserNotes !== (keeper.notes ?? "").trim()) {
+      lost.push({ field: "Notes", value: loserNotes });
+    }
+    return lost;
+  }
+
+  async function confirmDelete() {
+    if (!keeper || losers.length === 0 || deleting) return;
+    setDeleting(true);
+    try {
+      for (const loser of losers) {
+        if (loser.id === undefined) continue;
+        await deleteRecord(loser.id);
+      }
+      toast({
+        title: "Duplicate resolved",
+        description:
+          `Deleted ${losers.length === 1 ? "1 redundant record" : `${losers.length} redundant records`}. ` +
+          `Run "Rebuild search keys" to normalize the kept record's identifier.`,
+      });
+      onResolved(group.canonical);
+    } catch (err) {
+      setDeleting(false);
+      toast({
+        title: "Could not delete record",
+        description: err instanceof Error ? err.message : "Deletion failed — no records were merged.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !deleting && onClose()}>
+      <DialogContent className="max-w-lg" data-testid="dialog-resolve-duplicate">
+        <DialogHeader>
+          <DialogTitle>Resolve duplicate</DialogTitle>
+          <DialogDescription>
+            Pick the record to keep. The other record(s) will be deleted — nothing is merged
+            automatically, so copy over any metadata you want to keep first (their attachments stay
+            recoverable under Settings → Deleted Attachments).
+          </DialogDescription>
+        </DialogHeader>
+        {loadError ? (
+          <p className="text-sm text-muted-foreground" data-testid="text-resolve-load-error">
+            This group could not be loaded — it may already have been resolved. Re-run the health
+            check to refresh the list.
+          </p>
+        ) : !records ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading records…
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="text-xs text-muted-foreground">
+              Canonical form:{" "}
+              <span className="font-mono break-all text-foreground">{group.canonical}</span>
+            </div>
+            <RadioGroup
+              value={keeperId !== null ? String(keeperId) : undefined}
+              onValueChange={(v) => setKeeperId(Number(v))}
+              className="space-y-2"
+            >
+              {records.map((r) => (
+                <div key={r.id} className="flex items-start gap-2 rounded-md border p-2">
+                  <RadioGroupItem
+                    value={String(r.id)}
+                    id={`keeper-${r.id}`}
+                    data-testid={`radio-keeper-${r.id}`}
+                  />
+                  <Label htmlFor={`keeper-${r.id}`} className="min-w-0 flex-1 cursor-pointer font-normal">
+                    <span className="block font-mono text-xs break-all">{r.inputString}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      #{r.id} · {r.type}
+                      {r.label.trim() ? ` · ${r.label}` : ""}
+                      {r.tags.length > 0 ? ` · tags: ${r.tags.join(", ")}` : ""}
+                      {(r.notes ?? "").trim() ? " · has notes" : ""}
+                    </span>
+                  </Label>
+                </div>
+              ))}
+            </RadioGroup>
+            {keeper && (
+              <div className="space-y-2">
+                {losers.some((l) => lostMetadata(l).length > 0) ? (
+                  <div
+                    className="rounded-md border border-destructive/50 p-2 space-y-2"
+                    data-testid="text-resolve-lost-metadata"
+                  >
+                    <p className="text-xs font-medium text-destructive">
+                      Metadata on the record(s) to be deleted that the kept record does not have:
+                    </p>
+                    {losers.map((l) =>
+                      lostMetadata(l).length > 0 ? (
+                        <div key={l.id} className="text-xs space-y-0.5">
+                          <p className="text-muted-foreground">#{l.id}:</p>
+                          {lostMetadata(l).map((m) => (
+                            <p key={m.field} className="break-all">
+                              <span className="text-muted-foreground">{m.field}: </span>
+                              {m.value}
+                            </p>
+                          ))}
+                        </div>
+                      ) : null,
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground" data-testid="text-resolve-no-loss">
+                    The record(s) to be deleted carry no labels, tags, or notes the kept record
+                    doesn't already have.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={onClose}
+            disabled={deleting}
+            data-testid="button-resolve-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => void confirmDelete()}
+            disabled={loadError || !keeper || losers.length === 0 || deleting}
+            data-testid="button-resolve-confirm"
+          >
+            {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Delete {losers.length === 1 ? "1 record" : `${losers.length} records`}, keep #
+            {keeper?.id ?? "—"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

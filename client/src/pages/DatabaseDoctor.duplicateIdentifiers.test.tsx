@@ -127,6 +127,96 @@ describe("Database Doctor duplicate identifier records", () => {
   });
 });
 
+describe("guided Resolve flow (Task #1880)", () => {
+  beforeEach(async () => {
+    openRecordPreview.mockClear();
+    await clearAllRecords();
+  });
+
+  afterEach(() => cleanup());
+
+  it("deletes the redundant record via CRUD, hides the group, and previews lost metadata", async () => {
+    const keeperId = await seedVerbatim(BECH32, "keeper");
+    const dupeId = await seedVerbatim(`  ${BECH32.toUpperCase()}  `, "dupe-label");
+    await db.records.update(dupeId, { tags: ["lost-tag"], notes: "lost note" });
+
+    await runHealthCheck();
+
+    fireEvent.click(screen.getByTestId("button-resolve-duplicate-0"));
+    await waitFor(() => expect(screen.getByTestId(`radio-keeper-${keeperId}`)).toBeTruthy());
+
+    // Default keeper is the first row; the dupe's label/tags/notes are shown as at-risk.
+    const lost = screen.getByTestId("text-resolve-lost-metadata");
+    expect(lost.textContent).toContain("dupe-label");
+    expect(lost.textContent).toContain("lost-tag");
+    expect(lost.textContent).toContain("lost note");
+
+    const confirm = screen.getByTestId("button-resolve-confirm") as HTMLButtonElement;
+    expect(confirm.textContent).toContain(`keep #${keeperId}`);
+    fireEvent.click(confirm);
+
+    // The redundant record is deleted through the CRUD layer and the group hides.
+    await waitFor(async () => {
+      expect(await db.records.get(dupeId)).toBeUndefined();
+    });
+    expect(await db.records.get(keeperId)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByTestId("dialog-resolve-duplicate")).toBeNull());
+    expect(screen.queryByTestId("duplicate-group-0")).toBeNull();
+  });
+
+  it("lets the user switch the keeper before confirming", async () => {
+    const firstId = await seedVerbatim(BECH32, "first");
+    const secondId = await seedVerbatim(`${BECH32.toUpperCase()}`, "second");
+
+    await runHealthCheck();
+
+    fireEvent.click(screen.getByTestId("button-resolve-duplicate-0"));
+    await waitFor(() => expect(screen.getByTestId(`radio-keeper-${secondId}`)).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId(`radio-keeper-${secondId}`));
+    const confirm = screen.getByTestId("button-resolve-confirm") as HTMLButtonElement;
+    await waitFor(() => expect(confirm.textContent).toContain(`keep #${secondId}`));
+    fireEvent.click(confirm);
+
+    await waitFor(async () => {
+      expect(await db.records.get(firstId)).toBeUndefined();
+    });
+    expect(await db.records.get(secondId)).toBeTruthy();
+  });
+
+  it("cancel leaves both records untouched", async () => {
+    const keeperId = await seedVerbatim(BECH32, "keeper");
+    const dupeId = await seedVerbatim(`${BECH32.toUpperCase()}`, "dupe");
+
+    await runHealthCheck();
+
+    fireEvent.click(screen.getByTestId("button-resolve-duplicate-0"));
+    await waitFor(() => expect(screen.getByTestId("button-resolve-cancel")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("button-resolve-cancel"));
+
+    await waitFor(() => expect(screen.queryByTestId("dialog-resolve-duplicate")).toBeNull());
+    expect(await db.records.get(keeperId)).toBeTruthy();
+    expect(await db.records.get(dupeId)).toBeTruthy();
+    // The group is still listed — nothing was resolved.
+    expect(screen.getByTestId("duplicate-group-0")).toBeTruthy();
+  });
+
+  it("disables confirm when the group is stale (rows already deleted elsewhere)", async () => {
+    const keeperId = await seedVerbatim(BECH32, "keeper");
+    const dupeId = await seedVerbatim(`${BECH32.toUpperCase()}`, "dupe");
+
+    await runHealthCheck();
+
+    // Simulate the user deleting the dupe from the detail panel after the scan.
+    await db.records.delete(dupeId);
+
+    fireEvent.click(screen.getByTestId("button-resolve-duplicate-0"));
+    await waitFor(() => expect(screen.getByTestId("text-resolve-load-error")).toBeTruthy());
+    expect((screen.getByTestId("button-resolve-confirm") as HTMLButtonElement).disabled).toBe(true);
+    expect(await db.records.get(keeperId)).toBeTruthy();
+  });
+});
+
 describe("DuplicateIdentifierCard pagination", () => {
   afterEach(() => cleanup());
 
