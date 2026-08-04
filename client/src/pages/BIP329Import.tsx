@@ -29,6 +29,7 @@ import {
 } from '@/lib/wallet-import/import-manager';
 import { getImportSummary } from '@/lib/wallet-import/merge-utils';
 import { parseJsonLines, convertToImportRecords, type BIP329Record } from '@/lib/bip329';
+import { canonicalizeRecordIdentifier, isMixedCaseBech32 } from '@/lib/bitcoin';
 import {
   Table,
   TableBody,
@@ -222,6 +223,16 @@ export default function BIP329Import() {
   };
   
   const summary = duplicateInfos.length > 0 ? getImportSummary(duplicateInfos) : null;
+
+  // Canonicalization heads-up (mirrors Quick Tagger's paste-flow warning):
+  // identifiers in the file that will be stored case-folded (mixed-case
+  // bech32 or uppercase hex txids/outpoints) get a non-blocking notice so
+  // importers of files produced by other wallets aren't surprised when the
+  // saved identifier differs from the file's.
+  const caseFoldedCount = duplicateInfos.filter(info => {
+    const raw = (info.parsedRecord.inputString || '').trim();
+    return isMixedCaseBech32(raw) || canonicalizeRecordIdentifier(raw) !== raw;
+  }).length;
   
   const renderStepIndicator = () => (
     <div className="flex flex-wrap items-center justify-center gap-2 mb-8" data-testid="step-indicator">
@@ -355,6 +366,22 @@ export default function BIP329Import() {
         </div>
       )}
       
+      {caseFoldedCount > 0 && (
+        <Alert data-testid="alert-identifier-warning">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            <span className="font-medium">
+              {caseFoldedCount} {caseFoldedCount === 1 ? 'identifier' : 'identifiers'} will be saved in lowercase.
+            </span>
+            <span className="block text-sm mt-1">
+              Mixed-case bech32 addresses and uppercase transaction IDs are stored
+              in their canonical lowercase form, so the saved identifiers will
+              differ from this file's exact text.
+            </span>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Card data-testid="card-preview-table">
         <CardHeader>
           <CardTitle className="text-base" data-testid="text-preview-title">Labels to Import</CardTitle>
