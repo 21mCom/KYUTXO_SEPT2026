@@ -529,6 +529,10 @@ args = "trusted-types-csp-sync-tests"
 task = "workflow.run"
 args = "duplicate-identifiers-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "database-doctor-duplicates-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1893,6 +1897,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/pages/DatabaseDoctor.duplicateIdentifiers.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-duplicates-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-duplicates-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
