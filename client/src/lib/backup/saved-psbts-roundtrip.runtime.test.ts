@@ -134,6 +134,20 @@ const PSBT_B: NewSavedPsbt = {
       amountSats: 74_670,
       isChange: false,
     },
+    // Zero-value OP_RETURN data output notarizing an evidence file (v38).
+    {
+      address: "OP_RETURN",
+      amountSats: 0,
+      isChange: false,
+      dataOutput: {
+        payloadHex: "9f4b2c7aa1e3d05f6b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+        isNotarization: true,
+        evidenceId: 7,
+        evidenceAttachmentId: 42,
+        evidenceTitle: "Purchase agreement",
+        evidenceFilename: "agreement.pdf",
+      },
+    },
   ],
 };
 
@@ -210,7 +224,24 @@ describe("saved PSBTs backup round-trip", () => {
 
     const restored = sortByBase64(stripId(await getAllSavedPsbts()));
     expect(restored).toHaveLength(2);
-    expect(restored).toEqual(beforeExport);
+    // This backup carries no evidence rows, so notarization references dangle
+    // after restore and are DROPPED (never left pointing at a stale id).
+    const expectedAfterRestore = beforeExport.map((p) => ({
+      ...p,
+      outputs: p.outputs.map((o) =>
+        o.dataOutput
+          ? {
+              ...o,
+              dataOutput: {
+                ...o.dataOutput,
+                evidenceId: undefined,
+                evidenceAttachmentId: undefined,
+              },
+            }
+          : o,
+      ),
+    }));
+    expect(restored).toEqual(expectedAfterRestore);
 
     // Spot-check the fields a user would lose silently if restore coerced them.
     const a = restored.find((p) => p.psbtBase64 === PSBT_A.psbtBase64)!;
@@ -225,6 +256,130 @@ describe("saved PSBTs backup round-trip", () => {
     expect(b.changeAddress).toBeUndefined();
     expect(b.changeSats).toBe(0);
     expect(b.totalInputSats).toBe(75_000);
+    // The OP_RETURN data output (notarization) survives the round-trip with
+    // its payload and hints intact — but this backup carries NO evidence rows,
+    // so the references to evidence 7 / attachment 42 dangle and are DROPPED on
+    // restore (a stale numeric id could point at an unrelated live row).
+    expect(b.outputs).toHaveLength(2);
+    expect(b.outputs[1]).toEqual({
+      address: "OP_RETURN",
+      amountSats: 0,
+      isChange: false,
+      dataOutput: {
+        payloadHex: "9f4b2c7aa1e3d05f6b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+        isNotarization: true,
+        evidenceId: undefined,
+        evidenceAttachmentId: undefined,
+        evidenceTitle: "Purchase agreement",
+        evidenceFilename: "agreement.pdf",
+      },
+    });
+  });
+
+  it("replace restore remaps notarization references onto the freshly restored evidence rows", async () => {
+    // Seed a real evidence document + attachment and a PSBT whose data output
+    // references their LIVE ids. After a restore the evidence rows get fresh
+    // ids (clear() never resets key generation), so the reference must be
+    // remapped or Verify would look at the wrong — or a nonexistent — row.
+    const { addEvidence, addEvidenceAttachment, getAllEvidence } = await import(
+      "@/lib/data/evidence-crud"
+    );
+    const evidenceId = await addEvidence({
+      title: "Purchase agreement",
+      documentType: "contract",
+      tags: [],
+    });
+    const attachmentId = await addEvidenceAttachment({
+      evidenceId,
+      filename: "agreement.pdf",
+      mimeType: "application/pdf",
+      size: 1234,
+      objectStoragePath: "seed://agreement",
+    });
+
+    const psbt: NewSavedPsbt = {
+      ...PSBT_B,
+      name: "Notarize agreement.pdf",
+      psbtBase64: "cHNidP8BAHECAAAAAdaKZW4tTk9UQVJJWkUA",
+      outputs: [
+        {
+          address: "bc1qdestb000000000000000000000000000000000",
+          amountSats: 74_670,
+          isChange: false,
+        },
+        {
+          address: "OP_RETURN",
+          amountSats: 0,
+          isChange: false,
+          dataOutput: {
+            payloadHex: "9f4b2c7aa1e3d05f6b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+            isNotarization: true,
+            evidenceId,
+            evidenceAttachmentId: attachmentId,
+            evidenceTitle: "Purchase agreement",
+            evidenceFilename: "agreement.pdf",
+          },
+        },
+      ],
+    };
+    await savePsbt(psbt);
+    const blob = await exportToBlob();
+
+    // Wipe, then seed UNRELATED rows so the restored evidence/attachment get
+    // fresh ids that differ from the backup's (and would collide if verbatim).
+    await clearEverything();
+    const decoyEvidenceId = await addEvidence({
+      title: "Unrelated document",
+      documentType: "receipt",
+      tags: [],
+    });
+    const decoyAttachmentId = await addEvidenceAttachment({
+      evidenceId: decoyEvidenceId,
+      filename: "unrelated.pdf",
+      mimeType: "application/pdf",
+      size: 5,
+      objectStoragePath: "seed://unrelated",
+    });
+    // The restore clears again (replace mode), removing the decoys but leaving
+    // the key generators advanced — this is what forces the id shift.
+    expect(decoyEvidenceId).not.toBe(evidenceId);
+
+    await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter,
+    });
+
+    const restoredEvidence = await getAllEvidence();
+    expect(restoredEvidence).toHaveLength(1);
+    const liveEvidence = restoredEvidence[0];
+    const { getEvidenceAttachmentsByEvidenceId } = await import(
+      "@/lib/data/evidence-crud"
+    );
+    const liveAttachments = await getEvidenceAttachmentsByEvidenceId(liveEvidence.id!);
+    expect(liveAttachments).toHaveLength(1);
+    const liveAttachment = liveAttachments[0];
+
+    const restored = await getAllSavedPsbts();
+    expect(restored).toHaveLength(1);
+    const dataOut = restored[0].outputs.find((o) => o.dataOutput)!.dataOutput!;
+    expect(dataOut.evidenceId).toBe(liveEvidence.id);
+    expect(dataOut.evidenceAttachmentId).toBe(liveAttachment.id);
+    expect(dataOut.payloadHex).toBe(
+      "9f4b2c7aa1e3d05f6b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+    );
+
+    // The Evidence page's lookup matches the remapped reference, so the
+    // restored attachment gets its Notarized badge + Verify action back.
+    const { findNotarizationsForAttachment } = await import(
+      "@/lib/evidence-notarization"
+    );
+    const found = findNotarizationsForAttachment(
+      restored,
+      { id: liveAttachment.id, filename: liveAttachment.filename },
+      liveEvidence.id!,
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0].savedPsbtId).toBe(restored[0].id);
   });
 
   it("merge restore of the same backup dedupes by psbtBase64 and keeps local-only PSBTs", async () => {

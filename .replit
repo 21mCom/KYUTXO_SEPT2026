@@ -1285,7 +1285,7 @@ isValidation = true
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/psbt.test.ts client/src/lib/psbt-metadata.test.ts client/src/lib/data/saved-psbts-crud.test.ts client/src/components/BuildPsbtDialog.test.tsx client/src/lib/backup/saved-psbts-roundtrip.runtime.test.ts"
+args = "npx vitest run client/src/lib/psbt.test.ts client/src/lib/psbt-metadata.test.ts client/src/lib/data/saved-psbts-crud.test.ts client/src/components/BuildPsbtDialog.test.tsx client/src/lib/backup/saved-psbts-roundtrip.runtime.test.ts client/src/lib/evidence-notarization.test.ts"
 
 [[workflows.workflow]]
 name = "psbt-builder-browser-check"

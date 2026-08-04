@@ -64,7 +64,8 @@ import {
   TrendingDown,
   HelpCircle,
   Loader2,
-  FileSignature
+  FileSignature,
+  ShieldCheck
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { getOwners, getWalletNames, getTags, getCategories, getParticipantsByAddresses, getSpendInputsByOutpoints } from "@/lib/dataFacade";
@@ -72,6 +73,11 @@ import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BuildPsbtDialog } from "@/components/BuildPsbtDialog";
 import { SavedPsbtsDialog } from "@/components/SavedPsbtsDialog";
+import {
+  peekPendingNotarization,
+  clearPendingNotarization,
+  type NotarizationIntent,
+} from "@/lib/evidence-notarization";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
@@ -583,6 +589,15 @@ export default function UTXOs() {
   const [selectedUtxosForPsbt, setSelectedUtxosForPsbt] = useState<Map<string, UTXO>>(new Map());
   const [buildPsbtOpen, setBuildPsbtOpen] = useState(false);
   const [savedPsbtsOpen, setSavedPsbtsOpen] = useState(false);
+  // Pending evidence notarization handed off from the Evidence page (the
+  // file's SHA-256 digest is embedded as an OP_RETURN output in the PSBT).
+  const [notarization, setNotarization] = useState<NotarizationIntent | null>(() =>
+    peekPendingNotarization(),
+  );
+  const dismissNotarization = useCallback(() => {
+    clearPendingNotarization();
+    setNotarization(null);
+  }, []);
   
   // Smart filtering: exclude blockchain-discovered addresses by default
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
@@ -2247,6 +2262,29 @@ export default function UTXOs() {
       </Card>
 
       <div className={searchPendingClass(isSearchPending, 'UTXOs')}>
+        {notarization && (
+          <div
+            className="flex items-center justify-between gap-2 mb-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 flex-none flex-wrap"
+            data-testid="bar-notarization-intent"
+          >
+            <span className="text-sm flex items-center gap-2 min-w-0">
+              <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
+              <span className="truncate">
+                Notarizing <span className="font-medium">{notarization.evidenceFilename ?? "evidence file"}</span>
+                {" "}— select the UTXOs to fund the transaction, then Build PSBT.
+              </span>
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={dismissNotarization}
+              data-testid="button-dismiss-notarization"
+            >
+              <X className="h-4 w-4 mr-1" />
+              Cancel notarization
+            </Button>
+          </div>
+        )}
         {selectedUtxosForPsbt.size > 0 && (
           <div
             className="flex items-center justify-between gap-2 mb-2 rounded-md border bg-card px-3 py-2 flex-none flex-wrap"
@@ -2347,6 +2385,8 @@ export default function UTXOs() {
         onOpenChange={setBuildPsbtOpen}
         utxos={Array.from(selectedUtxosForPsbt.values())}
         recordForAddress={(address) => addressToRecord.get(address)}
+        notarization={notarization}
+        onSaved={dismissNotarization}
       />
       <SavedPsbtsDialog
         open={savedPsbtsOpen}

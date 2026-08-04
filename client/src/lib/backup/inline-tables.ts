@@ -625,14 +625,20 @@ export async function restoreInlineTables(
 
   // savedPsbts (unsigned PSBTs from the watch-only builder, Dexie v37) ride
   // inline like dustFlags. Older backups have no `savedPsbts` key and restore
-  // cleanly. Rows carry no foreign keys into other tables (inputs reference
-  // txids, which are stable), so no id remap is needed; in merge mode rows
-  // whose PSBT bytes already exist are skipped.
+  // cleanly. In merge mode rows whose PSBT bytes already exist are skipped.
+  // Inputs reference txids (stable), but notarization data outputs reference
+  // evidence/attachment ids — those CHANGE on restore, so they are remapped
+  // through the maps produced by restoreEvidenceRows above; references whose
+  // target is not in the backup are dropped rather than left dangling.
   await restoreSavedPsbtRows(
     arr("savedPsbts"),
     restoreMode,
     { skipNotification: true },
     meta ? { insertedIds: meta.savedPsbtIds } : undefined,
+    {
+      evidenceIdMap: evidenceResult.evidenceIdMap,
+      evidenceAttachmentIdMap: evidenceResult.evidenceAttachmentIdMap,
+    },
   );
 
   // utxoLineage and custodySegments are streamed tables now, so NEW backups

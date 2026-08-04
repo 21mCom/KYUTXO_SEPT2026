@@ -1021,10 +1021,33 @@ export interface SavedPsbtInput {
   hasScript?: boolean;
 }
 
+/**
+ * Zero-value OP_RETURN data output embedded in a saved PSBT (Dexie v38).
+ * Used for on-chain notarization: the payload is the evidence file's SHA-256
+ * digest, so anyone holding the file can later prove it existed at the
+ * transaction's block time.
+ */
+export interface SavedPsbtDataOutput {
+  /** Hex-encoded OP_RETURN payload (32-byte SHA-256 digest for notarizations). */
+  payloadHex: string;
+  /** True when this data output notarizes an evidence file. */
+  isNotarization?: boolean;
+  /** Evidence document the payload was computed from (best-effort reference). */
+  evidenceId?: number;
+  /** Attachment row whose bytes were hashed (best-effort reference). */
+  evidenceAttachmentId?: number;
+  /** Human-readable hints kept for display after the evidence is gone. */
+  evidenceTitle?: string;
+  evidenceFilename?: string;
+}
+
 export interface SavedPsbtOutput {
+  /** Destination/change address; 'OP_RETURN' when `dataOutput` is present. */
   address: string;
   amountSats: number;
   isChange: boolean;
+  /** Present only on the zero-value OP_RETURN data output. */
+  dataOutput?: SavedPsbtDataOutput;
 }
 
 export interface SavedPsbt {

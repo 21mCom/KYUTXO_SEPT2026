@@ -114,4 +114,95 @@ describe('saved-psbts-crud', () => {
     expect(await restoreSavedPsbtRows(undefined, 'replace')).toBe(0);
     expect(await restoreSavedPsbtRows([], 'merge')).toBe(0);
   });
+
+  it('persists and restores an OP_RETURN data output with its evidence reference', async () => {
+    const dataOutput = {
+      payloadHex: '9f4b2c7aa1e3d05f6b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c',
+      isNotarization: true,
+      evidenceId: 7,
+      evidenceAttachmentId: 42,
+      evidenceTitle: 'Purchase agreement',
+      evidenceFilename: 'agreement.pdf',
+    };
+    const withData = makePsbt({
+      outputs: [
+        { address: 'bc1qdest', amountSats: 99_718, isChange: false },
+        { address: 'OP_RETURN', amountSats: 0, isChange: false, dataOutput },
+      ],
+    });
+
+    await savePsbt(withData);
+    const saved = await getAllSavedPsbts();
+    expect(saved[0].outputs[1]).toEqual({
+      address: 'OP_RETURN',
+      amountSats: 0,
+      isChange: false,
+      dataOutput,
+    });
+
+    // Restore (replace) preserves the data output verbatim.
+    await clearSavedPsbts();
+    const written = await restoreSavedPsbtRows([withData], 'replace');
+    expect(written).toBe(1);
+    const restored = await getAllSavedPsbts();
+    expect(restored[0].outputs[1].dataOutput).toEqual(dataOutput);
+  });
+
+  it('remaps evidence references on restore and drops references whose target is gone', async () => {
+    // Evidence ids change on restore (clear() never resets key generation), so
+    // a notarization reference restored verbatim would dangle — or point at an
+    // unrelated row. The restore must rewrite it through the evidence restore's
+    // id maps.
+    const withRefs = makePsbt({
+      outputs: [
+        {
+          address: 'OP_RETURN',
+          amountSats: 0,
+          isChange: false,
+          dataOutput: {
+            payloadHex: 'ab'.repeat(32),
+            isNotarization: true,
+            evidenceId: 7,
+            evidenceAttachmentId: 42,
+            evidenceTitle: 'Agreement',
+            evidenceFilename: 'agreement.pdf',
+          },
+        },
+      ],
+    });
+    const remap = {
+      evidenceIdMap: new Map([[7, 101]]),
+      evidenceAttachmentIdMap: new Map([[42, 202]]),
+    };
+    await restoreSavedPsbtRows([withRefs], 'replace', undefined, undefined, remap);
+    let rows = await getAllSavedPsbts();
+    expect(rows[0].outputs[0].dataOutput).toEqual({
+      payloadHex: 'ab'.repeat(32),
+      isNotarization: true,
+      evidenceId: 101,
+      evidenceAttachmentId: 202,
+      evidenceTitle: 'Agreement',
+      evidenceFilename: 'agreement.pdf',
+    });
+
+    // A reference whose target the restore did not carry is DROPPED, never left
+    // dangling (a stale numeric id could collide with an unrelated live row).
+    await clearSavedPsbts();
+    await restoreSavedPsbtRows(
+      [withRefs],
+      'replace',
+      undefined,
+      undefined,
+      { evidenceIdMap: new Map(), evidenceAttachmentIdMap: new Map() },
+    );
+    rows = await getAllSavedPsbts();
+    expect(rows[0].outputs[0].dataOutput).toEqual({
+      payloadHex: 'ab'.repeat(32),
+      isNotarization: true,
+      evidenceId: undefined,
+      evidenceAttachmentId: undefined,
+      evidenceTitle: 'Agreement',
+      evidenceFilename: 'agreement.pdf',
+    });
+  });
 });

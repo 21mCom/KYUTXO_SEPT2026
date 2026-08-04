@@ -34,11 +34,26 @@
 import * as ecc from '@bitcoinerlab/secp256k1';
 import * as bitcoin from 'bitcoinjs-lib';
 import { validateAddress, type AddressType } from './bitcoin';
+import type { SavedPsbtDataOutput } from './db-types';
 
 bitcoin.initEccLib(ecc);
 
 /** Standard dust threshold (satoshis) used for change-output decisions. */
 export const DUST_LIMIT_SATS = 546;
+
+/**
+ * Maximum OP_RETURN payload (bytes) that stays within the standardness limit
+ * — larger data outputs won't relay on default node policy.
+ */
+export const OP_RETURN_MAX_PAYLOAD_BYTES = 80;
+
+/**
+ * Placeholder stored in `SavedPsbtOutput.address` for the zero-value
+ * OP_RETURN data output (which has no address). Presence of `dataOutput` on
+ * the output spec is the real discriminator; this keeps the address field
+ * human-meaningful in exports/backups.
+ */
+export const OP_RETURN_OUTPUT_MARKER = 'OP_RETURN';
 
 /** Minimum accepted fee rate (sats/vB) — below this a tx won't relay. */
 export const MIN_FEE_RATE_SATS_PER_VB = 1;
@@ -79,6 +94,11 @@ export interface PsbtOutputSpec {
   address: string;
   amountSats: number;
   isChange: boolean;
+  /**
+   * Present only on the zero-value OP_RETURN data output: the payload that was
+   * embedded. `address` is OP_RETURN_OUTPUT_MARKER on that output.
+   */
+  dataOutput?: SavedPsbtDataOutput;
 }
 
 export interface PsbtBuildParams {
@@ -90,6 +110,12 @@ export interface PsbtBuildParams {
   /** Where the leftover goes. Required when the leftover exceeds the dust limit. */
   changeAddress?: string;
   network?: 'mainnet' | 'testnet';
+  /**
+   * Optional zero-value OP_RETURN data output (e.g. an evidence-file SHA-256
+   * digest for on-chain notarization). At most one per transaction; the
+   * payload must stay within the standardness limit.
+   */
+  dataOutput?: { payloadHex: string };
 }
 
 export interface PsbtBuildResult {
@@ -174,6 +200,31 @@ export function outputVbytes(addressType: AddressType): number {
 }
 
 /**
+ * Serialized size of a zero-value OP_RETURN output: 8-byte amount + varint
+ * script length + script. The script is OP_RETURN plus a single push of the
+ * payload (direct push up to 75 bytes, OP_PUSHDATA1 beyond that).
+ */
+export function dataOutputVbytes(payloadBytes: number): number {
+  const pushPrefix = payloadBytes <= 75 ? 1 : 2; // OP_PUSHDATA1 adds a length byte
+  const scriptLen = 1 + pushPrefix + payloadBytes;
+  return 8 + 1 + scriptLen;
+}
+
+/** Compile the OP_RETURN scriptPubKey embedding the given payload. */
+export function buildOpReturnScript(payload: Uint8Array): Uint8Array {
+  if (payload.length === 0) {
+    throw new Error('The OP_RETURN payload must not be empty.');
+  }
+  if (payload.length > OP_RETURN_MAX_PAYLOAD_BYTES) {
+    throw new Error(
+      `The OP_RETURN payload is ${payload.length} bytes, over the ${OP_RETURN_MAX_PAYLOAD_BYTES}-byte ` +
+        'standardness limit — a transaction with this data output would not relay on default node policy.',
+    );
+  }
+  return bitcoin.script.compile([bitcoin.opcodes.OP_RETURN, payload]);
+}
+
+/**
  * Estimate the virtual size of the final signed transaction. Only an estimate:
  * input script sizes for multisig vaults depend on m-of-n, and ECDSA signature
  * lengths vary by a byte or two.
@@ -181,6 +232,7 @@ export function outputVbytes(addressType: AddressType): number {
 export function estimateTxVbytes(
   inputs: PsbtInputSpec[],
   outputTypes: AddressType[],
+  dataPayloadBytes = 0,
 ): number {
   const anySegwit = inputs.some(
     (i) =>
@@ -198,7 +250,9 @@ export function estimateTxVbytes(
     4 + // locktime
     (anySegwit ? 0.5 : 0); // segwit marker + flag (weight 2)
   const inBytes = inputs.reduce((sum, i) => sum + inputVbytes(i.scriptType), 0);
-  const outBytes = outputTypes.reduce((sum, t) => sum + outputVbytes(t), 0);
+  const outBytes =
+    outputTypes.reduce((sum, t) => sum + outputVbytes(t), 0) +
+    (dataPayloadBytes > 0 ? dataOutputVbytes(dataPayloadBytes) : 0);
   return Math.ceil(overhead + inBytes + outBytes);
 }
 
@@ -442,13 +496,31 @@ export function buildUnsignedPsbt(params: PsbtBuildParams): PsbtBuildResult {
     throw new Error(`Send amount must be at least ${DUST_LIMIT_SATS} sats (the dust limit).`);
   }
 
+  // --- OP_RETURN data output (optional) ---------------------------------------
+  // Validate and compile up front so a payload problem is reported before any
+  // fee math is shown. Zero value by definition — data outputs are unspendable.
+  let dataOutputScript: Uint8Array | undefined;
+  let dataPayload: Uint8Array | undefined;
+  if (params.dataOutput) {
+    try {
+      dataPayload = hexToBytes(params.dataOutput.payloadHex);
+    } catch {
+      throw new Error('The OP_RETURN payload is not valid hexadecimal.');
+    }
+    dataOutputScript = buildOpReturnScript(dataPayload); // throws on empty/oversize
+  }
+
   // --- Fee / change math ------------------------------------------------------
   let changeAddress = params.changeAddress?.trim() || undefined;
   let outputTypes: AddressType[] = [addressTypeOf(destinationAddress)];
   if (changeAddress) {
     outputTypes.push(addressTypeOf(changeAddress));
   }
-  const estimatedVbytes = estimateTxVbytes(params.inputs, outputTypes);
+  const estimatedVbytes = estimateTxVbytes(
+    params.inputs,
+    outputTypes,
+    dataPayload?.length ?? 0,
+  );
   let feeSats = Math.ceil(feeRate * estimatedVbytes);
   let changeSats = totalInputSats - sendAmountSats - feeSats;
 
@@ -534,6 +606,15 @@ export function buildUnsignedPsbt(params: PsbtBuildParams): PsbtBuildResult {
   if (changeSats > 0 && changeAddress) {
     outputs.push({ address: changeAddress, amountSats: changeSats, isChange: true });
     psbt.addOutput({ address: changeAddress, value: BigInt(changeSats) });
+  }
+  if (dataOutputScript && dataPayload) {
+    outputs.push({
+      address: OP_RETURN_OUTPUT_MARKER,
+      amountSats: 0,
+      isChange: false,
+      dataOutput: { payloadHex: bytesToHex(dataPayload) },
+    });
+    psbt.addOutput({ script: dataOutputScript, value: BigInt(0) });
   }
 
   return {

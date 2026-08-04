@@ -5,12 +5,16 @@ import * as bip39 from 'bip39';
 import BIP32Factory from 'bip32';
 import {
   buildUnsignedPsbt,
+  buildOpReturnScript,
+  dataOutputVbytes,
   decodePsbtSummary,
   estimateTxVbytes,
   inputVbytes,
   bytesToHex,
   hexToBytes,
   DUST_LIMIT_SATS,
+  OP_RETURN_MAX_PAYLOAD_BYTES,
+  OP_RETURN_OUTPUT_MARKER,
   type PsbtInputSpec,
 } from './psbt';
 
@@ -478,6 +482,127 @@ describe('buildUnsignedPsbt', () => {
         buildUnsignedPsbt({ ...base, inputs: [wpkhInput({ txid: 'xyz' })], sendAmountSats: 50_000 }),
       ).toThrow(/transaction id/i);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OP_RETURN data outputs (evidence notarization): one optional zero-value
+// output embedding a payload (e.g. a file's SHA-256 digest).
+// ---------------------------------------------------------------------------
+describe('OP_RETURN data output', () => {
+  // SHA-256 of the ASCII string "kyutxo notarization fixture" (32 bytes).
+  const PAYLOAD_HEX =
+    '9f4b2c7aa1e3d05f6b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c';
+
+  it('dataOutputVbytes matches the serialized OP_RETURN output shape', () => {
+    // 32-byte payload: 8 (amount) + 1 (script len) + 1 (OP_RETURN) + 1 (push) + 32.
+    expect(dataOutputVbytes(32)).toBe(43);
+    // 76-byte payload: switches to OP_PUSHDATA1 (one extra length byte).
+    expect(dataOutputVbytes(76)).toBe(8 + 1 + 1 + 2 + 76);
+    expect(dataOutputVbytes(80)).toBe(8 + 1 + 1 + 2 + 80);
+  });
+
+  it('estimateTxVbytes adds the data output size to the total', () => {
+    const without = estimateTxVbytes([wpkhInput()], ['P2WPKH']);
+    const withData = estimateTxVbytes([wpkhInput()], ['P2WPKH'], 32);
+    expect(withData - without).toBe(dataOutputVbytes(32));
+  });
+
+  it('buildOpReturnScript compiles OP_RETURN + minimal push of the payload', () => {
+    const script = buildOpReturnScript(hexToBytes(PAYLOAD_HEX));
+    expect(script[0]).toBe(bitcoin.opcodes.OP_RETURN);
+    expect(script[1]).toBe(32); // direct push of 32 bytes
+    expect(bytesToHex(script.slice(2))).toBe(PAYLOAD_HEX);
+  });
+
+  it('builds a PSBT with a zero-value OP_RETURN output and accounts for it in the fee', () => {
+    const dataVbytes = dataOutputVbytes(32);
+    const vbytes = estimateTxVbytes([wpkhInput()], ['P2WPKH'], 32);
+    const fee = Math.ceil(2 * vbytes);
+    const plainVbytes = estimateTxVbytes([wpkhInput()], ['P2WPKH']);
+    const plainFee = Math.ceil(2 * plainVbytes);
+    expect(vbytes - plainVbytes).toBe(dataVbytes);
+
+    const result = buildUnsignedPsbt({
+      inputs: [wpkhInput()],
+      destinationAddress: ADDR_W1,
+      sendAmountSats: 100_000 - fee,
+      feeRateSatsPerVb: 2,
+      dataOutput: { payloadHex: PAYLOAD_HEX },
+    });
+
+    expect(result.feeSats).toBe(fee);
+    expect(result.outputs).toHaveLength(2);
+    expect(result.outputs[1]).toEqual({
+      address: OP_RETURN_OUTPUT_MARKER,
+      amountSats: 0,
+      isChange: false,
+      dataOutput: { payloadHex: PAYLOAD_HEX },
+    });
+
+    // Round-trip decode: the OP_RETURN output is really there, zero-valued,
+    // and the tx still finalizes/extracts after external signing.
+    const decoded = bitcoin.Psbt.fromBase64(result.psbtBase64);
+    expect(decoded.txOutputs.length).toBe(2);
+    const dataOut = decoded.txOutputs[1];
+    expect(dataOut.value).toBe(BigInt(0));
+    expect(bytesToHex(dataOut.script)).toBe(bytesToHex(buildOpReturnScript(hexToBytes(PAYLOAD_HEX))));
+
+    const key = root.derivePath("m/84'/0'/0'/0/0");
+    decoded.signInput(0, key);
+    decoded.finalizeAllInputs();
+    const tx = decoded.extractTransaction();
+    expect(tx.outs).toHaveLength(2);
+    expect(tx.outs[1].value).toBe(BigInt(0));
+  });
+
+  it('places the data output after destination and change in the output order', () => {
+    const vbytes = estimateTxVbytes([wpkhInput()], ['P2WPKH', 'P2WPKH'], 32);
+    const fee = Math.ceil(2 * vbytes);
+    const result = buildUnsignedPsbt({
+      inputs: [wpkhInput()],
+      destinationAddress: ADDR_W1,
+      sendAmountSats: 50_000,
+      feeRateSatsPerVb: 2,
+      changeAddress: ADDR_CHANGE0,
+      dataOutput: { payloadHex: PAYLOAD_HEX },
+    });
+    expect(result.outputs.map((o) => o.address)).toEqual([
+      ADDR_W1,
+      ADDR_CHANGE0,
+      OP_RETURN_OUTPUT_MARKER,
+    ]);
+    // Fee covers all three outputs; change absorbs the remainder exactly.
+    expect(result.totalInputSats - result.sendAmountSats - result.changeSats).toBe(fee);
+  });
+
+  it('rejects payloads over the standardness limit with a clear message', () => {
+    const oversize = 'ab'.repeat(OP_RETURN_MAX_PAYLOAD_BYTES + 1);
+    expect(() =>
+      buildUnsignedPsbt({
+        inputs: [wpkhInput()],
+        destinationAddress: ADDR_W1,
+        sendAmountSats: 50_000,
+        feeRateSatsPerVb: 2,
+        dataOutput: { payloadHex: oversize },
+      }),
+    ).toThrow(/standardness limit/);
+  });
+
+  it('rejects empty and malformed payloads', () => {
+    const base = {
+      inputs: [wpkhInput()],
+      destinationAddress: ADDR_W1,
+      sendAmountSats: 50_000,
+      feeRateSatsPerVb: 2,
+    };
+    expect(() => buildUnsignedPsbt({ ...base, dataOutput: { payloadHex: '' } })).toThrow(/empty/i);
+    expect(() => buildUnsignedPsbt({ ...base, dataOutput: { payloadHex: 'xyz' } })).toThrow(
+      /hexadecimal/i,
+    );
+    expect(() => buildUnsignedPsbt({ ...base, dataOutput: { payloadHex: 'abc' } })).toThrow(
+      /hexadecimal/i,
+    );
   });
 });
 

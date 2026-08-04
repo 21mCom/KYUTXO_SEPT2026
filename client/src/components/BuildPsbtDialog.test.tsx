@@ -255,6 +255,64 @@ describe('BuildPsbtDialog', () => {
     expect(warning.textContent).toMatch(/lookalike of one of your own addresses/i);
   });
 
+  it('embeds the notarization digest as an OP_RETURN output and records the evidence reference on save', async () => {
+    const PAYLOAD_HEX =
+      '9f4b2c7aa1e3d05f6b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c';
+    renderDialog({
+      notarization: {
+        payloadHex: PAYLOAD_HEX,
+        evidenceId: 7,
+        evidenceAttachmentId: 42,
+        evidenceTitle: 'Purchase agreement',
+        evidenceFilename: 'agreement.pdf',
+      },
+    });
+
+    // The intent banner shows what is being notarized and the digest.
+    const banner = await screen.findByTestId('panel-notarization-intent');
+    expect(banner.textContent).toContain('agreement.pdf');
+    expect(screen.getByTestId('text-notarization-hash').textContent).toBe(PAYLOAD_HEX);
+
+    // Default name reflects the notarization.
+    expect((screen.getByTestId('input-psbt-name') as HTMLInputElement).value).toBe(
+      'Notarize agreement.pdf',
+    );
+
+    fireEvent.change(screen.getByTestId('input-destination'), {
+      target: { value: ADDR_W1 },
+    });
+
+    // Fee math includes the data output: 178 vB (2 inputs + destination) +
+    // 43 vB (OP_RETURN with a 32-byte payload) = 221 vB at 5 sats/vB = 1105.
+    await waitFor(() => {
+      expect(screen.getByTestId('panel-build-summary')).toBeTruthy();
+    });
+    expect(screen.getByTestId('text-fee').textContent).toBe('1,105 sats');
+    expect(screen.getByTestId('text-send-amount').textContent).toBe('158,895 sats');
+    expect(screen.getByTestId('text-data-output').textContent).toContain('0 sats');
+
+    fireEvent.click(screen.getByTestId('button-save-psbt'));
+    await waitFor(async () => {
+      const rows = await getAllSavedPsbts();
+      expect(rows).toHaveLength(1);
+      const saved = rows[0];
+      expect(saved.outputs).toHaveLength(2);
+      expect(saved.outputs[1]).toEqual({
+        address: 'OP_RETURN',
+        amountSats: 0,
+        isChange: false,
+        dataOutput: {
+          payloadHex: PAYLOAD_HEX,
+          isNotarization: true,
+          evidenceId: 7,
+          evidenceAttachmentId: 42,
+          evidenceTitle: 'Purchase agreement',
+          evidenceFilename: 'agreement.pdf',
+        },
+      });
+    });
+  });
+
   it('rejects a fee rate below the relay minimum', async () => {
     renderDialog();
     await screen.findByTestId('text-selected-total');

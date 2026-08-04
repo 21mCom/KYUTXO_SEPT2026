@@ -251,19 +251,37 @@ export async function restoreEvidenceRows(
   evidenceAttachmentsAdded: number;
   insertedEvidenceIds: number[];
   insertedEvidenceAttachmentIds: number[];
+  /**
+   * Backup id -> live id for every evidence row this restore accounts for
+   * (added rows map to their fresh id; merge-skipped duplicates map to the
+   * already-present live row with the same identity). Other tables that
+   * reference evidence ids (e.g. saved-PSBT notarization outputs) MUST remap
+   * through this — clear() does not reset key generation, so restored ids
+   * differ from the backup's.
+   */
+  evidenceIdMap: Map<number, number>;
+  /** Backup attachment id -> live attachment id (same contract as above). */
+  evidenceAttachmentIdMap: Map<number, number>;
 }> {
   const now = Date.now();
   const evidenceIdMap = new Map<number, number>();
+  const evidenceAttachmentIdMap = new Map<number, number>();
   // Backup evidence ids that were skipped as duplicates in merge mode, so their
   // attachments can be skipped too (no orphaned attachment rows).
   const skippedEvidenceIds = new Set<number>();
 
   const evidenceSource = Array.isArray(evidence) ? evidence : [];
 
-  // In merge mode, seed the de-dup set with the identities already in the vault.
+  // In merge mode, seed the de-dup set with the identities already in the vault,
+  // keeping the live rows so a skipped backup row can still be mapped onto the
+  // existing document it duplicates (for reference remapping).
   const seen = new Set<string>();
+  const existingByIdentity = new Map<string, Evidence>();
   if (restoreMode === 'merge') {
-    for (const ev of await getAllEvidence()) seen.add(evidenceIdentity(ev));
+    for (const ev of await getAllEvidence()) {
+      seen.add(evidenceIdentity(ev));
+      existingByIdentity.set(evidenceIdentity(ev), ev);
+    }
   }
 
   // Build the list of rows to add (after merge de-dup), keeping the source rows
@@ -274,7 +292,11 @@ export async function restoreEvidenceRows(
     if (restoreMode === 'merge') {
       const key = evidenceIdentity(ev);
       if (seen.has(key)) {
-        if (typeof ev.id === 'number') skippedEvidenceIds.add(ev.id);
+        if (typeof ev.id === 'number') {
+          skippedEvidenceIds.add(ev.id);
+          const existing = existingByIdentity.get(key);
+          if (existing?.id !== undefined) evidenceIdMap.set(ev.id, existing.id);
+        }
         continue;
       }
       seen.add(key);
@@ -311,11 +333,27 @@ export async function restoreEvidenceRows(
   let evidenceAttachmentsAdded = 0;
   const insertedEvidenceAttachmentIds: number[] = [];
   const attachmentSource = Array.isArray(evidenceAttachments) ? evidenceAttachments : [];
+  // Cache of live attachments per (already-existing) evidence id, used to map
+  // skipped backup attachments onto their live counterparts by filename.
+  const liveAttachmentsByEvidence = new Map<number, EvidenceAttachment[]>();
   for (const ea of attachmentSource) {
     const { id, ...d } = ea;
     // Skip attachments belonging to an evidence row that was de-duped away, so
-    // no orphaned attachment is appended for a document we didn't add.
+    // no orphaned attachment is appended for a document we didn't add. The
+    // backup attachment id is still mapped onto the live attachment with the
+    // same filename under the duplicate document, so references pointing at it
+    // (e.g. saved-PSBT notarization outputs) can be remapped.
     if (typeof d.evidenceId === 'number' && skippedEvidenceIds.has(d.evidenceId)) {
+      const liveEvidenceId = evidenceIdMap.get(d.evidenceId);
+      if (liveEvidenceId !== undefined && typeof id === 'number') {
+        let liveAtts = liveAttachmentsByEvidence.get(liveEvidenceId);
+        if (!liveAtts) {
+          liveAtts = await getEvidenceAttachmentsByEvidenceId(liveEvidenceId);
+          liveAttachmentsByEvidence.set(liveEvidenceId, liveAtts);
+        }
+        const match = liveAtts.find((a) => a.filename === (d.filename || 'unknown'));
+        if (match?.id !== undefined) evidenceAttachmentIdMap.set(id, match.id);
+      }
       continue;
     }
     const mappedEvidenceId =
@@ -334,6 +372,7 @@ export async function restoreEvidenceRows(
       { skipNotification: true }
     );
     insertedEvidenceAttachmentIds.push(newAttachmentId);
+    if (typeof id === 'number') evidenceAttachmentIdMap.set(id, newAttachmentId);
     evidenceAttachmentsAdded++;
   }
 
@@ -342,5 +381,7 @@ export async function restoreEvidenceRows(
     evidenceAttachmentsAdded,
     insertedEvidenceIds,
     insertedEvidenceAttachmentIds,
+    evidenceIdMap,
+    evidenceAttachmentIdMap,
   };
 }

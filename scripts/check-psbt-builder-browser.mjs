@@ -22,7 +22,15 @@
 //      its decoded components and that the stored base64 round-trips through
 //      bitcoinjs-lib IN THE BROWSER (this is what catches a Buffer-global
 //      crash that vitest cannot),
-//   5. reloads the page and asserts the saved PSBT persists.
+//   5. reloads the page and asserts the saved PSBT persists,
+//   6. notarization E2E: seeds an evidence document with a real uploaded
+//      attachment, clicks "Notarize on-chain" on the Evidence page (SHA-256
+//      via WebCrypto in the browser), lands on the UTXOs page with the
+//      intent banner, builds + saves the PSBT with the OP_RETURN data
+//      output, asserts the digest in Saved PSBTs (payload hex, copy-hash
+//      button, notarization badge) and the exact OP_RETURN script bytes in
+//      Node, then back on the Evidence page asserts the Notarized badge and
+//      that "Verify" reports a match.
 //
 // Everything runs offline against IndexedDB — no network request leaves the
 // machine. Usage: node scripts/check-psbt-builder-browser.mjs
@@ -30,6 +38,7 @@
 
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 
 await acquireBrowserCheckLock();
@@ -60,6 +69,12 @@ const SATS_A = 100_000;
 const SATS_B = 60_000;
 // 2 P2WPKH inputs (68 vB) + 1 P2WPKH output (31) + 10.5 overhead = 178 vB.
 const EXPECTED_FEE = 178 * 5;
+// Notarization: the OP_RETURN data output adds 43 vB (8 amount + 1 scriptlen +
+// 1 OP_RETURN + 1 push + 32-byte digest) -> 221 vB at 5 sats/vB.
+const EXPECTED_NOTARIZATION_FEE = (178 + 43) * 5;
+const EVIDENCE_FILE_NAME = 'notarize-me.txt';
+const EVIDENCE_FILE_CONTENT = 'kyutxo notarization fixture file\n';
+const EXPECTED_DIGEST = createHash('sha256').update(EVIDENCE_FILE_CONTENT, 'utf8').digest('hex');
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -497,6 +512,208 @@ async function main() {
       name: 'saved PSBT persists across a page reload',
       passed: afterReloadCount === 1,
       detail: `rows after reload: ${afterReloadCount}`,
+    });
+
+    // ── Notarization E2E: Evidence page -> UTXOs -> build -> save -> verify ─
+    // Seed an evidence document with a REAL uploaded attachment through the
+    // app's own upload path (server endpoint in web mode).
+    const evSeed = await page.evaluate(
+      async ({ filename, content }) => {
+        const evCrud = await import('/src/lib/data/evidence-crud.ts');
+        const attachments = await import('/src/lib/attachments.ts');
+        const file = new File([content], filename, { type: 'text/plain' });
+        const storagePath = await attachments.uploadFile(file);
+        const evidenceId = await evCrud.addEvidence({
+          title: 'Notarization fixture',
+          documentType: 'contract',
+          tags: [],
+        });
+        const attachmentId = await evCrud.addEvidenceAttachment({
+          evidenceId,
+          filename,
+          mimeType: 'text/plain',
+          size: content.length,
+          objectStoragePath: storagePath,
+        });
+        return { evidenceId, attachmentId };
+      },
+      { filename: EVIDENCE_FILE_NAME, content: EVIDENCE_FILE_CONTENT },
+    );
+    steps.push({
+      name: 'seeded an evidence document with a real uploaded attachment',
+      passed: evSeed.evidenceId > 0 && evSeed.attachmentId > 0,
+      detail: `evidenceId=${evSeed.evidenceId} attachmentId=${evSeed.attachmentId}`,
+    });
+
+    // Evidence page: open the document (card -> preview -> Edit opens the
+    // detail dialog) and click "Notarize on-chain" on the attachment. The
+    // click hashes the bytes via WebCrypto and navigates to the UTXOs page.
+    await page.goto(`${BASE_URL}evidence`, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
+    const card = page.getByTestId(`card-evidence-${evSeed.evidenceId}`);
+    await card.waitFor({ state: 'visible', timeout: 30_000 });
+    await card.click();
+    await page.getByTestId('button-preview-edit').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByTestId('button-preview-edit').click();
+    const notarizeBtn = page.getByTestId(`button-notarize-${evSeed.attachmentId}`);
+    await notarizeBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await notarizeBtn.click();
+
+    // Landing on the UTXOs page with the intent banner proves the digest was
+    // computed and the handoff happened.
+    const intentBar = page.getByTestId('bar-notarization-intent');
+    const intentVisible = await intentBar
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const intentText = intentVisible ? ((await intentBar.textContent()) ?? '') : '';
+    steps.push({
+      name: 'Notarize click hashes the file and lands on UTXOs with the intent banner',
+      passed: intentVisible && intentText.includes(EVIDENCE_FILE_NAME),
+      detail: `visible=${intentVisible} text="${intentText.trim().slice(0, 120)}"`,
+    });
+
+    // Select the two UTXOs again and open the build dialog.
+    const groupRow2 = page.getByTestId(`row-address-${ADDR_W0.slice(0, 8)}`);
+    await groupRow2.waitFor({ state: 'visible', timeout: 30_000 });
+    await groupRow2.click();
+    await page.getByTestId(`checkbox-utxo-${TX_A}:0`).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByTestId(`checkbox-utxo-${TX_A}:0`).click();
+    await page.getByTestId(`checkbox-utxo-${TX_B}:1`).click();
+    await page.getByTestId('button-build-psbt').click();
+    await page.getByTestId('dialog-build-psbt').waitFor({ state: 'visible', timeout: 15_000 });
+
+    // The dialog carries the notarization intent and the exact browser-computed digest.
+    const dialogIntent = page.getByTestId('panel-notarization-intent');
+    await dialogIntent.waitFor({ state: 'visible', timeout: 20_000 });
+    const hashText = ((await page.getByTestId('text-notarization-hash').textContent()) ?? '').trim();
+    steps.push({
+      name: 'build dialog shows the browser-computed SHA-256 digest',
+      passed: hashText === EXPECTED_DIGEST,
+      detail: `dialog hash: "${hashText}" expected: "${EXPECTED_DIGEST}"`,
+    });
+
+    // Fee math accounts for the OP_RETURN output: 221 vB at 5 sats/vB.
+    await page.getByTestId('input-destination').fill(ADDR_W1);
+    await page.getByTestId('panel-build-summary').waitFor({ state: 'visible', timeout: 15_000 });
+    const nFeeText = ((await page.getByTestId('text-fee').textContent()) ?? '').trim();
+    const dataOutText = ((await page.getByTestId('text-data-output').textContent()) ?? '').trim();
+    steps.push({
+      name: `fee math includes the OP_RETURN output (${EXPECTED_NOTARIZATION_FEE.toLocaleString()} sats)`,
+      passed:
+        nFeeText === `${EXPECTED_NOTARIZATION_FEE.toLocaleString()} sats` &&
+        dataOutText.includes('0 sats'),
+      detail: `fee: "${nFeeText}", data output: "${dataOutText}"`,
+    });
+
+    // Save; the intent banner on the UTXOs page clears via onSaved.
+    await page.getByTestId('button-save-psbt').click();
+    await page.getByTestId('dialog-build-psbt').waitFor({ state: 'detached', timeout: 15_000 });
+    const intentGone = await intentBar
+      .waitFor({ state: 'detached', timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    steps.push({
+      name: 'saving the notarization PSBT clears the intent banner',
+      passed: intentGone,
+      detail: `banner detached=${intentGone}`,
+    });
+
+    // Saved PSBTs: the notarization row shows the badge and the exact payload.
+    await openSavedPsbts(page);
+    const nBadge = page.locator('[data-testid^="badge-notarization-"]').first();
+    await nBadge.waitFor({ state: 'visible', timeout: 15_000 });
+    const nPsbtId = (await nBadge.getAttribute('data-testid')).replace('badge-notarization-', '');
+    await page.getByTestId(`row-saved-psbt-${nPsbtId}`).click();
+    const payloadEl = page.getByTestId(`text-data-payload-${nPsbtId}-1`);
+    await payloadEl.waitFor({ state: 'visible', timeout: 10_000 });
+    const payloadText = ((await payloadEl.textContent()) ?? '').trim();
+    const copyHashVisible = await page
+      .getByTestId(`button-copy-hash-${nPsbtId}-1`)
+      .isVisible()
+      .catch(() => false);
+    steps.push({
+      name: 'Saved PSBTs shows the notarization badge, exact payload, and copy-hash action',
+      passed: payloadText === EXPECTED_DIGEST && copyHashVisible,
+      detail: `payload: "${payloadText}" copyHash=${copyHashVisible}`,
+    });
+
+    // The saved row records the evidence reference, and the OP_RETURN script
+    // bytes are exactly 6a 20 <digest> with a zero value (checked in Node).
+    const nRoundTrip = await page.evaluate(async (psbtId) => {
+      const crud = await import('/src/lib/data/saved-psbts-crud.ts');
+      const rows = await crud.getAllSavedPsbts();
+      const row = rows.find((r) => String(r.id) === String(psbtId));
+      if (!row) return { ok: false, detail: 'row not found' };
+      const dataOut = row.outputs?.find((o) => o.dataOutput);
+      return {
+        ok: !!dataOut,
+        detail: dataOut ? 'found' : 'no data output on the saved row',
+        psbtBase64: row.psbtBase64,
+        dataOutput: dataOut?.dataOutput,
+      };
+    }, nPsbtId);
+    let scriptOk = false;
+    let scriptDetail = nRoundTrip.detail;
+    if (nRoundTrip.ok && nRoundTrip.psbtBase64) {
+      try {
+        const bitcoin = await import('bitcoinjs-lib');
+        const psbt = bitcoin.Psbt.fromBase64(nRoundTrip.psbtBase64, {
+          network: bitcoin.networks.bitcoin,
+        });
+        const out1 = psbt.txOutputs[1];
+        const scriptHex = Array.from(out1.script, (b) => b.toString(16).padStart(2, '0')).join('');
+        scriptOk =
+          psbt.txOutputs.length === 2 &&
+          out1.value === BigInt(0) &&
+          scriptHex === `6a20${EXPECTED_DIGEST}` &&
+          nRoundTrip.dataOutput?.isNotarization === true &&
+          nRoundTrip.dataOutput?.evidenceAttachmentId === evSeed.attachmentId &&
+          nRoundTrip.dataOutput?.payloadHex === EXPECTED_DIGEST;
+        scriptDetail = `outputs=${psbt.txOutputs.length} value=${out1.value} script=${scriptHex.slice(0, 20)}… dataOutput=${JSON.stringify(nRoundTrip.dataOutput)}`;
+      } catch (err) {
+        scriptDetail = `parse threw: ${err.message}`;
+      }
+    }
+    steps.push({
+      name: 'saved PSBT carries the exact OP_RETURN script bytes and the evidence reference',
+      passed: scriptOk,
+      detail: scriptDetail,
+    });
+    await page.keyboard.press('Escape');
+
+    // Back on the Evidence page: the attachment shows Notarized and Verify
+    // re-hashes the bytes and reports a match.
+    await page.goto(`${BASE_URL}evidence`, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
+    const card2 = page.getByTestId(`card-evidence-${evSeed.evidenceId}`);
+    await card2.waitFor({ state: 'visible', timeout: 30_000 });
+    await card2.click();
+    await page.getByTestId('button-preview-edit').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByTestId('button-preview-edit').click();
+    const notarizedBadge = page.getByTestId(`badge-notarized-${evSeed.attachmentId}`);
+    const notarizedVisible = await notarizedBadge
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    steps.push({
+      name: 'notarized attachment shows the Notarized badge on the Evidence page',
+      passed: notarizedVisible,
+      detail: `visible=${notarizedVisible}`,
+    });
+
+    await page.getByTestId(`button-verify-notarization-${evSeed.attachmentId}`).click();
+    // Radix duplicates toast text into an aria-live region — match .first().
+    const verifyToast = await page
+      .getByText('Notarization verified')
+      .first()
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    steps.push({
+      name: 'Verify re-hashes the current bytes and reports a match',
+      passed: verifyToast,
+      detail: `toast visible=${verifyToast}`,
     });
 
     steps.push({

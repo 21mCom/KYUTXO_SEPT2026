@@ -48,14 +48,28 @@ export async function clearSavedPsbts(options?: SavedPsbtWriteOptions): Promise<
 export type SavedPsbtRestoreMode = 'merge' | 'replace';
 
 /**
+ * Backup-id -> live-id maps produced by restoreEvidenceRows. Notarization
+ * data outputs reference evidence/attachment ids, which CHANGE on restore
+ * (fresh autoincrement ids); the references must be remapped through these
+ * maps or they would dangle — or worse, collide with unrelated live rows.
+ */
+export interface SavedPsbtEvidenceRefRemap {
+  evidenceIdMap: Map<number, number>;
+  evidenceAttachmentIdMap: Map<number, number>;
+}
+
+/**
  * Restore saved-PSBT rows from a backup. SINGLE source of truth for the backup
  * restore path (v3 inline tables).
  *
- * The backup `id` is always stripped (every row gets a fresh autoincrement id);
- * the rows carry no foreign keys into other tables (inputs reference txids,
- * which are stable across restores), so no id remap is needed. In MERGE mode a
- * row whose PSBT bytes already exist in the vault is skipped so merging the
- * same backup twice can't duplicate entries. Rows missing psbtBase64 are
+ * The backup `id` is always stripped (every row gets a fresh autoincrement id).
+ * Inputs reference txids (stable across restores), but notarization data
+ * outputs reference evidence/attachment ids: when `remapEvidenceRefs` is
+ * provided those references are rewritten through the restore's id maps, and
+ * references whose target no longer exists are DROPPED (the payload and
+ * filename/title hints are kept so the output stays inspectable). In MERGE
+ * mode a row whose PSBT bytes already exist in the vault is skipped so merging
+ * the same backup twice can't duplicate entries. Rows missing psbtBase64 are
  * skipped (a PSBT without its bytes is useless).
  *
  * Returns the number of rows actually written.
@@ -67,6 +81,7 @@ export async function restoreSavedPsbtRows(
   // Optional collector: every freshly inserted row's id is pushed here, so a
   // cancelled merge can undo exactly the rows this restore added.
   collect?: { insertedIds?: number[] },
+  remapEvidenceRefs?: SavedPsbtEvidenceRefRemap,
 ): Promise<number> {
   if (!rows || rows.length === 0) return 0;
 
@@ -96,7 +111,29 @@ export async function restoreSavedPsbtRows(
       sendAmountSats: typeof d.sendAmountSats === 'number' ? d.sendAmountSats : 0,
       changeSats: typeof d.changeSats === 'number' ? d.changeSats : 0,
       inputs: Array.isArray(d.inputs) ? d.inputs : [],
-      outputs: Array.isArray(d.outputs) ? d.outputs : [],
+      outputs: Array.isArray(d.outputs)
+        ? d.outputs.map((o: any) => {
+            if (!o?.dataOutput || !remapEvidenceRefs) return o;
+            const data = o.dataOutput;
+            return {
+              ...o,
+              dataOutput: {
+                ...data,
+                // Remap through the restore's id maps; a reference whose target
+                // no longer exists is dropped rather than left dangling (a
+                // stale numeric id could point at an unrelated live row).
+                evidenceId:
+                  typeof data.evidenceId === 'number'
+                    ? remapEvidenceRefs.evidenceIdMap.get(data.evidenceId)
+                    : undefined,
+                evidenceAttachmentId:
+                  typeof data.evidenceAttachmentId === 'number'
+                    ? remapEvidenceRefs.evidenceAttachmentIdMap.get(data.evidenceAttachmentId)
+                    : undefined,
+              },
+            };
+          })
+        : [],
       createdAt: typeof d.createdAt === 'number' ? d.createdAt : now,
       updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : now,
     });

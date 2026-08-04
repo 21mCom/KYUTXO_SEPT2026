@@ -22,6 +22,7 @@ import {
   FileSignature,
   Loader2,
   Pencil,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 import {
@@ -200,6 +201,12 @@ export function SavedPsbtsDialog({ open, onOpenChange }: SavedPsbtsDialogProps) 
                       )}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
+                      {psbt.outputs.some((o) => o.dataOutput?.isNotarization) && (
+                        <Badge variant="outline" className="text-xs" data-testid={`badge-notarization-${psbt.id}`}>
+                          <ShieldCheck className="h-3 w-3 mr-1" />
+                          Notarization
+                        </Badge>
+                      )}
                       <Badge variant="secondary">{psbt.inputs.length} input{psbt.inputs.length !== 1 ? "s" : ""}</Badge>
                       <span className="font-mono">{psbt.sendAmountSats.toLocaleString()} sats</span>
                       <span className="font-mono">fee {psbt.feeSats.toLocaleString()}</span>
@@ -284,13 +291,53 @@ export function SavedPsbtsDialog({ open, onOpenChange }: SavedPsbtsDialogProps) 
                               className="flex items-center justify-between gap-2 rounded bg-muted/30 px-2 py-1"
                               data-testid={`row-psbt-output-${psbt.id}-${i}`}
                             >
-                              <span className="font-mono text-xs truncate" title={output.address}>
-                                {truncateAddress(output.address, 16, 10)}
-                                {output.isChange && (
-                                  <Badge variant="secondary" className="ml-2 text-xs">change</Badge>
+                              {output.dataOutput ? (
+                                <span className="flex items-center gap-2 min-w-0 font-mono text-xs">
+                                  <Badge variant="secondary" className="text-xs shrink-0">OP_RETURN</Badge>
+                                  <span className="truncate" title={output.dataOutput.payloadHex} data-testid={`text-data-payload-${psbt.id}-${i}`}>
+                                    {output.dataOutput.payloadHex}
+                                  </span>
+                                  {output.dataOutput.isNotarization && (
+                                    <Badge variant="outline" className="text-xs shrink-0">
+                                      <ShieldCheck className="h-3 w-3 mr-1" />
+                                      {output.dataOutput.evidenceFilename
+                                        ? `Notarizes ${output.dataOutput.evidenceFilename}`
+                                        : "Notarization"}
+                                    </Badge>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="font-mono text-xs truncate" title={output.address}>
+                                  {truncateAddress(output.address, 16, 10)}
+                                  {output.isChange && (
+                                    <Badge variant="secondary" className="ml-2 text-xs">change</Badge>
+                                  )}
+                                </span>
+                              )}
+                              <span className="flex items-center gap-1 shrink-0">
+                                <span className="font-mono text-xs">{output.amountSats.toLocaleString()} sats</span>
+                                {output.dataOutput && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-6 w-6"
+                                    onClick={() =>
+                                      copy(output.dataOutput!.payloadHex, {
+                                        label: "OP_RETURN payload (hex)",
+                                        key: `hash-${psbt.id}-${i}`,
+                                      })
+                                    }
+                                    title="Copy payload hash"
+                                    data-testid={`button-copy-hash-${psbt.id}-${i}`}
+                                  >
+                                    {isCopied(`hash-${psbt.id}-${i}`) ? (
+                                      <Check className="h-3.5 w-3.5 text-green-500" />
+                                    ) : (
+                                      <Copy className="h-3.5 w-3.5" />
+                                    )}
+                                  </Button>
                                 )}
                               </span>
-                              <span className="font-mono text-xs">{output.amountSats.toLocaleString()} sats</span>
                             </div>
                           ))}
                         </div>

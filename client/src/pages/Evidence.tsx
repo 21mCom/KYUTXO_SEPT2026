@@ -33,8 +33,10 @@ import {
   ArrowUp,
   ArrowDown,
   Paperclip,
-  Pencil
+  Pencil,
+  ShieldCheck
 } from "lucide-react";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -91,6 +93,13 @@ import {
 import { uploadFile, downloadFile, deleteFile, getFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
 import { useDropzone } from "react-dropzone";
 import { searchPendingClass } from "@/lib/search-pending-class";
+import { getAllSavedPsbts } from "@/lib/data/saved-psbts-crud";
+import {
+  setPendingNotarization,
+  hashBlobSha256Hex,
+  findNotarizationsForAttachment,
+  type NotarizationRecord,
+} from "@/lib/evidence-notarization";
 
 const evidenceFormSchema = z.object({
   title: z.string().min(1, "Title is required").max(200, "Title too long"),
@@ -107,6 +116,7 @@ type EvidenceFormValues = z.infer<typeof evidenceFormSchema>;
 
 export default function EvidencePage() {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, isSearchPending] = useDebouncedValue(searchTerm, PAGE_DEBOUNCE.Evidence);
   const [filterType, setFilterType] = useState<string>("all");
@@ -129,6 +139,21 @@ export default function EvidencePage() {
   const [sortColumn, setSortColumn] = useState<'date' | 'title' | 'type' | 'importance' | 'source' | 'parties'>('date');
   const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc');
   const [attachmentCounts, setAttachmentCounts] = useState<Map<number, number>>(new Map());
+  const [notarizingId, setNotarizingId] = useState<number | null>(null);
+  const [verifyingId, setVerifyingId] = useState<number | null>(null);
+
+  // Saved PSBTs drive the notarized state of each attachment (the OP_RETURN
+  // data output records the payload + evidence reference).
+  const savedPsbts = useLiveQuery(() => getAllSavedPsbts(), []);
+  const notarizationsByAttachment = new Map<number, NotarizationRecord[]>();
+  if (savedPsbts) {
+    for (const att of selectedAttachments) {
+      const matches = findNotarizationsForAttachment(savedPsbts, att, selectedEvidence?.id);
+      if (matches.length > 0 && att.id !== undefined) {
+        notarizationsByAttachment.set(att.id, matches);
+      }
+    }
+  }
 
   const rawEvidence = useLiveQuery(() => getAllEvidence(), []);
   const [loadedEvidence, setLoadedEvidence] = useState<Evidence[]>([]);
@@ -412,6 +437,75 @@ export default function EvidencePage() {
         description: "Failed to download the file.",
         variant: "destructive",
       });
+    }
+  };
+
+  // Notarize on-chain: hash the stored bytes with SHA-256 and hand the digest
+  // to the PSBT builder (on the UTXOs page) as an OP_RETURN data output. The
+  // transaction is signed and broadcast externally — the app never signs.
+  const handleNotarizeAttachment = async (attachment: EvidenceAttachment) => {
+    if (attachment.id === undefined) return;
+    setNotarizingId(attachment.id);
+    try {
+      const blob = await getFileBlob(attachment.objectStoragePath, attachment.mimeType);
+      const payloadHex = await hashBlobSha256Hex(blob);
+      setPendingNotarization({
+        payloadHex,
+        evidenceId: selectedEvidence?.id,
+        evidenceAttachmentId: attachment.id,
+        evidenceTitle: selectedEvidence?.title,
+        evidenceFilename: attachment.filename,
+      });
+      toast({
+        title: "Digest computed",
+        description: "Select the UTXOs to fund the notarization transaction, then Build PSBT.",
+      });
+      navigate("/utxos");
+    } catch (error) {
+      console.error("Failed to notarize attachment:", error);
+      toast({
+        title: "Could not notarize the file",
+        description: error instanceof Error ? error.message : "Failed to read the file bytes.",
+        variant: "destructive",
+      });
+    } finally {
+      setNotarizingId(null);
+    }
+  };
+
+  // Verify: re-hash the current bytes and compare against the digest recorded
+  // in the saved PSBT's OP_RETURN payload.
+  const handleVerifyNotarization = async (attachment: EvidenceAttachment) => {
+    if (attachment.id === undefined) return;
+    const recorded = notarizationsByAttachment.get(attachment.id) ?? [];
+    if (recorded.length === 0) return;
+    setVerifyingId(attachment.id);
+    try {
+      const blob = await getFileBlob(attachment.objectStoragePath, attachment.mimeType);
+      const payloadHex = await hashBlobSha256Hex(blob);
+      const match = recorded.find((r) => r.payloadHex === payloadHex);
+      if (match) {
+        toast({
+          title: "Notarization verified",
+          description: `The current file bytes still match the digest embedded in "${match.savedPsbtName}".`,
+        });
+      } else {
+        toast({
+          title: "Notarization mismatch",
+          description:
+            "The current file bytes do NOT match the notarized digest — the file has changed since it was notarized.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("Failed to verify notarization:", error);
+      toast({
+        title: "Could not verify the notarization",
+        description: error instanceof Error ? error.message : "Failed to read the file bytes.",
+        variant: "destructive",
+      });
+    } finally {
+      setVerifyingId(null);
     }
   };
 
@@ -1294,13 +1388,54 @@ export default function EvidencePage() {
                             <div className="flex items-center gap-3">
                               <FileIcon className="h-5 w-5" />
                               <div>
-                                <p className="text-sm font-medium">{att.filename}</p>
+                                <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
+                                  {att.filename}
+                                  {att.id !== undefined && notarizationsByAttachment.has(att.id) && (
+                                    <Badge variant="outline" className="text-xs" data-testid={`badge-notarized-${att.id}`}>
+                                      <ShieldCheck className="h-3 w-3 mr-1" />
+                                      Notarized
+                                    </Badge>
+                                  )}
+                                </div>
                                 <p className="text-xs text-muted-foreground">
                                   {(att.size / 1024).toFixed(1)} KB
                                 </p>
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
+                              {att.id !== undefined && notarizationsByAttachment.has(att.id) ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={verifyingId === att.id}
+                                  onClick={() => handleVerifyNotarization(att)}
+                                  title="Re-hash the current file bytes and compare to the notarized digest"
+                                  data-testid={`button-verify-notarization-${att.id}`}
+                                >
+                                  {verifyingId === att.id ? (
+                                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                  ) : (
+                                    <ShieldCheck className="h-4 w-4 mr-1" />
+                                  )}
+                                  Verify
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={notarizingId === att.id}
+                                  onClick={() => handleNotarizeAttachment(att)}
+                                  title="Hash this file and embed the digest in an OP_RETURN output"
+                                  data-testid={`button-notarize-${att.id}`}
+                                >
+                                  {notarizingId === att.id ? (
+                                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                  ) : (
+                                    <ShieldCheck className="h-4 w-4 mr-1" />
+                                  )}
+                                  Notarize on-chain
+                                </Button>
+                              )}
                               {canPreview && (
                                 <Button
                                   size="sm"
@@ -1372,14 +1507,16 @@ export default function EvidencePage() {
               {previewEvidence?.title || previewAttachment?.filename || "Preview"}
             </DialogTitle>
             {previewEvidence && (
-              <DialogDescription className="flex items-center gap-2">
+              // Not a DialogDescription: that renders a <p>, and Badges (divs)
+              // inside it trip validateDOMNesting in the browser.
+              <div className="text-sm text-muted-foreground flex items-center gap-2">
                 <Badge variant="secondary">{getDocumentTypeLabel(previewEvidence.documentType)}</Badge>
                 {previewEvidence.importance && (
                   <Badge className={getImportanceColor(previewEvidence.importance)}>
                     {previewEvidence.importance}
                   </Badge>
                 )}
-              </DialogDescription>
+              </div>
             )}
           </DialogHeader>
 

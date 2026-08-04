@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { AlertCircle, Check, Copy, Download, Loader2, Save } from "lucide-react";
+import { AlertCircle, Check, Copy, Download, Loader2, Save, ShieldCheck } from "lucide-react";
 import {
   buildUnsignedPsbt,
   estimateTxVbytes,
@@ -23,6 +23,7 @@ import {
   type PsbtBuildResult,
   type PsbtInputSpec,
 } from "@/lib/psbt";
+import type { NotarizationIntent } from "@/lib/evidence-notarization";
 import {
   detectInputScriptType,
   resolveInputDerivation,
@@ -67,10 +68,16 @@ export interface BuildPsbtDialogProps {
   utxos: UTXO[];
   /** Look up the address record for a UTXO's address (drives script-type and derivation metadata). */
   recordForAddress: (address: string) => DbRecord | undefined;
+  /**
+   * When set, the transaction embeds a zero-value OP_RETURN data output with
+   * this evidence-file digest alongside the payment leg (on-chain
+   * notarization). The saved PSBT records the evidence reference.
+   */
+  notarization?: NotarizationIntent | null;
   onSaved?: () => void;
 }
 
-export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, onSaved }: BuildPsbtDialogProps) {
+export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, notarization, onSaved }: BuildPsbtDialogProps) {
   const { toast } = useToast();
   const { copy, isCopied } = useCopyToClipboard();
 
@@ -142,7 +149,11 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
     setSelectedRecords([]);
     setChangeWalletOptions([]);
     setChangeWalletXpub("");
-    setName(`PSBT ${format(new Date(), "yyyy-MM-dd HH:mm")}`);
+    setName(
+      notarization
+        ? `Notarize ${notarization.evidenceFilename ?? "evidence"}`
+        : `PSBT ${format(new Date(), "yyyy-MM-dd HH:mm")}`,
+    );
     setInputSpecs([]);
     setPreparing(true);
 
@@ -207,11 +218,16 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
     try {
       let send: number;
       let change: string | undefined;
+      const dataPayloadBytes = notarization ? notarization.payloadHex.length / 2 : 0;
       if (sendMax) {
         change = undefined;
         // Send-max: no change output, so estimate with destination only and
         // sweep everything else.
-        const vbytes = estimateTxVbytes(inputSpecs, [validateAddress(destination.trim()).addressType ?? "Unknown"]);
+        const vbytes = estimateTxVbytes(
+          inputSpecs,
+          [validateAddress(destination.trim()).addressType ?? "Unknown"],
+          dataPayloadBytes,
+        );
         if (!Number.isFinite(rate) || rate < MIN_FEE_RATE_SATS_PER_VB) {
           throw new Error(`Fee rate must be at least ${MIN_FEE_RATE_SATS_PER_VB} sat/vB.`);
         }
@@ -230,12 +246,13 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
         feeRateSatsPerVb: rate,
         changeAddress: change,
         network: destNetwork,
+        dataOutput: notarization ? { payloadHex: notarization.payloadHex } : undefined,
       });
       return { result };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     }
-  }, [open, preparing, inputSpecs, destination, feeRate, sendMax, amountSats, changeAddress, totalSats]);
+  }, [open, preparing, inputSpecs, destination, feeRate, sendMax, amountSats, changeAddress, totalSats, notarization]);
 
   const result = preview?.result;
   const displayWarnings = useMemo(() => {
@@ -315,7 +332,24 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
           hasDerivationInfo: !!i.derivation,
           hasScript: !!(i.witnessScriptHex || i.redeemScriptHex),
         })),
-        outputs: result.outputs,
+        // Attach the evidence reference to the OP_RETURN data output so the
+        // Saved PSBTs dialog (and the Evidence page's Verify action) can trace
+        // the payload back to the file it notarizes.
+        outputs: result.outputs.map((o) =>
+          o.dataOutput && notarization
+            ? {
+                ...o,
+                dataOutput: {
+                  ...o.dataOutput,
+                  isNotarization: true,
+                  evidenceId: notarization.evidenceId,
+                  evidenceAttachmentId: notarization.evidenceAttachmentId,
+                  evidenceTitle: notarization.evidenceTitle,
+                  evidenceFilename: notarization.evidenceFilename,
+                },
+              }
+            : o,
+        ),
       });
       toast({
         title: "PSBT saved",
@@ -352,6 +386,47 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
           </div>
         ) : (
           <div className="flex flex-col gap-4">
+            {notarization && (
+              <div
+                className="flex items-start gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-sm"
+                data-testid="panel-notarization-intent"
+              >
+                <ShieldCheck className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">
+                    Notarizing {notarization.evidenceFilename ?? "an evidence file"}
+                    {notarization.evidenceTitle ? ` (${notarization.evidenceTitle})` : ""} on-chain
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    The transaction embeds the file's SHA-256 digest in a zero-value OP_RETURN output.
+                    Anyone holding the file can later prove it existed at this transaction's block time.
+                  </p>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <code
+                      className="text-xs font-mono truncate"
+                      title={notarization.payloadHex}
+                      data-testid="text-notarization-hash"
+                    >
+                      {notarization.payloadHex}
+                    </code>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 shrink-0"
+                      onClick={() => copy(notarization.payloadHex, { label: "SHA-256 digest", key: "notarization-hash" })}
+                      title="Copy digest"
+                      data-testid="button-copy-notarization-hash"
+                    >
+                      {isCopied("notarization-hash") ? (
+                        <Check className="h-3.5 w-3.5 text-green-500" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm" data-testid="text-selected-total">
               <span className="font-medium">{utxos.length} UTXO{utxos.length !== 1 ? "s" : ""} selected</span>
               <span className="ml-2 text-muted-foreground">
@@ -512,6 +587,14 @@ export function BuildPsbtDialog({ open, onOpenChange, utxos, recordForAddress, o
                     {result.changeSats > 0 ? `${result.changeSats.toLocaleString()} sats` : "—"}
                   </span>
                 </div>
+                {result.outputs.some((o) => o.dataOutput) && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">Notarization (OP_RETURN)</span>
+                    <span className="font-mono text-xs truncate" data-testid="text-data-output">
+                      0 sats → {result.outputs.find((o) => o.dataOutput)?.dataOutput?.payloadHex.slice(0, 16)}…
+                    </span>
+                  </div>
+                )}
                 {displayWarnings.map((w, i) => (
                   <div
                     key={i}

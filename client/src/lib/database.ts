@@ -91,6 +91,15 @@ export class KYUTXODatabase extends Dexie {
   constructor() {
     super('KYUTXODatabase');
 
+    // v38: savedPsbts outputs may now carry a zero-value OP_RETURN data output
+    // (payload hex + evidence reference for on-chain notarization). The field
+    // is non-indexed, so the index declaration is unchanged — the bump records
+    // the shape change so upgrades from any earlier version stay explicit.
+    // Delta declaration — all other tables inherit unchanged from v37.
+    this.version(38).stores({
+      savedPsbts: '++id, createdAt, name',
+    });
+
     // v37: add the savedPsbts table — unsigned PSBTs built from selected
     // UTXOs, stored with their decoded components so they can be revisited,
     // renamed, re-downloaded, or deleted. Delta declaration — all other
