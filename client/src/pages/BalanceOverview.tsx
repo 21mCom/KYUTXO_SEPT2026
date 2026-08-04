@@ -1366,14 +1366,25 @@ export default function BalanceOverview() {
         ok = false;
       }
 
-      const remaining = await countHeuristicMatchedAddresses();
+      // Success from the sync call only means the network sync ran — it does
+      // NOT guarantee this address gained exact prevout data. Re-check whether
+      // the address is still in the heuristic set before choosing the toast.
+      const remainingAddresses = await getHeuristicMatchedAddresses();
+      const remaining = remainingAddresses.length;
+      const stillHeuristic = remainingAddresses.includes(address);
       setHeuristicAddressCount(remaining);
       if (remaining === 0) setHeuristicWarningDismissed(false);
 
-      if (ok) {
+      if (ok && !stillHeuristic) {
         toast({
           title: "Re-synced",
           description: "This address now uses exact matching.",
+        });
+      } else if (ok) {
+        toast({
+          title: "Re-synced, but still estimated",
+          description:
+            "This address still uses estimated matching — its spend data couldn't be resolved.",
         });
       } else {
         toast({

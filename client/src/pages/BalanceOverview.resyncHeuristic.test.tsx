@@ -103,10 +103,17 @@ const countHeuristicMatchedAddresses = vi.fn(() =>
   Promise.resolve(resyncCalled ? followUpHeuristicCount : HEURISTIC_COUNT),
 );
 const getHeuristicMatchedAddresses = vi.fn(() => {
-  // The action calls this once up front; mark the run started so the post-sync
-  // recount (countHeuristicMatchedAddresses) returns the follow-up value.
+  // First call (banner list / bulk action's up-front read) returns the full
+  // set and marks the run started; later calls (e.g. the single-address
+  // handler's post-sync membership re-check) reflect the follow-up count:
+  // 0 → everything promoted, otherwise "B" remains heuristic.
+  const list = resyncCalled
+    ? followUpHeuristicCount === 0
+      ? []
+      : ["B"]
+    : ["A", "B"];
   resyncCalled = true;
-  return Promise.resolve(["A", "B"]);
+  return Promise.resolve(list);
 });
 vi.mock("@/lib/data/address-stats", () => ({
   recomputeAddressStats: vi.fn(() => Promise.resolve({ cancelled: false })),
@@ -188,8 +195,13 @@ beforeEach(() => {
   resyncCalled = false;
   followUpHeuristicCount = HEURISTIC_COUNT;
   getHeuristicMatchedAddresses.mockImplementation(() => {
+    const list = resyncCalled
+      ? followUpHeuristicCount === 0
+        ? []
+        : ["B"]
+      : ["A", "B"];
     resyncCalled = true;
-    return Promise.resolve(["A", "B"]);
+    return Promise.resolve(list);
   });
   syncSingleAddress.mockResolvedValue({ success: true });
 });
@@ -354,6 +366,28 @@ describe("BalanceOverview heuristic re-sync", () => {
 
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
     expect(toastCalls[0].title).toBe("Re-synced");
+    expect(toastCalls[0].variant).toBeUndefined();
+  });
+
+  it("toasts an honest 'still estimated' message when the sync succeeds but the address stays heuristic", async () => {
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    // The address remains in the heuristic set after the (successful) sync:
+    // no exact prevout data could be resolved for it.
+    getHeuristicMatchedAddresses.mockImplementation(() => {
+      resyncCalled = true;
+      return Promise.resolve(["A", "B"]);
+    });
+    await renderAndShowBanner();
+
+    fireEvent.click(screen.getByTestId("button-toggle-heuristic-details"));
+    await screen.findByTestId("button-resync-heuristic-address-A");
+
+    fireEvent.click(screen.getByTestId("button-resync-heuristic-address-A"));
+
+    await waitFor(() => expect(syncSingleAddress).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Re-synced, but still estimated");
+    expect(toastCalls[0].description).toContain("still uses estimated matching");
     expect(toastCalls[0].variant).toBeUndefined();
   });
 
