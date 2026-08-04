@@ -355,6 +355,10 @@ args = "browser-check-lock-guard"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "engine-bridge-shared-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "saved-template-derive-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2073,6 +2077,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-pof-node-unreachable-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "engine-bridge-shared-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-engine-bridge-shared.js"
 
 [workflows.workflow.metadata]
 isValidation = true
