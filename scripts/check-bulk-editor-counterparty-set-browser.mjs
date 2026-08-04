@@ -16,9 +16,12 @@
 //      for the preview to show exactly 3 matching records.
 //   4. Adds a Set action on Counterparty Name, applies via the confirm
 //      dialog, and asserts all three stored records now carry the new value.
-//   5. Reloads the page, unlocks the vault again, and re-reads the stored
+//   5. Clicks Undo (task #1915) and asserts every record returns to its exact
+//      prior value — the pre-existing name is restored and the empty ones stay
+//      empty — then re-applies the Set for the remaining rounds.
+//   6. Reloads the page, unlocks the vault again, and re-reads the stored
 //      values from Dexie — the Set must survive the reload.
-//   6. Rebuilds the same filter and runs a Clear action on Counterparty Name,
+//   7. Rebuilds the same filter and runs a Clear action on Counterparty Name,
 //      asserting all three stored values are emptied.
 //
 // Everything runs offline against local IndexedDB — no network requests.
@@ -290,6 +293,52 @@ async function main() {
         detail: `stored = ${JSON.stringify(last)} (expected ${JSON.stringify(expected)})`,
       });
       if (!ok) throw new Error('Set round never produced the expected stored counterparty names.');
+    }
+
+    // ── Undo round: restore the mixed prior values (task #1915) ────────────
+    // The Undo snapshot captured each record's BEFORE value: record A had an
+    // existing counterparty name, B and C were empty. Undo must restore each
+    // record's exact prior value — including empties staying empty.
+    {
+      const undoBtn = page.getByTestId('button-undo');
+      await undoBtn.waitFor({ state: 'visible', timeout: 15_000 });
+      await undoBtn.click();
+      const undoConfirm = page.getByRole('button', { name: 'Undo Changes' });
+      await undoConfirm.waitFor({ state: 'visible', timeout: 10_000 });
+      await undoConfirm.click();
+
+      const expected = [EXISTING_NAME, '', ''];
+      const { ok, last } = await waitForStoredNames(page, ADDRS, expected);
+      steps.push({
+        name: 'undo: each record returns to its exact prior value (existing name restored, empties stay empty)',
+        passed: ok,
+        detail: `stored after undo = ${JSON.stringify(last)} (expected ${JSON.stringify(expected)})`,
+      });
+      if (!ok) throw new Error('Undo did not restore the prior per-record counterparty names.');
+
+      const undoGone = await undoBtn
+        .waitFor({ state: 'detached', timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false);
+      steps.push({
+        name: 'undo: the Undo button disappears after a successful undo (snapshot consumed)',
+        passed: undoGone,
+        detail: undoGone ? 'button-undo detached' : 'button-undo still visible after undo',
+      });
+    }
+
+    // Re-apply the Set so the reload-survival and Clear rounds below still
+    // exercise the original end-to-end flow. The filter conditions persist
+    // after apply/undo (only the actions list is cleared).
+    {
+      const expected = [NEW_NAME, NEW_NAME, NEW_NAME];
+      const { ok, last } = await runCounterpartyActionRound('Set', NEW_NAME, expected);
+      steps.push({
+        name: 're-set (post-undo): applying Set again writes the new name to all 3 records',
+        passed: ok,
+        detail: `stored = ${JSON.stringify(last)} (expected ${JSON.stringify(expected)})`,
+      });
+      if (!ok) throw new Error('Post-undo Set round never produced the expected stored counterparty names.');
     }
 
     // ── Reload + unlock: the Set must survive a full page reload ───────────
