@@ -245,6 +245,82 @@ async function main() {
       detail: `nextDisabled=${nextDisabled} stillOnUpload=${stillOnUpload} setupVisible=${setupVisible}`,
     });
 
+    // ── SLIP-132 round: a real Sparrow/Electrum-style zprv export ─────────
+    // The first fixture only covered xprv/WIF. The safety scan also rejects
+    // SLIP-132 prefixes (yprv/zprv/uprv/vprv/...); prove the full
+    // upload→reject path with a zprv-containing export file.
+    //
+    // First wait for the previous security toast to clear so the second
+    // toast assertion cannot pass on the stale one.
+    const staleToastGone = await toastTitle
+      .waitFor({ state: 'detached', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!staleToastGone) {
+      // Try dismissing via any visible toast close buttons, then re-wait.
+      const closeButtons = page.locator('[toast-close], [data-radix-toast-announce-exclude] button, [aria-label="Close"]');
+      const n = await closeButtons.count().catch(() => 0);
+      for (let i = 0; i < n; i++) {
+        await closeButtons.nth(i).click().catch(() => {});
+      }
+      await toastTitle.waitFor({ state: 'detached', timeout: 15_000 });
+    }
+    steps.push({ name: 'first security toast cleared before SLIP-132 round', passed: true, detail: 'toast detached' });
+
+    // Structure mirrors a Sparrow "Export Wallet" / Electrum JSON: keystore
+    // with a zprv master private key. 111 base58-ish chars after the prefix
+    // (same shape as a real serialized extended key).
+    const fakeZprv = 'zprv' + 'AWgYBBk7JR8Gj9r2X4t6V8w1Y3z5B7d9F2h4K6m8P1r3T5v7X9z2C4e6G8j1L3n5Q7s9U2w4Y6a8C1e3G5i7K9m2O4q6S8u1W3y5A7c9E2g4I6k8M';
+    const zprvExport = [
+      '{',
+      '  "wallet_type": "standard",',
+      '  "keystore": {',
+      '    "type": "bip32",',
+      `    "xprv": "${fakeZprv}",`,
+      '    "derivation": "m/84h/0h/0h"',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+
+    await page.setInputFiles('[data-testid="input-file-upload"]', {
+      name: 'sparrow-zprv-export.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(zprvExport, 'utf8'),
+    });
+
+    const zprvToastSeen = await page
+      .getByText('Security Warning - File Rejected', { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 20_000 })
+      .then(() => true)
+      .catch(() => false);
+    steps.push({
+      name: 'zprv export triggers the "Security Warning - File Rejected" toast',
+      passed: zprvToastSeen,
+      detail: `zprvToastSeen=${zprvToastSeen}`,
+    });
+
+    await page.waitForTimeout(1_500);
+    const zprvCardVisible = await page
+      .getByText('sparrow-zprv-export.json', { exact: false })
+      .first()
+      .isVisible()
+      .catch(() => false);
+    const zprvSelectVisible = await page
+      .getByTestId('select-wallet-type')
+      .isVisible()
+      .catch(() => false);
+    const zprvNextDisabled = await page
+      .getByTestId('button-next-step')
+      .isDisabled()
+      .catch(() => false);
+    steps.push({
+      name: 'zprv file state cleared (no card, no wallet-type select, Next disabled)',
+      passed: !zprvCardVisible && !zprvSelectVisible && zprvNextDisabled,
+      detail: `zprvCardVisible=${zprvCardVisible} zprvSelectVisible=${zprvSelectVisible} zprvNextDisabled=${zprvNextDisabled}`,
+    });
+
     // ── Sanity: a clean file is still accepted afterwards ─────────────────
     const cleanJson = JSON.stringify({
       wallet: 'sparrow',
@@ -292,7 +368,7 @@ async function main() {
     }
     process.exit(1);
   }
-  console.log('[privkey-reject-browser] PASSED: a wallet file containing private keys is rejected with a clear warning, the file state is cleared, and Next stays blocked.');
+  console.log('[privkey-reject-browser] PASSED: wallet files containing private keys (xprv/WIF and SLIP-132 zprv) are rejected with a clear warning, the file state is cleared, and Next stays blocked.');
 }
 
 main().catch((err) => {
