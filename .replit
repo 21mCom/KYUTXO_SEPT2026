@@ -541,6 +541,10 @@ args = "database-doctor-duplicates-browser-check"
 task = "workflow.run"
 args = "address-checker-invault-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "transactions-entity-filter-engine-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1894,6 +1898,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-dashboard-hidden-matches-engine-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "transactions-entity-filter-engine-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-transactions-entity-filter-engine-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
