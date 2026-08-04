@@ -13,7 +13,16 @@
 //   1. re-runs scripts/check-lockfile-urls.js
 //   2. verifies each rewritten URL actually fetches (HTTP HEAD/GET probe)
 //
-// Usage: node scripts/fix-lockfile-urls.mjs [--no-verify]
+// Usage: node scripts/fix-lockfile-urls.mjs [--no-verify] [--postinstall]
+//
+// --postinstall is used by the package.json "postinstall" hook so the fixer
+// runs automatically after every npm install. In this mode the script:
+//   - is a fast no-op (no JSON parse, no checker spawn) when the lockfile
+//     contains no firewall URLs — so external CI's `npm ci` is not slowed
+//   - treats a missing package-lock.json as a no-op instead of an error
+//     (e.g. installs driven without a lockfile)
+//   - skips network URL verification (implies --no-verify) so offline/CI
+//     installs never fail on registry probes
 
 import fs from 'fs';
 import path from 'path';
@@ -26,7 +35,8 @@ const LOCKFILE = path.resolve(ROOT, 'package-lock.json');
 const CHECK_SCRIPT = path.resolve(ROOT, 'scripts', 'check-lockfile-urls.js');
 const FORBIDDEN = 'package-firewall.replit.local';
 const REGISTRY = 'https://registry.npmjs.org';
-const VERIFY = !process.argv.includes('--no-verify');
+const POSTINSTALL = process.argv.includes('--postinstall');
+const VERIFY = !process.argv.includes('--no-verify') && !POSTINSTALL;
 
 function fail(message) {
   console.error(`[fix-lockfile-urls] FAIL: ${message}`);
@@ -74,9 +84,22 @@ async function verifyUrl(url) {
 }
 
 async function main() {
-  if (!fs.existsSync(LOCKFILE)) fail(`package-lock.json not found at ${LOCKFILE}`);
+  if (!fs.existsSync(LOCKFILE)) {
+    if (POSTINSTALL) {
+      // No lockfile to fix (e.g. install without a lockfile); nothing to do.
+      return;
+    }
+    fail(`package-lock.json not found at ${LOCKFILE}`);
+  }
 
   const contents = fs.readFileSync(LOCKFILE, 'utf8');
+
+  // Fast path for the postinstall hook: when the lockfile is clean, exit
+  // immediately without parsing JSON or spawning the checker, so `npm ci`
+  // in external CI pays essentially nothing.
+  if (POSTINSTALL && !contents.includes(FORBIDDEN)) {
+    return;
+  }
   let lock;
   try {
     lock = JSON.parse(contents);

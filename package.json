@@ -8,6 +8,7 @@
     "build": "node scripts/check-crud-guards.js && vite build && esbuild server/index-prod.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc",
+    "postinstall": "node scripts/fix-lockfile-urls.mjs --postinstall",
     "db:push": "drizzle-kit push",
     "test": "vitest run"
   },
