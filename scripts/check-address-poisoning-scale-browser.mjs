@@ -421,6 +421,26 @@ async function main() {
       }
     })();
 
+    // Live progress counter: the button label must repaint through distinct
+    // intermediate "Tagging N / 10,000…" states while chunks stream (the jsdom
+    // test only proves onProgress -> state; a real browser could still batch
+    // every update into one final paint). Sample the PAINTED label fast via
+    // in-page rAF-synced reads so we observe actual renders, not just state.
+    const progressSamples = new Set();
+    const progressLoop = (async () => {
+      while (probing) {
+        const label = await page
+          .evaluate(() => {
+            const btn = document.querySelector('[data-testid="button-tag-all-suspects"]');
+            return btn ? btn.textContent ?? '' : '';
+          })
+          .catch(() => '');
+        const m = label.match(/Tagging\s+([\d,]+)\s*\/\s*([\d,]+)/);
+        if (m) progressSamples.add(`${m[1]}/${m[2]}`);
+        await page.waitForTimeout(40);
+      }
+    })();
+
     // Success toast (Radix duplicates text into aria-live — use .first()).
     const toast = page.getByText(/Tagged \d+ record/).first();
     const tagCompleted = await toast
@@ -430,7 +450,19 @@ async function main() {
     const tagMs = Date.now() - tagStart;
     probing = false;
     await probeLoop;
+    await progressLoop;
     const toastText = tagCompleted ? ((await toast.textContent()) ?? '').trim() : '';
+
+    const expectedTotal = ADDRESS_COUNT.toLocaleString('en-US');
+    const intermediateSamples = Array.from(progressSamples).filter((s) => {
+      const [doneStr, totalStr] = s.split('/');
+      return totalStr === expectedTotal && doneStr !== totalStr;
+    });
+    steps.push({
+      name: 'live "Tagging N / 10,000…" counter repaints through at least two distinct intermediate states',
+      passed: intermediateSamples.length >= 2,
+      detail: `distinct intermediate renders=${intermediateSamples.length} (all sampled: ${Array.from(progressSamples).join(', ') || 'none'})`,
+    });
 
     steps.push({
       name: `Tag all suspects (${ADDRESS_COUNT}) shows a busy state and completes within ${TAG_BUDGET_MS / 1000}s`,
