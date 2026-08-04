@@ -81,6 +81,12 @@ vi.mock("@/lib/blockchain-api", () => ({
   createProviderFromSettings: (...a: unknown[]) => createProviderFromSettings(...a),
 }));
 
+// The "In Vault" column's batched membership lookup hits Dexie; these tests
+// don't seed a vault, so stub it to an empty result.
+vi.mock("@/lib/data/record-crud", () => ({
+  getSavedAddressRecordLookup: async () => new Map(),
+}));
+
 import AddressChecker from "./AddressChecker";
 
 // Valid mainnet bech32 address (BIP173 test vector).

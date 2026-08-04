@@ -1,0 +1,169 @@
+// @vitest-environment jsdom
+//
+// Tests for the "In Vault" column in the Address Checker: rows whose address
+// matches a saved `type: 'address'` record (case-insensitive) show a "Saved"
+// badge with the record's label on hover, while unsaved, invalid, and
+// non-address-type matches show "—". The membership lookup must resolve in a
+// single batched call per run (never per-row) and recompute on Reset + re-run.
+
+import "fake-indexeddb/auto";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+
+// Render every virtualized row (jsdom's zero-size scroll element would
+// otherwise render none).
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: (opts: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: opts.count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * 53,
+        size: 53,
+        end: (index + 1) * 53,
+      })),
+    getTotalSize: () => opts.count * 53,
+    measureElement: () => {},
+  }),
+}));
+
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("@/hooks/use-node-settings", () => ({
+  useNodeSettings: () => ({ nodeSettings: { id: "default", providerType: "mempool-space" } }),
+}));
+
+const getAddressCoreStats = vi.fn();
+const createProviderFromSettings = vi.fn(() => ({ getAddressCoreStats }));
+vi.mock("@/lib/blockchain-api", () => ({
+  createProviderFromSettings: (...a: unknown[]) => createProviderFromSettings(...a),
+}));
+
+// Spy on the batched membership lookup while keeping the real implementation
+// (and the real CRUD helpers used for seeding). Partial mock via
+// importOriginal — a wholesale mock of the data module would break seeding.
+const lookupSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/data/record-crud", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("@/lib/data/record-crud")>();
+  return {
+    ...mod,
+    getSavedAddressRecordLookup: (addresses: string[]) => {
+      lookupSpy(addresses);
+      return mod.getSavedAddressRecordLookup(addresses);
+    },
+  };
+});
+
+import AddressChecker from "./AddressChecker";
+import { createRecord, clearAllRecords } from "@/lib/data/record-crud";
+
+// Valid mainnet addresses.
+const ADDR_SAVED = "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3";
+const ADDR_UNSAVED = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+const ADDR_INVALID = "not-a-bitcoin-address";
+
+async function runCheck() {
+  fireEvent.change(screen.getByTestId("textarea-address-input"), {
+    target: { value: `${ADDR_SAVED}\n${ADDR_UNSAVED}\n${ADDR_INVALID}` },
+  });
+  fireEvent.click(screen.getByTestId("button-run-check"));
+  await waitFor(() => {
+    expect(screen.getByTestId("button-reset-check")).toBeTruthy();
+  });
+}
+
+describe("AddressChecker — In Vault column", () => {
+  beforeEach(async () => {
+    cleanup();
+    vi.clearAllMocks();
+    await clearAllRecords();
+    getAddressCoreStats.mockImplementation(async () => ({
+      txCount: 3,
+      receivedSats: 100000,
+      sentSats: 40000,
+      balanceSats: 60000,
+    }));
+    // Seed an address record with an UPPERCASE inputString: matching must be
+    // case-insensitive against the pasted lowercase address.
+    await createRecord({
+      type: "address",
+      inputString: ADDR_SAVED.toUpperCase(),
+      label: "Savings wallet",
+      tags: [],
+      categories: [],
+    });
+    // A non-address record for the unsaved address must NOT count as a match.
+    await createRecord({
+      type: "txid",
+      inputString: ADDR_UNSAVED,
+      label: "Some transaction",
+      tags: [],
+      categories: [],
+    });
+  });
+
+  it("flags saved addresses (case-insensitive, with label tooltip) and dashes the rest", async () => {
+    render(<AddressChecker />);
+    await runCheck();
+
+    // Saved address → "Saved" badge carrying the record's label for hover.
+    await waitFor(() => {
+      expect(screen.getByTestId("badge-invault-0")).toBeTruthy();
+    });
+    const badge = screen.getByTestId("badge-invault-0");
+    expect(badge.getAttribute("title")).toBe("Saved in vault: Savings wallet");
+    expect(screen.getByTestId("cell-invault-0").textContent).toContain("Saved");
+
+    // Unsaved address (only a txid-type record exists for it) → neutral dash.
+    expect(screen.queryByTestId("badge-invault-1")).toBeNull();
+    expect(screen.getByTestId("cell-invault-1").textContent).toBe("—");
+
+    // Invalid input → neutral dash.
+    expect(screen.queryByTestId("badge-invault-2")).toBeNull();
+    expect(screen.getByTestId("cell-invault-2").textContent).toBe("—");
+  });
+
+  it("resolves membership in one batched lookup per run, never per-row", async () => {
+    render(<AddressChecker />);
+    await runCheck();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("badge-invault-0")).toBeTruthy();
+    });
+    expect(lookupSpy).toHaveBeenCalledTimes(1);
+    const batchArg = lookupSpy.mock.calls[0][0] as string[];
+    expect(batchArg).toEqual([ADDR_SAVED, ADDR_UNSAVED]);
+  });
+
+  it("recomputes the snapshot on Reset + re-run so newly saved addresses appear", async () => {
+    render(<AddressChecker />);
+    await runCheck();
+    await waitFor(() => {
+      expect(screen.getByTestId("badge-invault-0")).toBeTruthy();
+    });
+    expect(screen.getByTestId("cell-invault-1").textContent).toBe("—");
+
+    // Save the previously unsaved address into the vault, then Reset + re-run.
+    await createRecord({
+      type: "address",
+      inputString: ADDR_UNSAVED,
+      label: "",
+      tags: [],
+      categories: [],
+    });
+    fireEvent.click(screen.getByTestId("button-reset-check"));
+    await runCheck();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("badge-invault-1")).toBeTruthy();
+    });
+    // Unlabeled record falls back to a generic tooltip.
+    expect(screen.getByTestId("badge-invault-1").getAttribute("title")).toBe("Saved in vault");
+    expect(lookupSpy).toHaveBeenCalledTimes(2);
+  });
+});

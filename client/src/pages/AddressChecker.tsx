@@ -16,6 +16,12 @@ import { validateAddress, formatBTC } from "@/lib/bitcoin";
 import type { AddressInfo, ApiTransaction } from "@/lib/providers/types";
 import { computeHistoryFromTxs } from "@/lib/providers/address-history";
 import { runWithConcurrency, chunk, createPatchBuffer } from "@/lib/address-checker-run";
+import { getSavedAddressRecordLookup } from "@/lib/data/record-crud";
+
+// Shared empty lookup so rows see a stable reference before a run's
+// vault-membership snapshot resolves (keeps the memoized rows from
+// re-rendering when nothing changed).
+const EMPTY_VAULT_MEMBERSHIP: ReadonlyMap<string, string | null> = new Map();
 
 // Provider-aware concurrency: an Electrum node over the pooled multiplexed
 // socket tolerates many parallel lookups; public HTTP APIs (mempool.space,
@@ -183,6 +189,7 @@ const AddressCheckRow = memo(function AddressCheckRow({
   measureRef,
   isHistoryRunning,
   onLoadHistory,
+  vaultMembership,
 }: {
   row: AddressRow;
   i: number;
@@ -192,6 +199,8 @@ const AddressCheckRow = memo(function AddressCheckRow({
   measureRef: (el: HTMLTableRowElement | null) => void;
   isHistoryRunning: boolean;
   onLoadHistory: (index: number) => void;
+  /** Per-run snapshot: lowercased address → saved record label (null = unlabeled). */
+  vaultMembership: ReadonlyMap<string, string | null>;
 }) {
   return (
     <TableRow
@@ -221,6 +230,31 @@ const AddressCheckRow = memo(function AddressCheckRow({
             ? `${row.raw.slice(0, 10)}…${row.raw.slice(-10)}`
             : row.raw}
         </span>
+      </TableCell>
+
+      {/* "In Vault" snapshot for this run. Native title tooltip (not Radix):
+          a Radix Tooltip per row froze the 5,000-row mount — see the address
+          cell comment above. The saved record's label rides in the title. */}
+      <TableCell data-testid={`cell-invault-${i}`}>
+        {(() => {
+          const savedLabel = row.isInvalid
+            ? undefined
+            : vaultMembership.get(row.raw.toLowerCase());
+          return savedLabel !== undefined ? (
+            <span
+              className="cursor-default inline-flex"
+              title={savedLabel ? `Saved in vault: ${savedLabel}` : "Saved in vault"}
+              data-testid={`badge-invault-${i}`}
+            >
+              <Badge variant="secondary" className="gap-1 text-green-600 dark:text-green-400">
+                <CheckCircle className="h-3 w-3" />
+                Saved
+              </Badge>
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          );
+        })()}
       </TableCell>
 
       <TableCell className="text-right">
@@ -345,6 +379,10 @@ export default function AddressChecker() {
   const [prefetchProgress, setPrefetchProgress] = useState<{ fetched: number; total: number } | null>(null);
   // When on, hides completed rows with 0 confirmed transactions from the table.
   const [hideZeroTx, setHideZeroTx] = useState(false);
+  // "In Vault" column snapshot for the current run: lowercased address →
+  // saved record label. Resolved once per run (single batched DB query) and
+  // held in state so the memoized rows re-render only when it changes.
+  const [vaultMembership, setVaultMembership] = useState<ReadonlyMap<string, string | null>>(EMPTY_VAULT_MEMBERSHIP);
   const cancelledRef = useRef(false);
   // Monotonic run token: each runCheck invocation bumps it and captures its
   // own value. Workers from a superseded run (user cancels then immediately
@@ -403,6 +441,17 @@ export default function AddressChecker() {
     // "Cancelled" for this run means either the user hit Cancel/Reset or a
     // newer run has taken over.
     const isCancelled = () => cancelledRef.current || isStale();
+
+    // Snapshot vault membership once per run so the "In Vault" column picks up
+    // newly saved addresses on every check. One batched query for the whole
+    // list (never per-row), resolved in parallel with the provider lookups; a
+    // stale run's late resolution is dropped. Failures degrade to an empty
+    // map inside the helper, so the check itself is never blocked.
+    setVaultMembership(EMPTY_VAULT_MEMBERSHIP);
+    getSavedAddressRecordLookup(parsed.filter(r => !r.isInvalid).map(r => r.raw))
+      .then(map => {
+        if (!isStale()) setVaultMembership(map);
+      });
 
     let provider: BlockchainProvider;
     try {
@@ -704,6 +753,7 @@ export default function AddressChecker() {
     setProviderError(null);
     setPastedText("");
     setHideZeroTx(false);
+    setVaultMembership(EMPTY_VAULT_MEMBERSHIP);
   };
 
   const handleCancel = () => {
@@ -956,6 +1006,7 @@ export default function AddressChecker() {
                     <TableHeader>
                       <TableRow>
                         <TableHead className="min-w-[200px]">Address</TableHead>
+                        <TableHead>In Vault</TableHead>
                         <TableHead className="text-right">Status</TableHead>
                         <TableHead className="text-right">Transactions</TableHead>
                         <TableHead className="text-right">Total Received</TableHead>
@@ -968,7 +1019,7 @@ export default function AddressChecker() {
                     <TableBody>
                       {virtualItems.length > 0 && virtualItems[0].start > scrollMargin && (
                         <TableRow>
-                          <TableCell colSpan={8} className="p-0 border-0" style={{ height: virtualItems[0].start - scrollMargin }} />
+                          <TableCell colSpan={9} className="p-0 border-0" style={{ height: virtualItems[0].start - scrollMargin }} />
                         </TableRow>
                       )}
                       {virtualItems.map(virtualRow => {
@@ -983,6 +1034,7 @@ export default function AddressChecker() {
                             measureRef={rowVirtualizer.measureElement}
                             isHistoryRunning={isHistoryRunning}
                             onLoadHistory={runHistoryForRow}
+                            vaultMembership={vaultMembership}
                           />
                         );
                       })}
@@ -992,7 +1044,7 @@ export default function AddressChecker() {
                         const remaining = rowVirtualizer.getTotalSize() - (lastItem.end - scrollMargin);
                         return remaining > 0 ? (
                           <TableRow>
-                            <TableCell colSpan={8} className="p-0 border-0" style={{ height: remaining }} />
+                            <TableCell colSpan={9} className="p-0 border-0" style={{ height: remaining }} />
                           </TableRow>
                         ) : null;
                       })()}

@@ -51,6 +51,12 @@ vi.mock("@/lib/blockchain-api", async (importOriginal) => ({
   createProviderFromSettings: mocks.createProviderFromSettings,
 }));
 
+// The "In Vault" column's batched membership lookup hits Dexie; these tests
+// don't seed a vault, so stub it to an empty result.
+vi.mock("@/lib/data/record-crud", () => ({
+  getSavedAddressRecordLookup: async () => new Map(),
+}));
+
 vi.mock("@/lib/bitcoin", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   validateAddress: (addr: string) =>
