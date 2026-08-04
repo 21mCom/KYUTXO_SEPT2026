@@ -202,6 +202,8 @@ export function canonicalizeRecordIdentifier(input: string): string {
   if (!input || typeof input !== 'string') return input;
   const trimmed = input.trim();
   if (/^[a-fA-F0-9]{64}$/.test(trimmed)) return trimmed.toLowerCase();
+  const outpointMatch = trimmed.match(/^([a-fA-F0-9]{64}):(\d+)$/);
+  if (outpointMatch) return `${outpointMatch[1].toLowerCase()}:${outpointMatch[2]}`;
   if (/^(?:bc|tb|bcrt)1[a-z0-9]+$/i.test(trimmed)) return trimmed.toLowerCase();
   return trimmed;
 }

@@ -50,6 +50,21 @@ describe('canonicalizeRecordIdentifier', () => {
     expect(canonicalizeRecordIdentifier(`  ${TXID_LOWER.toUpperCase()} `)).toBe(TXID_LOWER);
   });
 
+  it('lowercases the txid part of outpoint identifiers (txid:vout)', () => {
+    expect(canonicalizeRecordIdentifier(`${TXID_LOWER.toUpperCase()}:0`)).toBe(
+      `${TXID_LOWER}:0`,
+    );
+    expect(canonicalizeRecordIdentifier(`  ${TXID_LOWER.toUpperCase()}:15 `)).toBe(
+      `${TXID_LOWER}:15`,
+    );
+    expect(canonicalizeRecordIdentifier(`${TXID_LOWER}:3`)).toBe(`${TXID_LOWER}:3`);
+    // Non-outpoint colon strings stay verbatim
+    expect(canonicalizeRecordIdentifier('ABC:0')).toBe('ABC:0');
+    expect(canonicalizeRecordIdentifier(`${TXID_LOWER.toUpperCase()}:x`)).toBe(
+      `${TXID_LOWER.toUpperCase()}:x`,
+    );
+  });
+
   it('trims but otherwise leaves free-form strings alone', () => {
     expect(canonicalizeRecordIdentifier('  Some Custom Identifier  ')).toBe(
       'Some Custom Identifier',

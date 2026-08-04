@@ -93,6 +93,22 @@ describe("BIP329Import identifier canonicalization warning", () => {
     expect(screen.queryByTestId("alert-identifier-warning")).toBeNull();
   });
 
+  it("counts uppercase outpoint identifiers (txid:vout) in the warning", async () => {
+    renderWithProviders(<BIP329Import />);
+
+    await uploadAndPreview(
+      makeJsonl([
+        { type: "output", ref: `${UPPER_TXID}:0`, label: "Upper outpoint" },
+        { type: "output", ref: `${TXID}:1`, label: "Canonical outpoint" },
+      ]),
+    );
+
+    const alert = screen.getByTestId("alert-identifier-warning");
+    expect(alert.textContent).toContain(
+      "1 identifier will be saved in lowercase",
+    );
+  });
+
   it("uses singular wording for a single case-folded identifier", async () => {
     renderWithProviders(<BIP329Import />);
 
