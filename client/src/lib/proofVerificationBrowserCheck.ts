@@ -32,7 +32,13 @@
  * guards against.
  */
 
-import { verifyBip322P2SH, verifyBitcoinSignature } from './signatureVerify';
+import {
+  verifyBip322Full,
+  verifyBip322P2SH,
+  verifyBip322P2WPKH,
+  verifyBip322Simple,
+  verifyBitcoinSignature,
+} from './signatureVerify';
 
 /**
  * Deterministic 2-of-2 P2SH-P2WSH (wrapped multisig) BIP-322 Full witness,
@@ -42,6 +48,40 @@ const P2SH_P2WSH_2OF2_ADDR = '3GKSstjZTsY2XfdxbzDtWTJJEw4B4918PY';
 const P2SH_P2WSH_2OF2_SIG =
   'BABIMEUCIQCadTCxF4nxWc3SUPxswQANiHXbElgvkdWBCwUxGf3xfgIgBA9b/XFCIH2+rqWUXv53UolAR2rxfAHc0IdUHma8meoBSDBFAiEA8GtfmPQfcFLZRRHzPHISGVvrzeCGtM2yHpoAcl7TlHMCIBId6VTsTZ+cElN8SdhCiNa+iIX8diqxLMEEeX6Ih/KeAUdSIQNPNVvct8wK9yjvPM65YV2QaEu1sspfhZqw8LcEB1hxqiECRm1/yuVj5csJoNGHC7WANEgEYXh5oUlJzyIoXxuuPydSrg==';
 const MESSAGE = 'Hello World';
+
+/**
+ * Vectors for the remaining verify paths, shared verbatim with
+ * signatureVerify.test.ts.
+ */
+
+// Legacy Bitcoin Signed Message (BIP-137): one compressed key, all three
+// address forms (P2PKH "1…", P2SH-P2WPKH "3…", native P2WPKH "bc1q…").
+const LEGACY_MSG = 'I certify that I control the following Bitcoin address.';
+const LEGACY_SIG =
+  'H72VK8HyRDe4nk1xkYqVSYYCsHnIW0vWAHwepHY9NbX8XDuRBu+d01+7LiWh5DAvvo0rm8Mt7mcby6BDsnYvAAw=';
+const LEGACY_P2PKH_ADDR = '1EgNtna8ohPPfDu3AJKCg6tMuP9rqTnQnL';
+const LEGACY_P2WPKH_ADDR = 'bc1qjcxzyzqj2u3mgrt0m8wzgcee0n4u3592ehm4gt';
+const LEGACY_P2SH_P2WPKH_ADDR = '3Bn49vExQ5BGF7dMQ7A3PewhxzGAQEwzqy';
+
+// BIP-322 Simple, Taproot key-path (Bitcoin Core's authoritative vector).
+const P2TR_ADDR = 'bc1ppv609nr0vr25u07u95waq5lucwfm6tde4nydujnu8npg4q75mr5sxq8lt3';
+const P2TR_SIG =
+  'AUHd69PrJQEv+oKTfZ8l+WROBHuy9HKrbFCJu7U1iK2iiEy1vMU5EfMtjc+VSHM7aU0SDbak5IUZRVno2P5mjSafAQ==';
+
+// BIP-322 Simple, native SegWit P2WPKH (canonical bip322-js reference key).
+const P2WPKH_ADDR = 'bc1q9vza2e8x573nczrlzms0wvx3gsqjx7vavgkx0l';
+const P2WPKH_SIG =
+  'AkgwRQIhAOzyynlqt93lOKJr+wmmxIens//zPzl9tqIOua93wO6MAiBi5n5EyAcPScOjf1lAqIUIQtr3zKNeavYabHyR8eGhowEhAsfxIAMZZEKUPYWI4BruhAQjzFT8FSFSajuFwrDL1Yhy';
+
+// BIP-322 Full, native P2WSH 2-of-2 multisig.
+const P2WSH_2OF2_ADDR = 'bc1qfpchwlajc9pau0d07x70wrpnpaztq76kfax9nkd4wxa9dkp68dwsufky9g';
+const P2WSH_2OF2_SIG =
+  'BABHMEQCIBFFh2jDYGfAgcuZzo3HhHiRGn87fjZSI/z+W2uGEGEcAiBJpv32zgDb+7vZyxf6vnp8o7CkbRN2Jy4WpB1cu878xgFIMEUCIQDXRoPFQ7SzbYIVGWq7hANoceKbtdiiQZtmcRVWR4vqHQIgJH5LKbiKOVROPFv7t3sxxBiC3L5b0HzPxwk/81b7SXgBR1IhAtgntbsL3xs/6UNoiJwxgdLC6j0rnr1e7JlIeU5aHRb5IQJIHVIzTIoCDYEi8uGdY4IIsHtYX/Nf898lcYpzDga7y1Ku';
+
+// BIP-322 Full, Taproot single-leaf script-path (<xA> OP_CHECKSIG).
+const P2TR_LEAF_ADDR = 'bc1pcnljf6kcnlqvltg0fu08egg8s6hkesl4d33pss4vuydslpkam6kqxnvn7f';
+const P2TR_LEAF_SIG =
+  'A0A1mEkAVwneZScZ471WeokN/HeyoOHZL+bs3n+U3O2ZaqC/0N7VXErZb5+2auYT68rftiDKRYT4tSK1KtZqv2HdIiDsXbY6q+HSqka826luZyqGIC0F1tHPrZ1ga6Oyt9mDUKwhwWtnUePNDU0/a+5R0EusRiuVc/O12Sss8leylEVxdx+h';
 
 /**
  * Decode a base64 witness, flip one byte deep inside it, and re-encode it.
@@ -87,6 +127,169 @@ export async function runProofVerificationBrowserCheck(
   const bufferGlobalPresent =
     typeof (globalThis as { Buffer?: unknown }).Buffer !== 'undefined';
 
+  type VerifyResult = { verified: boolean; format?: string; error?: string };
+
+  /** A valid vector must return verified=true with the expected format. */
+  async function expectVerified(
+    name: string,
+    expectedFormat: string,
+    fn: () => Promise<VerifyResult>,
+  ): Promise<void> {
+    try {
+      const r = await fn();
+      const passed = r.verified === true && r.format === expectedFormat;
+      steps.push({
+        name,
+        passed,
+        detail: passed
+          ? `verified=true, format='${expectedFormat}'`
+          : `expected verified=true/format='${expectedFormat}', got verified=${r.verified}, format=${String(r.format)}, error=${String(r.error)}`,
+      });
+    } catch (e) {
+      steps.push({
+        name,
+        passed: false,
+        detail: `threw: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  }
+
+  /** A bad vector must fail CLEARLY: verified=false with an error, no crash. */
+  async function expectClearFailure(
+    name: string,
+    fn: () => Promise<VerifyResult>,
+  ): Promise<void> {
+    try {
+      const r = await fn();
+      const passed = r.verified === false && typeof r.error === 'string' && r.error.length > 0;
+      steps.push({
+        name,
+        passed,
+        detail: passed
+          ? `verified=false with error: ${r.error}`
+          : `expected verified=false with an error, got verified=${r.verified}, error=${String(r.error)}`,
+      });
+    } catch (e) {
+      steps.push({
+        name,
+        passed: false,
+        detail: `threw instead of returning a failure result: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Legacy Bitcoin Signed Message (BIP-137): P2PKH, P2SH-P2WPKH, P2WPKH.
+  // ---------------------------------------------------------------------
+  await expectVerified(
+    'legacy BSM verifies a P2PKH (1…) address',
+    'legacy',
+    () => verifyBitcoinSignature(LEGACY_P2PKH_ADDR, LEGACY_MSG, LEGACY_SIG),
+  );
+  await expectVerified(
+    'legacy BSM verifies a P2SH-P2WPKH (3…) address',
+    'legacy',
+    () => verifyBitcoinSignature(LEGACY_P2SH_P2WPKH_ADDR, LEGACY_MSG, LEGACY_SIG),
+  );
+  await expectVerified(
+    'legacy BSM verifies a native P2WPKH (bc1q…) address',
+    'legacy',
+    () => verifyBitcoinSignature(LEGACY_P2WPKH_ADDR, LEGACY_MSG, LEGACY_SIG),
+  );
+  await expectClearFailure(
+    'a tampered legacy BSM signature reports a clear failure',
+    () => verifyBitcoinSignature(LEGACY_P2PKH_ADDR, LEGACY_MSG, tamperWitness(LEGACY_SIG)),
+  );
+  await expectClearFailure(
+    'a legacy BSM proof against the wrong message reports a clear failure',
+    () => verifyBitcoinSignature(LEGACY_P2PKH_ADDR, `${LEGACY_MSG} (edited)`, LEGACY_SIG),
+  );
+
+  // ---------------------------------------------------------------------
+  // BIP-322 Simple: P2WPKH and Taproot key-path.
+  // ---------------------------------------------------------------------
+  await expectVerified(
+    'verifyBip322P2WPKH verifies a valid bc1q BIP-322 witness',
+    'bip322',
+    () => verifyBip322P2WPKH(P2WPKH_ADDR, MESSAGE, P2WPKH_SIG),
+  );
+  await expectVerified(
+    'verifyBitcoinSignature routes the P2WPKH BIP-322 proof and verifies it',
+    'bip322',
+    () => verifyBitcoinSignature(P2WPKH_ADDR, MESSAGE, P2WPKH_SIG),
+  );
+  await expectClearFailure(
+    'a tampered P2WPKH BIP-322 witness reports a clear failure',
+    () => verifyBitcoinSignature(P2WPKH_ADDR, MESSAGE, tamperWitness(P2WPKH_SIG)),
+  );
+  await expectClearFailure(
+    'a P2WPKH BIP-322 proof against the wrong message reports a clear failure',
+    () => verifyBitcoinSignature(P2WPKH_ADDR, 'Goodbye World', P2WPKH_SIG),
+  );
+
+  await expectVerified(
+    'verifyBip322Simple verifies the Taproot key-path Bitcoin Core vector',
+    'bip322',
+    () => verifyBip322Simple(P2TR_ADDR, MESSAGE, P2TR_SIG),
+  );
+  await expectVerified(
+    'verifyBitcoinSignature routes the Taproot key-path proof and verifies it',
+    'bip322',
+    () => verifyBitcoinSignature(P2TR_ADDR, MESSAGE, P2TR_SIG),
+  );
+  await expectClearFailure(
+    'a tampered Taproot key-path witness reports a clear failure',
+    () => verifyBitcoinSignature(P2TR_ADDR, MESSAGE, tamperWitness(P2TR_SIG)),
+  );
+  await expectClearFailure(
+    'a Taproot key-path proof against the wrong message reports a clear failure',
+    () => verifyBitcoinSignature(P2TR_ADDR, 'Goodbye World', P2TR_SIG),
+  );
+
+  // ---------------------------------------------------------------------
+  // BIP-322 Full: native P2WSH multisig and Taproot script-path.
+  // ---------------------------------------------------------------------
+  await expectVerified(
+    'verifyBip322Full verifies a 2-of-2 P2WSH multisig witness',
+    'bip322',
+    () => verifyBip322Full(P2WSH_2OF2_ADDR, MESSAGE, P2WSH_2OF2_SIG),
+  );
+  await expectVerified(
+    'verifyBitcoinSignature routes the P2WSH multisig proof and verifies it',
+    'bip322',
+    () => verifyBitcoinSignature(P2WSH_2OF2_ADDR, MESSAGE, P2WSH_2OF2_SIG),
+  );
+  await expectClearFailure(
+    'a tampered P2WSH multisig witness reports a clear failure',
+    () => verifyBitcoinSignature(P2WSH_2OF2_ADDR, MESSAGE, tamperWitness(P2WSH_2OF2_SIG)),
+  );
+  await expectClearFailure(
+    'a P2WSH multisig proof against the wrong message reports a clear failure',
+    () => verifyBitcoinSignature(P2WSH_2OF2_ADDR, 'Goodbye World', P2WSH_2OF2_SIG),
+  );
+
+  await expectVerified(
+    'verifyBip322Full verifies a Taproot single-leaf script-path witness',
+    'bip322',
+    () => verifyBip322Full(P2TR_LEAF_ADDR, MESSAGE, P2TR_LEAF_SIG),
+  );
+  await expectVerified(
+    'verifyBitcoinSignature routes the Taproot script-path proof and verifies it',
+    'bip322',
+    () => verifyBitcoinSignature(P2TR_LEAF_ADDR, MESSAGE, P2TR_LEAF_SIG),
+  );
+  await expectClearFailure(
+    'a tampered Taproot script-path witness reports a clear failure',
+    () => verifyBitcoinSignature(P2TR_LEAF_ADDR, MESSAGE, tamperWitness(P2TR_LEAF_SIG)),
+  );
+  await expectClearFailure(
+    'a Taproot script-path proof against the wrong message reports a clear failure',
+    () => verifyBitcoinSignature(P2TR_LEAF_ADDR, 'Goodbye World', P2TR_LEAF_SIG),
+  );
+
+  // ---------------------------------------------------------------------
+  // P2SH-P2WSH (wrapped multisig) — the original guard, kept verbatim.
+  // ---------------------------------------------------------------------
   // Step 1: a valid P2SH-P2WSH witness verifies via the dedicated verifier.
   try {
     const r = await verifyBip322P2SH(P2SH_P2WSH_2OF2_ADDR, MESSAGE, P2SH_P2WSH_2OF2_SIG);
