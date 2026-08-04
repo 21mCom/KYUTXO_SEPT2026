@@ -437,6 +437,22 @@ const EXT_P2TR_CSA_ADDR =
 const EXT_P2TR_CSA_SIG =
   'BEBujq6LRmZ54+Yd2U61ZuZ8syMAjwEIDK8Khrmwv2Z0hVGWFyUS3Lzkojet3SUwHMI4NbmRb22abXpNOiivy/6LQD7Mq3nPb5EfSf0E99e1xlXyawmGZKuzdWfugY/Hz7uAD5itHlAaHSVO2F0665tTFRb/prdmCI++GqW8+gClSi9GIEFwbAfWkhruaXo8Q9iyvqp9dBG1hej+Epo7KpD4y/lrrCBQAWPlbIFWR5ZVgsKUVO1vkCo8UDo4tykH8BYT+FJd0rpSnCHAZZBkvVWi1jy8+EHSK0d4N/c6athPNZVcxUCmSHcE1d8=';
 
+// P2TR multi-leaf taproot trees (deep multisig vaults). The signing leaf sits
+// alongside other committed scripts, so the control block carries a 32-byte-
+// per-level merkle path that verifyTaprootCommitment must fold to re-derive
+// the output key — the branch a single-leaf tree never exercises.
+// 2-leaf tree, spending leaf 0 (1-node merkle path).
+const EXT_P2TR_2LEAF_ADDR =
+  'bc1pqpldgprlt26wnfepjwwjeckqf3xx209mv6cv5tmqg7yp3ce70t8qxkp6l9';
+const EXT_P2TR_2LEAF_SIG =
+  'A0CE6iStiz/MJsj8mrO9eI7YlMePdDQ7ZNl1P3XG8basn3+HYQ2XlkLg27zIxVpGD7ck8d2dQ3rorgY85FZ/CZjlIiD5+3LJw5Ensu1OTWzVGRSdFTGiZpUYVjjhTZtBITS6bKxBwZ6Q385Z2IITzh0Nfr85F5IiQkLcp12/lSvSjOrYnsmaxjPBEYswVPX5yNRPREECRo1xdxuvKjl25u7FIMXmRdE=';
+
+// 4-leaf tree, spending leaf 2 (2-node merkle path).
+const EXT_P2TR_4LEAF_ADDR =
+  'bc1pw5uutnp49f5p6pddf5uzmdwq7rtqjy4q0rdfa6g9jc39q33w6zjq4y0eak';
+const EXT_P2TR_4LEAF_SIG =
+  'A0CAMxrmvcyZA+NoVD9dRm7/PBgXZOVzoSHBX2fKtLtkZLFv/oUnOE1J3tSE4k51dMCF6XROcQu8YZtbw0n4T8PfIiCjDjcKNN2qhu12YKD7QA1DzRFwisS72htM+LU/20N8OKxhwN1Kbqvq6udX4wtvGczBplOg2Us+14x+FIfa1XVd4KzpL5w6939n9dcX9+wB/l634de4ICixTur3OCOCZyWl7V6y/xMiWZiGC1HIJIW3B+vP4czzO+npe5J1GBWa9E2DHg==';
+
 describe('BIP-322 Full verification (external independent vectors)', () => {
   it('verifies an externally-produced P2WSH 2-of-2 multisig witness', async () => {
     const result = await verifyBip322Full(EXT_P2WSH_2OF2_ADDR, EXT_MSG, EXT_P2WSH_2OF2_SIG);
@@ -458,6 +474,30 @@ describe('BIP-322 Full verification (external independent vectors)', () => {
   it('verifies an externally-produced P2TR CHECKSIGADD 2-of-2 tapscript witness', async () => {
     const result = await verifyBip322Full(EXT_P2TR_CSA_ADDR, EXT_MSG, EXT_P2TR_CSA_SIG);
     expect(result.verified).toBe(true);
+  });
+
+  it('verifies an externally-produced P2TR script-path witness in a 2-leaf tree (merkle-path folding)', async () => {
+    const result = await verifyBip322Full(EXT_P2TR_2LEAF_ADDR, EXT_MSG, EXT_P2TR_2LEAF_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('verifies an externally-produced P2TR script-path witness in a 4-leaf tree (2-level merkle path)', async () => {
+    const result = await verifyBip322Full(EXT_P2TR_4LEAF_ADDR, EXT_MSG, EXT_P2TR_4LEAF_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('rejects a multi-leaf tapscript witness against the wrong message', async () => {
+    const result = await verifyBip322Full(EXT_P2TR_2LEAF_ADDR, 'Goodbye World', EXT_P2TR_2LEAF_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('rejects a multi-leaf tapscript witness against a different multi-leaf address', async () => {
+    const result = await verifyBip322Full(EXT_P2TR_4LEAF_ADDR, EXT_MSG, EXT_P2TR_2LEAF_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/control block does not commit/i);
   });
 
   it('rejects an external multisig witness against the wrong message', async () => {
