@@ -115,6 +115,10 @@ args = "address-poisoning-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "address-poisoning-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dusted-mark-all-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1780,6 +1784,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-dashboard-hidden-matches-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-poisoning-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-poisoning-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
