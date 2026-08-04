@@ -68,6 +68,19 @@ jobs:
       - name: Build Electron app
         run: npx electron-builder --config electron-builder.json --win
 
+      # RELEASE GATE: prove the native better-sqlite3 read-engine survives real
+      # packaging on a full runner. npmRebuild is ON here, so the addon is built
+      # for the Electron ABI — the check must run the extracted worker under the
+      # packaged KYUTXO.exe itself (ELECTRON_RUN_AS_NODE), never a system-Node
+      # stand-in. KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON=1 disables the fallback
+      # so an ABI/load regression fails the release instead of being masked.
+      # Reuses the release/win-unpacked output from the electron-builder step.
+      - name: Verify packaged native read-engine under shipping Electron ABI
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+          KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON: '1'
+        run: node scripts/check-packaged-native-engine.mjs
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

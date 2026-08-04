@@ -33,12 +33,21 @@
 // A real release build (scripts/electron-build.sh, npmRebuild on) runs the
 // worker under the shipped Electron binary, so the ABI is exercised for real.
 //
+// CI mode (GitHub Actions, .github/workflows/build.yml): the full runner CAN
+// start Electron and packages with npmRebuild on (Electron-ABI addon), so the
+// system-Node fallback would be an ABI LIE there. Set
+// KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON=1 to demand the packaged-binary
+// (ELECTRON_RUN_AS_NODE) runtime path: the check fails if the packaged binary
+// is missing or crashes instead of falling back, proving the Electron-ABI
+// addon genuinely loads under the shipping runtime.
+//
 // Usage:
 //   node scripts/check-packaged-native-engine.mjs
 //     Builds dist (only if missing), the worker bundle, and a --dir asar, then
 //     asserts. Set KYUTXO_PACKAGED_SKIP_BUILD=1 to reuse an existing
-//     release/linux-unpacked output (fails if absent) — e.g. right after
-//     check-packaged-electron-browser.mjs has already built it.
+//     release/<platform>-unpacked output (fails if absent) — e.g. right after
+//     check-packaged-electron-browser.mjs (Linux) or the CI electron-builder
+//     step (Windows) has already built it.
 
 import { execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -48,8 +57,16 @@ import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const UNPACKED_DIR = path.join(ROOT, 'release', 'linux-unpacked');
+const ROOT = process.platform === 'win32'
+  ? path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, '')), '..')
+  : path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// electron-builder's --dir/unpacked layout is platform-named.
+const UNPACKED_DIR = path.join(
+  ROOT,
+  'release',
+  process.platform === 'win32' ? 'win-unpacked' : 'linux-unpacked',
+);
+const REQUIRE_ELECTRON_RUNTIME = process.env.KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON === '1';
 const RESOURCES = path.join(UNPACKED_DIR, 'resources');
 const ASAR = path.join(RESOURCES, 'app.asar');
 const ASAR_UNPACKED = path.join(RESOURCES, 'app.asar.unpacked');
@@ -97,9 +114,13 @@ function buildAsar() {
   }
 }
 
-/** Locate the packaged app executable (extraMetadata.name = "kyutxo"). */
+/** Locate the packaged app executable (extraMetadata.name = "kyutxo",
+ *  productName = "KYUTXO"; Windows uses productName + .exe). */
 function findPackagedBinary() {
-  for (const name of ['kyutxo', 'KYUTXO']) {
+  const names = process.platform === 'win32'
+    ? ['KYUTXO.exe', 'kyutxo.exe']
+    : ['kyutxo', 'KYUTXO'];
+  for (const name of names) {
     const candidate = path.join(UNPACKED_DIR, name);
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
@@ -280,7 +301,19 @@ async function main() {
         env: { ELECTRON_RUN_AS_NODE: '1' },
       });
     }
-    runtimes.push({ label: `system node ${process.execPath}`, bin: process.execPath, env: {} });
+    if (REQUIRE_ELECTRON_RUNTIME) {
+      // CI / real-release mode: the addon was rebuilt for the Electron ABI
+      // (npmRebuild on), so a system-Node fallback would either fail on ABI or
+      // — worse — mask a broken packaged binary. Demand the real runtime.
+      if (runtimes.length === 0) {
+        throw new Error(
+          `${TAG} KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON=1 but no packaged binary was found in ${UNPACKED_DIR}`,
+        );
+      }
+      console.log(`${TAG} REQUIRE_ELECTRON mode: system-Node fallback disabled.`);
+    } else {
+      runtimes.push({ label: `system node ${process.execPath}`, bin: process.execPath, env: {} });
+    }
 
     let loaded = false;
     let loadDetail = '';
@@ -305,10 +338,14 @@ async function main() {
         .trim()
         .slice(-400)}`;
       if (!runtimeCrashed) break; // genuine worker/addon failure — do not mask with a fallback
-      console.log(`${TAG} runtime crashed before the driver ran — trying next runtime.`);
+      if (runtimes.indexOf(runtime) < runtimes.length - 1) {
+        console.log(`${TAG} runtime crashed before the driver ran — trying next runtime.`);
+      }
     }
     steps.push({
-      name: 'extracted packaged worker bundle loads better-sqlite3 and answers init/status/integrityCheck',
+      name: REQUIRE_ELECTRON_RUNTIME
+        ? 'extracted packaged worker bundle loads better-sqlite3 UNDER THE PACKAGED ELECTRON BINARY (ELECTRON_RUN_AS_NODE) and answers init/status/integrityCheck'
+        : 'extracted packaged worker bundle loads better-sqlite3 and answers init/status/integrityCheck',
       passed: loaded,
       detail: loadDetail,
     });

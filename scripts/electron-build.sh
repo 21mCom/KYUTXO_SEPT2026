@@ -38,8 +38,12 @@ node scripts/check-packaged-electron-browser.mjs
 # bytes actually load and open a scratch database. The renderer gate above
 # deliberately skips the native module (nix Electron 29 / npmRebuild off), so
 # this is the only place an asarUnpack or worker-bundle-path regression fails.
-# Reuses the release/ output already produced above.
+# Reuses the release/ output already produced above. Because this script
+# packages with npmRebuild ON, the addon is on the Electron ABI — require the
+# packaged binary runtime (ELECTRON_RUN_AS_NODE) so a system-Node fallback can
+# never mask an ABI/load regression. (The GitHub Actions build runs the same
+# check post-package on the Windows runner — see .github/workflows/build.yml.)
 echo "Step 5: Verifying the packaged native read-engine (asarUnpack release gate)..."
-KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-native-engine.mjs
+KYUTXO_PACKAGED_SKIP_BUILD=1 KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON=1 node scripts/check-packaged-native-engine.mjs
 
 echo "Build complete! Check the 'release' folder for distributable packages."
