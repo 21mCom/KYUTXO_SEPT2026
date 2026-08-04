@@ -20,11 +20,16 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
-const SCRIPTS_DIR = path.dirname(__filename);
+// Test hook: node --test suite (check-engine-bridge-shared.test.mjs) points
+// this at fixture directories so a broken regex can't silently pass everything.
+const SCRIPTS_DIR =
+  process.env.CHECK_ENGINE_BRIDGE_SCRIPTS_DIR || path.dirname(__filename);
 
 const allCheckScripts = fs
   .readdirSync(SCRIPTS_DIR)
-  .filter((f) => /^check-.*\.mjs$/.test(f))
+  // node:test companions (check-*.test.mjs) are test suites, not check
+  // scripts — their fixture strings intentionally contain inline bridges.
+  .filter((f) => /^check-.*\.mjs$/.test(f) && !/\.test\.mjs$/.test(f))
   .sort();
 
 const engineChecks = allCheckScripts.filter((f) =>
