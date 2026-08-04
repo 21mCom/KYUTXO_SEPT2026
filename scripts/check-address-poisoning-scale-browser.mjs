@@ -27,6 +27,11 @@
 //   5. asserts the grouped result list is virtualized (bounded mounted rows),
 //      that scrolling to the bottom swaps the window and the main thread
 //      stays responsive (rAF round-trip)
+//   6. selects a suspect tag and clicks "Tag all suspects (10,000)" — asserts
+//      the busy state appears, the main thread stays responsive while the
+//      chunked bulk writes stream (rAF probes), the run completes within a
+//      generous budget, the success toast reports all 10k creations, and the
+//      blockchain-discovered record count confirms the writes landed
 //
 // Everything runs offline against IndexedDB — no network request leaves the
 // machine. Usage: node scripts/check-address-poisoning-scale-browser.mjs
@@ -49,6 +54,9 @@ const STRANGERS_PER_TX = 2;
 // Generous "seconds, not minutes" budget: the bucketed scan finishes in a few
 // seconds locally; kept loose so parallel-validation load can't flake it.
 const SCAN_BUDGET_MS = 90_000;
+// Tagging 10k suspects = chunked bulk creates into real IndexedDB; generous
+// "seconds, not minutes" budget so parallel-validation load can't flake it.
+const TAG_BUDGET_MS = 120_000;
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -375,6 +383,81 @@ async function main() {
         scrollProbeMs < 3_000,
       detail: `mounted=${bottomState.mounted}, firstRow ${firstTopRow} -> ${bottomState.firstTestId}, scroll+2xRAF=${scrollProbeMs}ms`,
     });
+
+    // ── Tag all suspects at 10k scale stays responsive and completes ────────
+    // The page pre-selects the default suspect tag ("suspected-poisoning"), so
+    // the button is ready to click; applyPoisoningTags creates the vocabulary
+    // row itself if missing.
+    const tagAllButton = page.getByTestId('button-tag-all-suspects');
+    await tagAllButton.waitFor({ state: 'visible', timeout: 10_000 });
+    const buttonLabel = ((await tagAllButton.textContent()) ?? '').trim();
+
+    const tagStart = Date.now();
+    await tagAllButton.click();
+
+    // Busy state: the button disables and shows a spinner while the chunked
+    // bulk writes stream. Poll fast — 10k creates take multiple seconds.
+    let busySeen = false;
+    for (let i = 0; i < 100 && !busySeen; i++) {
+      busySeen = await tagAllButton.isDisabled().catch(() => false);
+      if (!busySeen) await page.waitForTimeout(50);
+    }
+
+    // Responsiveness while tagging: repeated rAF round-trips must keep
+    // resolving. The pre-fix per-record loop would monopolise the main thread
+    // for the whole run; the chunked+yielding path keeps every probe short.
+    let maxProbeMs = 0;
+    let probing = true;
+    const probeLoop = (async () => {
+      while (probing) {
+        const t0 = Date.now();
+        await page
+          .evaluate(
+            () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+          )
+          .catch(() => {});
+        maxProbeMs = Math.max(maxProbeMs, Date.now() - t0);
+        await page.waitForTimeout(250);
+      }
+    })();
+
+    // Success toast (Radix duplicates text into aria-live — use .first()).
+    const toast = page.getByText(/Tagged \d+ record/).first();
+    const tagCompleted = await toast
+      .waitFor({ state: 'visible', timeout: TAG_BUDGET_MS })
+      .then(() => true)
+      .catch(() => false);
+    const tagMs = Date.now() - tagStart;
+    probing = false;
+    await probeLoop;
+    const toastText = tagCompleted ? ((await toast.textContent()) ?? '').trim() : '';
+
+    steps.push({
+      name: `Tag all suspects (${ADDRESS_COUNT}) shows a busy state and completes within ${TAG_BUDGET_MS / 1000}s`,
+      passed: busySeen && tagCompleted && tagMs <= TAG_BUDGET_MS,
+      detail: `button="${buttonLabel}", busySeen=${busySeen}, completed=${tagCompleted} in ${tagMs}ms`,
+    });
+    steps.push({
+      name: 'main thread stays responsive during the 10k tagging run',
+      passed: maxProbeMs > 0 && maxProbeMs < 5_000,
+      detail: `max rAF round-trip while tagging = ${maxProbeMs}ms`,
+    });
+    steps.push({
+      name: 'toast reports all 10k suspects were newly created records',
+      passed: toastText.includes(`created ${ADDRESS_COUNT} new record`),
+      detail: `toast="${toastText}"`,
+    });
+
+    // The writes actually landed: 10k blockchain-discovered records now exist.
+    const discoveredCount = await page.evaluate(async () => {
+      const recordCrud = await import('/src/lib/data/record-crud.ts');
+      return recordCrud.countRecordsByImportanceTiersDirect(['blockchain-discovered']);
+    });
+    steps.push({
+      name: `all ${ADDRESS_COUNT} suspects now have blockchain-discovered records`,
+      passed: discoveredCount === ADDRESS_COUNT,
+      detail: `blockchain-discovered count=${discoveredCount}`,
+    });
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -405,7 +488,7 @@ async function main() {
   }
 
   console.log(
-    `[poisoning-scale] PASSED: the Address Poisoning page scans a ${ADDRESS_COUNT}-address vault in seconds, cancels mid-scan, and renders 10k results through a bounded virtualized window.`,
+    `[poisoning-scale] PASSED: the Address Poisoning page scans a ${ADDRESS_COUNT}-address vault in seconds, cancels mid-scan, and renders 10k results through a bounded virtualized window, and tags all 10k suspects via chunked bulk writes without freezing.`,
   );
 }
 
