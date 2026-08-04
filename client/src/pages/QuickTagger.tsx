@@ -43,7 +43,7 @@ import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
 import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
 import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, captureMergeOrigin, getRecord } from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
-import { validateBitcoinInput } from "@/lib/bitcoin";
+import { validateBitcoinInput, canonicalizeRecordIdentifier, isMixedCaseBech32 } from "@/lib/bitcoin";
 import {
   type TaggerMode,
   classifyForMode,
@@ -74,6 +74,10 @@ interface ParsedEntry {
   type: 'address' | 'transaction' | 'invalid';
   existingRecordId?: number;
   selected: boolean;
+  /** True when saving will change the entry (mixed-case bech32 or uppercase hex folded to lowercase). */
+  caseFolded: boolean;
+  /** True when the entry is a 64-char hex string (saved as a transaction ID; could be an x-only pubkey). */
+  hex64: boolean;
 }
 
 type Step = 'paste' | 'review' | 'metadata' | 'complete';
@@ -221,6 +225,10 @@ export default function QuickTagger() {
         type: entryType,
         existingRecordId,
         selected: classifyForMode(entryType, mode) === 'match',
+        caseFolded:
+          entryType !== 'invalid' &&
+          (isMixedCaseBech32(line) || canonicalizeRecordIdentifier(line) !== line),
+        hex64: /^[a-fA-F0-9]{64}$/.test(line),
       });
     }
 
@@ -269,6 +277,10 @@ export default function QuickTagger() {
   const existingCount = selected.filter(e => e.existingRecordId !== undefined).length;
   const newCount = selected.filter(e => e.existingRecordId === undefined).length;
   const totalCount = selected.length;
+  // Canonicalization heads-up (mirrors the single-record form's identifier warning):
+  // count only entries of the active mode — those are the ones that will be saved.
+  const caseFoldedCount = entries.filter(e => e.type === mode && e.caseFolded).length;
+  const hex64TxidCount = entries.filter(e => e.type === 'transaction' && e.hex64).length;
 
   // Toggle entry selection (only entries matching the active mode are selectable)
   const toggleEntry = (index: number) => {
@@ -589,6 +601,37 @@ export default function QuickTagger() {
                     >
                       Switch to {mode === 'address' ? 'Transactions' : 'Addresses'}
                     </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {(caseFoldedCount > 0 || (mode === 'transaction' && hex64TxidCount > 0)) && (
+                <Alert data-testid="alert-identifier-warning">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    {caseFoldedCount > 0 && (
+                      <span className="block">
+                        <span className="font-medium">
+                          {caseFoldedCount} {caseFoldedCount === 1 ? 'entry' : 'entries'} will be saved in lowercase.
+                        </span>
+                        <span className="block text-sm mt-1">
+                          Bech32 addresses mixing upper- and lowercase letters are usually a paste
+                          mistake; they will be stored in their canonical lowercase form.
+                        </span>
+                      </span>
+                    )}
+                    {mode === 'transaction' && hex64TxidCount > 0 && (
+                      <span className={cn("block", caseFoldedCount > 0 && "mt-2")}>
+                        <span className="font-medium">
+                          {hex64TxidCount} {hex64TxidCount === 1 ? 'entry' : 'entries'} will be saved as transaction IDs.
+                        </span>
+                        <span className="block text-sm mt-1">
+                          A 64-character hex string could also be an x-only public key pasted by
+                          accident — public keys are not tracked, only addresses and transaction IDs.
+                          Double-check what you copied before applying.
+                        </span>
+                      </span>
+                    )}
                   </AlertDescription>
                 </Alert>
               )}
