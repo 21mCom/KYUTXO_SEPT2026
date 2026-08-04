@@ -71,6 +71,10 @@ args = "quantum-scan-scale-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "address-poisoning-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "electrum-sent-nudge-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1828,3 +1832,14 @@ args = "npx vitest run client/src/lib/bitcoin.canonicalize.test.ts client/src/li
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "address-poisoning-scale-browser-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-poisoning-scale-browser.mjs"
