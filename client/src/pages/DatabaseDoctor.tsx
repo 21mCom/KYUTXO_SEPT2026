@@ -1237,14 +1237,18 @@ function ResolveDuplicateDialog({
   // Metadata the redundant record(s) carry, shown so the user can copy anything
   // they care about BEFORE confirming. Values also present verbatim on the
   // keeper are not "lost", so they are filtered out of the warning.
+  // NOTE: rows written by older code paths can lack `label`/`tags`/`notes`
+  // entirely (createRecord spreads the input as-is), so every field access
+  // here must tolerate undefined — this crashed in a real browser before.
   function lostMetadata(loser: VaultRecord): { field: string; value: string }[] {
     if (!keeper) return [];
     const lost: { field: string; value: string }[] = [];
-    if (loser.label.trim() && loser.label.trim() !== keeper.label.trim()) {
-      lost.push({ field: "Label", value: loser.label.trim() });
+    const loserLabel = (loser.label ?? "").trim();
+    if (loserLabel && loserLabel !== (keeper.label ?? "").trim()) {
+      lost.push({ field: "Label", value: loserLabel });
     }
-    const keeperTags = new Set(keeper.tags.map((t) => t.toLowerCase()));
-    const missingTags = loser.tags.filter((t) => !keeperTags.has(t.toLowerCase()));
+    const keeperTags = new Set((keeper.tags ?? []).map((t) => t.toLowerCase()));
+    const missingTags = (loser.tags ?? []).filter((t) => !keeperTags.has(t.toLowerCase()));
     if (missingTags.length > 0) {
       lost.push({ field: "Tags", value: missingTags.join(", ") });
     }
@@ -1322,8 +1326,8 @@ function ResolveDuplicateDialog({
                     <span className="block font-mono text-xs break-all">{r.inputString}</span>
                     <span className="block text-xs text-muted-foreground">
                       #{r.id} · {r.type}
-                      {r.label.trim() ? ` · ${r.label}` : ""}
-                      {r.tags.length > 0 ? ` · tags: ${r.tags.join(", ")}` : ""}
+                      {(r.label ?? "").trim() ? ` · ${r.label}` : ""}
+                      {(r.tags ?? []).length > 0 ? ` · tags: ${(r.tags ?? []).join(", ")}` : ""}
                       {(r.notes ?? "").trim() ? " · has notes" : ""}
                     </span>
                   </Label>
