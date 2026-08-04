@@ -30,6 +30,9 @@ const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
 const BASE_URL = `http://localhost:${PORT}/`;
 const SETUP_PASSWORD = 'addr-checker-5k-check-123';
 const N = Number(process.env.N || 5000);
+// Every SAVED_STRIDE-th pasted address is pre-seeded as a saved `address`
+// record so the "In Vault" column has real matches spread across the run.
+const SAVED_STRIDE = 20;
 
 function genAddresses(n) {
   bitcoin.initEccLib(secp);
@@ -119,6 +122,7 @@ async function main() {
   const exe = resolveChromium();
   console.log(`[addr-checker-5k] chromium: ${exe}, N=${N}`);
   const addresses = genAddresses(N);
+  console.log('[addr-checker-5k] addresses generated');
 
   let devProc = null;
   if (!(await isServerUp(BASE_URL))) {
@@ -144,6 +148,7 @@ async function main() {
     }
   }
 
+  console.log('[addr-checker-5k] chromium launched');
   const steps = [];
   const step = (name, passed, detail) => {
     steps.push({ name, passed, detail });
@@ -170,6 +175,7 @@ async function main() {
       }
     }
 
+    console.log('[addr-checker-5k] app loaded, creating vault');
     // Create the vault.
     await pwInput.fill(SETUP_PASSWORD);
     await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
@@ -194,6 +200,29 @@ async function main() {
         electrumSSL: false,
       });
     });
+
+    // Seed a slice of the pasted list as saved `address` records (every
+    // SAVED_STRIDE-th, alternating labeled/unlabeled) so the "In Vault"
+    // column has matches spread across the 5,000 rows.
+    const savedIndexes = [];
+    for (let i = 0; i < addresses.length; i += SAVED_STRIDE) savedIndexes.push(i);
+    const seeded = await page.evaluate(async (savedAddrs) => {
+      const recordCrud = await import('/src/lib/data/record-crud.ts');
+      const ids = await recordCrud.bulkCreateRecords(
+        savedAddrs.map((a, k) => ({
+          type: 'address',
+          inputString: a,
+          label: k % 2 === 0 ? `Seeded saved #${k}` : '',
+          notes: '',
+          tags: [],
+          categories: [],
+        })),
+        { skipVocabularySync: true, skipNotification: true },
+      );
+      return ids.length;
+    }, savedIndexes.map((i) => addresses[i]));
+    if (seeded !== savedIndexes.length) throw new Error(`Seeded ${seeded}/${savedIndexes.length} saved records`);
+    console.log(`[addr-checker-5k] seeded ${seeded} saved address records (stride ${SAVED_STRIDE})`);
 
     await page.goto(BASE_URL + '#/address-checker', { waitUntil: 'load', timeout: 60_000 }).catch(() => {});
     // The app may use path routing instead of hash routing; navigate in-app if needed.
@@ -227,12 +256,62 @@ async function main() {
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }, addresses.join('\n'));
 
+    // Count membership queries: wrap db.records.where so any query against the
+    // inputStringLower index during the run is tallied. The "In Vault" column
+    // must resolve the whole 5,000-address list in ONE batched query — a
+    // regression to per-row reads shows up as a large count here.
+    await page.evaluate(async () => {
+      const { db } = await import('/src/lib/database.ts');
+      window.__membershipQueries = 0;
+      const origWhere = db.records.where.bind(db.records);
+      db.records.where = (index) => {
+        if (index === 'inputStringLower') window.__membershipQueries++;
+        return origWhere(index);
+      };
+    });
+
     const t0 = Date.now();
     await page.evaluate(() => { window.__clickAt = performance.now(); });
     await page.getByTestId('button-run-check').click();
     await page.getByTestId('button-cancel-check').waitFor({ state: 'visible', timeout: 15_000 });
 
     step('run started: 5,000 rows rendered', (await page.getByTestId('row-address-0').count()) === 1);
+
+    // ── "In Vault" column: Saved badges for the seeded slice ─────────────
+    // Index 0 is seeded (stride starts at 0) and always in the virtualized
+    // top window; the membership snapshot resolves async right after Run.
+    let savedBadgeOk = false;
+    let savedBadgeDetail = '';
+    try {
+      await page.getByTestId('badge-invault-0').waitFor({ state: 'visible', timeout: 15_000 });
+      const badgeStats = await page.evaluate((stride) => {
+        const rows = Array.from(document.querySelectorAll('[data-testid^="row-address-"]'));
+        let seededWithBadge = 0, seededMissing = 0, unseededWithBadge = 0, labeledTitle = 0;
+        for (const r of rows) {
+          const i = Number(r.getAttribute('data-testid').replace('row-address-', ''));
+          const badge = r.querySelector(`[data-testid="badge-invault-${i}"]`);
+          if (i % stride === 0) {
+            if (badge) {
+              seededWithBadge++;
+              if ((badge.getAttribute('title') || '').includes('Seeded saved #')) labeledTitle++;
+            } else seededMissing++;
+          } else if (badge) unseededWithBadge++;
+        }
+        return { rendered: rows.length, seededWithBadge, seededMissing, unseededWithBadge, labeledTitle };
+      }, SAVED_STRIDE);
+      savedBadgeOk =
+        badgeStats.seededWithBadge > 0 &&
+        badgeStats.seededMissing === 0 &&
+        badgeStats.unseededWithBadge === 0 &&
+        badgeStats.labeledTitle > 0;
+      savedBadgeDetail = JSON.stringify(badgeStats);
+    } catch (e) {
+      savedBadgeDetail = `badge-invault-0 never appeared: ${e.message}`;
+    }
+    step('Saved badges render for the seeded slice (and only that slice)', savedBadgeOk, savedBadgeDetail);
+
+    const membershipQueries = await page.evaluate(() => window.__membershipQueries || 0);
+    step('exactly ONE membership query for the whole run (no per-row DB reads)', membershipQueries === 1, `inputStringLower queries=${membershipQueries}`);
 
     // ── Responsiveness probes while the run is under way ────────────────
     // Every ~400 ms: measure event-loop latency in-page and scroll the page
@@ -288,12 +367,14 @@ async function main() {
       const rows = document.querySelectorAll('[data-testid^="row-address-"]');
       let done = 0, checking = 0, withTx = 0, withBalance = 0;
       for (const r of rows) {
-        const badge = r.cells?.[1]?.textContent || r.children[1]?.textContent || '';
+        // Column order: Address(0), In Vault(1), Status(2), Transactions(3),
+        // Received(4), Sent(5), Balance(6), ...
+        const badge = r.cells?.[2]?.textContent || r.children[2]?.textContent || '';
         if (badge.includes('Done')) {
           done++;
-          const tx = r.children[2]?.textContent?.trim();
+          const tx = r.children[3]?.textContent?.trim();
           if (tx && tx !== '—') withTx++;
-          const bal = r.children[5]?.textContent?.trim();
+          const bal = r.children[6]?.textContent?.trim();
           if (bal && bal !== '—') withBalance++;
         }
         if (badge.includes('Checking')) checking++;
@@ -307,7 +388,7 @@ async function main() {
     const doneAfter = rowStats.done;
     await page.waitForTimeout(1500);
     const doneLater = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('[data-testid^="row-address-"]')).filter((r) => (r.children[1]?.textContent || '').includes('Done')).length,
+      Array.from(document.querySelectorAll('[data-testid^="row-address-"]')).filter((r) => (r.children[2]?.textContent || '').includes('Done')).length,
     );
     step('run actually stopped (done count stable after Stop)', doneLater === doneAfter, `done ${doneAfter} → ${doneLater}`);
 
