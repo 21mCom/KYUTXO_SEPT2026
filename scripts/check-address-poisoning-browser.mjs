@@ -31,6 +31,12 @@
 //      refreshes the row)
 //   7. clicks "Tag target" and verifies the poisoning-target badge appears on
 //      the group header
+//   8. seeds a SECOND fixture wave — two more victim addresses with three
+//      lookalike suspects between them — re-runs the scan, and exercises the
+//      bulk banner buttons: "Tag all suspects (3)" must tag every untagged
+//      suspect row (badge appears on each, Dexie records round-trip, count
+//      drops to 0 and the button disables), then "Tag all targets (2)" must
+//      badge both remaining group headers and drop its count to 0
 //
 // NOTE for reviewers: the route /address-poisoning maps to
 // client/src/pages/AddressPoisoning.tsx (see client/src/App.tsx), and the
@@ -69,6 +75,20 @@ const DUST_VOUT = 1;
 const DUST_SATS = 800; // <= default 1000-sat dust threshold
 const SUSPECT_TAG = 'suspected-poisoning'; // page default suspect tag
 const TARGET_TAG = 'poisoning-target'; // page default target tag
+
+// ── Second fixture wave for the bulk "Tag all" buttons ──────────────────────
+// A lookalike match requires BOTH a shared leading run and a shared trailing
+// run of >= matchLength (default 4). Every address below shares the 'bc1q'
+// prefix (4 chars) with everything else, but the trailing 4 chars are unique
+// per victim/suspect pair, so each suspect matches exactly its own victim and
+// nothing cross-matches (incl. the first wave's 'wxyz' suffix).
+const VICTIM2_ADDR = 'bc1qsecondvictimaaaaaaaaaaaaaaaaaaaaqrst';
+const SUSPECT2A_ADDR = 'bc1qsecondvictlookalikeoneaaaaaaaaaaqrst';
+const SUSPECT2B_ADDR = 'bc1qsecondviclookaliketwoaaaaaaaaaaaqrst';
+const VICTIM3_ADDR = 'bc1qthirdvictimbbbbbbbbbbbbbbbbbbbbbmnop';
+const SUSPECT3_ADDR = 'bc1qthirdvictlookalikeccccccccccccccmnop';
+const DUST_TXID_2 = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+const DUST_TXID_3 = '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0';
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -402,6 +422,183 @@ async function main() {
       name: 'Tag target applies the tag: poisoning-target badge appears on the group header',
       passed: targetBadgeAppeared,
       detail: `target badge visible=${targetBadgeAppeared}`,
+    });
+
+    // ── Bulk "Tag all" buttons: seed a second wave and re-scan ──────────────
+    // Two more victims with three lookalike suspects between them. The first
+    // wave's suspect/target are already tagged, so after the re-scan the bulk
+    // buttons must count exactly the 3 new suspects / 2 new targets.
+    await page.evaluate(
+      async ({ fixtures }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const txCrud = await import('/src/lib/data/transaction-crud.ts');
+        const blockTime = Math.floor(Date.now() / 1000) - 86400;
+        for (const f of fixtures) {
+          const recordId = await recordCrud.createRecord({
+            type: 'address',
+            inputString: f.victim,
+            label: f.label,
+          });
+          await txCrud.addTransaction({
+            txid: f.txid,
+            blockHeight: 800001,
+            blockTime,
+            fee: 210,
+            feeRate: 1,
+            syncedAt: Date.now(),
+          });
+          await txCrud.addParticipant({
+            txid: f.txid,
+            role: 'output',
+            address: f.victim,
+            amount: 800,
+            vout: 1,
+            recordId,
+          });
+          let vin = 0;
+          for (const suspect of f.suspects) {
+            await txCrud.addParticipant({
+              txid: f.txid,
+              role: 'input',
+              address: suspect,
+              amount: 5000,
+              vout: vin++,
+            });
+          }
+        }
+      },
+      {
+        fixtures: [
+          {
+            victim: VICTIM2_ADDR,
+            label: 'Second poisoning victim',
+            txid: DUST_TXID_2,
+            suspects: [SUSPECT2A_ADDR, SUSPECT2B_ADDR],
+          },
+          {
+            victim: VICTIM3_ADDR,
+            label: 'Third poisoning victim',
+            txid: DUST_TXID_3,
+            suspects: [SUSPECT3_ADDR],
+          },
+        ],
+      },
+    );
+
+    await runBtn.click();
+    const tagAllSuspectsBtn = page.getByTestId('button-tag-all-suspects');
+    const tagAllTargetsBtn = page.getByTestId('button-tag-all-targets');
+    const suspectsCountReady = await page
+      .waitForFunction(
+        () => {
+          const el = document.querySelector('[data-testid="button-tag-all-suspects"]');
+          return !!el && /\(3\)/.test(el.textContent ?? '');
+        },
+        undefined,
+        { timeout: 60_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    const tagAllSuspectsLabel = ((await tagAllSuspectsBtn.textContent().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim();
+    const tagAllTargetsLabel = ((await tagAllTargetsBtn.textContent().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim();
+    steps.push({
+      name: 're-scan counts exactly the 3 new untagged suspects and 2 new untagged targets',
+      passed: suspectsCountReady && /\(2\)/.test(tagAllTargetsLabel),
+      detail: `suspects button=${JSON.stringify(tagAllSuspectsLabel)}, targets button=${JSON.stringify(tagAllTargetsLabel)}`,
+    });
+
+    // ── Tag all suspects: every new suspect row gains the badge ─────────────
+    await tagAllSuspectsBtn.click();
+    const newSuspects = [SUSPECT2A_ADDR, SUSPECT2B_ADDR, SUSPECT3_ADDR];
+    const suspectBadgeResults = [];
+    for (const addr of newSuspects) {
+      const row = page.getByTestId(`row-suspect-${addr}`);
+      await row.scrollIntoViewIfNeeded().catch(() => {});
+      const badgeVisible = await page
+        .getByTestId(`badge-tag-${addr}-${SUSPECT_TAG}`)
+        .waitFor({ state: 'visible', timeout: 30_000 })
+        .then(() => true)
+        .catch(() => false);
+      suspectBadgeResults.push(badgeVisible);
+    }
+    steps.push({
+      name: 'Tag all suspects: every suspect row across both targets gains the tag badge',
+      passed: suspectBadgeResults.every(Boolean),
+      detail: `badges visible=[${suspectBadgeResults.join(', ')}] for [${newSuspects.map((a) => a.slice(0, 14) + '…').join(', ')}]`,
+    });
+
+    const bulkDbTags = await page.evaluate(
+      async ({ suspects, tag }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const recs = await recordCrud.getRecordsByInputStrings(suspects);
+        const byAddr = new Map(recs.map((r) => [r.inputString, r]));
+        return suspects.map((s) => {
+          const r = byAddr.get(s);
+          return !!r && Array.isArray(r.tags) && r.tags.includes(tag);
+        });
+      },
+      { suspects: newSuspects, tag: SUSPECT_TAG },
+    );
+    steps.push({
+      name: 'all bulk-tagged suspects round-trip in Dexie with the suspected-poisoning tag',
+      passed: Array.isArray(bulkDbTags) && bulkDbTags.length === 3 && bulkDbTags.every(Boolean),
+      detail: `db tag presence=[${bulkDbTags.join(', ')}]`,
+    });
+
+    const suspectsCountZero = await page
+      .waitForFunction(
+        () => {
+          const el = document.querySelector('[data-testid="button-tag-all-suspects"]');
+          return !!el && /\(0\)/.test(el.textContent ?? '');
+        },
+        undefined,
+        { timeout: 30_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    const tagAllSuspectsDisabled = await tagAllSuspectsBtn.isDisabled().catch(() => false);
+    steps.push({
+      name: 'Tag all suspects count drops to 0 and the button disables',
+      passed: suspectsCountZero && tagAllSuspectsDisabled,
+      detail: `count=0 reached=${suspectsCountZero}, disabled=${tagAllSuspectsDisabled}`,
+    });
+
+    // ── Tag all targets: both new group headers gain the badge ──────────────
+    await tagAllTargetsBtn.click();
+    const newTargets = [VICTIM2_ADDR, VICTIM3_ADDR];
+    const targetBadgeResults = [];
+    for (const addr of newTargets) {
+      const group = page.getByTestId(`group-${addr}`);
+      await group.scrollIntoViewIfNeeded().catch(() => {});
+      const badgeVisible = await page
+        .getByTestId(`badge-target-tag-${addr}-${TARGET_TAG}`)
+        .waitFor({ state: 'visible', timeout: 30_000 })
+        .then(() => true)
+        .catch(() => false);
+      targetBadgeResults.push(badgeVisible);
+    }
+    steps.push({
+      name: 'Tag all targets: both remaining group headers gain the poisoning-target badge',
+      passed: targetBadgeResults.every(Boolean),
+      detail: `badges visible=[${targetBadgeResults.join(', ')}]`,
+    });
+
+    const targetsCountZero = await page
+      .waitForFunction(
+        () => {
+          const el = document.querySelector('[data-testid="button-tag-all-targets"]');
+          return !!el && /\(0\)/.test(el.textContent ?? '');
+        },
+        undefined,
+        { timeout: 30_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    const tagAllTargetsDisabled = await tagAllTargetsBtn.isDisabled().catch(() => false);
+    steps.push({
+      name: 'Tag all targets count drops to 0 and the button disables',
+      passed: targetsCountZero && tagAllTargetsDisabled,
+      detail: `count=0 reached=${targetsCountZero}, disabled=${tagAllTargetsDisabled}`,
     });
   } finally {
     await browser.close();
