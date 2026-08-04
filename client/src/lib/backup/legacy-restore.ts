@@ -542,6 +542,14 @@ export function mergeDuplicateTransactionsByTxid<T extends Record<string, any>>(
  * — never overwriting a populated field — while an unmatched backup participant is
  * added. Existing live participants are never duplicated. All participants'
  * `recordId` is remapped through `recordIdMap`.
+ *
+ * FULLY-BLANK live inputs (only txid+role='input' — no address, no resolved
+ * prevout) have no key-based identity. When, for a collided txid, the number of
+ * such blank rows exactly equals the number of distinct backup input outpoints
+ * that matched nothing, they are paired ordinally (blank rows by id ↔ backup
+ * outpoints by first appearance) and enriched instead of duplicated; when the
+ * counts differ the pairing is ambiguous and the backup input is added as
+ * before (see the ordinal-pairing block inside).
  */
 export async function restoreLegacyTransactions(
   blockchainTransactions: any[] | undefined,
@@ -643,6 +651,14 @@ export async function restoreLegacyTransactions(
     //     de-dup so the same backup never doubles a row.
     const liveByMatchKey = new Map<string, TransactionParticipant>();
     const liveByExactKey = new Map<string, TransactionParticipant>();
+    // FULLY-BLANK live inputs per collided txid: rows with only txid+role='input'
+    // (no address AND no resolved prevout). They have no stable identity of their
+    // own — a richer backup input carrying prevTxid/prevVout can never match them
+    // by key — so without extra care the backup input is ADDED, leaving two rows
+    // for the same logical spend. Collected here (NOT via liveByExactKey, which
+    // collapses all blanks for a txid onto one exact key) for the ordinal-pairing
+    // pass below. Kept in load order; sorted by id before pairing.
+    const blankLiveInputsByTxid = new Map<string, TransactionParticipant[]>();
     if (collidedTxids.size > 0) {
       const collidedArr = Array.from(collidedTxids);
       const PARTICIPANT_BATCH = 500;
@@ -652,6 +668,55 @@ export async function restoreLegacyTransactions(
           if (!liveByExactKey.has(participantKey(lp))) liveByExactKey.set(participantKey(lp), lp);
           const mk = participantMatchKey(lp);
           if (mk && !liveByMatchKey.has(mk)) liveByMatchKey.set(mk, lp);
+          const addrBlank =
+            lp.address === undefined || lp.address === null || String(lp.address).trim() === "";
+          if (lp.role === "input" && mk === null && addrBlank && typeof lp.id === "number") {
+            const list = blankLiveInputsByTxid.get(lp.txid);
+            if (list) list.push(lp);
+            else blankLiveInputsByTxid.set(lp.txid, [lp]);
+          }
+        }
+      }
+    }
+
+    // Ordinal pairing for fully-blank live inputs (task: a restored backup that
+    // resolves an outpoint the live row never knew must ENRICH, not duplicate).
+    // There is no persisted vin index, so pairing is only safe when it is
+    // UNAMBIGUOUS: for a collided txid, when the number of blank live inputs
+    // exactly equals the number of DISTINCT backup input outpoints that matched
+    // no live participant, each blank row must correspond to one of those spends
+    // (a tx's inputs are a fixed set — the backup simply resolved what sync had
+    // not). Both sides preserve vin order in practice (sync inserts inputs in
+    // vin order → ascending ids; the backup array keeps its export order), so
+    // they are paired ordinally: i-th blank live input (by id) ↔ i-th unmatched
+    // backup outpoint (by first appearance). Even if the relative order ever
+    // differed, every pairing still maps a real spend of this tx onto a blank
+    // placeholder row of the same tx, so no wrong data can be attached — only,
+    // at worst, to a sibling placeholder. When the counts differ the pairing IS
+    // ambiguous (e.g. some blanks belong to spends the backup doesn't carry),
+    // so those rows stay unmatched and the backup input is added as before —
+    // the documented, deliberate fallback.
+    if (blankLiveInputsByTxid.size > 0) {
+      const unmatchedBackupInputKeysByTxid = new Map<string, string[]>();
+      const seenUnmatchedKeys = new Set<string>();
+      for (const p of transactionParticipants) {
+        if (!p.txid || p.role !== "input" || !blankLiveInputsByTxid.has(p.txid)) continue;
+        const mk = participantMatchKey(p);
+        if (!mk || liveByMatchKey.has(mk) || seenUnmatchedKeys.has(mk)) continue;
+        seenUnmatchedKeys.add(mk);
+        const list = unmatchedBackupInputKeysByTxid.get(p.txid);
+        if (list) list.push(mk);
+        else unmatchedBackupInputKeysByTxid.set(p.txid, [mk]);
+      }
+      for (const [txid, blanks] of blankLiveInputsByTxid) {
+        const keys = unmatchedBackupInputKeysByTxid.get(txid);
+        if (!keys || keys.length !== blanks.length) continue;
+        const ordered = [...blanks].sort((a, b) => (a.id as number) - (b.id as number));
+        for (let i = 0; i < keys.length; i++) {
+          // Registering the blank row under the backup outpoint's match key
+          // makes the main loop below find and ENRICH it (filling prevTxid/
+          // prevVout/address/amount/recordId) instead of adding a duplicate.
+          liveByMatchKey.set(keys[i], ordered[i]);
         }
       }
     }
