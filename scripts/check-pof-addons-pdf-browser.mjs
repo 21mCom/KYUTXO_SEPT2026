@@ -256,6 +256,7 @@ async function main() {
 
   let baselinePdfBytes = null;
   let addonsPdfBytes = null;
+  let samplePdfBytes = null;
   let baselineChallenge = null;
   let addonsChallenge = null;
 
@@ -373,6 +374,23 @@ async function main() {
     console.log(
       `[pof-addons-pdf] captured add-ons PDF (${addonsPdfBytes.byteLength} bytes)`,
     );
+
+    // ════════════════════════════════════════════════════════════════════
+    // RUN 3 — SAMPLE PDF with the add-ons STILL SET in the UI: the
+    // specimen's isSample guards must strip the verifier reference and
+    // block anchor entirely (a specimen must never carry a real bank case
+    // number or anchor hash).
+    // ════════════════════════════════════════════════════════════════════
+    const sampleBtn = page.getByTestId('button-generate-sample-pdf');
+    await sampleBtn.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    const [sampleDownload] = await Promise.all([
+      page.waitForEvent('download', { timeout: 90_000 }),
+      sampleBtn.click(),
+    ]);
+    samplePdfBytes = await readDownloadBytes(sampleDownload);
+    console.log(
+      `[pof-addons-pdf] captured SAMPLE PDF with add-ons set (${samplePdfBytes.byteLength} bytes)`,
+    );
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -391,8 +409,10 @@ async function main() {
   // ── Parse + assert (Node side; pdf.js is only the oracle) ────────────────
   const baselineText = await extractFullText(baselinePdfBytes);
   const addonsText = await extractFullText(addonsPdfBytes);
+  const sampleText = await extractFullText(samplePdfBytes);
   const nBaseline = norm(baselineText);
   const nAddons = norm(addonsText);
+  const nSample = norm(sampleText);
 
   const steps = [];
 
@@ -483,6 +503,35 @@ async function main() {
       detail: passed ? 'sentence present' : 'sentence missing from appendix',
     });
   }
+
+  // 7) SAMPLE PDF (generated with the add-ons STILL SET in the UI): the
+  //    isSample guards must strip every verifier-reference / block-anchor
+  //    token AND the concrete entered values.
+  {
+    const forbidden = [
+      'Verifier ref:',
+      'Block anchor:',
+      'Verifier Reference:',
+      'Block Anchor:',
+      VERIFIER_REF,
+      ANCHOR_HASH,
+    ];
+    const leaked = forbidden.filter((f) => nSample.includes(norm(f)));
+    steps.push({
+      name: 'sample PDF: no verifier-reference / block-anchor text or values anywhere',
+      passed: leaked.length === 0,
+      detail:
+        leaked.length === 0 ? 'no forbidden tokens' : `leaked: ${leaked.join(' | ')}`,
+    });
+  }
+
+  // 8) Sanity: the sample PDF is really the SAMPLE variant (stamped), so a
+  //    silently-downloaded real PDF can't masquerade as a passing specimen.
+  steps.push({
+    name: 'sample PDF: carries the SAMPLE stamp (proves we parsed the specimen)',
+    passed: nSample.includes(norm('SAMPLE')),
+    detail: 'checked for SAMPLE stamp text',
+  });
 
   const ok = steps.every((s) => s.passed);
   console.log(`[pof-addons-pdf] ok=${ok}`);
