@@ -2,8 +2,21 @@
 export const KYUTXO_APP_VERSION = "1.1.28";
 
 // ────────────────────────────────────────────────────────────────────────────
-// Persisted declaration preferences (attestation + glossary toggles)
+// Persisted declaration preferences
+//
+// Persistence boundary: only SECTION TOGGLES and non-identifying formatting
+// preferences are persisted to localStorage (attestation/glossary/intro,
+// QR explorer choice, provenance + fiat currency/rate, and the AML section
+// on/off switch). Sensitive free-text identity data — declarant name, contact,
+// residential address, DOB, tax ID, ID number, nationality, purpose,
+// statement, and the AML free-text answers (source of wealth/funds, tax
+// jurisdiction/statement, PEP status) — is deliberately NEVER auto-persisted:
+// this page can be used on shared machines and those answers describe a
+// person, not a document style. Persisting/restoring preferences only seeds
+// the form's initial state; it never alters previously generated declarations.
 // ────────────────────────────────────────────────────────────────────────────
+import { type ExplorerId, QR_EXPLORERS } from "./explorer-helpers";
+
 export const DECLARATION_PREFS_KEY = "kyutxo.proofOfFunds.declarationPrefs";
 
 export interface DeclarationPrefs {
@@ -12,6 +25,18 @@ export interface DeclarationPrefs {
   attestationPlaceOfSigning: string;
   attestationWitnessLine: string;
   includeGlossary: boolean;
+  // QR codes section
+  includeQr: boolean;
+  qrExplorerId: ExplorerId;
+  // Acquisition & Provenance section
+  includeProvenance: boolean;
+  provenanceFiatCurrency: string;
+  // Fiat equivalent
+  fiatCurrency: string;
+  fiatRate: string;
+  // AML / Risk Screening — toggle only; the free-text answers are identity
+  // data and are intentionally not persisted (see boundary note above).
+  includeAml: boolean;
 }
 
 export const DEFAULT_DECLARATION_PREFS: DeclarationPrefs = {
@@ -20,40 +45,54 @@ export const DEFAULT_DECLARATION_PREFS: DeclarationPrefs = {
   attestationPlaceOfSigning: "",
   attestationWitnessLine: "",
   includeGlossary: false,
+  includeQr: false,
+  qrExplorerId: "mempool",
+  includeProvenance: false,
+  provenanceFiatCurrency: "USD",
+  fiatCurrency: "USD",
+  fiatRate: "",
+  includeAml: false,
 };
 
+function bool(v: unknown, fallback: boolean): boolean {
+  return typeof v === "boolean" ? v : fallback;
+}
+
+function str(v: unknown, fallback: string): string {
+  return typeof v === "string" ? v : fallback;
+}
+
+function explorerId(v: unknown, fallback: ExplorerId): ExplorerId {
+  return typeof v === "string" && QR_EXPLORERS.some((e) => e.id === v)
+    ? (v as ExplorerId)
+    : fallback;
+}
+
 export function loadDeclarationPrefs(): DeclarationPrefs {
+  const d = DEFAULT_DECLARATION_PREFS;
   try {
     const stored = localStorage.getItem(DECLARATION_PREFS_KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as Partial<DeclarationPrefs>;
       return {
-        includeIntro:
-          typeof parsed.includeIntro === "boolean"
-            ? parsed.includeIntro
-            : DEFAULT_DECLARATION_PREFS.includeIntro,
-        includeAttestation:
-          typeof parsed.includeAttestation === "boolean"
-            ? parsed.includeAttestation
-            : DEFAULT_DECLARATION_PREFS.includeAttestation,
-        attestationPlaceOfSigning:
-          typeof parsed.attestationPlaceOfSigning === "string"
-            ? parsed.attestationPlaceOfSigning
-            : DEFAULT_DECLARATION_PREFS.attestationPlaceOfSigning,
-        attestationWitnessLine:
-          typeof parsed.attestationWitnessLine === "string"
-            ? parsed.attestationWitnessLine
-            : DEFAULT_DECLARATION_PREFS.attestationWitnessLine,
-        includeGlossary:
-          typeof parsed.includeGlossary === "boolean"
-            ? parsed.includeGlossary
-            : DEFAULT_DECLARATION_PREFS.includeGlossary,
+        includeIntro: bool(parsed.includeIntro, d.includeIntro),
+        includeAttestation: bool(parsed.includeAttestation, d.includeAttestation),
+        attestationPlaceOfSigning: str(parsed.attestationPlaceOfSigning, d.attestationPlaceOfSigning),
+        attestationWitnessLine: str(parsed.attestationWitnessLine, d.attestationWitnessLine),
+        includeGlossary: bool(parsed.includeGlossary, d.includeGlossary),
+        includeQr: bool(parsed.includeQr, d.includeQr),
+        qrExplorerId: explorerId(parsed.qrExplorerId, d.qrExplorerId),
+        includeProvenance: bool(parsed.includeProvenance, d.includeProvenance),
+        provenanceFiatCurrency: str(parsed.provenanceFiatCurrency, d.provenanceFiatCurrency),
+        fiatCurrency: str(parsed.fiatCurrency, d.fiatCurrency),
+        fiatRate: str(parsed.fiatRate, d.fiatRate),
+        includeAml: bool(parsed.includeAml, d.includeAml),
       };
     }
   } catch {
     // Ignore parse/storage errors — fall back to defaults
   }
-  return DEFAULT_DECLARATION_PREFS;
+  return d;
 }
 
 export function saveDeclarationPrefs(prefs: DeclarationPrefs) {

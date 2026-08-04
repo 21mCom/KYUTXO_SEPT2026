@@ -149,19 +149,28 @@ export default function ProofOfFundsDeclaration() {
     }
   }, [declarantName, declarationDate, purpose, verifierReference, freshnessAnchor, freshnessAnchorEnabled]);
 
-  // Fiat
-  const [fiatCurrency, setFiatCurrency] = useState("USD");
-  const [fiatRate, setFiatRate] = useState("");
+  // Fiat. Restored from the persisted declaration preferences.
+  const [fiatCurrency, setFiatCurrency] = useState(
+    () => loadDeclarationPrefs().fiatCurrency,
+  );
+  const [fiatRate, setFiatRate] = useState(() => loadDeclarationPrefs().fiatRate);
 
-  // Balance-verification QR codes (optional)
-  const [includeQr, setIncludeQr] = useState(false);
-  const [qrExplorerId, setQrExplorerId] = useState<ExplorerId>("mempool");
+  // Balance-verification QR codes (optional). Restored from persisted preferences.
+  const [includeQr, setIncludeQr] = useState(() => loadDeclarationPrefs().includeQr);
+  const [qrExplorerId, setQrExplorerId] = useState<ExplorerId>(
+    () => loadDeclarationPrefs().qrExplorerId,
+  );
   // address -> generated QR data URL for the on-screen preview
   const [qrPreviews, setQrPreviews] = useState<Record<string, string>>({});
 
-  // Acquisition & Provenance section (optional, off by default)
-  const [includeProvenance, setIncludeProvenance] = useState(false);
-  const [provenanceFiatCurrency, setProvenanceFiatCurrency] = useState("USD");
+  // Acquisition & Provenance section (optional, off by default). Restored from
+  // persisted preferences.
+  const [includeProvenance, setIncludeProvenance] = useState(
+    () => loadDeclarationPrefs().includeProvenance,
+  );
+  const [provenanceFiatCurrency, setProvenanceFiatCurrency] = useState(
+    () => loadDeclarationPrefs().provenanceFiatCurrency,
+  );
 
   // Attestation block (optional, off by default). Initial values are restored
   // from the persisted declaration preferences (see loadDeclarationPrefs).
@@ -186,6 +195,11 @@ export default function ProofOfFundsDeclaration() {
     () => loadDeclarationPrefs().includeIntro,
   );
 
+  // AML / Risk Screening section (optional, off by default). Only the section
+  // toggle is persisted; the free-text answers below are identity data and are
+  // deliberately session-only (see declaration-prefs.ts boundary note).
+  const [includeAml, setIncludeAml] = useState(() => loadDeclarationPrefs().includeAml);
+
   // Persist declaration preferences whenever any of them changes so they are
   // restored on the next page load.
   useEffect(() => {
@@ -195,6 +209,13 @@ export default function ProofOfFundsDeclaration() {
       attestationPlaceOfSigning,
       attestationWitnessLine,
       includeGlossary,
+      includeQr,
+      qrExplorerId,
+      includeProvenance,
+      provenanceFiatCurrency,
+      fiatCurrency,
+      fiatRate,
+      includeAml,
     });
   }, [
     includeIntro,
@@ -202,10 +223,14 @@ export default function ProofOfFundsDeclaration() {
     attestationPlaceOfSigning,
     attestationWitnessLine,
     includeGlossary,
+    includeQr,
+    qrExplorerId,
+    includeProvenance,
+    provenanceFiatCurrency,
+    fiatCurrency,
+    fiatRate,
+    includeAml,
   ]);
-
-  // AML / Risk Screening section (optional, off by default)
-  const [includeAml, setIncludeAml] = useState(false);
   const [amlPepStatus, setAmlPepStatus] = useState<"not-stated" | "yes" | "no">("not-stated");
   const [amlTaxJurisdiction, setAmlTaxJurisdiction] = useState("");
   const [amlSourceOfWealth, setAmlSourceOfWealth] = useState("");
