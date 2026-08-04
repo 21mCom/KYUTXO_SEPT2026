@@ -46,3 +46,17 @@ total. Pick a real address with 3-60 txs (block-vin walk) so the counter has
 several distinct values but the fetch stays fast.
 
 **Known flake (2026-07):** the live tx-counter assertion (>=2 distinct samples) fails deterministically when the picked real address has few txs (e.g. 4) — the fetch completes within one render so only one "4/4" sample is captured. Unrelated tasks blocked on this used an audited validation skip; a real fix is to pick an address with more txs or throttle the provider fetch during the check.
+
+## Virtualized heuristic list at scale (2026-08)
+The detail list only reads input-role participants, so thousands of heuristic
+rows can be seeded as display-only participants (bulkAddParticipants, fake
+bc1q… strings, no records/tx rows) — only an address you'll actually Re-sync
+needs to be a VALID address with a record (syncSingleAddress validates format
+and requires a record). Mock the provider deterministically with
+context.route('https://mempool.space/**') (tip/height, /address info, /txs →
+[]) and prove per-row targeting from the intercepted /address/<addr> URLs —
+don't assert the "exact matching" toast (wording under change, and a 0-tx mock
+sync never promotes). Virtualizer rows are measured lazily, so a precomputed
+scrollHeight bottom undershoots; converge with a loop re-setting
+scrollTop=scrollHeight until stable. List order = participant insertion order,
+so seed the target address last to force real scrolling.
