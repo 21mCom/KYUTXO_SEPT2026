@@ -39,3 +39,6 @@ After many back-to-back validation runs, a check can fail on `input-password` ti
 
 ## Wedged lock owner dooms the whole queue
 If one browser check hangs while holding the shared /tmp lock (0% CPU, no log progress after "reusing dev server"), every queued check — including yours — fails on the 20-minute lock timeout, not on assertions. Diagnose by reading the failing check's tail (look for "timed out ... waiting for ... lock (held by pid ...)") and `ps` on the owner. Completion reviews also count reloads as NOT logout: browser checks that claim login transitions must click the app's real logout control and verify the password screen appears.
+
+## Mocking an external Esplora API in a browser check
+`context.route('**://mempool.space/api/**')` intercepts the page's cross-origin fetches; fulfilled responses need `access-control-allow-origin: *` or the page's fetch() can't read them (GET is CORS-simple, no preflight). Count requests node-side at route entry so aborted in-flight requests still count but post-cancel requests can't hide.

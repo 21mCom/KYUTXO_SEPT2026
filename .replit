@@ -435,6 +435,10 @@ args = "address-checker-5k-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "address-checker-cancel-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "address-checker-deep-scroll-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2163,6 +2167,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/data/transaction-crud.opReturnBooleanScan.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-cancel-history-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-cancel-history-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
