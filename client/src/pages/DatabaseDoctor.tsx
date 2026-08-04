@@ -60,9 +60,11 @@ import {
   repairInputStringLower,
   repairAddressImportanceTiers,
   repairCanonicalInputStrings,
+  repairStaleTypeSpecificFields,
   getRecordsByIds,
   deleteRecord,
 } from "@/lib/data/record-crud";
+import { getStaleTypeSpecificFields } from "@/lib/record-type-clears";
 import type { Record as VaultRecord } from "@/lib/db-types";
 import {
   Dialog,
@@ -144,6 +146,11 @@ interface RecordStats {
   // (i.e. a true duplicate pair). Surfaced so the user knows they exist — the
   // repair reports, never merges.
   canonicalIdentifierCollision: number;
+  // Rows still carrying type-specific metadata their CURRENT type can no
+  // longer show/edit (per getStaleTypeSpecificFields — e.g. flowType left on
+  // an address after a Type switch predating the automatic clearing). The
+  // EXACT predicate the "Clear stale type fields" repair fixes.
+  staleTypeFields: number;
 }
 
 // One record participating in a canonical-identifier collision, as listed in
@@ -304,6 +311,7 @@ export default function DatabaseDoctor() {
         hiddenTierTagged: 0,
         nonCanonicalIdentifier: 0,
         canonicalIdentifierCollision: 0,
+        staleTypeFields: 0,
       };
       const samples: SampleRow[] = [];
       // Canonical-identifier health needs whole-table key multiplicity (the
@@ -382,6 +390,13 @@ export default function DatabaseDoctor() {
               !isBlank(row["notes"]) ||
               (Array.isArray(tagsVal) && tagsVal.length > 0);
             if (hasUserMeta) recordStats.hiddenTierTagged += 1;
+          }
+
+          // Stale type-specific metadata: fields the row's current type can
+          // no longer show/edit (left behind by a Type switch predating the
+          // automatic clearing). Same predicate as the repair.
+          if (getStaleTypeSpecificFields(row as never).length > 0) {
+            recordStats.staleTypeFields += 1;
           }
 
           const lockedUnreadable = isLockedUnreadable(row);
@@ -620,7 +635,8 @@ function Verdict({ result }: { result: DoctorResult }) {
     recordStats.searchKeyDesynced > 0 ||
     recordStats.invalidTier > 0 ||
     recordStats.missingTier > 0 ||
-    recordStats.nonCanonicalIdentifier > 0
+    recordStats.nonCanonicalIdentifier > 0 ||
+    recordStats.staleTypeFields > 0
   ) {
     tone = "warn";
     title = "Your records are readable, but some may not show up in search or lists.";
@@ -642,6 +658,11 @@ function Verdict({ result }: { result: DoctorResult }) {
     if (recordStats.invalidTier > 0 || recordStats.missingTier > 0) {
       lines.push(
         `${(recordStats.invalidTier + recordStats.missingTier).toLocaleString()} records have a missing or unrecognized importance tier (often restored from an older backup), which can make them invisible to some filtered views. Use "Normalize importance tiers" below to fix them.`,
+      );
+    }
+    if (recordStats.staleTypeFields > 0) {
+      lines.push(
+        `${recordStats.staleTypeFields.toLocaleString()} records carry leftover metadata from a previous Type (for example, a transaction flow type still saved on a record now marked as an address). These values are invisible in the edit form but can surface in reports and exports. Use "Clear stale type fields" below to remove them.`,
       );
     }
   } else {
@@ -805,6 +826,12 @@ function RecordHealthCard({ stats, flags }: { stats: RecordStats; flags: Migrati
           highlight={stats.canonicalIdentifierCollision > 0}
         />
         <StatLine
+          label="Leftover metadata from a previous Type (repairable)"
+          value={stats.staleTypeFields.toLocaleString()}
+          testid="stat-stale-type-fields"
+          highlight={stats.staleTypeFields > 0}
+        />
+        <StatLine
           label="With a blank label"
           value={stats.blankLabel.toLocaleString()}
           testid="stat-blank-label"
@@ -859,7 +886,7 @@ function RepairToolsCard({
   onRepairComplete: () => void;
 }) {
   const { toast } = useToast();
-  const [running, setRunning] = useState<null | "searchKeys" | "tiers">(null);
+  const [running, setRunning] = useState<null | "searchKeys" | "tiers" | "typeFields">(null);
   const [repairProgress, setRepairProgress] = useState("");
 
   const runSearchKeyRepair = async () => {
@@ -956,6 +983,41 @@ function RepairToolsCard({
     }
   };
 
+  const runTypeFieldRepair = async () => {
+    setRunning("typeFields");
+    setRepairProgress("");
+    try {
+      const res = await repairStaleTypeSpecificFields((scanned, fixed) => {
+        setRepairProgress(
+          `Checked ${scanned.toLocaleString()} records — cleaned ${fixed.toLocaleString()}…`,
+        );
+      });
+      if (res.ok) {
+        toast({
+          title: "Stale type fields cleared",
+          description: `Cleaned ${res.fixed.toLocaleString()} of ${res.scanned.toLocaleString()} checked records.`,
+        });
+      } else {
+        toast({
+          title: "Type-field cleanup did not finish",
+          description:
+            "An error occurred mid-run. Cleaned rows were kept — run it again to finish.",
+          variant: "destructive",
+        });
+      }
+      onRepairComplete();
+    } catch (err) {
+      toast({
+        title: "Type-field cleanup failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setRunning(null);
+      setRepairProgress("");
+    }
+  };
+
   return (
     <Card data-testid="card-repair-tools">
       <CardHeader>
@@ -1026,6 +1088,33 @@ function RepairToolsCard({
               <RefreshCw className="h-4 w-4" />
             )}
             Normalize tiers
+          </Button>
+        </div>
+        <Separator />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Clear stale type fields</p>
+            <p className="text-xs text-muted-foreground max-w-md">
+              {stats.staleTypeFields > 0
+                ? `${stats.staleTypeFields.toLocaleString()} records currently carry metadata left over from a previous Type.`
+                : "No leftover type-specific metadata detected right now."}{" "}
+              Removes only fields the record's current Type can no longer show or edit (for
+              example, a transaction flow type still saved on an address) — the same fields the
+              edit form clears automatically when you switch a record's Type today.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={runTypeFieldRepair}
+            disabled={running !== null}
+            data-testid="button-repair-type-fields"
+          >
+            {running === "typeFields" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Clear stale type fields
           </Button>
         </div>
         {running !== null && repairProgress && (

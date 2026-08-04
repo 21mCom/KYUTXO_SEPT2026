@@ -3,6 +3,7 @@ import { db, notifyDbChange, isUserCuratedImportance, type Record, type Attachme
 import { isValidImportanceTier, isHiddenDiscoveryTier, HIDDEN_DISCOVERY_TIERS } from '../db-types';
 import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from './vocabulary-crud';
 import { canonicalizeRecordIdentifier } from '../bitcoin';
+import { getStaleTypeSpecificFields } from '../record-type-clears';
 import { getActivityBus } from '../activity-bus';
 import { type GroupBy, GROUP_EMPTY_KEY, addressMatchesGroup, type AddressBalanceRow } from '../balance-grouping';
 
@@ -981,6 +982,82 @@ export async function repairCanonicalInputStrings(
 
   return { scanned, fixed, skippedCollisions, ok };
 }
+/**
+ * Re-runnable repair for records still carrying type-specific metadata their
+ * CURRENT type can no longer show or edit (flowType/dispositionType on
+ * addresses, counterpartyType/counterpartyName on transactions, all six
+ * type-specific fields on 'other'). The edit form now clears these on a Type
+ * switch, but rows whose Type was switched before that fix keep the orphaned
+ * values, which can surface in reports and exports.
+ *
+ * Uses the exact same mapping the form uses (getStaleTypeSpecificFields /
+ * getTypeSwitchClears in lib/record-type-clears), so scan, repair, and the
+ * live edit path can never disagree about which fields are stale.
+ *
+ * Fixed rows get a fresh `updatedAt` so the engine mirror's freshness
+ * fingerprint observes the change. Keyset-batched with yields; safe to run
+ * any number of times (healthy rows are never touched).
+ */
+export async function repairStaleTypeSpecificFields(
+  onProgress?: (scanned: number, fixed: number) => void,
+): Promise<{ scanned: number; fixed: number; ok: boolean }> {
+  const BATCH = 1000;
+  let lastId = 0;
+  let scanned = 0;
+  let fixed = 0;
+  let ok = true;
+
+  try {
+    for (;;) {
+      const chunk = await db.records
+        .where('id')
+        .above(lastId)
+        .limit(BATCH)
+        .toArray();
+      if (chunk.length === 0) break;
+      lastId = chunk[chunk.length - 1].id!;
+      scanned += chunk.length;
+
+      const now = Date.now();
+      const toFix: Record[] = [];
+      for (const r of chunk) {
+        const staleKeys = getStaleTypeSpecificFields(r);
+        if (staleKeys.length === 0) continue;
+        const repaired: Record = { ...r, updatedAt: now };
+        for (const key of staleKeys) {
+          // Delete (not set-to-undefined) so the stored row truly drops the
+          // field, matching what IndexedDB's structured clone does on the
+          // live edit path.
+          delete (repaired as unknown as globalThis.Record<string, unknown>)[key];
+        }
+        toFix.push(repaired);
+      }
+
+      if (toFix.length > 0) {
+        await db.records.bulkPut(toFix);
+        fixed += toFix.length;
+      }
+
+      onProgress?.(scanned, fixed);
+      if (chunk.length < BATCH) break;
+      // Yield between batches so a huge vault does not freeze the renderer.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  } catch (err) {
+    ok = false;
+    console.error(
+      '[repairStaleTypeSpecificFields] Failed:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  if (fixed > 0) {
+    notifyDbChange('records');
+  }
+
+  return { scanned, fixed, ok };
+}
+
 export interface SearchVisibilityIssues {
   /** At least one row has a missing or unrecognized importance tier. */
   tiersAffected: boolean;

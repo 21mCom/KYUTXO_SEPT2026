@@ -69,41 +69,12 @@ function scoreRecordMetadata(record: DbRecord): number {
   return score;
 }
 
-// Type-specific metadata clearing when a record's Type is switched.
-//
-// The edit form only renders the metadata section matching the current type
-// (RecordFormDialog: "Transaction Details" for 'transaction', "Acquisition &
-// Provenance" for 'address', neither for 'other'), so after a Type switch the
-// now-hidden fields would silently persist and could surface in reports and
-// exports. Mirror the form's per-type field groupings here and clear whatever
-// the new type can no longer show/edit:
-//   - transaction-only: flowType, dispositionType
-//   - address-only:     counterpartyType, counterpartyName
-//   - shared by address AND transaction (intentionally retained across a
-//     switch between those two): acquisitionMethod, costBasisUsd — both
-//     sections render these fields, so the value stays visible and editable.
-//   - 'other' renders none of them, so all six are cleared.
-// Returned undefined values overwrite the merged row in updateRecord and are
-// dropped by IndexedDB's structured clone, i.e. the fields are truly removed.
-export function getTypeSwitchClears(
-  newType: DbRecord["type"],
-): Partial<Pick<DbRecord, "flowType" | "acquisitionMethod" | "dispositionType" | "costBasisUsd" | "counterpartyType" | "counterpartyName">> {
-  if (newType === "transaction") {
-    return { counterpartyType: undefined, counterpartyName: undefined };
-  }
-  if (newType === "address") {
-    return { flowType: undefined, dispositionType: undefined };
-  }
-  // 'other' has no type-specific metadata sections at all.
-  return {
-    flowType: undefined,
-    acquisitionMethod: undefined,
-    dispositionType: undefined,
-    costBasisUsd: undefined,
-    counterpartyType: undefined,
-    counterpartyName: undefined,
-  };
-}
+// Type-specific metadata clearing when a record's Type is switched. The
+// mapping lives in @/lib/record-type-clears so the Database Doctor's stale
+// type-field scan/repair shares the exact same source of truth; re-exported
+// here for existing importers/tests.
+export { getTypeSwitchClears } from "@/lib/record-type-clears";
+import { getTypeSwitchClears } from "@/lib/record-type-clears";
 
 // Select the best record from a list of duplicates based on metadata richness
 function selectBestRecord(records: DbRecord[]): DbRecord {
