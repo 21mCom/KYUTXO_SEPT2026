@@ -88,12 +88,13 @@ function main() {
   }
 
   console.error(
-    '\nTo fix: every "resolved" URL must use the canonical registry form\n' +
+    '\nTo fix, run the automated fixer:\n' +
+      '  node scripts/fix-lockfile-urls.mjs\n' +
+      'It rewrites every firewall URL to the canonical registry form\n' +
       '  https://registry.npmjs.org/<name>/-/<basename>-<version>.tgz\n' +
-      '(for scoped packages, <name> keeps the @scope/ prefix and <basename> drops it).\n' +
-      'Derive <name> from the lockfile key after the last "node_modules/" and <version>\n' +
-      'from the entry — do NOT string-replace the host portion only. Then run\n' +
-      '"npm install" to prove the URLs fetch, re-run this check, and commit the lockfile.'
+      '(deriving <name>/<version> from each lockfile entry, never host-only\n' +
+      'string replacement), re-runs this check, and verifies the rewritten URLs\n' +
+      'actually fetch from the registry. Then commit the lockfile.'
   );
   process.exit(1);
 }
