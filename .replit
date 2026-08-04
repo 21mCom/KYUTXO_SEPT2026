@@ -443,6 +443,10 @@ args = "poisoning-copy-guard-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "canonical-identifiers-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dashboard-hidden-matches-engine-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1953,6 +1957,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-address-checker-invault-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "canonical-identifiers-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-canonical-identifiers-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
