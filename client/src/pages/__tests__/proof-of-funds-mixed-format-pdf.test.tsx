@@ -12,7 +12,7 @@
 // address, then generates the PDF (jsPDF is mocked so every `doc.text(...)`
 // string is captured) and asserts:
 //   (1) the per-address "Signature Format:" line uses the correct human label
-//       for each format (Bitcoin Signed Message vs BIP-322 (Taproot / Schnorr));
+//       for each format (Bitcoin Signed Message vs BIP-322);
 //   (2) the appendix signature-box heading switches between
 //       "Wallet Signature (base64):" and "BIP-322 Witness (base64):";
 //   (3) the DISCLAIMERS section uses the combined
@@ -189,7 +189,7 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
       "Signature Format: Bitcoin Signed Message",
     );
     expect(pdfTextLines).toContain(
-      "Signature Format: BIP-322 (Simple)",
+      "Signature Format: BIP-322",
     );
 
     // (2) Appendix signature-box headings switch on format.

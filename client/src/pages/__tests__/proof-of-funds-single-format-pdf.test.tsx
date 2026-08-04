@@ -196,9 +196,7 @@ describe("ProofOfFundsDeclaration — single-format proof-of-control PDF", () =>
     // (1) Per-address "Signature Format:" line uses the legacy label, and the
     //     BIP-322 label is never emitted.
     expect(pdfTextLines).toContain("Signature Format: Bitcoin Signed Message");
-    expect(pdfTextLines).not.toContain(
-      "Signature Format: BIP-322 (Taproot / Schnorr)",
-    );
+    expect(pdfTextLines).not.toContain("Signature Format: BIP-322");
 
     // (2) Disclaimer uses the single legacy phrasing.
     const legacyDisclaimer = pdfTextLines.find(
@@ -230,9 +228,7 @@ describe("ProofOfFundsDeclaration — single-format proof-of-control PDF", () =>
 
     // (1) Per-address "Signature Format:" line uses the BIP-322 label, and the
     //     legacy label is never emitted.
-    expect(pdfTextLines).toContain(
-      "Signature Format: BIP-322 (Taproot / Schnorr)",
-    );
+    expect(pdfTextLines).toContain("Signature Format: BIP-322");
     expect(pdfTextLines).not.toContain(
       "Signature Format: Bitcoin Signed Message",
     );

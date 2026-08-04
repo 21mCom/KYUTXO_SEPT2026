@@ -120,7 +120,7 @@ describe("ProofOfFundsDeclaration — bc1q signature verification (E2E, real ver
     // The inline verified line shows the BIP-322 (Simple) format label.
     await waitFor(() => {
       expect(
-        screen.getByText(/Signature verified \(BIP-322 \(Simple\)\)/),
+        screen.getByText(/Signature verified \(BIP-322\)/),
       ).toBeTruthy();
     });
 

@@ -182,7 +182,7 @@ describe("ProofOfFundsDeclaration — Taproot (BIP-322) proof-of-control PDF", (
     // (1) Per-address "Signature Format:" line uses the BIP-322 label and the
     //     legacy label must NOT appear anywhere.
     expect(pdfTextLines).toContain(
-      "Signature Format: BIP-322 (Simple)",
+      "Signature Format: BIP-322",
     );
     expect(pdfTextLines).not.toContain(
       "Signature Format: Bitcoin Signed Message",
