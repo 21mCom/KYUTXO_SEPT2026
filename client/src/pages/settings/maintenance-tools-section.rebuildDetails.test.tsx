@@ -212,6 +212,16 @@ describe("Last rebuild result — per-transaction details", () => {
     expect(screen.queryByTestId("rebuild-result-details")).toBeNull();
   });
 
+  it("Dismiss button removes the rebuild result panel", async () => {
+    await runRebuild(makeResult());
+
+    fireEvent.click(screen.getByTestId("button-dismiss-rebuild-result"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("rebuild-result-summary")).toBeNull();
+    });
+  });
+
   it("names the truncated txid in the completion toast when exactly one orphan was processed", async () => {
     await runRebuild(
       makeResult({
