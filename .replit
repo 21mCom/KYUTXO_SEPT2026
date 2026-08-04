@@ -435,6 +435,10 @@ args = "records-search-visibility-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "behavior-hidden-matches-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dashboard-hidden-matches-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -1998,6 +2002,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/pages/AddressChecker.inVault.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "behavior-hidden-matches-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-behavior-hidden-matches-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
