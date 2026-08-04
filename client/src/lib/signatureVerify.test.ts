@@ -968,6 +968,88 @@ describe("BIP-322 P2SH-P2WSH rejects structurally-valid-but-insufficient wrapped
   });
 });
 
+/**
+ * P2SH-P2WPKH (wrapped single-key "3…" vault) BIP-322 vector, generated
+ * deterministically offline like the wrapped-multisig vectors above: fixed
+ * private key sha256("KYUTXO P2SH-P2WPKH BIP-322 vector key"), RFC-6979
+ * ECDSA over the BIP-143 sighash of the BIP-322 to_sign transaction whose
+ * to_spend output carries the P2SH scriptPubKey. Witness stack:
+ * [DER sig + SIGHASH_ALL byte, 33-byte compressed pubkey].
+ */
+const P2SH_P2WPKH_ADDR = '3AK7FtoYUyY4qNecR5VLwjmw7uU6FrwFB7';
+const P2SH_P2WPKH_SIG =
+  'AkgwRQIhAMoylwMGkfqbpK/65/XQ+D3niVHdZ87AWTiPJWemmSpTAiAkhzM4VOHIA8Ta+vwyzryLeFf2X+4zJqDIQKinuac86AEhA1GNUOBChF8VuAUZmjHsXVI/GWuGqYLaJ0g57bkWZIbG';
+
+describe('BIP-322 P2SH-P2WPKH (wrapped single-key) verification', () => {
+  // Witness stack: [DER sig (with trailing sighash byte), 33-byte pubkey].
+  const items = splitWitness(P2SH_P2WPKH_SIG);
+
+  it('verifies the wrapped single-key vector', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WPKH_ADDR, FULL_MSG, P2SH_P2WPKH_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('routes the wrapped single-key witness through verifyBitcoinSignature', async () => {
+    const result = await verifyBitcoinSignature(P2SH_P2WPKH_ADDR, FULL_MSG, P2SH_P2WPKH_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('rejects the signature against the wrong message', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WPKH_ADDR, 'Goodbye World', P2SH_P2WPKH_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
+
+  it('rejects a bit-flipped DER signature (tampered witness)', async () => {
+    // Flip a byte inside the r-value: the DER stays structurally parseable and
+    // the untouched pubkey still hashes to the address's redeem script, so the
+    // forgery must be caught by ECDSA validation itself — never by crashing and
+    // never by the redeem-script-mismatch branch.
+    const badSig = flipByte(items[0], 10);
+    const result = await verifyBip322P2SH(
+      P2SH_P2WPKH_ADDR,
+      FULL_MSG,
+      joinWitness([badSig, items[1]]),
+    );
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+    expect(result.error).not.toMatch(/does not correspond/i);
+  });
+
+  it('rejects a substituted foreign pubkey (redeem script no longer matches)', async () => {
+    // Swap in a different valid 33-byte compressed pubkey (from the native
+    // P2WPKH vector). It hashes to a DIFFERENT redeem script, so the witness
+    // can no longer prove control of this address.
+    const foreignPub = splitWitness(P2WPKH_BIP322_HELLO_SIG)[1];
+    expect(foreignPub.length).toBe(33);
+    const result = await verifyBip322P2SH(
+      P2SH_P2WPKH_ADDR,
+      FULL_MSG,
+      joinWitness([items[0], foreignPub]),
+    );
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/does not correspond|not supported/i);
+  });
+
+  it('rejects when the sighash-type byte is altered (sighash binding)', async () => {
+    // The trailing sighash byte of the DER item participates in the BIP-143
+    // sighash the ECDSA signature commits to; changing SIGHASH_ALL (0x01) to
+    // SIGHASH_NONE (0x02) must fail signature validation, not crash or pass.
+    const mutated = items[0].slice();
+    mutated[mutated.length - 1] = 0x02; // SIGHASH_NONE
+    const result = await verifyBip322P2SH(
+      P2SH_P2WPKH_ADDR,
+      FULL_MSG,
+      joinWitness([mutated, items[1]]),
+    );
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/does not correspond/i);
+  });
+});
+
 describe("challenge message helpers", () => {
   it("builds a deterministic challenge embedding the address and nonce", () => {
     const msg = buildChallengeMessage({
