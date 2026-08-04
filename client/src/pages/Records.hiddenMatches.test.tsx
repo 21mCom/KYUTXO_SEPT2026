@@ -397,6 +397,67 @@ describe("Records hidden-tier match notice", () => {
     });
   });
 
+  it("a search term combined with a behavior label counts hidden matches via the load effect's deferred count", async () => {
+    // Task #1892 — the behavior-only test above exercises the recount effect
+    // (deps: [behaviorFilters]). Changing the SEARCH while a behavior label is
+    // already selected instead re-runs the load effect, whose deferred count
+    // reads the behavior selection via behaviorFiltersRef at call time. That
+    // deferred predicate must honor BOTH narrowings.
+    mockLocation = "/records";
+    hiddenResult = { count: 2, capped: false, scanCapped: false };
+    render(<Records />);
+
+    // Select the "not-enough-data" behavior label first (recount path).
+    fireEvent.click(screen.getByTestId("mock-behavior-filter"));
+    await screen.findByTestId("notice-hidden-matches", undefined, { timeout: 3000 });
+    const callsBefore = vi.mocked(countHiddenTierMatches).mock.calls.length;
+    expect(callsBefore).toBeGreaterThan(0);
+
+    // Now add a search term — this triggers a full load, not the recount.
+    fireEvent.change(screen.getByTestId("input-search"), {
+      target: { value: "stash" },
+    });
+
+    await waitFor(
+      () => {
+        expect(
+          vi.mocked(countHiddenTierMatches).mock.calls.length,
+        ).toBeGreaterThan(callsBefore);
+      },
+      { timeout: 3000 },
+    );
+
+    // The load effect's deferred predicate must compose the search residual
+    // AND the behavior selection (read via the ref at call time).
+    const calls = vi.mocked(countHiddenTierMatches).mock.calls;
+    const { matches } = calls[calls.length - 1][0];
+    // Unsynced address ("not-enough-data") whose label matches the search.
+    expect(
+      matches({ type: "address", label: "cold stash", tags: [] } as never),
+    ).toBe(true);
+    // Behavior matches, search does not.
+    expect(
+      matches({ type: "address", label: "unrelated", tags: [] } as never),
+    ).toBe(false);
+    // Search matches, behavior does not (synced, recent activity).
+    expect(
+      matches({
+        type: "address",
+        label: "hot stash",
+        statsComputedAt: 1,
+        cachedTxCount: 5,
+        cachedLastActivityTime: Math.floor(Date.now() / 1000),
+        tags: [],
+      } as never),
+    ).toBe(false);
+
+    // The notice stays up with the combined-narrowing count.
+    const notice = await screen.findByTestId("notice-hidden-matches", undefined, {
+      timeout: 3000,
+    });
+    expect(notice.textContent).toContain("2 matches are hidden");
+  });
+
   it("clearing a behavior-only narrowing clears the notice", async () => {
     mockLocation = "/records";
     hiddenResult = { count: 4, capped: false, scanCapped: false };
