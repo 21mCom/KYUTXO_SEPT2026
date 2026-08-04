@@ -98,4 +98,41 @@ describe("EsploraProvider.getAddressHistoryDates onProgress per page", () => {
     expect(result.firstSeenTime).toBe(1000);
     expect(result.lastSeenTime).toBe(1000 + 2 * 100 + 9);
   });
+
+  it("aborting the signal mid-walk stops further page fetches", async () => {
+    // Endless full pages — without cancellation the walk would never end.
+    let call = 0;
+    const controller = new AbortController();
+    fetchMock.mockImplementation(async () => {
+      const page = makePage(call, 25);
+      call += 1;
+      return new Response(JSON.stringify(page), { status: 200 });
+    });
+
+    const provider = new TestEsploraProvider();
+    const onProgress = vi.fn((scanned: number) => {
+      // Cancel after the second page has been reported.
+      if (scanned >= 50) controller.abort();
+    });
+
+    await expect(
+      provider.getAddressHistoryDates(ADDR, onProgress, controller.signal),
+    ).rejects.toThrow(/cancelled/i);
+
+    // Exactly two pages were fetched; the between-pages guard stopped the
+    // walk before a third request went out.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("an already-aborted signal prevents any fetch", async () => {
+    queuePages([makePage(0, 25)]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const provider = new TestEsploraProvider();
+    await expect(
+      provider.getAddressHistoryDates(ADDR, undefined, controller.signal),
+    ).rejects.toThrow(/cancelled/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

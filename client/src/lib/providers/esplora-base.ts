@@ -296,6 +296,7 @@ export abstract class EsploraProvider implements BlockchainProvider {
   async getAddressHistoryDates(
     address: string,
     onProgress?: (scanned: number) => void,
+    signal?: AbortSignal,
   ): Promise<AddressHistoryDates> {
     let firstSeenTime: number | undefined;
     let lastSeenTime: number | undefined;
@@ -303,11 +304,16 @@ export abstract class EsploraProvider implements BlockchainProvider {
     let scanned = 0;
 
     for (;;) {
+      // Bail out between pages when the user cancels mid-walk. The in-flight
+      // request itself is also aborted via the signal passed to
+      // rateLimitedFetch below.
+      if (signal?.aborted) throw new Error('Sync cancelled');
+
       const url = lastTxid
         ? `${this.baseUrl}/address/${address}/txs/chain/${lastTxid}`
         : `${this.baseUrl}/address/${address}/txs`;
 
-      const txsResponse = await this.rateLimitedFetch(url);
+      const txsResponse = await this.rateLimitedFetch(url, signal);
       const txs: ApiTransaction[] = await txsResponse.json();
 
       if (!txs || txs.length === 0) break;

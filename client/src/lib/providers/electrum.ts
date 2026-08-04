@@ -172,8 +172,12 @@ export class ElectrumProvider implements BlockchainProvider {
   async getAddressTransactions(
     address: string,
     onProgress?: (scanned: number) => void,
+    signal?: AbortSignal,
   ): Promise<ApiTransaction[]> {
     this.ensureElectron();
+    
+    // Bail out before the history lookup if the caller already cancelled.
+    if (signal?.aborted) throw new Error('Sync cancelled');
     
     const api = getElectronAPI();
     
@@ -204,6 +208,9 @@ export class ElectrumProvider implements BlockchainProvider {
     if (scanned > 0) onProgress?.(scanned);
     
     for (let i = 0; i < uncached.length; i += ElectrumProvider.TX_FETCH_CONCURRENCY) {
+      // Bail out between batches when the user cancels mid-walk. IPC calls
+      // themselves cannot be aborted, so this stops after the in-flight batch.
+      if (signal?.aborted) throw new Error('Sync cancelled');
       const batch = uncached.slice(i, i + ElectrumProvider.TX_FETCH_CONCURRENCY);
       const results = await Promise.all(
         batch.map(async (item) => {
@@ -401,8 +408,9 @@ export class ElectrumProvider implements BlockchainProvider {
   async getAddressHistoryDates(
     address: string,
     onProgress?: (scanned: number) => void,
+    signal?: AbortSignal,
   ): Promise<AddressHistoryDates> {
-    const txs = await this.getAddressTransactions(address, onProgress);
+    const txs = await this.getAddressTransactions(address, onProgress, signal);
     return computeHistoryFromTxs(address, txs);
   }
 

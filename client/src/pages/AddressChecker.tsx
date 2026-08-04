@@ -404,6 +404,10 @@ export default function AddressChecker() {
   // run see a stale token and become no-ops instead of mutating the new run's
   // rows or prematurely re-enabling the history controls.
   const historyRunIdRef = useRef(0);
+  // AbortController for the current history run's provider walks. Aborting it
+  // stops in-flight page fetches promptly (within one request), not just
+  // between addresses.
+  const historyAbortRef = useRef<AbortController | null>(null);
   // Page-level scroll element + list offset for the row virtualizer: the
   // table does not own a scroll container, the whole page scrolls as one.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -439,7 +443,9 @@ export default function AddressChecker() {
     historyCancelledRef.current = false;
     // A new check owns the rows: permanently invalidate any prior history
     // workers so late completions can't write onto the new dataset (clearing
-    // the cancel flag alone would re-enable them).
+    // the cancel flag alone would re-enable them). Abort their in-flight
+    // provider walks too so they stop fetching pages promptly.
+    historyAbortRef.current?.abort();
     historyRunIdRef.current++;
     // Stale history runs no longer run their finalizer, so the new check must
     // resolve the history control state itself or it could stay stuck "running".
@@ -628,6 +634,11 @@ export default function AddressChecker() {
 
     historyCancelledRef.current = false;
     setIsHistoryRunning(true);
+    // Abort any leftover walks from a superseded run, then create this run's
+    // own controller so Cancel can stop in-flight page fetches mid-walk.
+    historyAbortRef.current?.abort();
+    const abortController = new AbortController();
+    historyAbortRef.current = abortController;
     const runToken = ++historyRunIdRef.current;
     const isStale = () => historyRunIdRef.current !== runToken;
     // "Cancelled" for this run means either the user hit Cancel/Reset or a
@@ -659,7 +670,7 @@ export default function AddressChecker() {
             const dates = await provider.getAddressHistoryDates!(address, (scanned) => {
               if (isCancelled()) return;
               progressBuffer.add(i, { historyScanned: scanned });
-            });
+            }, abortController.signal);
             if (isCancelled()) {
               // A newer run owns the rows now — a stale worker must not touch them.
               if (isStale()) return;
@@ -737,6 +748,9 @@ export default function AddressChecker() {
 
   const handleCancelHistory = () => {
     historyCancelledRef.current = true;
+    // Abort in-flight provider walks so a long single-address scan stops
+    // fetching pages promptly, not after the whole history is walked.
+    historyAbortRef.current?.abort();
     // Permanently invalidate in-flight workers: even if a later run resets the
     // cancel flag, workers from this run stay stale and cannot mutate rows.
     historyRunIdRef.current++;
@@ -750,6 +764,7 @@ export default function AddressChecker() {
   const handleReset = () => {
     cancelledRef.current = true;
     historyCancelledRef.current = true;
+    historyAbortRef.current?.abort();
     historyRunIdRef.current++;
     providerRef.current = null;
     setIsRunning(false);

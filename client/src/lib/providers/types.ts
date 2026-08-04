@@ -79,10 +79,14 @@ export interface BlockchainProvider {
    * walks every confirmed transaction and can take many seconds. The optional
    * onProgress callback reports the running count of transactions scanned so the
    * UI can show progress instead of an indeterminate spinner.
+   *
+   * Pass an AbortSignal to stop the walk promptly (within one in-flight
+   * request / between pages) when the user cancels mid-scan.
    */
   getAddressHistoryDates?(
     address: string,
     onProgress?: (scanned: number) => void,
+    signal?: AbortSignal,
   ): Promise<AddressHistoryDates>;
 }
 
