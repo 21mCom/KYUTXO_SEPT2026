@@ -199,6 +199,10 @@ args = "sample-pdf-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "pof-addons-pdf-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "pof-empty-exclusion-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2133,6 +2137,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/data/vocabulary-crud.ensure.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-addons-pdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-addons-pdf-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

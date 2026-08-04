@@ -101,6 +101,7 @@
 - [React disabled-click guard](react-disabled-click-guard.md) — React swallows forced clicks while props.disabled is set; assert the disabled state, not handler fallback toasts behind it.
 - [Radix toast vs Playwright strict](radix-toast-playwright-strict.md) — toast text duplicates into aria-live; getByText needs .first(); gate cancel asserts on a streamed phase, not first progress.
 - [Corrupted test-file repair](corrupted-test-repair.md) — restore mangled tests' original intent from git history; a "repair" that deletes them leaves green workflows with zero coverage.
+- [Node-side message signing](node-side-message-signing.md) — sign the live per-session challenge in the check script (noble secp256k1 + header 27+rec+4) instead of pre-generated fixtures; block non-localhost to surface manual-anchor paths.
 - [Browser engine-bridge mock](browser-engine-bridge-mock.md) — test engine-served reads in Chromium via an addInitScript electronAPI.engine bridge (no isElectron flag) answering fingerprints/pages from live IDB.
 - [Detail-panel click races](detail-panel-click-races.md) — async badges (e.g. conflict count) shift layout mid-click and steal coordinate clicks in browser checks; dispatchEvent('click') + recover if URL changed.
 - [Optional Record fields in real vaults](optional-record-fields-real-vault.md) — rows created without tags/label store UNDEFINED; jsdom fixtures that always set them hide browser-only `.length` crashes.
