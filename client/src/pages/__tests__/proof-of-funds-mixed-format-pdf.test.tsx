@@ -188,9 +188,9 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
     expect(pdfTextLines).toContain(
       "Signature Format: Bitcoin Signed Message",
     );
-    expect(pdfTextLines).toContain(
-      "Signature Format: BIP-322",
-    );
+    // The label is intentionally just "BIP-322" — it covers both Simple
+    // (single-key) and Full (script-path / multisig) witnesses.
+    expect(pdfTextLines).toContain("Signature Format: BIP-322");
 
     // (2) Appendix signature-box headings switch on format.
     expect(pdfTextLines).toContain("Wallet Signature (base64):");
