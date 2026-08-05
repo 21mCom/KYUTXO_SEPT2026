@@ -12,52 +12,94 @@ NO_BUFFER_CMD="node scripts/check-no-buffer-global.js"
 PDF_TEXT_CMD="node scripts/check-pdf-text-sanitized.js"
 POF_PAGE_CMD="npx vitest run client/src/pages/ProofOfFundsDeclaration.documentIntegrity.test.tsx client/src/pages/ProofOfFundsDeclaration.freshnessAnchorValidation.test.tsx client/src/pages/ProofOfFundsDeclaration.nodeUnreachable.test.tsx client/src/pages/proof-of-funds/pof-pdf-data.canonicalPayload.test.ts"
 
-# Remove outdated variants of a command (same prefix, different file list) so
-# the hook doesn't accumulate stale duplicate runs when a command is updated.
-remove_stale_variants() {
-  prefix="$1"
-  current="$2"
-
-  if [ -f "$HOOK_FILE" ] && grep -qF "$prefix" "$HOOK_FILE"; then
-    tmp="$HOOK_FILE.tmp"
-    while IFS= read -r line; do
-      case "$line" in
-        "$current") printf '%s\n' "$line" ;;
-        "$prefix"*) echo "Removed stale variant of a hook command." >&2 ;;
-        *) printf '%s\n' "$line" ;;
-      esac
-    done < "$HOOK_FILE" > "$tmp"
-    mv "$tmp" "$HOOK_FILE"
-    chmod +x "$HOOK_FILE"
-  fi
-}
-
-append_check() {
-  cmd="$1"
+# Each managed check is written to the hook as:
+#   <command> # managed-check: <key>
+# The stable key (not the command string) identifies the check, so when a
+# command changes (renamed script, grown vitest file list) the installer
+# replaces the old line instead of piling up stale duplicates.
+#
+# install_check <key> <label> <command> [legacy_prefix]
+#   - Removes any existing line tagged with the same key whose command differs.
+#   - Removes untagged legacy lines that match the command exactly or start
+#     with the optional legacy_prefix (migration from older hook formats).
+#   - Ensures exactly one line for this check remains.
+install_check() {
+  key="$1"
   label="$2"
+  cmd="$3"
+  legacy_prefix="$4"
 
-  if [ -f "$HOOK_FILE" ] && grep -qF "$cmd" "$HOOK_FILE"; then
-    echo "Pre-commit hook already contains the $label check."
+  marker="# managed-check: $key"
+  line="$cmd $marker"
+
+  if [ ! -f "$HOOK_FILE" ]; then
+    printf '#!/bin/sh\n%s\n' "$line" > "$HOOK_FILE"
+    chmod +x "$HOOK_FILE"
+    echo "Pre-commit hook installed with $label check."
     return 0
   fi
 
-  if [ -f "$HOOK_FILE" ]; then
-    echo "$cmd" >> "$HOOK_FILE"
-    echo "Appended $label check to existing pre-commit hook."
+  tmp="$HOOK_FILE.tmp"
+  found=0
+  removed=0
+  while IFS= read -r existing; do
+    case "$existing" in
+      "$line")
+        if [ "$found" -eq 1 ]; then
+          removed=1
+        else
+          found=1
+          printf '%s\n' "$existing"
+        fi
+        ;;
+      *"$marker")
+        # Same check key, different (stale) command.
+        removed=1
+        ;;
+      "$cmd")
+        # Untagged legacy line for the current command: replace with tagged form.
+        removed=1
+        ;;
+      *)
+        if [ -n "$legacy_prefix" ]; then
+          case "$existing" in
+            "$legacy_prefix"*" # managed-check: "*)
+              printf '%s\n' "$existing"
+              continue
+              ;;
+            "$legacy_prefix"*)
+              # Untagged legacy variant (e.g. an older vitest file list).
+              removed=1
+              continue
+              ;;
+          esac
+        fi
+        printf '%s\n' "$existing"
+        ;;
+    esac
+  done < "$HOOK_FILE" > "$tmp"
+
+  if [ "$found" -eq 0 ]; then
+    printf '%s\n' "$line" >> "$tmp"
+  fi
+
+  mv "$tmp" "$HOOK_FILE"
+  chmod +x "$HOOK_FILE"
+
+  if [ "$removed" -eq 1 ]; then
+    echo "Replaced stale variant(s) of the $label check."
+  elif [ "$found" -eq 1 ]; then
+    echo "Pre-commit hook already contains the $label check."
   else
-    printf '#!/bin/sh\n%s\n' "$cmd" > "$HOOK_FILE"
-    chmod +x "$HOOK_FILE"
-    echo "Pre-commit hook installed with $label check."
+    echo "Appended $label check to pre-commit hook."
   fi
 }
 
-remove_stale_variants "npx vitest run client/src/pages/ProofOfFundsDeclaration." "$POF_PAGE_CMD"
-
-append_check "$CRUD_CMD" "CRUD guards"
-append_check "$LOCKFILE_CMD" "lockfile URLs"
-append_check "$NO_EXTERNAL_CMD" "no external resources"
-append_check "$NOTE_RENDER_CMD" "note rendering"
-append_check "$TEST_PROVIDERS_CMD" "test providers"
-append_check "$NO_BUFFER_CMD" "no buffer global"
-append_check "$PDF_TEXT_CMD" "pdf text sanitized"
-append_check "$POF_PAGE_CMD" "Proof of Funds page tests"
+install_check "crud-guards" "CRUD guards" "$CRUD_CMD" "node scripts/check-crud-guards"
+install_check "lockfile-urls" "lockfile URLs" "$LOCKFILE_CMD" "node scripts/check-lockfile-urls"
+install_check "no-external-resources" "no external resources" "$NO_EXTERNAL_CMD" "node scripts/check-no-external-resources"
+install_check "note-rendering" "note rendering" "$NOTE_RENDER_CMD" "node scripts/check-note-rendering"
+install_check "test-providers" "test providers" "$TEST_PROVIDERS_CMD" "node scripts/check-test-providers"
+install_check "no-buffer-global" "no buffer global" "$NO_BUFFER_CMD" "node scripts/check-no-buffer-global"
+install_check "pdf-text-sanitized" "pdf text sanitized" "$PDF_TEXT_CMD" "node scripts/check-pdf-text-sanitized"
+install_check "pof-page-tests" "Proof of Funds page tests" "$POF_PAGE_CMD" "npx vitest run client/src/pages/ProofOfFundsDeclaration."
