@@ -398,6 +398,27 @@ describe('BIP-322 Full verification (P2SH-wrapped multisig)', () => {
     expect(result.error).toMatch(/does not correspond|not supported/i);
   });
 
+  it('rejects a wrapped single-key proof carrying a 65-byte uncompressed public key', async () => {
+    // Reuse the DER signature from the P2WPKH BIP-322 vector and pair it with
+    // a 65-byte uncompressed-form (0x04-prefixed) public key — the witness
+    // shape a mistaken tool would produce. P2SH-P2WPKH is only defined for
+    // compressed keys, so this must fail closed with an error that names the
+    // compressed-key requirement (never crash, never verify).
+    const [derSig] = splitWitness(P2WPKH_BIP322_HELLO_SIG);
+    const uncompressed = new Uint8Array(65);
+    uncompressed[0] = 0x04;
+    uncompressed[1] = 0xc7; // arbitrary non-zero coordinate bytes
+    uncompressed[64] = 0x72;
+    const result = await verifyBip322P2SH(
+      P2SH_P2WSH_2OF2_ADDR,
+      FULL_MSG,
+      joinWitness([derSig, uncompressed]),
+    );
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/uncompressed/i);
+    expect(result.error).toMatch(/33-byte compressed/i);
+  });
+
   it('rejects a non-P2SH address', async () => {
     const result = await verifyBip322P2SH(P2WSH_2OF2_ADDR, FULL_MSG, P2SH_P2WSH_2OF2_SIG);
     expect(result.verified).toBe(false);

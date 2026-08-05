@@ -1374,6 +1374,25 @@ export async function verifyBip322P2SH(
     };
   }
 
+  // A two-item [DER sig, 65-byte pubkey] stack is a P2SH-P2WPKH proof built
+  // with an UNCOMPRESSED public key (0x04-prefixed, or the rare 0x06/0x07
+  // hybrid form). P2WPKH — and therefore P2SH-P2WPKH — is defined only for
+  // 33-byte compressed keys, so this can never verify; name the requirement
+  // instead of the generic "does not correspond" error.
+  if (
+    witness.length === 2 &&
+    witness[1].length === 65 &&
+    (witness[1][0] === 0x04 || witness[1][0] === 0x06 || witness[1][0] === 0x07)
+  ) {
+    return {
+      verified: false,
+      error:
+        'This looks like a P2SH-P2WPKH (wrapped single-key) proof, but the public key in the ' +
+        'witness is uncompressed (65 bytes). P2SH-wrapped SegWit requires a 33-byte compressed ' +
+        'public key — re-create the proof with your wallet using the compressed key for this address.',
+    };
+  }
+
   return {
     verified: false,
     error:
