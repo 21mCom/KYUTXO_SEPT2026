@@ -13,6 +13,9 @@
 //        includeProvenance-> ON,   provenanceFiatCurrency -> GBP
 //        fiatCurrency     -> EUR,  fiatRate               -> 65000
 //        includeAml       -> ON
+//        includeAttestation -> ON (with place-of-signing + witness line text)
+//        includeGlossary  -> ON
+//        includeIntro     -> ON
 //      and fills sensitive identity free-text (declarant name + tax ID)
 //   3. RELOADS the page (real navigation), unlocks the vault again, re-runs
 //      the offline balance check, and asserts:
@@ -46,6 +49,8 @@ const PREFS_KEY = 'kyutxo.proofOfFunds.declarationPrefs';
 const DECLARANT_NAME = 'Alice Prefs Example';
 const DECLARANT_TAX_ID = 'TAX-ID-9876543';
 const FIAT_RATE = '65000';
+const ATTEST_PLACE = 'Lisbon, Portugal';
+const ATTEST_WITNESS = 'Jane Doe, Notary, Reg. No. 424242';
 const FUNDED_SATS = 250_000;
 const FUNDED_TXID =
   'a1b2c3d4e5f6071829304152637485960718293041526374859607182930a1b2';
@@ -258,6 +263,12 @@ async function main() {
         (await switchState(page, 'switch-include-provenance')) === 'unchecked' &&
         (await switchState(page, 'switch-include-aml')) === 'unchecked',
     );
+    step(
+      'defaults: attestation / glossary / intro switches start unchecked',
+      (await switchState(page, 'switch-include-attestation')) === 'unchecked' &&
+        (await switchState(page, 'switch-include-glossary')) === 'unchecked' &&
+        (await switchState(page, 'switch-include-intro')) === 'unchecked',
+    );
 
     // ── Set every persisted preference away from its default ─────────────
     await page.getByTestId('switch-include-qr').click();
@@ -273,13 +284,28 @@ async function main() {
     await amlSwitch.scrollIntoViewIfNeeded({ timeout: 10_000 });
     await amlSwitch.click();
 
+    // Attestation block: toggle ON and fill the persisted formatting text.
+    const attestSwitch = page.getByTestId('switch-include-attestation');
+    await attestSwitch.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    await attestSwitch.click();
+    await page.getByTestId('input-attestation-place').fill(ATTEST_PLACE);
+    await page.getByTestId('input-attestation-witness').fill(ATTEST_WITNESS);
+
+    // Glossary + Introduction toggles.
+    const glossarySwitch = page.getByTestId('switch-include-glossary');
+    await glossarySwitch.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    await glossarySwitch.click();
+    const introSwitch = page.getByTestId('switch-include-intro');
+    await introSwitch.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    await introSwitch.click();
+
     // Sensitive identity free-text — must NOT survive the reload.
     await page.getByTestId('input-declarant-name').fill(DECLARANT_NAME);
     await page.getByTestId('input-declarant-tax-id').fill(DECLARANT_TAX_ID);
 
     // Wait until the save effect has flushed the new prefs to localStorage.
     await page.waitForFunction(
-      (key) => {
+      ({ key, place, witness }) => {
         try {
           const raw = localStorage.getItem(key);
           if (!raw) return false;
@@ -291,13 +317,18 @@ async function main() {
             p.provenanceFiatCurrency === 'GBP' &&
             p.fiatCurrency === 'EUR' &&
             p.fiatRate === '65000' &&
-            p.includeAml === true
+            p.includeAml === true &&
+            p.includeAttestation === true &&
+            p.attestationPlaceOfSigning === place &&
+            p.attestationWitnessLine === witness &&
+            p.includeGlossary === true &&
+            p.includeIntro === true
           );
         } catch {
           return false;
         }
       },
-      PREFS_KEY,
+      { key: PREFS_KEY, place: ATTEST_PLACE, witness: ATTEST_WITNESS },
       { timeout: 20_000 },
     );
     step('prefs persisted to localStorage after toggling', true);
@@ -356,6 +387,32 @@ async function main() {
     step(
       'restored: includeAml switch is checked',
       (await switchState(page, 'switch-include-aml')) === 'checked',
+    );
+    step(
+      'restored: includeAttestation switch is checked',
+      (await switchState(page, 'switch-include-attestation')) === 'checked',
+    );
+    {
+      const place = await page.getByTestId('input-attestation-place').inputValue();
+      step(
+        'restored: attestation place of signing text',
+        place === ATTEST_PLACE,
+        `value: ${JSON.stringify(place)}`,
+      );
+      const witness = await page.getByTestId('input-attestation-witness').inputValue();
+      step(
+        'restored: attestation witness/notary line text',
+        witness === ATTEST_WITNESS,
+        `value: ${JSON.stringify(witness)}`,
+      );
+    }
+    step(
+      'restored: includeGlossary switch is checked',
+      (await switchState(page, 'switch-include-glossary')) === 'checked',
+    );
+    step(
+      'restored: includeIntro switch is checked',
+      (await switchState(page, 'switch-include-intro')) === 'checked',
     );
 
     // ── Assert sensitive identity fields are NOT restored ────────────────
