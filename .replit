@@ -435,6 +435,10 @@ args = "database-doctor-recompute-selected-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "database-doctor-select-all-loaded-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "filtered-scan-gate-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1469,6 +1473,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-database-doctor-recompute-selected-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-select-all-loaded-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-select-all-loaded-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
