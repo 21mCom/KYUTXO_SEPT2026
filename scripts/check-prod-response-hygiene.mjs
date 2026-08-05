@@ -283,6 +283,34 @@ async function main() {
       `status=${rogueBadJson.status}, body=${rogueBadJson.body.slice(0, 120)}`,
     );
 
+    // 5d. Replit-domain Hosts must NOT be honored when REPL_ID is unset.
+    // isAllowedHost allowlists *.replit.dev / *.replit.app only inside a
+    // Replit environment; this server was launched with REPL_ID cleared, so a
+    // regression making those domains accepted unconditionally in local
+    // builds would show up here as a non-403.
+    for (const rogueReplitHost of ['evil.replit.dev', 'evil.replit.app:5391']) {
+      const rogueReplit = await rawRequest({
+        method: 'GET',
+        path: '/',
+        headers: { Host: rogueReplitHost },
+      });
+      step(
+        `Replit-domain Host (${rogueReplitHost}) is rejected 403 when REPL_ID is unset`,
+        rogueReplit.status === 403 && !rogueReplit.body.includes(LAUNCH_TOKEN),
+        `status=${rogueReplit.status}, leaked=${rogueReplit.body.includes(LAUNCH_TOKEN)}`,
+      );
+    }
+    const rogueReplitApi = await rawRequest({
+      method: 'GET',
+      path: `/api/attachments/download/${SECRET_REL_PATH}`,
+      headers: { Host: 'evil.replit.dev', [TOKEN_HEADER]: LAUNCH_TOKEN },
+    });
+    step(
+      'Replit-domain Host + valid token on /api is rejected 403 when REPL_ID is unset',
+      rogueReplitApi.status === 403 && !rogueReplitApi.body.includes('Download failed'),
+      `status=${rogueReplitApi.status}, body=${rogueReplitApi.body.slice(0, 120)}`,
+    );
+
     // Sanity: the same raw-socket path with a loopback Host succeeds, so the
     // rogue rejections above are due to the Host value, not the transport.
     const loopbackHtml = await rawRequest({
