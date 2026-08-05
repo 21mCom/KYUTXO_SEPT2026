@@ -368,6 +368,19 @@ export async function verifyBip322Simple(
     };
   }
 
+  // A key-path witness may carry a BIP-341 annex as its last item (leading
+  // 0x50 byte). Peel it off here so a [schnorr sig, annex] stack stays on the
+  // key-path route — the annex participates in the sighash via sha_annex.
+  let annex: Uint8Array | undefined;
+  if (
+    witness.length === 2 &&
+    witness[witness.length - 1].length > 0 &&
+    witness[witness.length - 1][0] === 0x50
+  ) {
+    annex = witness[witness.length - 1];
+    witness = witness.slice(0, witness.length - 1);
+  }
+
   if (witness.length !== 1) {
     // A multi-item witness is a BIP-322 "Full" script-path spend (e.g. a
     // Taproot multisig / tapscript vault). Hand it to the Full verifier.
@@ -410,7 +423,14 @@ export async function verifyBip322Simple(
     toSign.addInput(toSpend.getHash(), 0, 0);
     toSign.addOutput(new Uint8Array([0x6a]), BigInt(0)); // OP_RETURN
 
-    const sighash = toSign.hashForWitnessV1(0, [spk], [BigInt(0)], hashType);
+    const sighash = toSign.hashForWitnessV1(
+      0,
+      [spk],
+      [BigInt(0)],
+      hashType,
+      undefined,
+      annex as Buffer | undefined,
+    );
     const ok = ecc.verifySchnorr(sighash, outputKey, sig);
     if (ok) {
       return { verified: true, format: 'bip322' };
