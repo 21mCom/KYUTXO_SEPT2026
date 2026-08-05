@@ -503,6 +503,21 @@ async function main() {
     });
     if (!badgesReady) throw new Error('pending-spend UI missing; aborting resolve check');
 
+    // ── Capture pre-resolve UI state so the post-resolve assertions have a
+    //    concrete baseline: the group card must show "2 pending" (one spend per
+    //    bottom row) and we record the group balance text to prove it drops. ──
+    const groupPendingBadge = page.getByTestId(`badge-unresolved-${WALLET_NAME}`);
+    const groupBadgeBefore = ((await groupPendingBadge.textContent().catch(() => '')) ?? '').trim();
+    const groupBalanceBefore = ((await page
+      .getByTestId(`text-group-balance-${WALLET_NAME}`)
+      .textContent()
+      .catch(() => '')) ?? '').trim();
+    steps.push({
+      name: 'group card shows "2 pending" before the resolve',
+      passed: groupBadgeBefore.includes('2 pending') && groupBalanceBefore.length > 0,
+      detail: `group badge before: "${groupBadgeBefore}", group balance before: "${groupBalanceBefore}"`,
+    });
+
     await tailResolveBtn.click();
 
     // Wait for the tail's blank input to be attributed, then read both spend
@@ -548,6 +563,110 @@ async function main() {
       passed: !!neighborUntouched,
       detail: `neighbor spend input after resolve: ${JSON.stringify(resolveResult.neighborInput)} (must remain blank/unattributed)`,
     });
+
+    // ── Post-resolve UI refresh: the database is right (asserted above); the
+    //    SCREEN must now catch up. resolvePrevouts recomputes the tail record's
+    //    cached stats (its lone seeded output is now a resolved spend → balance
+    //    0 / 0 UTXOs, so the tail row drops out of the group's cached rows) and
+    //    notifies the records/transactionParticipants scopes, which re-runs the
+    //    aggregation + unresolved-spend breakdown. A notification/recompute
+    //    regression would leave stale badges or totals on screen. Assert:
+    //      1. the group card's pending badge drops from "2 pending" to
+    //         "1 pending";
+    //      2. the tail row's badge-address-unresolved-* is GONE;
+    //      3. the untouched neighbor row still shows its pending badge;
+    //      4. the group balance text dropped (the tail's seeded sats left the
+    //         aggregate after its stats recompute). ──────────────────────────
+    const uiRefreshed = await page
+      .waitForFunction(
+        ({ tailAddr, walletName }) => {
+          const groupBadge = document.querySelector(
+            `[data-testid="badge-unresolved-${walletName}"]`,
+          );
+          const tailBadge = document.querySelector(
+            `[data-testid="badge-address-unresolved-${tailAddr}"]`,
+          );
+          return (
+            !tailBadge &&
+            !!groupBadge &&
+            /(^|[^\d,.])1 pending/.test(groupBadge.textContent || '')
+          );
+        },
+        { tailAddr: TAIL_ADDR, walletName: WALLET_NAME },
+        { timeout: 60_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    const groupBadgeAfter = ((await groupPendingBadge.textContent().catch(() => '')) ?? '').trim();
+    steps.push({
+      name: 'group card pending count dropped from 2 to 1 and tail badge cleared',
+      passed: uiRefreshed,
+      detail: uiRefreshed
+        ? `group badge after resolve: "${groupBadgeAfter}"`
+        : `UI never refreshed: group badge="${groupBadgeAfter}", tail badge ${
+            (await page.getByTestId(`badge-address-unresolved-${TAIL_ADDR}`).count()) > 0
+              ? 'STILL PRESENT'
+              : 'gone'
+          }`,
+    });
+
+    // The aggregation re-run cleared + reloaded the expanded group's rows, so
+    // the list remounted at scrollTop=0. Re-converge on the bottom, where the
+    // neighbor (now the lowest-balance row) must still show its pending badge
+    // while no tail badge exists anywhere in the DOM.
+    const scrollBoxAfter = page.getByTestId('scroll-group-address-rows');
+    await scrollBoxAfter.waitFor({ state: 'visible', timeout: 60_000 });
+    await scrollBoxAfter.evaluate(async (el) => {
+      for (let i = 0; i < 60; i++) {
+        el.scrollTop = el.scrollHeight;
+        await new Promise((r) => setTimeout(r, 150));
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) {
+          await new Promise((r) => setTimeout(r, 200));
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) return;
+        }
+      }
+    });
+    const neighborBadgeAfter = await page
+      .getByTestId(`badge-address-unresolved-${NEIGHBOR_ADDR}`)
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    const tailBadgeCount = await page
+      .getByTestId(`badge-address-unresolved-${TAIL_ADDR}`)
+      .count();
+    steps.push({
+      name: "neighbor row's pending badge survives the refresh; tail badge stays gone",
+      passed: neighborBadgeAfter && tailBadgeCount === 0,
+      detail: `neighbor badge visible=${neighborBadgeAfter}, tail badge nodes in DOM=${tailBadgeCount}`,
+    });
+
+    // Group balance must reflect the recomputed cached stats: the tail's seeded
+    // sats leave the total once its stats recompute to 0 balance / 0 UTXOs.
+    const parseBalance = (text) => {
+      const m = (text || '').replace(/,/g, '').match(/[\d.]+/);
+      return m ? Number.parseFloat(m[0]) : NaN;
+    };
+    const balanceBefore = parseBalance(groupBalanceBefore);
+    let groupBalanceAfter = '';
+    let balanceAfter = NaN;
+    const balDeadline = Date.now() + 30_000;
+    while (Date.now() < balDeadline) {
+      groupBalanceAfter = ((await page
+        .getByTestId(`text-group-balance-${WALLET_NAME}`)
+        .textContent()
+        .catch(() => '')) ?? '').trim();
+      balanceAfter = parseBalance(groupBalanceAfter);
+      if (Number.isFinite(balanceAfter) && balanceAfter < balanceBefore) break;
+      await page.waitForTimeout(500);
+    }
+    steps.push({
+      name: 'group balance dropped on screen after the resolve recompute',
+      passed:
+        Number.isFinite(balanceBefore) &&
+        Number.isFinite(balanceAfter) &&
+        balanceAfter < balanceBefore,
+      detail: `group balance before="${groupBalanceBefore}" (${balanceBefore}), after="${groupBalanceAfter}" (${balanceAfter})`,
+    });
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -576,7 +695,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    '[group-rows-virtual] PASSED: with thousands of addresses in an expanded wallet group only a small row window mounts, scrolling stays responsive, and per-row copy AND per-row Resolve target the correct address/record after deep scrolling.',
+    '[group-rows-virtual] PASSED: with thousands of addresses in an expanded wallet group only a small row window mounts, scrolling stays responsive, per-row copy AND per-row Resolve target the correct address/record after deep scrolling, and the post-resolve UI refresh clears the resolved row\'s badge, keeps the neighbor\'s, drops the group pending count 2→1, and lowers the group balance on screen.',
   );
 }
 
