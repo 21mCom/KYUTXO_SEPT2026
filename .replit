@@ -708,6 +708,10 @@ args = "backup-compare-browser-check"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "githooks-delegation-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "githooks-delegation-tests"
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -2512,6 +2516,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-githooks-delegation.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "githooks-delegation-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-githooks-delegation.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

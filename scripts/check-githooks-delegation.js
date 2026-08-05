@@ -15,7 +15,11 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
-const HOOKS_DIR = path.join(ROOT, '.githooks');
+// Test override: point the guard at a fixture hooks dir (see
+// scripts/check-githooks-delegation.test.mjs). Defaults to the repo's .githooks.
+const HOOKS_DIR = process.env.CHECK_GITHOOKS_DIR
+  ? path.resolve(process.env.CHECK_GITHOOKS_DIR)
+  : path.join(ROOT, '.githooks');
 
 const failures = [];
 
