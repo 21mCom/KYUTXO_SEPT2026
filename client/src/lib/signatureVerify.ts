@@ -423,15 +423,23 @@ export async function verifyBip322Simple(
     toSign.addInput(toSpend.getHash(), 0, 0);
     toSign.addOutput(new Uint8Array([0x6a]), BigInt(0)); // OP_RETURN
 
-    const sighash = toSign.hashForWitnessV1(
-      0,
-      [spk],
-      [BigInt(0)],
-      hashType,
-      undefined,
-      annex as Buffer | undefined,
-    );
-    const ok = ecc.verifySchnorr(sighash, outputKey, sig);
+    // BIP-322 permits the virtual to_sign transaction to carry nVersion 0 or
+    // 2, and the BIP-341 sighash commits to nVersion. Try v0 first (the
+    // common case) and fall back to v2 before rejecting.
+    let ok = false;
+    for (const toSignVersion of [0, 2]) {
+      toSign.version = toSignVersion;
+      const sighash = toSign.hashForWitnessV1(
+        0,
+        [spk],
+        [BigInt(0)],
+        hashType,
+        undefined,
+        annex as Buffer | undefined,
+      );
+      ok = ecc.verifySchnorr(sighash, outputKey, sig);
+      if (ok) break;
+    }
     if (ok) {
       return { verified: true, format: 'bip322' };
     }
@@ -1107,26 +1115,38 @@ export async function verifyBip322Full(
 
   const leafVersion = controlBlock[0] & 0xfe;
   const leafHash = tapLeafHash(leafVersion, leafScript);
-  const computeSighash = (hashType: number): Uint8Array =>
-    new Uint8Array(
-      toSign.hashForWitnessV1(
-        0,
-        [spk as Buffer],
-        [BigInt(0)],
-        hashType,
-        leafHash as Buffer,
-        annex as Buffer | undefined,
-      ),
-    );
-
-  let ok: boolean;
-  try {
-    ok = execTapscript(leafScript, inputStack, computeSighash);
-  } catch (err) {
+  // BIP-322 permits the virtual to_sign transaction to carry nVersion 0 or
+  // 2, and the BIP-341 sighash commits to nVersion. Try v0 first (the
+  // common case) and fall back to v2 before rejecting.
+  let ok = false;
+  let execError: unknown = null;
+  for (const toSignVersion of [0, 2]) {
+    toSign.version = toSignVersion;
+    const computeSighash = (hashType: number): Uint8Array =>
+      new Uint8Array(
+        toSign.hashForWitnessV1(
+          0,
+          [spk as Buffer],
+          [BigInt(0)],
+          hashType,
+          leafHash as Buffer,
+          annex as Buffer | undefined,
+        ),
+      );
+    try {
+      ok = execTapscript(leafScript, inputStack, computeSighash);
+      execError = null;
+    } catch (err) {
+      ok = false;
+      execError = err;
+    }
+    if (ok) break;
+  }
+  if (execError !== null) {
     return {
       verified: false,
       error: `BIP-322 Full (Taproot script-path) verification failed: ${
-        err instanceof Error ? err.message : String(err)
+        execError instanceof Error ? execError.message : String(execError)
       }`,
     };
   }

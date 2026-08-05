@@ -352,6 +352,75 @@ describe('BIP-322 SegWit verification over a version-2 to_sign', () => {
   });
 });
 
+/**
+ * Taproot vectors whose signatures commit to a VERSION-2 to_sign transaction.
+ * BIP-322 permits the virtual to_sign to carry nVersion 0 or 2, and the
+ * BIP-341 sighash commits to nVersion, so both the key-path (Simple) and
+ * script-path (Full) verifiers must accept both. Produced deterministically
+ * offline from fixed keys.
+ */
+const P2TR_KEYPATH_V2_ADDR =
+  'bc1p6nv3uwkk9js8dk92psp68cu6a0lj9r99yw8eare7jfj5v7lhuhfqshdr5r';
+const P2TR_KEYPATH_V2_SIG =
+  'AUDlY4lJ8IpUPWmPrSEY6JREhufFHYXLPU5hME/nHKjBel2kIEx4yW9bZ11ZSOQd0gRvuuP4e7+t+ghlpUtxSb20';
+
+const P2TR_SCRIPT_V2_ADDR =
+  'bc1p2qz8xkl8jf5p4k6wnrwaantrempfqqq6xmvn60d5uz568eut0xqqlwjd2r';
+const P2TR_SCRIPT_V2_SIG =
+  'A0DJO012jE9NqydZ1rAO/i9zoQMsEJ0clLFDMAfyrPh7JtAdFnC0KuP6GvSV1363D3HeFIqJfE6Leqbikt2wIkKxIiAexlk2c+eu8zNmPea4kb1BmfvTWPL6QhVWaR7hDen11qwhwBQNwCN/Ttx4IdAaUCK9H7kQ7uQ9Uyjjp2UbJxnIYGRB';
+
+describe('BIP-322 Taproot verification over a version-2 to_sign', () => {
+  it('verifies a key-path (Simple) proof signed over a version-2 to_sign', async () => {
+    const result = await verifyBip322Simple(
+      P2TR_KEYPATH_V2_ADDR,
+      'Hello World',
+      P2TR_KEYPATH_V2_SIG,
+    );
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('verifies a script-path (Full) proof signed over a version-2 to_sign', async () => {
+    const result = await verifyBip322Full(
+      P2TR_SCRIPT_V2_ADDR,
+      'Hello World',
+      P2TR_SCRIPT_V2_SIG,
+    );
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('routes a v2-committed key-path proof through verifyBitcoinSignature', async () => {
+    const result = await verifyBitcoinSignature(
+      P2TR_KEYPATH_V2_ADDR,
+      'Hello World',
+      P2TR_KEYPATH_V2_SIG,
+    );
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('rejects a v2-committed key-path proof against the wrong message', async () => {
+    const result = await verifyBip322Simple(
+      P2TR_KEYPATH_V2_ADDR,
+      'Goodbye World',
+      P2TR_KEYPATH_V2_SIG,
+    );
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
+
+  it('rejects a v2-committed script-path proof against the wrong message', async () => {
+    const result = await verifyBip322Full(
+      P2TR_SCRIPT_V2_ADDR,
+      'Goodbye World',
+      P2TR_SCRIPT_V2_SIG,
+    );
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
+});
+
 describe('BIP-322 Full verification (Taproot script-path)', () => {
   it('verifies a single-leaf P2TR script-path signature', async () => {
     const result = await verifyBip322Full(P2TR_LEAF_ADDR, FULL_MSG, P2TR_LEAF_SIG);
