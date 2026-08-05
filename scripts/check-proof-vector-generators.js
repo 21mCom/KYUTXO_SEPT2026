@@ -45,7 +45,7 @@ function runGenerator(script) {
 
 // --- expected values from the generators ------------------------------------
 
-function parseTaprootGeneratorOutput(out) {
+export function parseTaprootGeneratorOutput(out) {
   // Lines of the form:  NAME = 'value'
   const map = new Map();
   const re = /^([A-Z][A-Z0-9_]*) = '([^']*)'\s*$/gm;
@@ -58,7 +58,7 @@ function parseTaprootGeneratorOutput(out) {
 }
 
 // Maps the segwit generator's human labels to the test-file constant names.
-const SEGWIT_LABEL_TO_CONST = {
+export const SEGWIT_LABEL_TO_CONST = {
   'P2WPKH addr': 'P2WPKH_V2_INDEP_ADDR',
   'P2WPKH sig': 'P2WPKH_V2_INDEP_SIG',
   'P2WSH addr': 'P2WSH_V2_INDEP_ADDR',
@@ -73,7 +73,7 @@ const SEGWIT_LABEL_TO_CONST = {
   'P2SH-P2WSH 2of3 sig': 'P2SH_P2WSH_2OF3_V2_INDEP_SIG',
 };
 
-function parseSegwitGeneratorOutput(out) {
+export function parseSegwitGeneratorOutput(out) {
   const map = new Map();
   for (const rawLine of out.split('\n')) {
     const line = rawLine.trim();
@@ -94,7 +94,7 @@ function parseSegwitGeneratorOutput(out) {
 
 // --- actual constants from the test file ------------------------------------
 
-function parseTestConstants(source) {
+export function parseTestConstants(source) {
   // Matches: const NAME =\n?  'value' [+ 'value']*;
   const map = new Map();
   const re = /const\s+([A-Z][A-Z0-9_]*)\s*=\s*((?:'[^']*'\s*(?:\+\s*)?)+);/g;
@@ -105,6 +105,9 @@ function parseTestConstants(source) {
   }
   return map;
 }
+
+// Sanity floor for the number of generator constants that must parse.
+export const MIN_EXPECTED = 25;
 
 // --- compare -----------------------------------------------------------------
 
@@ -139,7 +142,6 @@ function main() {
 
   // Sanity floor: the generators cover the annex, v2-indep, segwit-v2 and
   // EXT_* families. If parsing ever silently collapses, refuse to pass.
-  const MIN_EXPECTED = 25;
   if (expected.size < MIN_EXPECTED) {
     fail(
       `only ${expected.size} generator constants were parsed (expected at least ` +
@@ -161,4 +163,8 @@ function main() {
   );
 }
 
-main();
+// Only run the full generator-vs-test-file comparison when executed directly
+// (node scripts/check-proof-vector-generators.js), not when imported by tests.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
