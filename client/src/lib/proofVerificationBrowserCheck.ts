@@ -78,6 +78,23 @@ const P2WSH_2OF2_ADDR = 'bc1qfpchwlajc9pau0d07x70wrpnpaztq76kfax9nkd4wxa9dkp68dw
 const P2WSH_2OF2_SIG =
   'BABHMEQCIBFFh2jDYGfAgcuZzo3HhHiRGn87fjZSI/z+W2uGEGEcAiBJpv32zgDb+7vZyxf6vnp8o7CkbRN2Jy4WpB1cu878xgFIMEUCIQDXRoPFQ7SzbYIVGWq7hANoceKbtdiiQZtmcRVWR4vqHQIgJH5LKbiKOVROPFv7t3sxxBiC3L5b0HzPxwk/81b7SXgBR1IhAtgntbsL3xs/6UNoiJwxgdLC6j0rnr1e7JlIeU5aHRb5IQJIHVIzTIoCDYEi8uGdY4IIsHtYX/Nf898lcYpzDga7y1Ku';
 
+// BIP-322 Simple, Taproot KEY-PATH witness carrying a BIP-341 ANNEX
+// ([64-byte Schnorr sig (SIGHASH_DEFAULT), annex]), shared verbatim with
+// signatureVerify.test.ts (P2TR_KEYPATH_ANNEX_*). The annex participates in
+// the BIP-341 sighash via sha_annex, so the verifier must peel it off AND
+// feed it into the sighash. annex = 0x50 || "kyutxo keypath annex vector".
+const P2TR_KEYPATH_ANNEX_ADDR =
+  'bc1pddrn4apn0qt2j5cjfr6c33cttsx09pc8kdlm6nlh3yapwws4dpgq98vxan';
+const P2TR_KEYPATH_ANNEX_SIG =
+  'AkB0LAZp8vfFceQJjuzSUFIrAQ0Bx/xMCaGLit27LpKGQ3XRwffFKX3Bn6535GjlfoWG9jWpRWECe83msMERysNmHFBreXV0eG8ga2V5cGF0aCBhbm5leCB2ZWN0b3I=';
+// Same signature with the annex removed — the sig committed to sha_annex,
+// so verification must fail with a clear error.
+const P2TR_KEYPATH_ANNEX_STRIPPED_SIG =
+  'AUB0LAZp8vfFceQJjuzSUFIrAQ0Bx/xMCaGLit27LpKGQ3XRwffFKX3Bn6535GjlfoWG9jWpRWECe83msMERysNm';
+// Same stack with one payload byte of the annex flipped.
+const P2TR_KEYPATH_ANNEX_ALTERED_SIG =
+  'AkB0LAZp8vfFceQJjuzSUFIrAQ0Bx/xMCaGLit27LpKGQ3XRwffFKX3Bn6535GjlfoWG9jWpRWECe83msMERysNmHFBreXV0eW8ga2V5cGF0aCBhbm5leCB2ZWN0b3I=';
+
 // BIP-322 Full, Taproot single-leaf script-path (<xA> OP_CHECKSIG).
 const P2TR_LEAF_ADDR = 'bc1pcnljf6kcnlqvltg0fu08egg8s6hkesl4d33pss4vuydslpkam6kqxnvn7f';
 const P2TR_LEAF_SIG =
@@ -244,6 +261,32 @@ export async function runProofVerificationBrowserCheck(
   await expectClearFailure(
     'a Taproot key-path proof against the wrong message reports a clear failure',
     () => verifyBitcoinSignature(P2TR_ADDR, 'Goodbye World', P2TR_SIG),
+  );
+
+  // ---------------------------------------------------------------------
+  // BIP-322 Simple: Taproot key-path witness carrying a BIP-341 annex.
+  // ---------------------------------------------------------------------
+  await expectVerified(
+    'verifyBip322Simple verifies an annex-carrying Taproot key-path witness',
+    'bip322',
+    () => verifyBip322Simple(P2TR_KEYPATH_ANNEX_ADDR, MESSAGE, P2TR_KEYPATH_ANNEX_SIG),
+  );
+  await expectVerified(
+    'verifyBitcoinSignature routes the annex-carrying key-path proof and verifies it',
+    'bip322',
+    () => verifyBitcoinSignature(P2TR_KEYPATH_ANNEX_ADDR, MESSAGE, P2TR_KEYPATH_ANNEX_SIG),
+  );
+  await expectClearFailure(
+    'an annex-stripped key-path witness reports a clear failure (sig committed to sha_annex)',
+    () => verifyBip322Simple(P2TR_KEYPATH_ANNEX_ADDR, MESSAGE, P2TR_KEYPATH_ANNEX_STRIPPED_SIG),
+  );
+  await expectClearFailure(
+    'a key-path witness with an altered annex byte reports a clear failure',
+    () => verifyBip322Simple(P2TR_KEYPATH_ANNEX_ADDR, MESSAGE, P2TR_KEYPATH_ANNEX_ALTERED_SIG),
+  );
+  await expectClearFailure(
+    'an annex-carrying key-path proof against the wrong message reports a clear failure',
+    () => verifyBip322Simple(P2TR_KEYPATH_ANNEX_ADDR, 'Goodbye World', P2TR_KEYPATH_ANNEX_SIG),
   );
 
   // ---------------------------------------------------------------------
