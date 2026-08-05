@@ -21,6 +21,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { PDFDocument } from "pdf-lib";
 import { renderWithProviders } from "@/test/testProviders";
+import { SUPPORTING_EVIDENCE_APPENDIX_HEADING } from "@/pages/proof-of-funds/pof-pdf-strings";
 
 const ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
 
@@ -172,7 +173,7 @@ describe("ProofOfFundsDeclaration — optional supporting evidence", () => {
 
     const joined = pdfState.drawn.join(" ");
     expect(
-      pdfState.drawn.some((l) => l.includes("APPENDIX: SUPPORTING EVIDENCE")),
+      pdfState.drawn.some((l) => l.includes(SUPPORTING_EVIDENCE_APPENDIX_HEADING)),
     ).toBe(false);
     expect(joined).not.toContain("EVIDENCE_ITEM_001");
     // The canonical payload still binds the (empty) evidence set into the hash.
@@ -215,7 +216,7 @@ describe("ProofOfFundsDeclaration — optional supporting evidence", () => {
     const joined = pdfState.drawn.join(" ");
     // (1) The appendix heading is drawn.
     expect(
-      pdfState.drawn.some((l) => l.includes("APPENDIX: SUPPORTING EVIDENCE")),
+      pdfState.drawn.some((l) => l.includes(SUPPORTING_EVIDENCE_APPENDIX_HEADING)),
     ).toBe(true);
     // (2) The canonical payload binds the file into the fingerprint.
     expect(joined).toContain("EVIDENCE_COUNT: 1");
@@ -247,7 +248,7 @@ describe("ProofOfFundsDeclaration — optional supporting evidence", () => {
     const joined = pdfState.drawn.join(" ");
     // (1) The appendix heading is drawn and the PDF is bound into the hash.
     expect(
-      pdfState.drawn.some((l) => l.includes("APPENDIX: SUPPORTING EVIDENCE")),
+      pdfState.drawn.some((l) => l.includes(SUPPORTING_EVIDENCE_APPENDIX_HEADING)),
     ).toBe(true);
     expect(joined).toContain("EVIDENCE_COUNT: 1");
     expect(joined).toContain("EVIDENCE_ITEM_001");

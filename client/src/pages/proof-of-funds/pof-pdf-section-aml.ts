@@ -12,6 +12,7 @@ import {
   buildNearestEntityLine,
 } from "@/lib/amlAppendixStrings";
 import { runAmlScreening } from "./aml-screening";
+import { AML_APPENDIX_HEADING } from "./pof-pdf-strings";
 import type { PdfLayout, PofPdfData } from "./pof-pdf-context";
 
 export async function renderAmlSection(L: PdfLayout, d: PofPdfData) {
@@ -52,7 +53,7 @@ export async function renderAmlSection(L: PdfLayout, d: PofPdfData) {
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(0, 0, 0);
-  doc.text("APPENDIX: AML / RISK SCREENING", margin, L.y);
+  doc.text(AML_APPENDIX_HEADING, margin, L.y);
   L.y += 8;
   doc.setLineWidth(0.5);
   doc.line(margin, L.y, margin + contentW, L.y);

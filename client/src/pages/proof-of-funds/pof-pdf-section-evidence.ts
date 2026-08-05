@@ -1,6 +1,7 @@
 // Supporting Evidence appendix (real declarations only). Extracted verbatim
 // from the pre-split builder — zero behavior change.
 import { formatEvidenceSize } from "./evidence-helpers";
+import { SUPPORTING_EVIDENCE_APPENDIX_HEADING } from "./pof-pdf-strings";
 import type { PdfLayout, PofPdfData } from "./pof-pdf-context";
 
 export function renderEvidenceSection(L: PdfLayout, d: PofPdfData) {
@@ -18,7 +19,7 @@ export function renderEvidenceSection(L: PdfLayout, d: PofPdfData) {
 
   doc.addPage();
   L.y = 20;
-  addLine("APPENDIX: SUPPORTING EVIDENCE", 13, true);
+  addLine(SUPPORTING_EVIDENCE_APPENDIX_HEADING, 13, true);
   addSpacer(2);
   addWrapped(
     "The declarant attached the following supporting evidence. Image files are embedded in this appendix. " +

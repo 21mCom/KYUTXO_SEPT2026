@@ -7,6 +7,7 @@ import { getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
 import { getAttachmentsByRecordId } from "@/lib/data/attachments-crud";
 import { ACQUISITION_METHOD_OPTIONS, COUNTERPARTY_TYPE_OPTIONS } from "@/lib/db-types";
 import type { PdfLayout, PofPdfData } from "./pof-pdf-context";
+import { PROVENANCE_APPENDIX_HEADING } from "./pof-pdf-strings";
 
 export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
   const { doc, autoTable, margin, contentW } = L;
@@ -185,7 +186,7 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(0, 0, 0);
-  doc.text("APPENDIX: ACQUISITION & PROVENANCE", margin, L.y);
+  doc.text(PROVENANCE_APPENDIX_HEADING, margin, L.y);
   L.y += 8;
   doc.setLineWidth(0.5);
   doc.line(margin, L.y, margin + contentW, L.y);

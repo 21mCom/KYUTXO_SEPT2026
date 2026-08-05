@@ -2,6 +2,7 @@
 // builder — zero behavior change.
 import { sanitizePdfText } from "@/lib/pdfText";
 import type { PdfLayout, PofPdfData } from "./pof-pdf-context";
+import { GLOSSARY_APPENDIX_HEADING } from "./pof-pdf-strings";
 
 export function renderGlossarySection(L: PdfLayout, d: PofPdfData) {
   const { doc, margin, contentW } = L;
@@ -16,7 +17,7 @@ export function renderGlossarySection(L: PdfLayout, d: PofPdfData) {
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(0, 0, 0);
-  doc.text("APPENDIX: GLOSSARY OF TERMS", margin, L.y);
+  doc.text(GLOSSARY_APPENDIX_HEADING, margin, L.y);
   L.y += 8;
   doc.setLineWidth(0.5);
   doc.line(margin, L.y, margin + contentW, L.y);

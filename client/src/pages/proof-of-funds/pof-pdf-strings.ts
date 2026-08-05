@@ -9,6 +9,7 @@ import {
   signatureFormatLabel,
   type SignatureFormat,
 } from "@/lib/signatureVerify";
+import { AML_APPENDIX_STRINGS } from "@/lib/amlAppendixStrings";
 
 // ── Appendix signature-box headings ─────────────────────────────────────────
 export const WALLET_SIGNATURE_HEADING = "Wallet Signature (base64):";
@@ -24,6 +25,15 @@ export const PROOF_OF_CONTROL_APPENDIX_HEADING =
   "APPENDIX: PROOF-OF-CONTROL EVIDENCE";
 export const HOW_TO_VERIFY_HEADING = "HOW TO INDEPENDENTLY VERIFY";
 export const CHALLENGE_MESSAGE_FORMAT_HEADING = "CHALLENGE MESSAGE FORMAT";
+export const SUPPORTING_EVIDENCE_APPENDIX_HEADING =
+  "APPENDIX: SUPPORTING EVIDENCE";
+export const GLOSSARY_APPENDIX_HEADING = "APPENDIX: GLOSSARY OF TERMS";
+// The AML appendix title is owned by AML_APPENDIX_STRINGS (amlAppendixStrings.ts)
+// so the on-screen preview and the PDF share one source; re-exported here so
+// the PDF builder sections and tests import all appendix headings from one place.
+export const AML_APPENDIX_HEADING = AML_APPENDIX_STRINGS.appendixTitle;
+export const PROVENANCE_APPENDIX_HEADING =
+  "APPENDIX: ACQUISITION & PROVENANCE";
 
 // ── Disclaimer scaffolding fragments (used by tests to locate the line) ─────
 export const CONTROL_INCLUDED_FRAGMENT = "proof-of-control is included";

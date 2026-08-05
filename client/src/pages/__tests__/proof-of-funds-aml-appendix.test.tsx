@@ -27,6 +27,7 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { AML_APPENDIX_HEADING } from "@/pages/proof-of-funds/pof-pdf-strings";
 
 const DECLARED_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
 const FLAGGED_ADDR = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
@@ -282,7 +283,7 @@ async function generatePdf() {
   fireEvent.click(pdfButton);
 
   await waitFor(() => {
-    expect(pdfHas("APPENDIX: AML / RISK SCREENING")).toBe(true);
+    expect(pdfHas(AML_APPENDIX_HEADING)).toBe(true);
   });
 }
 
@@ -403,7 +404,7 @@ describe("ProofOfFundsDeclaration — AML appendix PDF block", () => {
     fireEvent.click(pdfButton);
 
     await waitFor(() => {
-      expect(pdfHas("APPENDIX: AML / RISK SCREENING")).toBe(true);
+      expect(pdfHas(AML_APPENDIX_HEADING)).toBe(true);
     });
 
     expect(pdfHas("Nearest flagged entity:")).toBe(true);
