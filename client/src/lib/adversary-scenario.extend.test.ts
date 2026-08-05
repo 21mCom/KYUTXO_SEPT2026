@@ -15,9 +15,17 @@ import {
   buildAdversaryContext,
   extendAdversaryContextWithAssumed,
 } from "@/lib/adversary-view";
-import { runAdversaryScenario } from "@/lib/adversary-scenario";
+import {
+  runAdversaryScenario,
+  resolveScenarioReferences,
+} from "@/lib/adversary-scenario";
 import { createRecord, clearAllRecords } from "@/lib/data/record-crud";
-import { bulkAddParticipants, clearParticipants } from "@/lib/data/transaction-crud";
+import {
+  bulkAddParticipants,
+  bulkAddTransactions,
+  clearParticipants,
+  clearTransactions,
+} from "@/lib/data/transaction-crud";
 import type { TransactionParticipant } from "@/lib/db-types";
 
 const A = "bc1qscenaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -48,6 +56,49 @@ async function seedRecords(
 beforeEach(async () => {
   await clearAllRecords({ skipNotification: true });
   await clearParticipants({ skipNotification: true });
+  await clearTransactions({ skipNotification: true });
+});
+
+describe("resolveScenarioReferences", () => {
+  const TX1 = "a".repeat(64);
+  const TX2 = "b".repeat(64);
+
+  it("reports saved references that no longer match any record or synced transaction", async () => {
+    await seedRecords([{ addr: A, xpub: "xpub1" }]);
+    await bulkAddTransactions(
+      [{ txid: TX1, blockHeight: 100, blockTime: 1_700_000_000, fee: 100, feeRate: 1, syncedAt: Date.now() }],
+      { skipNotification: true },
+    );
+
+    const res = await resolveScenarioReferences({
+      knownAddresses: [A, B],
+      knownTxids: [TX1, TX2],
+    });
+    expect(res.unresolvedAddresses).toEqual([B]);
+    expect(res.unresolvedTxids).toEqual([TX2]);
+    expect(res.unresolvedCount).toBe(2);
+  });
+
+  it("resolves regardless of casing/whitespace (canonical lookup keys)", async () => {
+    await seedRecords([{ addr: A, xpub: "xpub1" }]);
+    await bulkAddTransactions(
+      [{ txid: TX1, blockHeight: 100, blockTime: 1_700_000_000, fee: 100, feeRate: 1, syncedAt: Date.now() }],
+      { skipNotification: true },
+    );
+
+    const res = await resolveScenarioReferences({
+      knownAddresses: [` ${A.toUpperCase()} `],
+      knownTxids: [TX1.toUpperCase()],
+    });
+    expect(res.unresolvedCount).toBe(0);
+  });
+
+  it("returns empty for a scenario with no references", async () => {
+    const res = await resolveScenarioReferences({ knownAddresses: [], knownTxids: [] });
+    expect(res.unresolvedCount).toBe(0);
+    expect(res.unresolvedAddresses).toEqual([]);
+    expect(res.unresolvedTxids).toEqual([]);
+  });
 });
 
 describe("extendAdversaryContextWithAssumed", () => {

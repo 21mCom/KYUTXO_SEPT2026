@@ -57,7 +57,9 @@ import {
 import type { AdversaryScenario } from "@/lib/database";
 import {
   runAdversaryScenario,
+  resolveScenarioReferences,
   type AdversaryScenarioDelta,
+  type ScenarioReferenceResolution,
 } from "@/lib/adversary-scenario";
 import type { AdversaryConfidence } from "@/lib/adversary-view";
 
@@ -276,6 +278,50 @@ function TxidPicker({
 
 // ─── Delta results ────────────────────────────────────────────────────────────
 
+function unresolvedNoticeText(count: number): string {
+  return `${count} saved ${count === 1 ? "assumption" : "assumptions"} no longer ${
+    count === 1 ? "matches" : "match"
+  } anything in this vault`;
+}
+
+/**
+ * Informational (never blocking) notice that some of the scenario's saved
+ * assumed addresses/txids no longer resolve against the vault — the run
+ * proceeds with the references that do resolve, so the delta may understate
+ * what the counterparty could unravel with the full saved assumption set.
+ */
+function UnresolvedReferencesNotice({
+  resolution,
+}: {
+  resolution: ScenarioReferenceResolution;
+}) {
+  if (resolution.unresolvedCount === 0) return null;
+  return (
+    <div
+      className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2"
+      data-testid="notice-scenario-unresolved-refs"
+    >
+      <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+      <p className="text-[11px] text-muted-foreground">
+        {unresolvedNoticeText(resolution.unresolvedCount)}
+        {" — the scenario runs with the "}
+        {resolution.unresolvedAddresses.length > 0 &&
+          `${resolution.unresolvedAddresses.length} ${
+            resolution.unresolvedAddresses.length === 1 ? "address" : "addresses"
+          }`}
+        {resolution.unresolvedAddresses.length > 0 &&
+          resolution.unresolvedTxids.length > 0 &&
+          " and "}
+        {resolution.unresolvedTxids.length > 0 &&
+          `${resolution.unresolvedTxids.length} ${
+            resolution.unresolvedTxids.length === 1 ? "transaction" : "transactions"
+          }`}
+        {" excluded, so its results may understate what this counterparty can unravel."}
+      </p>
+    </div>
+  );
+}
+
 function ScenarioDeltaView({ delta }: { delta: AdversaryScenarioDelta }) {
   const { summary } = delta;
   const [open, setOpen] = useState(true);
@@ -465,6 +511,23 @@ export function AdversaryScenariosPanel({
   const { toast } = useToast();
   const [open, setOpen] = useState(true);
   const scenarios = useLiveQuery(() => getAllAdversaryScenarios());
+
+  // Which saved assumed references still resolve against the vault. Live so
+  // deleting a record / clearing synced transactions surfaces the notice
+  // without a re-run; failures fall back to "no notice" (informational only).
+  const resolutions = useLiveQuery(async () => {
+    if (!scenarios) return undefined;
+    const map: Record<number, ScenarioReferenceResolution> = {};
+    for (const s of scenarios) {
+      if (s.id == null) continue;
+      try {
+        map[s.id] = await resolveScenarioReferences(s);
+      } catch (err) {
+        console.error("Scenario reference resolution failed:", err);
+      }
+    }
+    return map;
+  }, [scenarios]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -664,6 +727,7 @@ export function AdversaryScenariosPanel({
               const id = scenario.id!;
               const isRunning = runningId === id;
               const delta = deltas[id];
+              const resolution = resolutions?.[id];
               return (
                 <div
                   key={id}
@@ -732,6 +796,8 @@ export function AdversaryScenariosPanel({
                       </Button>
                     </div>
                   </div>
+
+                  {resolution && <UnresolvedReferencesNotice resolution={resolution} />}
 
                   {isRunning && (
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">

@@ -25,6 +25,9 @@
  * as the main audit.
  */
 
+import { canonicalizeRecordIdentifier } from "./bitcoin";
+import { getRecordsByInputStrings } from "./data/record-crud";
+import { getTransactionsByTxids } from "./data/transaction-crud";
 import {
   buildAdversaryContext,
   extendAdversaryContextWithAssumed,
@@ -300,6 +303,65 @@ export function computeScenarioDelta(
     narrative,
     baseline,
     scenario,
+  };
+}
+
+// ─── Saved-reference resolution ───────────────────────────────────────────────
+
+export interface ScenarioReferenceResolution {
+  /** Saved assumed addresses that no longer match any vault record. */
+  unresolvedAddresses: string[];
+  /** Saved assumed txids that no longer match any synced transaction. */
+  unresolvedTxids: string[];
+  /** Total unresolved references (addresses + txids). */
+  unresolvedCount: number;
+}
+
+/**
+ * Check which of a saved scenario's assumed references still resolve against
+ * the vault: addresses against records (any type — exact identifier match),
+ * txids against synced blockchain transactions. Purely informational — a
+ * scenario always runs with whatever the analysis can still find; this only
+ * explains why the numbers may understate the saved assumption set.
+ *
+ * Lookup keys are canonicalized the same way the CRUD write paths store them
+ * (trim; lowercase bech32/txid), so a saved reference never counts as
+ * "missing" merely because of casing/whitespace differences.
+ */
+export async function resolveScenarioReferences(refs: {
+  knownAddresses: string[];
+  knownTxids: string[];
+}): Promise<ScenarioReferenceResolution> {
+  const unresolvedAddresses: string[] = [];
+  const unresolvedTxids: string[] = [];
+
+  if (refs.knownAddresses.length > 0) {
+    const found = await getRecordsByInputStrings(refs.knownAddresses);
+    const foundSet = new Set(found.map((r) => r.inputString));
+    for (const addr of refs.knownAddresses) {
+      if (!foundSet.has(canonicalizeRecordIdentifier(addr))) {
+        unresolvedAddresses.push(addr);
+      }
+    }
+  }
+
+  if (refs.knownTxids.length > 0) {
+    const canonicalTxids = refs.knownTxids.map((t) =>
+      canonicalizeRecordIdentifier(t),
+    );
+    const found = await getTransactionsByTxids(canonicalTxids);
+    const foundSet = new Set(found.map((t) => t.txid));
+    for (let i = 0; i < refs.knownTxids.length; i++) {
+      if (!foundSet.has(canonicalTxids[i])) {
+        unresolvedTxids.push(refs.knownTxids[i]);
+      }
+    }
+  }
+
+  return {
+    unresolvedAddresses,
+    unresolvedTxids,
+    unresolvedCount: unresolvedAddresses.length + unresolvedTxids.length,
   };
 }
 
