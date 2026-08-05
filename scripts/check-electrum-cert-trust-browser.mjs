@@ -145,7 +145,7 @@ async function gotoWithRetry(page, url, firstSelectorTestId) {
 // succeeds with a pinned cert.
 function buildInitScript({ fingerprint, mode = 'untrusted', expectedFingerprint = null }) {
   return `(() => {
-    const calls = { electrumTest: [], electrumTrustCertificate: [] };
+    const calls = { electrumTest: [], electrumTrustCertificate: [], electrumRevokeCertificate: [] };
     let trusted = false;
     const mode = ${JSON.stringify(mode)};
     const expectedFingerprint = ${JSON.stringify(expectedFingerprint)};
@@ -218,7 +218,12 @@ function buildInitScript({ fingerprint, mode = 'untrusted', expectedFingerprint 
         }
         return { success: true, pinned: null };
       },
-      electrumRevokeCertificate: async () => { trusted = false; return { success: true, revoked: true }; },
+      electrumRevokeCertificate: async (params) => {
+        calls.electrumRevokeCertificate.push(params);
+        const hadPin = trusted;
+        trusted = false;
+        return { success: true, revoked: hadPin };
+      },
       torUpdateSettings: ok,
       torStatus: async () => ({ success: true, running: false }),
       torTest: async () => ({ success: false, error: 'mock' }),
@@ -403,6 +408,75 @@ async function main() {
       name: 'pinned-certificate panel shows the newly trusted fingerprint',
       passed: pinnedVisible && pinnedText === MOCK_FINGERPRINT,
       detail: `visible=${pinnedVisible} text="${pinnedText.slice(0, 40)}..."`,
+    });
+
+    // ── Revoke phase: revoke the pin → panel clears → next test re-prompts ──
+    const revokeButton = page.getByTestId('button-revoke-electrum-cert');
+    await revokeButton.scrollIntoViewIfNeeded();
+    await revokeButton.click();
+
+    const pinnedPanel = page.getByTestId('panel-electrum-pinned-cert');
+    const panelCleared = await pinnedPanel
+      .waitFor({ state: 'hidden', timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    steps.push({
+      name: 'revoking clears the pinned-certificate panel',
+      passed: panelCleared,
+      detail: `panel hidden=${panelCleared}`,
+    });
+
+    const callsAfterRevoke = await page.evaluate(() => {
+      const c = window.__electrumMockCalls;
+      return {
+        revokeCount: c.electrumRevokeCertificate.length,
+        revokeCall: c.electrumRevokeCertificate[0] ?? null,
+      };
+    });
+    steps.push({
+      name: 'electrumRevokeCertificate called once with the host/port',
+      passed:
+        callsAfterRevoke.revokeCount === 1 &&
+        callsAfterRevoke.revokeCall?.host === MOCK_HOST &&
+        callsAfterRevoke.revokeCall?.port === MOCK_PORT,
+      detail: `revokeCount=${callsAfterRevoke.revokeCount} call=${JSON.stringify({ host: callsAfterRevoke.revokeCall?.host, port: callsAfterRevoke.revokeCall?.port })}`,
+    });
+
+    // Test again: the mock is un-trusted again, so CERT_UNTRUSTED must
+    // re-open the trust dialog instead of silently reconnecting.
+    await testButton.scrollIntoViewIfNeeded();
+    await testButton.click();
+    const dialogReopened = await dialog
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    steps.push({
+      name: 'test after revoke re-opens the trust dialog (no silent reconnect)',
+      passed: dialogReopened,
+      detail: `dialog visible=${dialogReopened}`,
+    });
+
+    if (dialogReopened) {
+      const reFp =
+        ((await page.getByTestId('text-electrum-cert-fingerprint').textContent().catch(() => '')) ?? '').trim();
+      steps.push({
+        name: 'reopened dialog shows the server fingerprint again',
+        passed: reFp === MOCK_FINGERPRINT,
+        detail: `fingerprint shown="${reFp.slice(0, 24)}..."`,
+      });
+      // Dismiss so the context closes cleanly; also confirm no trust call
+      // happened just from re-opening the dialog.
+      await page.getByTestId('button-electrum-cert-reject').click().catch(() => {});
+    }
+
+    const callsFinal = await page.evaluate(() => {
+      const c = window.__electrumMockCalls;
+      return { testCount: c.electrumTest.length, trustCount: c.electrumTrustCertificate.length };
+    });
+    steps.push({
+      name: 'post-revoke test failed with CERT_UNTRUSTED (3 tests, still 1 trust call)',
+      passed: callsFinal.testCount === 3 && callsFinal.trustCount === 1,
+      detail: `testCount=${callsFinal.testCount} trustCount=${callsFinal.trustCount}`,
     });
 
     await context.close();
