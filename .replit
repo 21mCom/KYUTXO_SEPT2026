@@ -696,6 +696,10 @@ args = "backup-compare-node-check"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "backup-compare-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "githooks-delegation-guard"
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -2478,6 +2482,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-database-doctor-type-fields-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "githooks-delegation-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-githooks-delegation.js"
 
 [workflows.workflow.metadata]
 isValidation = true
