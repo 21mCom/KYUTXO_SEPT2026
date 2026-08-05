@@ -291,15 +291,15 @@ describe("partial spend (change output) custody segments", () => {
 
     const seg = await buildCustodySegment(ORIGIN_ADDR, TX_FUND, 0);
     expect(seg).not.toBeNull();
-    // Documented current behavior: the first matching leg in blockTime/
-    // insertion order wins. With the payment leg first, the trace ends as
-    // 'spent' (currentAmount 0) — the change output still gets its own
-    // independent segment, so remaining custody is preserved either way.
-    expect(["split", "spent"]).toContain(seg!.status);
-    if (seg!.status === "split") {
-      expect(seg!.currentAmount).toBe(40_000);
-    } else {
-      expect(seg!.currentAmount).toBe(0);
-    }
+    // The trace deterministically prefers the owned change leg of a partial
+    // spend, so even with the payment leg sorting first the origin segment
+    // ends as 'split' with the change amount — never 'spent' / 0.
+    expect(seg!.status).toBe("split");
+    expect(seg!.currentAmount).toBe(40_000);
+    expect(seg!.currentTxid).toBe(TX_SPEND);
+    expect(seg!.currentVout).toBe(1);
+    expect(seg!.currentAddress).toBe(CHANGE_ADDR);
+    expect(seg!.hopCount).toBe(1);
+    expect(seg!.evidenceTxids).toEqual([TX_FUND, TX_SPEND]);
   });
 });
