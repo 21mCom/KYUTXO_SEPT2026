@@ -177,6 +177,8 @@ export interface ElectrumBatchHistoryParams extends ElectrumTorParams {
   useSSL?: boolean;
   addresses: string[];
   timeout?: number;
+  // Optional cancellation group id (see ElectrumHistoryParams.cancelId).
+  cancelId?: string;
 }
 
 export interface ElectrumBatchHistoryResult {
@@ -198,6 +200,8 @@ export interface ElectrumBatchUtxoParams extends ElectrumTorParams {
   useSSL?: boolean;
   addresses: string[];
   timeout?: number;
+  // Optional cancellation group id (see ElectrumHistoryParams.cancelId).
+  cancelId?: string;
 }
 
 export interface ElectrumBatchUtxoResult {

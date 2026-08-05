@@ -320,6 +320,54 @@ describe("electrum-batch-get-history pipelining", () => {
     expect(result.success).toBe(false);
     expect(result.error).toBeTruthy();
   });
+
+  it("cancelling mid-batch rejects in-flight requests and stops dequeuing", async () => {
+    buildScripthashIndex();
+
+    // 500ms server-side latency per response: with window 8 over 24
+    // addresses an uncancelled run needs 3 waves (~1.5s plus the silent
+    // address timeout). Cancel during wave 1 — the batch must return well
+    // before that, with the un-attempted addresses never sent.
+    respondDelayMs = 500;
+
+    const cancelId = "batch-cancel-test-1";
+    const t = Date.now();
+    const pending = Promise.resolve(
+      ipc.invoke("electrum-batch-get-history", {
+        host: "127.0.0.1",
+        port: serverPort,
+        useSSL: false,
+        addresses: ADDRESSES,
+        timeout: 8000,
+        cancelId,
+      }),
+    );
+    // Let wave 1 get on the wire, then cancel.
+    await new Promise((r) => setTimeout(r, 150));
+    const cancelResult = await Promise.resolve(
+      ipc.invoke("electrum-cancel", { cancelId }),
+    );
+    expect(cancelResult.success).toBe(true);
+    expect(cancelResult.aborted).toBeGreaterThan(0);
+
+    const result = await pending;
+    const elapsed = Date.now() - t;
+
+    // Returned promptly: no 8s timeout on the silent address, no waves 2-3.
+    expect(elapsed).toBeLessThan(2000);
+    expect(result.success).toBe(true);
+    expect(result.results).toHaveLength(ADDRESSES.length);
+
+    let cancelled = 0;
+    for (let i = 0; i < ADDRESSES.length; i++) {
+      const entry = result.results[i];
+      expect(entry.address).toBe(ADDRESSES[i]);
+      if (!entry.success && /cancel/i.test(entry.error ?? "")) cancelled++;
+    }
+    // Everything past the first pipeline window must have been cancelled
+    // (either rejected in flight or never dequeued).
+    expect(cancelled).toBeGreaterThanOrEqual(ADDRESSES.length - 8);
+  }, 15000);
 });
 
 describe("electrum-batch-get-utxos pipelining", () => {

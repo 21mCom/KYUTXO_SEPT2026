@@ -56,7 +56,7 @@ export interface BlockchainProvider {
    * back to per-address getAddressCoreStats for addresses missing from the
    * map or when the whole batch throws.
    */
-  getAddressTxCountsBatch?(addresses: string[]): Promise<Map<string, number | { error: string }>>;
+  getAddressTxCountsBatch?(addresses: string[], signal?: AbortSignal): Promise<Map<string, number | { error: string }>>;
   /**
    * Optional companion to getAddressTxCountsBatch: the cheap single-call
    * balance lookup (sum of unspent outputs) used to complete core stats when
@@ -70,7 +70,7 @@ export interface BlockchainProvider {
    * failures. Callers fall back to per-address getAddressBalanceSats for
    * addresses missing from the map or when the whole batch throws.
    */
-  getAddressBalancesBatch?(addresses: string[]): Promise<Map<string, number | { error: string }>>;
+  getAddressBalancesBatch?(addresses: string[], signal?: AbortSignal): Promise<Map<string, number | { error: string }>>;
   /**
    * On-demand history walk: return first/last seen times (and, on Electrum,
    * also receivedSats / sentSats which cannot be computed cheaply).

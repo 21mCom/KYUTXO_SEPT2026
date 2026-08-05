@@ -169,6 +169,35 @@ export class ElectrumProvider implements BlockchainProvider {
     }
   }
 
+  // Shared cancelId plumbing: when the caller's AbortSignal fires,
+  // electrumCancel tells the main process to reject the IN-FLIGHT requests in
+  // this group immediately (freeing the pooled connection) instead of letting
+  // a slow/hung server run them to timeout. Feature-checked so an older
+  // preload without electrumCancel degrades to renderer-side signal checks.
+  private setupIpcCancellation(
+    api: ReturnType<typeof getElectronAPI>,
+    signal: AbortSignal | undefined,
+    prefix: string,
+  ): { cancelId: string | undefined; cleanup: () => void } {
+    const canCancelIpc = typeof api.electrumCancel === 'function';
+    const cancelId = canCancelIpc && signal
+      ? `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+      : undefined;
+    if (!signal || !cancelId) {
+      return { cancelId, cleanup: () => {} };
+    }
+    const onAbort = () => {
+      api.electrumCancel!({ cancelId }).catch(() => {
+        // Best-effort: the renderer-side signal checks still stop the run.
+      });
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    return {
+      cancelId,
+      cleanup: () => signal.removeEventListener('abort', onAbort),
+    };
+  }
+
   async getAddressTransactions(
     address: string,
     onProgress?: (scanned: number) => void,
@@ -348,17 +377,27 @@ export class ElectrumProvider implements BlockchainProvider {
   // caller can fall back to per-address calls for just those rows.
   async getAddressTxCountsBatch(
     addresses: string[],
+    signal?: AbortSignal,
   ): Promise<Map<string, number | { error: string }>> {
     this.ensureElectron();
+    if (signal?.aborted) throw new Error('Sync cancelled');
     const api = getElectronAPI();
-    const result = await api.electrumBatchGetHistory({
-      host: this.host,
-      port: this.port,
-      useSSL: this.useSSL,
-      addresses,
-      timeout: this.timeout,
-      ...this.torParams(),
-    });
+    const { cancelId, cleanup } = this.setupIpcCancellation(api, signal, 'bh');
+    let result;
+    try {
+      result = await api.electrumBatchGetHistory({
+        host: this.host,
+        port: this.port,
+        useSSL: this.useSSL,
+        addresses,
+        timeout: this.timeout,
+        ...(cancelId ? { cancelId } : {}),
+        ...this.torParams(),
+      });
+    } finally {
+      cleanup();
+    }
+    if (signal?.aborted) throw new Error('Sync cancelled');
     if (!result.success) {
       throw new Error(result.error || 'Batch history lookup failed');
     }
@@ -379,17 +418,27 @@ export class ElectrumProvider implements BlockchainProvider {
   // can fall back to per-address calls for just those rows.
   async getAddressBalancesBatch(
     addresses: string[],
+    signal?: AbortSignal,
   ): Promise<Map<string, number | { error: string }>> {
     this.ensureElectron();
+    if (signal?.aborted) throw new Error('Sync cancelled');
     const api = getElectronAPI();
-    const result = await api.electrumBatchGetUtxos({
-      host: this.host,
-      port: this.port,
-      useSSL: this.useSSL,
-      addresses,
-      timeout: this.timeout,
-      ...this.torParams(),
-    });
+    const { cancelId, cleanup } = this.setupIpcCancellation(api, signal, 'bu');
+    let result;
+    try {
+      result = await api.electrumBatchGetUtxos({
+        host: this.host,
+        port: this.port,
+        useSSL: this.useSSL,
+        addresses,
+        timeout: this.timeout,
+        ...(cancelId ? { cancelId } : {}),
+        ...this.torParams(),
+      });
+    } finally {
+      cleanup();
+    }
+    if (signal?.aborted) throw new Error('Sync cancelled');
     if (!result.success) {
       throw new Error(result.error || 'Batch UTXO lookup failed');
     }

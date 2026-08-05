@@ -408,6 +408,11 @@ export default function AddressChecker() {
   // stops in-flight page fetches promptly (within one request), not just
   // between addresses.
   const historyAbortRef = useRef<AbortController | null>(null);
+  // AbortController for the current check's Electrum batch prefetch phase.
+  // Aborting it cancels the in-flight batch IPC requests in the main process
+  // (via electrumCancel), so a pipelined batch against a slow server stops
+  // immediately instead of running to timeout.
+  const batchAbortRef = useRef<AbortController | null>(null);
   // Page-level scroll element + list offset for the row virtualizer: the
   // table does not own a scroll container, the whole page scrolls as one.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -450,6 +455,12 @@ export default function AddressChecker() {
     // Stale history runs no longer run their finalizer, so the new check must
     // resolve the history control state itself or it could stay stuck "running".
     setIsHistoryRunning(false);
+    // Abort any leftover batch prefetch from a superseded run, then create
+    // this run's own controller so Cancel/Reset can stop in-flight batch
+    // lookups mid-flight.
+    batchAbortRef.current?.abort();
+    const batchAbort = new AbortController();
+    batchAbortRef.current = batchAbort;
     const runToken = ++runIdRef.current;
     const isStale = () => runIdRef.current !== runToken;
     // "Cancelled" for this run means either the user hit Cancel/Reset or a
@@ -515,7 +526,7 @@ export default function AddressChecker() {
           for (const batch of batches) {
             if (isCancelled()) break;
             try {
-              const counts = await provider.getAddressTxCountsBatch!(batch);
+              const counts = await provider.getAddressTxCountsBatch!(batch, batchAbort.signal);
               for (const [addr, value] of counts) {
                 if (typeof value === "number") batchTxCounts.set(addr, value);
               }
@@ -525,7 +536,7 @@ export default function AddressChecker() {
             }
             if (canBatchBalances && !isCancelled()) {
               try {
-                const balances = await provider.getAddressBalancesBatch!(batch);
+                const balances = await provider.getAddressBalancesBatch!(batch, batchAbort.signal);
                 for (const [addr, value] of balances) {
                   if (typeof value === "number") batchBalances.set(addr, value);
                 }
@@ -765,6 +776,7 @@ export default function AddressChecker() {
     cancelledRef.current = true;
     historyCancelledRef.current = true;
     historyAbortRef.current?.abort();
+    batchAbortRef.current?.abort();
     historyRunIdRef.current++;
     providerRef.current = null;
     setIsRunning(false);
@@ -781,6 +793,10 @@ export default function AddressChecker() {
 
   const handleCancel = () => {
     cancelledRef.current = true;
+    // Cancel the in-flight Electrum batch lookups too, not just the
+    // renderer-side loop: a pipelined batch against a slow server would
+    // otherwise keep running in the main process until timeout.
+    batchAbortRef.current?.abort();
     setIsRunning(false);
   };
 

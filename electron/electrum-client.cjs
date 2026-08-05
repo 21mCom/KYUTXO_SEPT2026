@@ -1104,9 +1104,9 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         if (!parsed.ok) {
           return { success: false, error: parsed.error, results: [], latency: Date.now() - startTime };
         }
-        const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl } = parsed.data;
+        const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl, cancelId } = parsed.data;
         const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
-        await ensureVersionHandshake(key, timeout || 15000);
+        await ensureVersionHandshake(key, timeout || 15000, cancelId || undefined);
 
         console.log(`[Electrum Pool] Batch fetching ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
 
@@ -1117,12 +1117,16 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         let next = 0;
         const pipelineWorker = async () => {
           while (true) {
+            // Stop dequeuing new addresses once the renderer cancels — the
+            // in-flight requests are rejected by cancelGroup, and remaining
+            // addresses must not be sent to the (possibly slow) server.
+            if (isCancelled(cancelId)) return;
             const i = next++;
             if (i >= addresses.length) return;
             const address = addresses[i];
             try {
               const scripthash = addressToScripthash(address);
-              const history = await pooledRequest(key, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000);
+              const history = await pooledRequest(key, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000, cancelId || undefined);
               results[i] = {
                 address,
                 success: true,
@@ -1135,6 +1139,9 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
                 error: toIpcError(err, 'Address lookup failed'),
                 history: [],
               };
+              // A cancelled request means the whole batch is cancelled:
+              // stop this worker instead of dequeuing the next address.
+              if (err && err.electrumCancelled) return;
             }
           }
         };
@@ -1143,7 +1150,15 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
           workers.push(pipelineWorker());
         }
         await Promise.all(workers);
-      
+
+        // Addresses never dequeued (cancelled mid-batch) get explicit failed
+        // entries so the result array has no holes.
+        for (let i = 0; i < addresses.length; i++) {
+          if (!results[i]) {
+            results[i] = { address: addresses[i], success: false, error: 'Request cancelled', history: [] };
+          }
+        }
+
         const latency = Date.now() - startTime;
       
         return {
@@ -1182,9 +1197,9 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         if (!parsed.ok) {
           return { success: false, error: parsed.error, results: [], latency: Date.now() - startTime };
         }
-        const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl } = parsed.data;
+        const { host, port, useSSL, addresses, timeout, useTor, torProxyUrl, cancelId } = parsed.data;
         const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000, { useTor: !!useTor, torProxyUrl });
-        await ensureVersionHandshake(key, timeout || 15000);
+        await ensureVersionHandshake(key, timeout || 15000, cancelId || undefined);
 
         console.log(`[Electrum Pool] Batch fetching UTXOs for ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'}, window ${BATCH_PIPELINE_WINDOW})`);
 
@@ -1192,12 +1207,16 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
         let next = 0;
         const pipelineWorker = async () => {
           while (true) {
+            // Stop dequeuing new addresses once the renderer cancels — the
+            // in-flight requests are rejected by cancelGroup, and remaining
+            // addresses must not be sent to the (possibly slow) server.
+            if (isCancelled(cancelId)) return;
             const i = next++;
             if (i >= addresses.length) return;
             const address = addresses[i];
             try {
               const scripthash = addressToScripthash(address);
-              const utxos = await pooledRequest(key, 'blockchain.scripthash.listunspent', [scripthash], timeout || 30000);
+              const utxos = await pooledRequest(key, 'blockchain.scripthash.listunspent', [scripthash], timeout || 30000, cancelId || undefined);
               results[i] = {
                 address,
                 success: true,
@@ -1210,6 +1229,9 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
                 error: toIpcError(err, 'Address lookup failed'),
                 utxos: [],
               };
+              // A cancelled request means the whole batch is cancelled:
+              // stop this worker instead of dequeuing the next address.
+              if (err && err.electrumCancelled) return;
             }
           }
         };
@@ -1218,6 +1240,14 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
           workers.push(pipelineWorker());
         }
         await Promise.all(workers);
+
+        // Addresses never dequeued (cancelled mid-batch) get explicit failed
+        // entries so the result array has no holes.
+        for (let i = 0; i < addresses.length; i++) {
+          if (!results[i]) {
+            results[i] = { address: addresses[i], success: false, error: 'Request cancelled', utxos: [] };
+          }
+        }
 
         const latency = Date.now() - startTime;
 
