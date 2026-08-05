@@ -523,6 +523,10 @@ args = "dependency-audit-tests"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "install-hooks-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "legacy-upgrade-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1344,6 +1348,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/check-audit.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "install-hooks-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-install-hooks.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
