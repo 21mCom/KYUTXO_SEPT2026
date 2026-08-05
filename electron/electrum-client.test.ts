@@ -763,6 +763,140 @@ describe("hostile IPC payloads are rejected before any socket opens", () => {
   });
 });
 
+describe("electrum-cancel aborts in-flight requests against a hung server", () => {
+  let server: net.Server;
+  let port: number;
+
+  // Fake Electrum server that completes the handshake but NEVER answers
+  // blockchain.transaction.get / blockchain.scripthash.get_history — the
+  // "slow/hung server" the Cancel button must be able to interrupt.
+  function startHungElectrumServer(): Promise<{ server: net.Server; port: number }> {
+    return new Promise((resolve) => {
+      const srv = net.createServer((socket) => {
+        let buffer = "";
+        socket.on("data", (data) => {
+          buffer += data.toString();
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            let req: any;
+            try {
+              req = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if (req.method === "server.version") {
+              socket.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: ["Hung 1.0", "1.4"] }) + "\n");
+            } else if (req.method === "server.ping") {
+              socket.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: null }) + "\n");
+            }
+            // Everything else: swallow silently (hang).
+          }
+        });
+      });
+      trackSockets(srv);
+      srv.listen(0, "127.0.0.1", () =>
+        resolve({ server: srv, port: (srv.address() as net.AddressInfo).port }),
+      );
+    });
+  }
+
+  beforeAll(async () => {
+    ({ server, port } = await startHungElectrumServer());
+  });
+
+  afterAll(async () => {
+    await closeServer(server);
+  });
+
+  const TXID = "a".repeat(64);
+
+  it("rejects the in-flight request immediately and keeps the pooled socket open", async () => {
+    const cancelId = "cancel-test-1";
+    const pending = ipc.invoke("electrum-get-transaction", {
+      host: "127.0.0.1",
+      port,
+      useSSL: false,
+      txid: TXID,
+      timeout: 30000,
+      cancelId,
+    });
+    // Let the request reach the wire, then cancel.
+    await new Promise((r) => setTimeout(r, 300));
+    const start = Date.now();
+    const cancelResult = await ipc.invoke("electrum-cancel", { cancelId });
+    expect(cancelResult.success).toBe(true);
+    expect(cancelResult.aborted).toBeGreaterThanOrEqual(1);
+
+    const result = await pending;
+    // Rejection surfaces long before the 30s request timeout.
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/cancelled/i);
+
+    // The shared pooled connection survives the cancel.
+    const key = mod._test.poolKey("127.0.0.1", port, false, {});
+    const conn = mod._test.electrumPool.connections.get(key);
+    expect(conn).toBeTruthy();
+    expect(conn.healthy).toBe(true);
+    expect(conn.pendingMap.size).toBe(0);
+  });
+
+  it("a request arriving after its group was cancelled rejects immediately (IPC race)", async () => {
+    const cancelId = "cancel-test-2";
+    await ipc.invoke("electrum-cancel", { cancelId });
+    const start = Date.now();
+    const result = await ipc.invoke("electrum-get-transaction", {
+      host: "127.0.0.1",
+      port,
+      useSSL: false,
+      txid: TXID,
+      timeout: 30000,
+      cancelId,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/cancelled/i);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("cancelling one group leaves other in-flight requests untouched", async () => {
+    const cancelId = "cancel-test-3";
+    const doomed = ipc.invoke("electrum-get-transaction", {
+      host: "127.0.0.1",
+      port,
+      useSSL: false,
+      txid: TXID,
+      timeout: 30000,
+      cancelId,
+    });
+    // Same server, no cancel group, short timeout: must run to ITS OWN
+    // timeout, not get swept up by the other group's cancel.
+    const survivor = ipc.invoke("electrum-get-transaction", {
+      host: "127.0.0.1",
+      port,
+      useSSL: false,
+      txid: "b".repeat(64),
+      timeout: 3000,
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await ipc.invoke("electrum-cancel", { cancelId });
+    const doomedResult = await doomed;
+    expect(doomedResult.success).toBe(false);
+    expect(doomedResult.error).toMatch(/cancelled/i);
+
+    const survivorResult = await survivor;
+    expect(survivorResult.success).toBe(false);
+    expect(survivorResult.error).toMatch(/timeout/i);
+  });
+
+  it("rejects a hostile cancelId shape", async () => {
+    const result = await ipc.invoke("electrum-cancel", { cancelId: "evil/../id:50001" });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Invalid Electrum request/);
+  });
+});
+
 describe("electrum-cert-store persistence", () => {
   it("round-trips a trust decision and normalizes host case", () => {
     const filePath = certStore.certStorePath(dataDir);

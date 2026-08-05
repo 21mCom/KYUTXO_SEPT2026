@@ -163,9 +163,80 @@ function setupMultiplexedHandler(conn, key) {
   });
 }
 
-// Send a request on a multiplexed pooled connection
-function pooledRequest(key, method, params = [], timeout = 30000) {
+// --- Renderer-driven cancellation of in-flight requests -------------------
+// Cancel groups let the renderer abort requests it no longer wants (e.g. the
+// user pressed Cancel mid history scan against a slow/hung server) WITHOUT
+// destroying the shared multiplexed socket: each entry rejects only its own
+// pending request; a late server response for that id is simply ignored by
+// the data handler. Ids are opaque renderer-chosen strings, validated at the
+// IPC boundary.
+const cancelGroups = new Map(); // cancelId -> Set<abortFn>
+// Cancelled ids are remembered briefly so a request that ARRIVES after its
+// cancel (IPC race) rejects immediately instead of running to timeout.
+const cancelledIds = new Map(); // cancelId -> cancelledAt
+const CANCELLED_ID_TTL_MS = 60_000;
+
+function pruneCancelledIds() {
+  const now = Date.now();
+  for (const [id, at] of cancelledIds) {
+    if (now - at > CANCELLED_ID_TTL_MS) cancelledIds.delete(id);
+  }
+}
+
+function isCancelled(cancelId) {
+  if (!cancelId) return false;
+  pruneCancelledIds();
+  return cancelledIds.has(cancelId);
+}
+
+function registerCancelable(cancelId, abortFn) {
+  if (!cancelId) return () => {};
+  let group = cancelGroups.get(cancelId);
+  if (!group) {
+    group = new Set();
+    cancelGroups.set(cancelId, group);
+  }
+  group.add(abortFn);
+  return () => {
+    group.delete(abortFn);
+    if (group.size === 0) cancelGroups.delete(cancelId);
+  };
+}
+
+function cancelGroup(cancelId) {
+  pruneCancelledIds();
+  cancelledIds.set(cancelId, Date.now());
+  const group = cancelGroups.get(cancelId);
+  if (!group) return 0;
+  cancelGroups.delete(cancelId);
+  let aborted = 0;
+  for (const abortFn of group) {
+    try {
+      abortFn();
+      aborted++;
+    } catch (e) {
+      logMainError('[Electrum Pool] Cancel abort callback failed', e);
+    }
+  }
+  return aborted;
+}
+
+function makeCancelledError() {
+  const err = new Error('Request cancelled');
+  err.safeForIpc = true;
+  err.electrumCancelled = true;
+  return err;
+}
+
+// Send a request on a multiplexed pooled connection. `cancelId` (optional)
+// joins the request to a renderer-cancellable group: cancelling rejects this
+// request immediately and drops its pending entry, keeping the socket open.
+function pooledRequest(key, method, params = [], timeout = 30000, cancelId = undefined) {
   return new Promise((resolve, reject) => {
+    if (isCancelled(cancelId)) {
+      reject(makeCancelledError());
+      return;
+    }
     const conn = electrumPool.connections.get(key);
     if (!conn || !conn.healthy || conn.socket.destroyed) {
       reject(new Error('Connection not available'));
@@ -175,7 +246,9 @@ function pooledRequest(key, method, params = [], timeout = 30000) {
     const id = ++electrumPool.requestIdCounter;
     const request = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
     
+    let unregisterCancel = () => {};
     const timeoutId = setTimeout(() => {
+      unregisterCancel();
       conn.pendingMap.delete(id);
       // Reject ONLY this request — never destroy the shared multiplexed
       // socket here. Destroying it would cascade-fail every other in-flight
@@ -191,12 +264,33 @@ function pooledRequest(key, method, params = [], timeout = 30000) {
       reject(new Error(`Request timeout after ${timeout/1000}s for ${method}`));
     }, timeout);
     
-    conn.pendingMap.set(id, { resolve, reject, timeoutId });
+    const settleResolve = (value) => {
+      unregisterCancel();
+      resolve(value);
+    };
+    const settleReject = (err) => {
+      unregisterCancel();
+      reject(err);
+    };
+    conn.pendingMap.set(id, { resolve: settleResolve, reject: settleReject, timeoutId });
     conn.lastUsed = Date.now();
+
+    // Join the cancel group AFTER the pending entry exists so an abort always
+    // finds (and removes) it. Aborting rejects only this request; a late
+    // server response for the id is ignored by the data handler.
+    unregisterCancel = registerCancelable(cancelId, () => {
+      if (conn.pendingMap.get(id)) {
+        conn.pendingMap.delete(id);
+        clearTimeout(timeoutId);
+        console.log(`[Electrum Pool] Request cancelled on ${describeKey(key)} for ${method} (${conn.pendingMap.size} others in flight, connection kept open)`);
+        reject(makeCancelledError());
+      }
+    });
     
     try {
       conn.socket.write(request);
     } catch (e) {
+      unregisterCancel();
       conn.pendingMap.delete(id);
       clearTimeout(timeoutId);
       // Write error - mark unhealthy and close
@@ -613,18 +707,18 @@ async function getPooledConnection(host, port, useSSL, timeout = 30000, options 
 }
 
 // Send server.version handshake only once per connection
-async function ensureVersionHandshake(key, timeout = 15000) {
+async function ensureVersionHandshake(key, timeout = 15000, cancelId = undefined) {
   const conn = electrumPool.connections.get(key);
   if (!conn) throw new Error('Connection not available');
   
   if (!conn.versionSent) {
-    const version = await pooledRequest(key, 'server.version', ['KYUTXO', '1.4'], timeout);
+    const version = await pooledRequest(key, 'server.version', ['KYUTXO', '1.4'], timeout, cancelId);
     conn.versionSent = true;
     return version;
   }
   
   // Already sent version, just ping to verify connection is alive
-  await pooledRequest(key, 'server.ping', [], timeout);
+  await pooledRequest(key, 'server.ping', [], timeout, cancelId);
   return conn.cachedVersion || ['unknown', '1.4'];
 }
 
@@ -858,6 +952,25 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
     }
   });
 
+  // Abort every in-flight pooled request registered under a renderer-chosen
+  // cancel group id. Rejects ONLY those requests (the shared multiplexed
+  // socket stays open for other work) and remembers the id briefly so
+  // requests racing in right after the cancel reject immediately instead of
+  // running to timeout.
+  ipcMain.handle('electrum-cancel', async (event, rawArgs) => {
+    try {
+      const parsed = validateElectrumIpc(electrumIpcSchemas.cancel, rawArgs);
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error, aborted: 0 };
+      }
+      const aborted = cancelGroup(parsed.data.cancelId);
+      return { success: true, aborted };
+    } catch (error) {
+      logMainError('[KYUTXO] electrum-cancel failed', error);
+      return { success: false, error: toIpcError(error, 'Failed to cancel Electrum requests'), aborted: 0 };
+    }
+  });
+
   // Get address history (transactions) via Electrum - uses connection pool
   ipcMain.handle('electrum-get-history', async (event, rawArgs) => {
     try {
@@ -865,12 +978,12 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
       if (!parsed.ok) {
         return { success: false, error: parsed.error, history: [] };
       }
-      const { host, port, useSSL, address, timeout, useTor, torProxyUrl } = parsed.data;
+      const { host, port, useSSL, address, timeout, useTor, torProxyUrl, cancelId } = parsed.data;
       const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
-      await ensureVersionHandshake(key, timeout || 15000);
+      await ensureVersionHandshake(key, timeout || 15000, cancelId || undefined);
       
       const scripthash = addressToScripthash(address);
-      const history = await pooledRequest(key, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000);
+      const history = await pooledRequest(key, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000, cancelId || undefined);
       
       return {
         success: true,
@@ -921,11 +1034,11 @@ function registerElectrumHandlers(ipcMain, { dataDir } = {}) {
       if (!parsed.ok) {
         return { success: false, error: parsed.error };
       }
-      const { host, port, useSSL, txid, verbose, timeout, useTor, torProxyUrl } = parsed.data;
+      const { host, port, useSSL, txid, verbose, timeout, useTor, torProxyUrl, cancelId } = parsed.data;
       const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000, { useTor: !!useTor, torProxyUrl });
-      await ensureVersionHandshake(key, timeout || 15000);
+      await ensureVersionHandshake(key, timeout || 15000, cancelId || undefined);
       
-      const tx = await pooledRequest(key, 'blockchain.transaction.get', [txid, verbose !== false], timeout || 30000);
+      const tx = await pooledRequest(key, 'blockchain.transaction.get', [txid, verbose !== false], timeout || 30000, cancelId || undefined);
       
       return {
         success: true,
@@ -1144,5 +1257,9 @@ module.exports = {
     createElectrumConnection,
     cleanElectrumHost,
     getTrustStorePath: () => trustStorePath,
+    pooledRequest,
+    cancelGroup,
+    cancelGroups,
+    cancelledIds,
   },
 };

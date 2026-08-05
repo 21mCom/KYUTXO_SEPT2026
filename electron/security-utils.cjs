@@ -225,6 +225,13 @@ const txidSchema = z
   .string()
   .regex(/^[0-9a-fA-F]{64}$/, 'must be a 64-character hex transaction id');
 
+// Opaque renderer-chosen cancellation group id. Strict shape (short,
+// URL-safe alphanumeric) so it can never carry endpoint/path material.
+const electrumCancelIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,64}$/, 'must be a short alphanumeric id')
+  .nullish();
+
 const electrumConnectionSchema = z.object({
   host: electrumHostSchema,
   port: electrumPortSchema,
@@ -232,6 +239,7 @@ const electrumConnectionSchema = z.object({
   timeout: electrumTimeoutSchema,
   useTor: z.boolean().nullish(),
   torProxyUrl: electrumTorProxyUrlSchema,
+  cancelId: electrumCancelIdSchema,
 });
 
 const electrumIpcSchemas = {
@@ -267,6 +275,11 @@ const electrumIpcSchemas = {
   revokeCertificate: z.object({
     host: electrumHostSchema,
     port: electrumPortSchema,
+  }),
+  cancel: z.object({
+    cancelId: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,64}$/, 'must be a short alphanumeric id'),
   }),
 };
 

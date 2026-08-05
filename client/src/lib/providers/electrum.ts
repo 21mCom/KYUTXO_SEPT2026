@@ -180,16 +180,39 @@ export class ElectrumProvider implements BlockchainProvider {
     if (signal?.aborted) throw new Error('Sync cancelled');
     
     const api = getElectronAPI();
-    
+
+    // Cancellation group for this walk's IPC requests. When the caller's
+    // AbortSignal fires, electrumCancel tells the main process to reject the
+    // IN-FLIGHT requests immediately (freeing the pooled connection) instead
+    // of letting a slow/hung server run them to timeout. Feature-checked so
+    // an older preload without electrumCancel degrades to the previous
+    // between-batches cancellation.
+    const canCancelIpc = typeof api.electrumCancel === 'function';
+    const cancelId = canCancelIpc
+      ? `hist-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+      : undefined;
+    const onAbort = () => {
+      if (cancelId) {
+        api.electrumCancel!({ cancelId }).catch(() => {
+          // Best-effort: the renderer-side signal checks still stop the walk.
+        });
+      }
+    };
+    if (signal && cancelId) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    try {
     const historyResult = await api.electrumGetHistory({
       host: this.host,
       port: this.port,
       useSSL: this.useSSL,
       address,
       timeout: this.timeout,
+      ...(cancelId ? { cancelId } : {}),
       ...this.torParams(),
     });
     
+    if (signal?.aborted) throw new Error('Sync cancelled');
     if (!historyResult.success) {
       throw new Error(historyResult.error || 'Failed to get address history via Electrum');
     }
@@ -208,8 +231,9 @@ export class ElectrumProvider implements BlockchainProvider {
     if (scanned > 0) onProgress?.(scanned);
     
     for (let i = 0; i < uncached.length; i += ElectrumProvider.TX_FETCH_CONCURRENCY) {
-      // Bail out between batches when the user cancels mid-walk. IPC calls
-      // themselves cannot be aborted, so this stops after the in-flight batch.
+      // Bail out between batches when the user cancels mid-walk. The abort
+      // listener above additionally cancels the in-flight IPC requests, so a
+      // slow/hung batch is dropped immediately rather than run to timeout.
       if (signal?.aborted) throw new Error('Sync cancelled');
       const batch = uncached.slice(i, i + ElectrumProvider.TX_FETCH_CONCURRENCY);
       const results = await Promise.all(
@@ -222,6 +246,7 @@ export class ElectrumProvider implements BlockchainProvider {
               txid: item.tx_hash,
               verbose: true,
               timeout: this.timeout,
+              ...(cancelId ? { cancelId } : {}),
               ...this.torParams(),
             });
             
@@ -235,6 +260,10 @@ export class ElectrumProvider implements BlockchainProvider {
         })
       );
       
+      // A cancelled batch resolves with failed entries — surface the
+      // cancellation instead of caching a partial batch.
+      if (signal?.aborted) throw new Error('Sync cancelled');
+
       for (const result of results) {
         if (result) {
           const tx = this.convertElectrumTxToApiTx(result.tx, result.height);
@@ -248,6 +277,9 @@ export class ElectrumProvider implements BlockchainProvider {
     }
     
     return transactions;
+    } finally {
+      if (signal && cancelId) signal.removeEventListener('abort', onAbort);
+    }
   }
 
   async getAddressTxCount(address: string): Promise<number> {

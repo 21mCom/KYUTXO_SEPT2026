@@ -92,6 +92,9 @@ export interface ElectrumHistoryParams extends ElectrumTorParams {
   useSSL?: boolean;
   address: string;
   timeout?: number;
+  // Optional cancellation group id: an electrumCancel({ cancelId }) call
+  // aborts every in-flight request registered under the same id.
+  cancelId?: string;
 }
 
 export interface ElectrumHistoryItem {
@@ -134,6 +137,18 @@ export interface ElectrumTransactionParams extends ElectrumTorParams {
   txid: string;
   verbose?: boolean;
   timeout?: number;
+  // Optional cancellation group id (see ElectrumHistoryParams.cancelId).
+  cancelId?: string;
+}
+
+export interface ElectrumCancelParams {
+  cancelId: string;
+}
+
+export interface ElectrumCancelResult {
+  success: boolean;
+  aborted?: number;
+  error?: string;
 }
 
 export interface ElectrumTransactionResult {
@@ -337,6 +352,8 @@ interface ElectronAPI {
   electrumGetUtxos: (params: ElectrumUtxoParams) => Promise<ElectrumUtxoResult>;
   electrumGetTransaction: (params: ElectrumTransactionParams) => Promise<ElectrumTransactionResult>;
   electrumGetBlockHash: (params: ElectrumBlockHashParams) => Promise<ElectrumBlockHashResult>;
+  // Optional: older preloads may not expose it, so callers must feature-check.
+  electrumCancel?: (params: ElectrumCancelParams) => Promise<ElectrumCancelResult>;
   electrumBatchGetHistory: (params: ElectrumBatchHistoryParams) => Promise<ElectrumBatchHistoryResult>;
   electrumBatchGetUtxos: (params: ElectrumBatchUtxoParams) => Promise<ElectrumBatchUtxoResult>;
   electrumTrustCertificate: (params: ElectrumTrustCertificateParams) => Promise<ElectrumTrustCertificateResult>;
