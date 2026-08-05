@@ -25,6 +25,14 @@
 //      (key absence via `in`, not just undefined), updatedAt was bumped on
 //      the three repaired rows, and the healthy row kept its fields AND its
 //      original updatedAt
+//   6. ABOVE-THRESHOLD phase (task: "Confirm the mass-clear warning actually
+//      blocks the repair in a real browser", Task #1979's dialog): seeds 30
+//      MORE stale records (> the 25-record confirmation threshold), re-runs
+//      the check, clicks the repair button and asserts the confirmation
+//      dialog (dialog-confirm-type-field-repair) appears showing the count,
+//      that Cancel closes it WITHOUT any writes (fields + updatedAt intact in
+//      IndexedDB, stat unchanged), and that Confirm actually runs the repair
+//      (stat drops to 0, fields gone, updatedAt bumped)
 //
 // NOTE for reviewers: the stat line and repair button live in
 // client/src/pages/DatabaseDoctor.tsx (RecordStats.staleTypeFields /
@@ -395,6 +403,147 @@ async function main() {
         h.updatedAt === seededById.get(healthyId)?.updatedAt,
       detail: JSON.stringify({ after: h, seededUpdatedAt: seededById.get(healthyId)?.updatedAt }),
     });
+
+    // ═══ Phase 2: above-threshold confirmation dialog (>25 affected) ════════
+    // Seed 30 more stale addresses (each carrying a transaction-only flowType)
+    // so the repair button must open the confirm dialog instead of running.
+    const MASS_COUNT = 30;
+    const mass = await page.evaluate(
+      async ({ count }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const { db } = await import('/src/lib/database.ts');
+        const oldStamp = Date.now() - 86_400_000;
+        const ids = await recordCrud.bulkCreateRecords(
+          Array.from({ length: count }, (_, i) => ({
+            type: 'address',
+            inputString: `bc1qddtypefieldsmass${String(i).padStart(4, '0')}check`,
+            label: `DD mass stale ${i}`,
+            flowType: 'incoming',
+            updatedAt: oldStamp,
+          })),
+          { skipVocabularySync: true, skipNotification: true },
+        );
+        const rows = await db.records.where('id').anyOf(ids).toArray();
+        return {
+          ids,
+          staleSeeded: rows.filter((r) => 'flowType' in r).length,
+          updatedAts: rows.map((r) => [r.id, r.updatedAt]),
+        };
+      },
+      { count: MASS_COUNT },
+    );
+    const massUpdatedAt = new Map(mass.updatedAts);
+    steps.push({
+      name: `seeded ${MASS_COUNT} more stale records (above the 25-record threshold)`,
+      passed: mass.ids.length === MASS_COUNT && mass.staleSeeded === MASS_COUNT,
+      detail: `ids=${mass.ids.length} stale=${mass.staleSeeded}`,
+    });
+
+    // Re-run the health check so RepairToolsCard sees the new count.
+    await page.getByTestId('button-run-check').click();
+    let massCount = '';
+    {
+      const deadline2 = Date.now() + 120_000;
+      while (Date.now() < deadline2) {
+        massCount = (
+          (await page.getByTestId('stat-stale-type-fields').textContent().catch(() => '')) ?? ''
+        ).trim();
+        if (massCount === String(MASS_COUNT)) break;
+        await page.waitForTimeout(500);
+      }
+    }
+    steps.push({
+      name: `re-scan counts the ${MASS_COUNT} stale records`,
+      passed: massCount === String(MASS_COUNT),
+      detail: `stat-stale-type-fields="${massCount}"`,
+    });
+
+    // Click the repair button: the confirm dialog must appear (NOT run).
+    await page.getByTestId('button-repair-type-fields').click();
+    const dialog = page.getByTestId('dialog-confirm-type-field-repair');
+    const dialogAppeared = await dialog
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const dialogText = dialogAppeared ? ((await dialog.textContent()) ?? '') : '';
+    steps.push({
+      name: 'above-threshold click opens the confirmation dialog showing the count',
+      passed: dialogAppeared && dialogText.includes(String(MASS_COUNT)),
+      detail: dialogAppeared
+        ? `dialog text: ${dialogText.slice(0, 200)}`
+        : 'dialog never appeared',
+    });
+
+    // Cancel: dialog closes and NOTHING was written.
+    await page.getByTestId('button-cancel-type-field-repair').click();
+    await dialog.waitFor({ state: 'detached', timeout: 30_000 });
+    const afterCancel = await page.evaluate(
+      async ({ ids }) => {
+        const { db } = await import('/src/lib/database.ts');
+        const rows = await db.records.where('id').anyOf(ids).toArray();
+        return rows.map((r) => ({
+          id: r.id,
+          hasFlowType: 'flowType' in r,
+          updatedAt: r.updatedAt,
+        }));
+      },
+      { ids: mass.ids },
+    );
+    const cancelUntouched =
+      afterCancel.length === MASS_COUNT &&
+      afterCancel.every((r) => r.hasFlowType && r.updatedAt === massUpdatedAt.get(r.id));
+    const statAfterCancel = (
+      (await page.getByTestId('stat-stale-type-fields').textContent().catch(() => '')) ?? ''
+    ).trim();
+    steps.push({
+      name: 'Cancel closes the dialog and leaves all rows untouched (no writes)',
+      passed: cancelUntouched && statAfterCancel === String(MASS_COUNT),
+      detail: `untouched=${cancelUntouched} stat="${statAfterCancel}"`,
+    });
+
+    // Click again → dialog → Confirm: the repair must actually run.
+    await page.getByTestId('button-repair-type-fields').click();
+    await dialog.waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByTestId('button-confirm-type-field-repair').click();
+    await dialog.waitFor({ state: 'detached', timeout: 30_000 });
+    let massAfter = '';
+    {
+      const deadline3 = Date.now() + 120_000;
+      while (Date.now() < deadline3) {
+        massAfter = (
+          (await page.getByTestId('stat-stale-type-fields').textContent().catch(() => '')) ?? ''
+        ).trim();
+        if (massAfter === '0') break;
+        await page.waitForTimeout(500);
+      }
+    }
+    steps.push({
+      name: 'Confirm runs the repair and the automatic re-scan reports 0',
+      passed: massAfter === '0',
+      detail: `stat-stale-type-fields="${massAfter}"`,
+    });
+
+    const afterConfirm = await page.evaluate(
+      async ({ ids }) => {
+        const { db } = await import('/src/lib/database.ts');
+        const rows = await db.records.where('id').anyOf(ids).toArray();
+        return rows.map((r) => ({
+          id: r.id,
+          hasFlowType: 'flowType' in r,
+          updatedAt: r.updatedAt,
+        }));
+      },
+      { ids: mass.ids },
+    );
+    steps.push({
+      name: 'confirmed repair dropped flowType from all 30 rows and bumped updatedAt',
+      passed:
+        afterConfirm.length === MASS_COUNT &&
+        afterConfirm.every(
+          (r) => !r.hasFlowType && r.updatedAt > (massUpdatedAt.get(r.id) ?? Infinity),
+        ),
+      detail: JSON.stringify(afterConfirm.slice(0, 3)),
+    });
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -426,7 +575,7 @@ async function main() {
   }
 
   console.log(
-    "[dbdoctor-typefields] PASSED: the Database Doctor 'Clear stale type fields' repair removes stale type-specific metadata end-to-end (fields gone from IndexedDB, updatedAt bumped, re-scan shows 0) without touching healthy rows.",
+    "[dbdoctor-typefields] PASSED: the Database Doctor 'Clear stale type fields' repair removes stale type-specific metadata end-to-end (fields gone from IndexedDB, updatedAt bumped, re-scan shows 0) without touching healthy rows, and the >25-record mass-clear confirmation dialog blocks the repair on Cancel and runs it on Confirm.",
   );
 }
 
