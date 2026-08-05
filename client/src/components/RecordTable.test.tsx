@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { waitFor } from "@testing-library/react";
+import { waitFor, fireEvent } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
 
 const mockAttachmentsToArray = vi.fn(() => Promise.resolve([]));
@@ -187,5 +187,46 @@ describe("RecordTable missing array fields", () => {
     expect(row.textContent).toContain("beta");
     expect(row.textContent).toContain("+1");
     expect(row.textContent).toContain("cat1");
+  });
+
+  it("sorts by label and by tags without throwing when a row omits them (Task #1924)", async () => {
+    setTableColumns({ tags: true });
+
+    // Sparse row mirrors createRecord storage for records saved without
+    // optional metadata: label and tags are absent (undefined), not "".
+    const records = [
+      {
+        id: "sparse",
+        type: "address" as const,
+        inputString: "bc1addrSparseSort",
+      } as any,
+      {
+        id: "full",
+        type: "address" as const,
+        inputString: "bc1addrFullSort",
+        label: "Alpha label",
+        tags: ["zeta"],
+      },
+    ];
+
+    const { container } = renderWithProviders(<RecordTable records={records} />);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="row-record-sparse"]')).toBeTruthy();
+    });
+
+    // Label sort exercised a.label.toLowerCase() on an undefined label.
+    fireEvent.click(container.querySelector('[data-testid="button-sort-label"]')!);
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="row-record-sparse"]')).toBeTruthy();
+      expect(container.querySelector('[data-testid="row-record-full"]')).toBeTruthy();
+    });
+
+    // Tags sort exercised a.tags[0] on undefined tags.
+    fireEvent.click(container.querySelector('[data-testid="button-sort-tags"]')!);
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="row-record-sparse"]')).toBeTruthy();
+      expect(container.querySelector('[data-testid="row-record-full"]')).toBeTruthy();
+    });
   });
 });

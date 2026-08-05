@@ -315,16 +315,16 @@ export function RecordTable({
           bVal = b.type;
           break;
         case "label":
-          aVal = a.label.toLowerCase();
-          bVal = b.label.toLowerCase();
+          aVal = (a.label || "").toLowerCase();
+          bVal = (b.label || "").toLowerCase();
           break;
         case "inputString":
           aVal = a.inputString.toLowerCase();
           bVal = b.inputString.toLowerCase();
           break;
         case "tags":
-          aVal = (a.tags[0] || "").toLowerCase();
-          bVal = (b.tags[0] || "").toLowerCase();
+          aVal = ((a.tags ?? [])[0] || "").toLowerCase();
+          bVal = ((b.tags ?? [])[0] || "").toLowerCase();
           break;
         case "categories":
           aVal = ((a.categories || [])[0] || "").toLowerCase();

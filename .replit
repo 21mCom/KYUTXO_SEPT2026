@@ -35,6 +35,10 @@ args = "Start application"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "sparse-record-fixtures-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "merge-preview-rows-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2309,6 +2313,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-backup-compare-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "sparse-record-fixtures-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/RecordDetailPanel.sparseRecord.test.tsx client/src/components/RecordTable.test.tsx client/src/pages/Dashboard.sparseRecords.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

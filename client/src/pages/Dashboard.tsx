@@ -244,14 +244,14 @@ export default function Dashboard() {
       // Apply tag filter
       if (filter.tags.length > 0) {
         results = results.filter(r => 
-          filter.tags.some(tag => r.tags.includes(tag))
+          filter.tags.some(tag => (r.tags ?? []).includes(tag))
         );
       }
 
       // Apply category filter
       if (filter.categories.length > 0) {
         results = results.filter(r => 
-          filter.categories.some(cat => r.categories.includes(cat))
+          filter.categories.some(cat => (r.categories ?? []).includes(cat))
         );
       }
 
@@ -259,13 +259,13 @@ export default function Dashboard() {
       if (debouncedSearch.trim()) {
         const lowerQuery = debouncedSearch.toLowerCase();
         results = results.filter(record =>
-          record.label.toLowerCase().includes(lowerQuery) ||
+          record.label?.toLowerCase().includes(lowerQuery) ||
           record.inputString.toLowerCase().includes(lowerQuery) ||
           record.owner?.toLowerCase().includes(lowerQuery) ||
           record.walletName?.toLowerCase().includes(lowerQuery) ||
           record.notes?.toLowerCase().includes(lowerQuery) ||
-          record.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
-          record.categories.some(cat => cat.toLowerCase().includes(lowerQuery))
+          (record.tags ?? []).some(tag => tag.toLowerCase().includes(lowerQuery)) ||
+          (record.categories ?? []).some(cat => cat.toLowerCase().includes(lowerQuery))
         );
       }
 
@@ -305,17 +305,17 @@ export default function Dashboard() {
         return false;
       }
       if (filter.type && filter.type !== "all" && record.type !== filter.type) return false;
-      if (filter.tags.length > 0 && !filter.tags.some(tag => record.tags.includes(tag))) return false;
-      if (filter.categories.length > 0 && !filter.categories.some(cat => record.categories.includes(cat))) return false;
+      if (filter.tags.length > 0 && !filter.tags.some(tag => (record.tags ?? []).includes(tag))) return false;
+      if (filter.categories.length > 0 && !filter.categories.some(cat => (record.categories ?? []).includes(cat))) return false;
       if (lowerQuery) {
         return (
-          record.label.toLowerCase().includes(lowerQuery) ||
+          record.label?.toLowerCase().includes(lowerQuery) ||
           record.inputString.toLowerCase().includes(lowerQuery) ||
           record.owner?.toLowerCase().includes(lowerQuery) ||
           record.walletName?.toLowerCase().includes(lowerQuery) ||
           record.notes?.toLowerCase().includes(lowerQuery) ||
-          record.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
-          record.categories.some(cat => cat.toLowerCase().includes(lowerQuery))
+          (record.tags ?? []).some(tag => tag.toLowerCase().includes(lowerQuery)) ||
+          (record.categories ?? []).some(cat => cat.toLowerCase().includes(lowerQuery))
         );
       }
       return true;
@@ -414,16 +414,16 @@ export default function Dashboard() {
           bVal = b.type;
           break;
         case "label":
-          aVal = a.label.toLowerCase();
-          bVal = b.label.toLowerCase();
+          aVal = (a.label || "").toLowerCase();
+          bVal = (b.label || "").toLowerCase();
           break;
         case "inputString":
           aVal = a.inputString.toLowerCase();
           bVal = b.inputString.toLowerCase();
           break;
         case "tags":
-          aVal = (a.tags[0] || "").toLowerCase();
-          bVal = (b.tags[0] || "").toLowerCase();
+          aVal = ((a.tags ?? [])[0] || "").toLowerCase();
+          bVal = ((b.tags ?? [])[0] || "").toLowerCase();
           break;
         case "categories":
           aVal = ((a.categories || [])[0] || "").toLowerCase();

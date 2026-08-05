@@ -1059,11 +1059,11 @@ export function RecordDetailPanel({
               </>
             )}
 
-            {record.tags.length > 0 && (
+            {(record.tags ?? []).length > 0 && (
               <div>
                 <h4 className="text-sm font-medium mb-2">Tags</h4>
                 <div className="flex flex-wrap gap-2">
-                  {record.tags.map((tag) => (
+                  {(record.tags ?? []).map((tag) => (
                     <Badge key={tag} variant="secondary">
                       {tag}
                     </Badge>
@@ -1072,11 +1072,11 @@ export function RecordDetailPanel({
               </div>
             )}
 
-            {record.categories.length > 0 && (
+            {(record.categories ?? []).length > 0 && (
               <div>
                 <h4 className="text-sm font-medium mb-2">Categories</h4>
                 <div className="flex flex-wrap gap-2">
-                  {record.categories.map((category) => (
+                  {(record.categories ?? []).map((category) => (
                     <Badge key={category} variant="outline">
                       {category}
                     </Badge>
