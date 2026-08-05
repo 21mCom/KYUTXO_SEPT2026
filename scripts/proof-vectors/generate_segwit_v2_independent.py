@@ -315,6 +315,28 @@ def main():
     print("P2SH-P2WSH addr:", addr)
     print("P2SH-P2WSH sig :", witness_b64([sig, wscript]))
 
+    # --- P2SH-P2WSH 2-of-2 OP_CHECKMULTISIG ---
+    # Witness script: OP_2 <pk1> <pk2> OP_2 OP_CHECKMULTISIG. Witness stack is
+    # [<empty CHECKMULTISIG dummy>, sig1, sig2, witnessScript], signatures in
+    # the same order as the pubkeys in the script. Exercises the multisig
+    # witness-script path independently of the bitcoinjs stack (script
+    # ordering, empty dummy element, multi-signature BIP-143 sighash).
+    priv2 = int.from_bytes(sha256(b"vault-independent-segwit-v2-vector-key-2"), "big") % N
+    pub2 = compress(point_mul(priv2, G))
+    print("pubkey2:", pub2.hex())
+    ms_script = b"\x52" + push(pub) + push(pub2) + b"\x52\xae"
+    redeem = b"\x00\x20" + sha256(ms_script)
+    spk = b"\xa9\x14" + hash160(redeem) + b"\x87"
+    addr = p2sh_address(redeem)
+    txid = dsha256(to_spend_tx(spk, MSG))
+    sighash = bip143_sighash_v2(txid, ms_script)
+    r, s = ecdsa_sign(priv, sighash)
+    sig1 = der(r, s) + b"\x01"
+    r, s = ecdsa_sign(priv2, sighash)
+    sig2 = der(r, s) + b"\x01"
+    print("P2SH-P2WSH 2of2 addr:", addr)
+    print("P2SH-P2WSH 2of2 sig :", witness_b64([b"", sig1, sig2, ms_script]))
+
 
 if __name__ == "__main__":
     main()
