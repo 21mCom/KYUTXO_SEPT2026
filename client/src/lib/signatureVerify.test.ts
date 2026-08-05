@@ -1251,6 +1251,25 @@ describe("BIP-322 Full rejects structurally-valid-but-insufficient multisig (P2T
     expect(result.error).not.toMatch(/control block does not commit/i);
   });
 
+  it("rejects a CHECKSIGADD 2-of-2 with sigA duplicated into sigB's slot", async () => {
+    // A lone cosigner reusing their own Schnorr sig in both slots: each sig is
+    // bound to a distinct key by position, so only one CHECKSIG/CHECKSIGADD
+    // check passes and the count never reaches 2.
+    const dupA = joinWitness([items[1], items[1], items[2], items[3]]);
+    const result = await verifyBip322Full(EXT_P2TR_CSA_ADDR, EXT_MSG, dupA);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/control block does not commit/i);
+  });
+
+  it("rejects a CHECKSIGADD 2-of-2 with sigB duplicated into sigA's slot", async () => {
+    const dupB = joinWitness([items[0], items[0], items[2], items[3]]);
+    const result = await verifyBip322Full(EXT_P2TR_CSA_ADDR, EXT_MSG, dupB);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/control block does not commit/i);
+  });
+
   it("rejects a CHECKSIGADD 2-of-2 with one signature dropped (too few sigs)", async () => {
     // Remove sigB, leaving a single sig for a 2-of-2 tapscript: the count can
     // never reach 2, so verification must fail (without crashing).
