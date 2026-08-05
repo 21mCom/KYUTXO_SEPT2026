@@ -109,6 +109,29 @@ export function parseTestConstants(source) {
 // Sanity floor for the number of generator constants that must parse.
 export const MIN_EXPECTED = 25;
 
+// --- reverse direction: covered-family test constants need a generator -------
+
+// Naming families whose test constants are guaranteed to be independently
+// re-derivable. Any _ADDR/_SIG constant in these families that appears in
+// signatureVerify.test.ts MUST be emitted by a committed generator; a new
+// vector added test-side only silently erodes the guarantee.
+export function isCoveredFamilyConstant(name) {
+  if (!/_(?:ADDR|SIG)$/.test(name)) return false;
+  return (
+    name.startsWith('EXT_') ||
+    name.includes('_ANNEX_') ||
+    name.includes('_V2_INDEP_')
+  );
+}
+
+export function findUncoveredTestConstants(testConsts, expected) {
+  const uncovered = [];
+  for (const name of testConsts.keys()) {
+    if (isCoveredFamilyConstant(name) && !expected.has(name)) uncovered.push(name);
+  }
+  return uncovered.sort();
+}
+
 // --- compare -----------------------------------------------------------------
 
 function main() {
@@ -138,6 +161,18 @@ function main() {
       );
     }
     checked += 1;
+  }
+
+  // Reverse direction: any covered-family constant in the test file must be
+  // backed by generator output, or the "independently re-derivable"
+  // guarantee has silently eroded.
+  for (const name of findUncoveredTestConstants(testConsts, expected)) {
+    fail(
+      `${name} exists in signatureVerify.test.ts (covered naming family EXT_*/` +
+        '*_ANNEX_*/*_V2_INDEP_*) but is not emitted by any committed generator. ' +
+        'Add generator coverage for the new vector, or rename it out of the covered families ' +
+        'only if it is genuinely not meant to be independently re-derivable.',
+    );
   }
 
   // Sanity floor: the generators cover the annex, v2-indep, segwit-v2 and

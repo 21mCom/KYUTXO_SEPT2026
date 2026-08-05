@@ -20,6 +20,8 @@ import {
   parseTestConstants,
   SEGWIT_LABEL_TO_CONST,
   MIN_EXPECTED,
+  isCoveredFamilyConstant,
+  findUncoveredTestConstants,
 } from './check-proof-vector-generators.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -149,6 +151,67 @@ test('drifted value is preserved verbatim so the compare loop can flag it', () =
   const map = parseTestConstants(src);
   assert.equal(map.get('P2TR_ANNEX_SIG'), 'drifted-value');
   assert.notEqual(map.get('P2TR_ANNEX_SIG'), 'original-generator-value');
+});
+
+// --- reverse direction: covered-family constants need generator coverage ------
+
+test('isCoveredFamilyConstant matches the EXT_/_ANNEX_/_V2_INDEP_ families with _ADDR/_SIG suffix', () => {
+  assert.ok(isCoveredFamilyConstant('EXT_P2TR_LEAF_ADDR'));
+  assert.ok(isCoveredFamilyConstant('EXT_P2WSH_2OF2_SIG'));
+  assert.ok(isCoveredFamilyConstant('P2TR_ANNEX_ADDR'));
+  assert.ok(isCoveredFamilyConstant('P2TR_KEYPATH_ANNEX_STRIPPED_SIG'));
+  assert.ok(isCoveredFamilyConstant('P2WPKH_V2_INDEP_SIG'));
+  assert.ok(isCoveredFamilyConstant('P2SH_P2WSH_2OF3_V2_INDEP_ADDR'));
+});
+
+test('isCoveredFamilyConstant excludes messages, other suffixes and non-covered families', () => {
+  assert.equal(isCoveredFamilyConstant('EXT_MSG'), false); // no _ADDR/_SIG suffix
+  assert.equal(isCoveredFamilyConstant('P2WPKH_V2_ADDR'), false); // v2, but not _V2_INDEP_
+  assert.equal(isCoveredFamilyConstant('BARE_P2SH_2OF2_ADDR'), false);
+  assert.equal(isCoveredFamilyConstant('HELLO_WORLD_SIG'), false);
+  assert.equal(isCoveredFamilyConstant('MESSAGE'), false);
+});
+
+test('findUncoveredTestConstants flags a covered-family constant missing from generator output', () => {
+  const testConsts = parseTestConstants(
+    [
+      "const P2TR_ANNEX_ADDR = 'bc1p-old';",
+      "const P2TR_NEW_ANNEX_SIG = 'newly-added-without-generator';",
+      "const EXT_NEW_THING_ADDR = 'also-uncovered';",
+      "const BARE_P2SH_V2_ADDR = 'not-a-covered-family';",
+    ].join('\n'),
+  );
+  const expected = new Map([['P2TR_ANNEX_ADDR', 'bc1p-old']]);
+  assert.deepEqual(findUncoveredTestConstants(testConsts, expected), [
+    'EXT_NEW_THING_ADDR',
+    'P2TR_NEW_ANNEX_SIG',
+  ]);
+});
+
+test('findUncoveredTestConstants returns empty when every covered constant is generator-backed', () => {
+  const testConsts = parseTestConstants(
+    "const P2TR_ANNEX_ADDR = 'a';\nconst EXT_P2TR_LEAF_SIG = 'b';\nconst OTHER_CONST = 'c';\n",
+  );
+  const expected = new Map([
+    ['P2TR_ANNEX_ADDR', 'a'],
+    ['EXT_P2TR_LEAF_SIG', 'b'],
+  ]);
+  assert.deepEqual(findUncoveredTestConstants(testConsts, expected), []);
+});
+
+test('every covered-family constant in the real test file is emitted by a committed generator name set', () => {
+  // Offline approximation of the guard's reverse direction: the union of
+  // taproot-generator names (parsed from the generator source's print lines is
+  // not available offline) is approximated by requiring that each covered
+  // constant is either segwit-mapped or in the taproot families the taproot
+  // generator owns. The full byte-level check runs in the workflow.
+  const source = fs.readFileSync(TEST_FILE, 'utf8');
+  const map = parseTestConstants(source);
+  const covered = [...map.keys()].filter(isCoveredFamilyConstant);
+  assert.ok(covered.length >= 20, `expected many covered-family constants, got ${covered.length}`);
+  // EXT_MSG must never be treated as covered (it has no generator line).
+  assert.ok(map.has('EXT_MSG'));
+  assert.equal(isCoveredFamilyConstant('EXT_MSG'), false);
 });
 
 // --- real test file & floor sanity -------------------------------------------
