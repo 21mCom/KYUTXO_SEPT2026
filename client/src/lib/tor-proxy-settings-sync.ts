@@ -20,6 +20,13 @@ let lastSyncedKey: string | null = null;
 // Cached bootstrap token fetch (browser path only).
 let settingsTokenPromise: Promise<string | null> | null = null;
 
+// The token is per-server-process: a REAL server restart regenerates it, so a
+// 403 on the settings push means our cached token is stale. Drop the cache so
+// the next getBrowserSettingsToken() fetches a fresh one.
+function invalidateBrowserSettingsToken(): void {
+  settingsTokenPromise = null;
+}
+
 async function getBrowserSettingsToken(): Promise<string | null> {
   if (!settingsTokenPromise) {
     settingsTokenPromise = (async (): Promise<string | null> => {
@@ -66,6 +73,20 @@ export function torProxySettingsFromNodeSettings(settings: NodeSettings): TorPro
   };
 }
 
+function pushBrowserSettings(
+  normalized: object,
+  token: string,
+): Promise<Response> {
+  return fetch('/api/tor/settings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-tor-settings-token': token,
+    },
+    body: JSON.stringify(normalized),
+  });
+}
+
 // Push settings to the proxy. Returns true when the proxy accepted them.
 // Failures leave the dedup cache untouched so the next call retries; callers
 // can treat this as best-effort because a stale/missing allowlist fails closed
@@ -91,14 +112,17 @@ export async function syncTorProxySettings(
     } else {
       const token = await getBrowserSettingsToken();
       if (!token) return false;
-      const response = await fetch('/api/tor/settings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-tor-settings-token': token,
-        },
-        body: JSON.stringify(normalized),
-      });
+      let response = await pushBrowserSettings(normalized, token);
+      if (response.status === 403) {
+        // The bearer token is regenerated on every server start, so a 403 here
+        // most likely means the server restarted and our cached token is
+        // stale. Re-fetch the token and retry ONCE — otherwise the 428
+        // recovery loop in esplora-base can never survive a real restart.
+        invalidateBrowserSettingsToken();
+        const freshToken = await getBrowserSettingsToken();
+        if (!freshToken) return false;
+        response = await pushBrowserSettings(normalized, freshToken);
+      }
       if (!response.ok) {
         throw new Error(`Tor proxy settings sync failed: HTTP ${response.status}`);
       }

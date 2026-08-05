@@ -1605,7 +1605,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run server/tor-proxy.test.ts server/tor-proxy.transport.test.ts electron/tor-proxy.test.ts electron/security-utils.test.ts"
+args = "npx vitest run server/tor-proxy.test.ts server/tor-proxy.transport.test.ts electron/tor-proxy.test.ts electron/security-utils.test.ts client/src/lib/tor-proxy-settings-sync.staleToken.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
