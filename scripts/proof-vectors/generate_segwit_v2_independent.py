@@ -337,6 +337,28 @@ def main():
     print("P2SH-P2WSH 2of2 addr:", addr)
     print("P2SH-P2WSH 2of2 sig :", witness_b64([b"", sig1, sig2, ms_script]))
 
+    # --- P2SH-P2WSH 2-of-3 OP_CHECKMULTISIG, signed by cosigners 1 and 3 ---
+    # Witness script: OP_2 <pk1> <pk2> <pk3> OP_3 OP_CHECKMULTISIG. Only keys
+    # 1 and 3 sign (a NON-ADJACENT subset), so a correct verifier must match
+    # signatures to pubkeys in script order while skipping the non-signing
+    # middle key — exercising the subset-selection/ordering logic that a
+    # 2-of-2 vector (all keys sign) cannot.
+    priv3 = int.from_bytes(sha256(b"vault-independent-segwit-v2-vector-key-3"), "big") % N
+    pub3 = compress(point_mul(priv3, G))
+    print("pubkey3:", pub3.hex())
+    ms3_script = b"\x52" + push(pub) + push(pub2) + push(pub3) + b"\x53\xae"
+    redeem = b"\x00\x20" + sha256(ms3_script)
+    spk = b"\xa9\x14" + hash160(redeem) + b"\x87"
+    addr = p2sh_address(redeem)
+    txid = dsha256(to_spend_tx(spk, MSG))
+    sighash = bip143_sighash_v2(txid, ms3_script)
+    r, s = ecdsa_sign(priv, sighash)
+    sig1 = der(r, s) + b"\x01"
+    r, s = ecdsa_sign(priv3, sighash)
+    sig3 = der(r, s) + b"\x01"
+    print("P2SH-P2WSH 2of3 addr:", addr)
+    print("P2SH-P2WSH 2of3 sig :", witness_b64([b"", sig1, sig3, ms3_script]))
+
 
 if __name__ == "__main__":
     main()
