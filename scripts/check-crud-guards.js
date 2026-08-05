@@ -157,6 +157,10 @@ const ALWAYS_ALLOWED_FILES = new Set([
   // Same reason: seeds colliding pre-canonicalization rows verbatim so the
   // Database Doctor's duplicate-identifier card has something to list.
   path.resolve(ROOT, 'client/src/pages/DatabaseDoctor.duplicateIdentifiers.test.tsx'),
+  // Same reason: seeds rows still carrying stale type-specific metadata
+  // verbatim (the CRUD layer clears those fields on save), so the
+  // confirm-before-mass-clear test has something above the threshold.
+  path.resolve(ROOT, 'client/src/pages/DatabaseDoctor.typeFieldConfirm.test.tsx'),
   path.resolve(ROOT, 'client/src/lib/bip329-export.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-proximity.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-entity-contacts.test.ts'),

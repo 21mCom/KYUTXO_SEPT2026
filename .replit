@@ -2173,7 +2173,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/pages/DatabaseDoctor.duplicateIdentifiers.test.tsx"
+args = "npx vitest run client/src/pages/DatabaseDoctor.duplicateIdentifiers.test.tsx client/src/pages/DatabaseDoctor.typeFieldConfirm.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

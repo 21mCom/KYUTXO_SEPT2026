@@ -67,6 +67,16 @@ import {
 import { getStaleTypeSpecificFields } from "@/lib/record-type-clears";
 import type { Record as VaultRecord } from "@/lib/db-types";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -888,6 +898,10 @@ function RepairToolsCard({
   const { toast } = useToast();
   const [running, setRunning] = useState<null | "searchKeys" | "tiers" | "typeFields">(null);
   const [repairProgress, setRepairProgress] = useState("");
+  // Confirmation gate for the type-field repair: on a large vault this
+  // rewrites many records at once, so above the threshold the button opens a
+  // confirm dialog showing the affected count instead of running immediately.
+  const [typeFieldConfirmOpen, setTypeFieldConfirmOpen] = useState(false);
 
   const runSearchKeyRepair = async () => {
     setRunning("searchKeys");
@@ -981,6 +995,19 @@ function RepairToolsCard({
       setRunning(null);
       setRepairProgress("");
     }
+  };
+
+  // Above this many affected records the repair asks for confirmation first —
+  // a mass rewrite (e.g. after a bulk import) shouldn't happen on a single
+  // unguarded click. At or below it the click runs immediately, as before.
+  const TYPE_FIELD_CONFIRM_THRESHOLD = 25;
+
+  const handleTypeFieldRepairClick = () => {
+    if (stats.staleTypeFields > TYPE_FIELD_CONFIRM_THRESHOLD) {
+      setTypeFieldConfirmOpen(true);
+      return;
+    }
+    void runTypeFieldRepair();
   };
 
   const runTypeFieldRepair = async () => {
@@ -1105,7 +1132,7 @@ function RepairToolsCard({
           </div>
           <Button
             variant="outline"
-            onClick={runTypeFieldRepair}
+            onClick={handleTypeFieldRepairClick}
             disabled={running !== null}
             data-testid="button-repair-type-fields"
           >
@@ -1117,6 +1144,31 @@ function RepairToolsCard({
             Clear stale type fields
           </Button>
         </div>
+        <AlertDialog open={typeFieldConfirmOpen} onOpenChange={setTypeFieldConfirmOpen}>
+          <AlertDialogContent data-testid="dialog-confirm-type-field-repair">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Clear stale type fields on {stats.staleTypeFields.toLocaleString()} records?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will rewrite {stats.staleTypeFields.toLocaleString()} records at once, removing
+                only fields their current Type can no longer show or edit. Your addresses, labels,
+                tags, and notes are never touched, but the removed values cannot be restored
+                afterwards.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="button-cancel-type-field-repair">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="button-confirm-type-field-repair"
+                onClick={() => {
+                  setTypeFieldConfirmOpen(false);
+                  void runTypeFieldRepair();
+                }}
+              >
+                Clear fields
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         {running !== null && repairProgress && (
           <p className="text-sm text-muted-foreground" data-testid="text-repair-progress">
             {repairProgress}
