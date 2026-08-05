@@ -650,6 +650,34 @@ describe('BIP-322 P2SH-P2WSH 2-of-3 multisig v2 to_sign — independently genera
     expect(result.verified).toBe(false);
     expect(result.error).toMatch(/did not verify/i);
   });
+
+  it('rejects the same proof with one cosigner signature supplied twice', async () => {
+    // A lax OP_CHECKMULTISIG implementation that counts total valid
+    // (sig, pubkey) matches without consuming each signature and pubkey
+    // exactly once could accept [dummy, sig1, sig1, script]: sig1 matches
+    // pubkey1 and would "match again" if pubkeys aren't consumed strictly
+    // left-to-right. Both duplicated variants must fail.
+    const items = splitWitness(P2SH_P2WSH_2OF3_V2_INDEP_SIG);
+    expect(items).toHaveLength(4);
+
+    const dupFirst = [items[0], items[1], items[1], items[3]];
+    const r1 = await verifyBip322P2SH(
+      P2SH_P2WSH_2OF3_V2_INDEP_ADDR,
+      FULL_MSG,
+      joinWitness(dupFirst),
+    );
+    expect(r1.verified).toBe(false);
+    expect(r1.error).toMatch(/did not verify/i);
+
+    const dupSecond = [items[0], items[2], items[2], items[3]];
+    const r2 = await verifyBip322P2SH(
+      P2SH_P2WSH_2OF3_V2_INDEP_ADDR,
+      FULL_MSG,
+      joinWitness(dupSecond),
+    );
+    expect(r2.verified).toBe(false);
+    expect(r2.error).toMatch(/did not verify/i);
+  });
 });
 
 /**
