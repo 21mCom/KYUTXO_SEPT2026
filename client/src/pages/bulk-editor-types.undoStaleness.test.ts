@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import type { Record } from "@/lib/database";
 import {
   partitionUndoSnapshots,
+  buildUndoSkipPreview,
   undoValuesEquivalent,
   type UndoRecordSnapshot,
 } from "./bulk-editor-types";
@@ -102,6 +103,63 @@ describe("partitionUndoSnapshots", () => {
     const current = mapOf(rec(1, { label: "edited", notes: "edited notes" }));
     const result = partitionUndoSnapshots(snaps, current);
     expect(result.stale).toEqual([{ id: 1, changedFields: ["label", "notes"] }]);
+  });
+});
+
+describe("buildUndoSkipPreview", () => {
+  const snapshots: UndoRecordSnapshot[] = [
+    { id: 1, before: { counterpartyName: "Old Co" }, after: { counterpartyName: "New Co" } },
+    { id: 2, before: { counterpartyName: "" }, after: { counterpartyName: "New Co" } },
+    { id: 3, before: { label: "old" }, after: { label: "new" } },
+  ];
+
+  it("reports a clean preview when nothing changed since the apply", () => {
+    const current = mapOf(
+      rec(1, { counterpartyName: "New Co" }),
+      rec(2, { counterpartyName: "New Co" }),
+      rec(3, { label: "new" }),
+    );
+    const preview = buildUndoSkipPreview(snapshots, current);
+    expect(preview.restorableCount).toBe(3);
+    expect(preview.stale).toEqual([]);
+    expect(preview.missing).toEqual([]);
+  });
+
+  it("decorates stale entries with the current record's identifier and changed fields", () => {
+    const current = mapOf(
+      rec(1, { counterpartyName: "New Co" }),
+      rec(2, { counterpartyName: "Manual Edit Co" }),
+    );
+    const preview = buildUndoSkipPreview(snapshots, current);
+    expect(preview.restorableCount).toBe(1);
+    expect(preview.stale).toEqual([
+      { id: 2, identifier: "bc1qtest2", changedFields: ["counterpartyName"] },
+    ]);
+    expect(preview.missing).toEqual([{ id: 3 }]);
+  });
+
+  it("falls back to a Record #id identifier when the current row has no inputString", () => {
+    const current = mapOf(
+      rec(1, { counterpartyName: "New Co" }),
+      rec(2, { counterpartyName: "Manual Edit Co", inputString: "" }),
+      rec(3, { label: "new" }),
+    );
+    const preview = buildUndoSkipPreview(snapshots, current);
+    expect(preview.stale).toEqual([
+      { id: 2, identifier: "Record #2", changedFields: ["counterpartyName"] },
+    ]);
+  });
+
+  it("matches what partitionUndoSnapshots would restore (same authoritative check)", () => {
+    const current = mapOf(
+      rec(1, { counterpartyName: "Edited" }),
+      rec(3, { label: "new" }),
+    );
+    const preview = buildUndoSkipPreview(snapshots, current);
+    const partition = partitionUndoSnapshots(snapshots, current);
+    expect(preview.restorableCount).toBe(partition.restorable.length);
+    expect(preview.stale.map((s) => s.id)).toEqual(partition.stale.map((s) => s.id));
+    expect(preview.missing.map((m) => m.id)).toEqual(partition.missing);
   });
 });
 

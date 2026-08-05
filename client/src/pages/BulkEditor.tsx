@@ -60,7 +60,9 @@ import {
   type FilterCondition,
   type ActionDef,
   type UndoSnapshot,
+  type UndoSkipPreview,
   partitionUndoSnapshots,
+  buildUndoSkipPreview,
   FIELD_DEFS,
   OPERATORS,
   ACTION_TYPES,
@@ -466,6 +468,8 @@ export default function BulkEditor() {
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [lastUndo, setLastUndo] = useState<UndoSnapshot | null>(null);
+  const [undoSkipPreview, setUndoSkipPreview] = useState<UndoSkipPreview | null>(null);
+  const undoPreviewVersionRef = useRef(0);
   const [attachProgress, setAttachProgress] = useState<{ current: number; total: number } | null>(null);
 
   const [matchingRecords, setMatchingRecords] = useState<Record[]>([]);
@@ -756,6 +760,23 @@ export default function BulkEditor() {
     }
   };
   
+  // Pre-confirm skip preview: run the same staleness check the actual Undo
+  // uses so the user sees which records will be skipped BEFORE confirming.
+  // Advisory only — undoChanges re-partitions at confirm time.
+  const loadUndoSkipPreview = async (snapshot: UndoSnapshot) => {
+    const version = ++undoPreviewVersionRef.current;
+    setUndoSkipPreview(null);
+    try {
+      const currentRecords = await getRecordsByIds(snapshot.recordSnapshots.map(s => s.id));
+      if (version !== undoPreviewVersionRef.current) return;
+      const currentById = new Map(currentRecords.map(r => [r.id!, r]));
+      setUndoSkipPreview(buildUndoSkipPreview(snapshot.recordSnapshots, currentById));
+    } catch (error) {
+      console.error('Undo skip preview failed:', error);
+      // Leave preview null; the confirm-time check remains authoritative.
+    }
+  };
+
   // Undo last bulk edit (also uses batch processing)
   const undoChanges = async () => {
     if (!lastUndo) return;
@@ -939,7 +960,16 @@ export default function BulkEditor() {
           </div>
           
           {lastUndo && (
-            <Popover>
+            <Popover
+              onOpenChange={(open) => {
+                if (open) {
+                  loadUndoSkipPreview(lastUndo);
+                } else {
+                  undoPreviewVersionRef.current++;
+                  setUndoSkipPreview(null);
+                }
+              }}
+            >
               <PopoverTrigger asChild>
                 <Button 
                   variant="outline" 
@@ -977,6 +1007,45 @@ export default function BulkEditor() {
                   <div className="text-xs text-muted-foreground">
                     Performed {new Date(lastUndo.timestamp).toLocaleTimeString()}
                   </div>
+
+                  {undoSkipPreview === null ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="undo-skip-preview-loading">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Checking for records changed since the apply…
+                    </div>
+                  ) : (undoSkipPreview.stale.length > 0 || undoSkipPreview.missing.length > 0) ? (
+                    <div className="text-xs space-y-1 rounded border border-destructive/40 bg-destructive/10 p-2" data-testid="undo-skip-preview">
+                      <div className="flex items-center gap-1 font-medium">
+                        <AlertTriangle className="h-3 w-3 shrink-0 text-destructive" />
+                        <span>
+                          {undoSkipPreview.stale.length + undoSkipPreview.missing.length} record{undoSkipPreview.stale.length + undoSkipPreview.missing.length !== 1 ? 's' : ''} will be skipped
+                        </span>
+                      </div>
+                      <div className="text-muted-foreground">
+                        Only {undoSkipPreview.restorableCount} record{undoSkipPreview.restorableCount !== 1 ? 's' : ''} will be restored, to preserve newer changes.
+                      </div>
+                      <div className="max-h-24 overflow-auto space-y-0.5 pl-1">
+                        {undoSkipPreview.stale.map(s => (
+                          <div key={`stale-${s.id}`} className="truncate" data-testid={`undo-skip-stale-${s.id}`}>
+                            <span className="font-mono">{s.identifier.substring(0, 24)}</span>
+                            <span className="text-muted-foreground"> — edited since apply ({s.changedFields.join(', ')})</span>
+                          </div>
+                        ))}
+                        {undoSkipPreview.missing.map(m => (
+                          <div key={`missing-${m.id}`} className="truncate" data-testid={`undo-skip-missing-${m.id}`}>
+                            <span className="font-mono">Record #{m.id}</span>
+                            <span className="text-muted-foreground"> — deleted since apply</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="undo-skip-preview-clean">
+                      <CheckCircle2 className="h-3 w-3 shrink-0" />
+                      All {undoSkipPreview.restorableCount} record{undoSkipPreview.restorableCount !== 1 ? 's' : ''} can be restored.
+                    </div>
+                  )}
+
                   
                   <div className="flex justify-end gap-2 pt-2 border-t">
                     <Button 

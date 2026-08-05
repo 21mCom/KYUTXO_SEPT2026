@@ -171,6 +171,38 @@ function partitionUndoSnapshots(
   return { restorable, stale, missing };
 }
 
+interface UndoSkipPreview {
+  /** How many snapshot records are still safe to restore right now. */
+  restorableCount: number;
+  /** Records that would be skipped because their fields changed since the apply. */
+  stale: { id: number; identifier: string; changedFields: string[] }[];
+  /** Records that would be skipped because they were deleted since the apply. */
+  missing: { id: number }[];
+}
+
+/**
+ * Builds the pre-confirm skip preview shown in the Undo popover. Runs the
+ * same partitionUndoSnapshots check the actual Undo uses, then decorates
+ * stale entries with a human-readable identifier from the current record.
+ * This is advisory only — undoChanges re-runs the partition at confirm time,
+ * which remains the authoritative guard.
+ */
+function buildUndoSkipPreview(
+  snapshots: UndoRecordSnapshot[],
+  currentById: Map<number, Record>,
+): UndoSkipPreview {
+  const { restorable, stale, missing } = partitionUndoSnapshots(snapshots, currentById);
+  return {
+    restorableCount: restorable.length,
+    stale: stale.map(({ id, changedFields }) => ({
+      id,
+      identifier: currentById.get(id)?.inputString || `Record #${id}`,
+      changedFields,
+    })),
+    missing: missing.map((id) => ({ id })),
+  };
+}
+
 /**
  * Joins new text onto an existing text value for append/prepend actions.
  * The empty-value guard lives here (and ONLY here): when the existing value
@@ -198,5 +230,5 @@ function isActionTypeAllowedForField(actionType: ActionType, fieldDef: FieldDef 
   return true;
 }
 
-export type { FieldType, FieldDef, Operator, ActionType, FilterCondition, ActionDef, UndoSnapshot, UndoRecordSnapshot, UndoPartitionResult };
-export { FIELD_DEFS, OPERATORS, ACTION_TYPES, applyTextJoin, isActionTypeAllowedForField, undoValuesEquivalent, partitionUndoSnapshots };
+export type { FieldType, FieldDef, Operator, ActionType, FilterCondition, ActionDef, UndoSnapshot, UndoRecordSnapshot, UndoPartitionResult, UndoSkipPreview };
+export { FIELD_DEFS, OPERATORS, ACTION_TYPES, applyTextJoin, isActionTypeAllowedForField, undoValuesEquivalent, partitionUndoSnapshots, buildUndoSkipPreview };
