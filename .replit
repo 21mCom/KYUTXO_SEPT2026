@@ -515,6 +515,10 @@ args = "demo-custody-chain-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "custody-segment-build-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "address-checker-5k-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2572,6 +2576,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/check-packaged-freshness-guard.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "custody-segment-build-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-custody-segment-build-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
