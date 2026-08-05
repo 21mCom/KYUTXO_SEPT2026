@@ -56,6 +56,8 @@ const ADDR_C = 'bc1qcpccc222ccccccccccccccccccccccccccccc';
 const ADDRS = [ADDR_A, ADDR_B, ADDR_C];
 const EXISTING_NAME = 'Old Exchange Ltd';
 const NEW_NAME = 'Kraken Exchange GmbH';
+// Written to record B between Apply and Undo — Undo must not clobber it.
+const MANUAL_EDIT_NAME = 'Manual Edit Co';
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -299,7 +301,19 @@ async function main() {
     // The Undo snapshot captured each record's BEFORE value: record A had an
     // existing counterparty name, B and C were empty. Undo must restore each
     // record's exact prior value — including empties staying empty.
+    //
+    // Staleness guard (task #1948): before undoing, record B is manually
+    // edited (simulating a user edit between Apply and Undo). Undo must SKIP
+    // record B — preserving the newer manual edit — while still restoring
+    // A and C, and it must surface a skip notice.
     {
+      await page.evaluate(async ({ addr, manualName }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const [row] = await recordCrud.getRecordsByInputStrings([addr]);
+        if (!row) throw new Error('edited-between round: record not found');
+        await recordCrud.updateRecord(row.id, { counterpartyName: manualName });
+      }, { addr: ADDR_B, manualName: MANUAL_EDIT_NAME });
+
       const undoBtn = page.getByTestId('button-undo');
       await undoBtn.waitFor({ state: 'visible', timeout: 15_000 });
       await undoBtn.click();
@@ -307,14 +321,28 @@ async function main() {
       await undoConfirm.waitFor({ state: 'visible', timeout: 10_000 });
       await undoConfirm.click();
 
-      const expected = [EXISTING_NAME, '', ''];
+      const expected = [EXISTING_NAME, MANUAL_EDIT_NAME, ''];
       const { ok, last } = await waitForStoredNames(page, ADDRS, expected);
       steps.push({
-        name: 'undo: each record returns to its exact prior value (existing name restored, empties stay empty)',
+        name: 'undo: restores untouched records but SKIPS the record edited between apply and undo (manual edit preserved)',
         passed: ok,
         detail: `stored after undo = ${JSON.stringify(last)} (expected ${JSON.stringify(expected)})`,
       });
-      if (!ok) throw new Error('Undo did not restore the prior per-record counterparty names.');
+      if (!ok) throw new Error('Undo did not preserve the mid-flight manual edit / restore the untouched records.');
+
+      // The partial-undo notice must reach the user (toast text duplicates
+      // into aria-live, so take .first()).
+      const noticeSeen = await page
+        .getByText(/Skipped 1 record\(s\) to preserve newer changes/i)
+        .first()
+        .waitFor({ state: 'visible', timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false);
+      steps.push({
+        name: 'undo: a clear skip notice is shown for the record edited since the apply',
+        passed: noticeSeen,
+        detail: noticeSeen ? 'partial-undo toast visible' : 'skip notice toast never appeared',
+      });
 
       const undoGone = await undoBtn
         .waitFor({ state: 'detached', timeout: 10_000 })

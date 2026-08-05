@@ -98,12 +98,77 @@ interface ActionDef {
   files?: File[];
 }
 
+interface UndoRecordSnapshot {
+  id: number;
+  /** Field values as they were BEFORE the bulk apply (what Undo restores). */
+  before: Partial<Record>;
+  /** Field values the bulk apply wrote (what we expect to still find at Undo time). */
+  after: Partial<Record>;
+}
+
 interface UndoSnapshot {
   timestamp: number;
-  recordSnapshots: { id: number; before: Partial<Record> }[];
+  recordSnapshots: UndoRecordSnapshot[];
   description: string;
   recordCount: number;
   actionsApplied: { type: ActionType; field: string; value?: string }[];
+}
+
+/**
+ * Value equivalence for staleness detection. Text fields treat
+ * undefined/null/'' as the same "empty"; array fields compare element-wise.
+ */
+function undoValuesEquivalent(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const aa = Array.isArray(a) ? a : (a === undefined || a === null || a === '' ? [] : [a]);
+    const bb = Array.isArray(b) ? b : (b === undefined || b === null || b === '' ? [] : [b]);
+    return aa.length === bb.length && aa.every((v, i) => v === bb[i]);
+  }
+  const na = a === undefined || a === null ? '' : a;
+  const nb = b === undefined || b === null ? '' : b;
+  return na === nb;
+}
+
+interface UndoPartitionResult {
+  /** Snapshots whose records still hold exactly what the bulk apply wrote — safe to restore. */
+  restorable: UndoRecordSnapshot[];
+  /** Records whose relevant fields were edited after the apply — restoring would clobber the newer edit. */
+  stale: { id: number; changedFields: string[] }[];
+  /** Records that no longer exist (deleted since the apply). */
+  missing: number[];
+}
+
+/**
+ * Splits an undo snapshot list into records that are still safe to restore
+ * and records whose relevant fields changed since the bulk apply (or which
+ * were deleted). Undo must ONLY write back the restorable set, otherwise it
+ * silently discards edits made between Apply and Undo.
+ */
+function partitionUndoSnapshots(
+  snapshots: UndoRecordSnapshot[],
+  currentById: Map<number, Record>,
+): UndoPartitionResult {
+  const restorable: UndoRecordSnapshot[] = [];
+  const stale: { id: number; changedFields: string[] }[] = [];
+  const missing: number[] = [];
+
+  for (const snap of snapshots) {
+    const current = currentById.get(snap.id);
+    if (!current) {
+      missing.push(snap.id);
+      continue;
+    }
+    const changedFields = (Object.keys(snap.after) as (keyof Record)[])
+      .filter((field) => !undoValuesEquivalent(current[field], snap.after[field]))
+      .map((field) => field as string);
+    if (changedFields.length > 0) {
+      stale.push({ id: snap.id, changedFields });
+    } else {
+      restorable.push(snap);
+    }
+  }
+
+  return { restorable, stale, missing };
 }
 
 /**
@@ -133,5 +198,5 @@ function isActionTypeAllowedForField(actionType: ActionType, fieldDef: FieldDef 
   return true;
 }
 
-export type { FieldType, FieldDef, Operator, ActionType, FilterCondition, ActionDef, UndoSnapshot };
-export { FIELD_DEFS, OPERATORS, ACTION_TYPES, applyTextJoin, isActionTypeAllowedForField };
+export type { FieldType, FieldDef, Operator, ActionType, FilterCondition, ActionDef, UndoSnapshot, UndoRecordSnapshot, UndoPartitionResult };
+export { FIELD_DEFS, OPERATORS, ACTION_TYPES, applyTextJoin, isActionTypeAllowedForField, undoValuesEquivalent, partitionUndoSnapshots };

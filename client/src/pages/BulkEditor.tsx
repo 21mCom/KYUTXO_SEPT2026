@@ -45,6 +45,7 @@ import {
 } from "@/lib/dataFacade";
 import {
   countRecords,
+  getRecordsByIds,
   getRecordsByIndexedFieldAnyOfFiltered,
   getRecentRecordsFiltered,
 } from "@/lib/data/record-crud";
@@ -59,6 +60,7 @@ import {
   type FilterCondition,
   type ActionDef,
   type UndoSnapshot,
+  partitionUndoSnapshots,
   FIELD_DEFS,
   OPERATORS,
   ACTION_TYPES,
@@ -681,6 +683,7 @@ export default function BulkEditor() {
           snapshot.recordSnapshots.push({
             id: record.id!,
             before: beforeState,
+            after: { ...beforeState, ...updates },
           });
           
           if (Object.keys(updates).length > 0) {
@@ -760,19 +763,42 @@ export default function BulkEditor() {
     setIsApplying(true);
     
     try {
-      // Convert undo snapshots to bulk update format
-      const undoUpdates = lastUndo.recordSnapshots.map(snapshot => ({
+      // Staleness check: only restore records that still hold exactly what the
+      // bulk apply wrote. Records edited (or deleted) since the apply are
+      // skipped so Undo never silently overwrites a newer edit.
+      const currentRecords = await getRecordsByIds(lastUndo.recordSnapshots.map(s => s.id));
+      const currentById = new Map(currentRecords.map(r => [r.id!, r]));
+      const { restorable, stale, missing } = partitionUndoSnapshots(
+        lastUndo.recordSnapshots,
+        currentById,
+      );
+
+      const undoUpdates = restorable.map(snapshot => ({
         id: snapshot.id,
         changes: snapshot.before,
       }));
-      
-      const { successCount } = await bulkUpdateRecords(undoUpdates);
-      
-      toast({
-        title: "Undo Complete",
-        description: `Restored ${successCount} record(s) to previous state`,
-      });
-      
+
+      const { successCount } = undoUpdates.length > 0
+        ? await bulkUpdateRecords(undoUpdates)
+        : { successCount: 0 };
+
+      const skippedCount = stale.length + missing.length;
+      if (skippedCount > 0) {
+        const skipParts: string[] = [];
+        if (stale.length > 0) skipParts.push(`${stale.length} edited since the bulk apply`);
+        if (missing.length > 0) skipParts.push(`${missing.length} deleted since the bulk apply`);
+        toast({
+          title: successCount > 0 ? "Undo Partially Complete" : "Undo Skipped",
+          description: `Restored ${successCount} record(s). Skipped ${skippedCount} record(s) to preserve newer changes: ${skipParts.join(', ')}.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Undo Complete",
+          description: `Restored ${successCount} record(s) to previous state`,
+        });
+      }
+
       setLastUndo(null);
       setScrollResetSignal(s => s + 1);
     } catch (error) {

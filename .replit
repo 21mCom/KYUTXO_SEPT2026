@@ -775,7 +775,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/pages/bulk-editor-types.textJoin.test.ts"
+args = "npx vitest run client/src/pages/bulk-editor-types.textJoin.test.ts client/src/pages/bulk-editor-types.undoStaleness.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
