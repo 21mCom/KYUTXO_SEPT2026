@@ -1043,6 +1043,186 @@ describe("v3 merge restore", () => {
     expect(await getAllRecordOrigins()).toHaveLength(2);
   });
 
+  // Blank-input enrichment end-to-end: the classifier's ordinal pairing
+  // (merge-classify.ts, unit-covered by merge-classify.blankInputPairing) must
+  // drive REAL writes through restore.ts's participant branch. Seeds the vault
+  // that gets exported with an INPUT participant carrying a fully-resolved
+  // outpoint, then rebuilds the live vault with a FULLY-BLANK input row for the
+  // same txid (only txid+role='input' — no address, no prevout, exactly what
+  // sync leaves behind before resolution).
+  const BLANK_PREV_TXID = "f".repeat(64);
+
+  async function seedVaultWithResolvedInput(): Promise<void> {
+    const [recordId] = await bulkCreateRecords([RECORD_SHARED], {
+      skipNotification: true,
+      skipVocabularySync: true,
+    });
+    await bulkAddTransactions(
+      [
+        {
+          txid: TXID_SHARED,
+          blockHeight: 800_000,
+          blockTime: 1_700_000_000,
+          fee: 210,
+          feeRate: 1.5,
+          syncedAt: 1_700_000_500_000,
+        },
+      ],
+      { skipNotification: true },
+    );
+    await bulkAddParticipants(
+      [
+        // The resolved input the backup carries: outpoint + address + owner.
+        {
+          txid: TXID_SHARED,
+          role: "input",
+          address: RECORD_SHARED.inputString,
+          amount: 60_000,
+          prevTxid: BLANK_PREV_TXID,
+          prevVout: 3,
+          recordId,
+        },
+        {
+          txid: TXID_SHARED,
+          role: "output",
+          address: "bc1qdest000000000000000000000000000000000000",
+          amount: 59_000,
+          vout: 0,
+        },
+      ] as any,
+      { skipNotification: true },
+    );
+  }
+
+  // Live vault: same record (collides by inputString), placeholder tx, and a
+  // fully-blank input row — the shape the merge must enrich, never duplicate.
+  async function seedLiveVaultWithBlankInput(): Promise<number> {
+    await bulkCreateRecords([RECORD_SHARED], {
+      skipNotification: true,
+      skipVocabularySync: true,
+    });
+    await bulkAddTransactions(
+      [
+        {
+          txid: TXID_SHARED,
+          blockHeight: 0,
+          blockTime: 0,
+          fee: 0,
+          feeRate: 0,
+          syncedAt: 0,
+        },
+      ],
+      { skipNotification: true },
+    );
+    const [blankId] = await bulkAddParticipants(
+      [{ txid: TXID_SHARED, role: "input" }] as any,
+      { skipNotification: true },
+    );
+    return blankId;
+  }
+
+  it("merge ENRICHES a fully-blank live input row from a backup input with a resolved outpoint — one row, filled in place, no duplicate", async () => {
+    await seedVaultWithResolvedInput();
+    const blob = await exportToBlob();
+    await clearEverything();
+    const blankId = await seedLiveVaultWithBlankInput();
+    const liveRecordId = (await getAllRecords())[0].id!;
+
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter,
+      restoreMode: "merge",
+    });
+
+    const parts = await getParticipantsByTxids([TXID_SHARED]);
+    const inputs = parts.filter((p) => p.role === "input");
+    // Exactly ONE input row — the blank one, enriched in place (same id).
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].id).toBe(blankId);
+    expect(inputs[0].address).toBe(RECORD_SHARED.inputString);
+    expect(inputs[0].prevTxid).toBe(BLANK_PREV_TXID);
+    expect(inputs[0].prevVout).toBe(3);
+    expect(inputs[0].amount).toBe(60_000);
+    // recordId remapped to the LIVE record's id, not the backup's.
+    expect(inputs[0].recordId).toBe(liveRecordId);
+    // Only the output (absent live) was inserted; the input was NOT.
+    expect(result.counts.transactionParticipants).toBe(1);
+    expect(parts.filter((p) => p.role === "output")).toHaveLength(1);
+
+    // Idempotence: merging again changes nothing — the enriched input now has
+    // a real outpoint identity, so it match-keys instead of ordinal-pairing.
+    await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter,
+      restoreMode: "merge",
+    });
+    const again = await getParticipantsByTxids([TXID_SHARED]);
+    expect(again.filter((p) => p.role === "input")).toHaveLength(1);
+    expect(again).toHaveLength(parts.length);
+  });
+
+  it("cancelling a merge that enriched a blank input restores the ORIGINAL blank row verbatim", async () => {
+    await seedVaultWithResolvedInput();
+    const blob = await exportToBlob();
+    await clearEverything();
+    const blankId = await seedLiveVaultWithBlankInput();
+
+    // The per-batch progress report fires AFTER the batch is merged, so
+    // aborting on the participants phase guarantees the blank input was
+    // already enriched; the abort then surfaces at the next entry's check
+    // (blockchainTransactions streams after participants). The undo must
+    // revert the enrichment via the captured pre-enrichment row.
+    const controller = new AbortController();
+    let thrown: unknown = null;
+    try {
+      await restoreV3Backup({
+        source: blobChunks(blob),
+        attachmentWriter,
+        restoreMode: "merge",
+        signal: controller.signal,
+        onProgress: (p) => {
+          if (p.phase.startsWith("Restoring transactionParticipants")) {
+            controller.abort();
+          }
+        },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(BackupCancelledError);
+    const cancelErr = thrown as BackupCancelledError;
+    expect(cancelErr.clearedBeforeCancel).toBe(false);
+    expect(cancelErr.mergeUndone).toBe(true);
+    expect(cancelErr.mergeUndoFailed).toBeUndefined();
+
+    // The blank input is back EXACTLY as it was: same id, still the only
+    // input row, every enrichable field empty again.
+    const parts = await getParticipantsByTxids([TXID_SHARED]);
+    const inputs = parts.filter((p) => p.role === "input");
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].id).toBe(blankId);
+    expect(inputs[0].address ?? "").toBe("");
+    expect(inputs[0].prevTxid ?? null).toBeNull();
+    expect(inputs[0].prevVout ?? null).toBeNull();
+    expect(inputs[0].recordId ?? null).toBeNull();
+    // The inserted output was removed by the undo too.
+    expect(parts.filter((p) => p.role === "output")).toHaveLength(0);
+
+    // Re-running the merge to completion afterwards enriches cleanly.
+    await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter,
+      restoreMode: "merge",
+    });
+    const recovered = await getParticipantsByTxids([TXID_SHARED]);
+    const recoveredInputs = recovered.filter((p) => p.role === "input");
+    expect(recoveredInputs).toHaveLength(1);
+    expect(recoveredInputs[0].id).toBe(blankId);
+    expect(recoveredInputs[0].prevTxid).toBe(BLANK_PREV_TXID);
+    expect(recoveredInputs[0].address).toBe(RECORD_SHARED.inputString);
+  });
+
   it("OLDER backups without recordOrigins inline data still restore cleanly (origins simply absent)", async () => {
     await seedExportedVault();
 
