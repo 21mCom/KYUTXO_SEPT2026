@@ -20,9 +20,23 @@ Related: the independent SegWit v2 / P2SH-wrapped vectors (P2WPKH_V2_INDEP_*,
 P2WSH_V2_INDEP_*, P2SH_P2WPKH_V2_INDEP_*, P2SH_P2WSH_V2_INDEP_*) are
 reproduced by scripts/proof-vectors/generate_segwit_v2_independent.py
 (seed-string key + RFC-6979 deterministic ECDSA, so equally re-derivable).
+
+This script also emits the EXT_* "external independent vectors" (P2WSH
+2-of-2 / 2-of-3 OP_CHECKMULTISIG, P2TR single-leaf script-path,
+CHECKSIGADD 2-of-2 tapscript, and 2-leaf / 4-leaf taproot trees). The
+ORIGINAL EXT_* vectors were produced by an uncommitted throwaway script
+whose keys were lost, so they were regenerated from the committed seed
+strings below (ECDSA is RFC-6979 deterministic, Schnorr uses
+aux_rand = 32 zero bytes) — re-running this script reproduces the
+committed EXT_* constants byte-for-byte. All EXT_* vectors sign EXT_MSG
+("I certify that I control the following Bitcoin address."), commit to a
+version-0 to_sign, and preserve the original witness-stack shapes the
+tamper tests rely on (2-of-3 signed by NON-ADJACENT cosigners A and C;
+CHECKSIGADD stack [sigB, sigA, leafScript, controlBlock]).
 """
 
 import hashlib
+import hmac
 
 # ---------------------------------------------------------------- secp256k1
 
@@ -366,6 +380,234 @@ def gen_v2_script_path():
     emit("P2TR_SCRIPT_V2_INDEP_SIG", f"'{witness_b64([sig, leaf_script, control])}'")
 
 
+# ==================================================================
+# EXT_* external independent vectors (multisig P2WSH + taproot trees)
+# ==================================================================
+# The original EXT_* vectors came from an uncommitted throwaway script and
+# their keys were lost; these are regenerated from the seed strings below.
+
+# ---------------------------------------------- RFC-6979 deterministic ECDSA
+
+def rfc6979_k(privkey: int, msghash: bytes) -> int:
+    x = privkey.to_bytes(32, "big")
+    k = b"\x00" * 32
+    v = b"\x01" * 32
+    k = hmac.new(k, v + b"\x00" + x + msghash, hashlib.sha256).digest()
+    v = hmac.new(k, v, hashlib.sha256).digest()
+    k = hmac.new(k, v + b"\x01" + x + msghash, hashlib.sha256).digest()
+    v = hmac.new(k, v, hashlib.sha256).digest()
+    while True:
+        v = hmac.new(k, v, hashlib.sha256).digest()
+        cand = int.from_bytes(v, "big")
+        if 1 <= cand < N:
+            return cand
+        k = hmac.new(k, v + b"\x00", hashlib.sha256).digest()
+        v = hmac.new(k, v, hashlib.sha256).digest()
+
+
+def ecdsa_sign_der(privkey: int, msghash: bytes) -> bytes:
+    """RFC-6979 deterministic, low-S ECDSA signature, DER + SIGHASH_ALL byte."""
+    z = int.from_bytes(msghash, "big")
+    while True:
+        k = rfc6979_k(privkey, msghash)
+        pt = point_mul(k)
+        r = pt[0] % N
+        if r == 0:
+            continue
+        s = pow(k, N - 2, N) * (z + r * privkey) % N
+        if s == 0:
+            continue
+        if s > N // 2:
+            s = N - s
+        break
+
+    def enc_int(v: int) -> bytes:
+        b = v.to_bytes((v.bit_length() + 8) // 8, "big")
+        return b"\x02" + bytes([len(b)]) + b
+
+    body = enc_int(r) + enc_int(s)
+    return b"\x30" + bytes([len(body)]) + body + b"\x01"  # SIGHASH_ALL
+
+
+def compress(pt) -> bytes:
+    return bytes([2 + (pt[1] & 1)]) + pt[0].to_bytes(32, "big")
+
+
+def push(data: bytes) -> bytes:
+    assert len(data) < 0x4C
+    return bytes([len(data)]) + data
+
+
+# --------------------------------------------------------------- bech32 (v0)
+
+def bech32_encode_p2wsh(prog32: bytes) -> str:
+    hrp = "bc"
+    data = [0]  # witness v0
+    acc = 0
+    bits = 0
+    for byte in prog32:
+        acc = (acc << 8) | byte
+        bits += 8
+        while bits >= 5:
+            bits -= 5
+            data.append((acc >> bits) & 31)
+    if bits:
+        data.append((acc << (5 - bits)) & 31)
+    hrp_exp = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
+    polymod = bech32_polymod(hrp_exp + data + [0] * 6) ^ 1  # bech32 (v0)
+    checksum = [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
+    return hrp + "1" + "".join(CHARSET[d] for d in data + checksum)
+
+
+# ------------------------------------------------------------ BIP-143 sighash
+
+def bip143_sighash(to_spend_txid: bytes, script_code: bytes, version: int = 0) -> bytes:
+    """BIP-143 SIGHASH_ALL for the single-input single-OP_RETURN-output to_sign."""
+    dsha = lambda b: sha256(sha256(b))
+    outpoint = to_spend_txid + (0).to_bytes(4, "little")
+    pre = (
+        version.to_bytes(4, "little")
+        + dsha(outpoint)  # hashPrevouts
+        + dsha((0).to_bytes(4, "little"))  # hashSequence
+        + outpoint
+        + compact_size(len(script_code))
+        + script_code
+        + (0).to_bytes(8, "little")  # amount
+        + (0).to_bytes(4, "little")  # nSequence
+        + dsha((0).to_bytes(8, "little") + compact_size(1) + b"\x6a")  # hashOutputs
+        + (0).to_bytes(4, "little")  # nLockTime
+        + (1).to_bytes(4, "little")  # SIGHASH_ALL
+    )
+    return sha256(sha256(pre))
+
+
+def to_spend_txid(address_script: bytes, message: str) -> bytes:
+    msg_hash = tagged_hash("BIP0322-signed-message", message.encode())
+    script_sig = b"\x00\x20" + msg_hash
+    to_spend = (
+        (0).to_bytes(4, "little")
+        + compact_size(1)
+        + ser_outpoint(b"\x00" * 32, 0xFFFFFFFF)
+        + compact_size(len(script_sig))
+        + script_sig
+        + (0).to_bytes(4, "little")
+        + compact_size(1)
+        + (0).to_bytes(8, "little")
+        + compact_size(len(address_script))
+        + address_script
+        + (0).to_bytes(4, "little")
+    )
+    return sha256(sha256(to_spend))
+
+
+# -------------------------------------------------------- EXT P2WSH multisig
+
+def gen_ext_p2wsh_multisig():
+    key_a = key_from_seed("kyutxo ext p2wsh cosigner A")
+    key_b = key_from_seed("kyutxo ext p2wsh cosigner B")
+    key_c = key_from_seed("kyutxo ext p2wsh cosigner C")
+    pub_a = compress(point_mul(key_a))
+    pub_b = compress(point_mul(key_b))
+    pub_c = compress(point_mul(key_c))
+
+    # 2-of-2: OP_2 <pkA> <pkB> OP_2 OP_CHECKMULTISIG, both cosigners signing.
+    # Witness stack: [<empty CHECKMULTISIG dummy>, sigA, sigB, witnessScript].
+    script = b"\x52" + push(pub_a) + push(pub_b) + b"\x52\xae"
+    sh = sha256(script)
+    spk = b"\x00\x20" + sh
+    txid = to_spend_txid(spk, EXT_MESSAGE)
+    sighash = bip143_sighash(txid, script, 0)
+    sig_a = ecdsa_sign_der(key_a, sighash)
+    sig_b = ecdsa_sign_der(key_b, sighash)
+    emit("EXT_P2WSH_2OF2_ADDR", f"'{bech32_encode_p2wsh(sh)}'")
+    emit("EXT_P2WSH_2OF2_SIG", f"'{witness_b64([b'', sig_a, sig_b, script])}'")
+
+    # 2-of-3: OP_2 <pkA> <pkB> <pkC> OP_3 OP_CHECKMULTISIG, signed by the
+    # NON-ADJACENT cosigners A and C (the middle key B does not sign), so the
+    # verifier must match sigs to keys in script order while skipping B.
+    # Witness stack: [<empty dummy>, sigA, sigC, witnessScript].
+    script3 = b"\x52" + push(pub_a) + push(pub_b) + push(pub_c) + b"\x53\xae"
+    sh3 = sha256(script3)
+    spk3 = b"\x00\x20" + sh3
+    txid3 = to_spend_txid(spk3, EXT_MESSAGE)
+    sighash3 = bip143_sighash(txid3, script3, 0)
+    sig_a3 = ecdsa_sign_der(key_a, sighash3)
+    sig_c3 = ecdsa_sign_der(key_c, sighash3)
+    emit("EXT_P2WSH_2OF3_ADDR", f"'{bech32_encode_p2wsh(sh3)}'")
+    emit("EXT_P2WSH_2OF3_SIG", f"'{witness_b64([b'', sig_a3, sig_c3, script3])}'")
+
+
+# ------------------------------------------------------ EXT taproot vectors
+
+def tap_leaf_hash(script: bytes) -> bytes:
+    return tagged_hash("TapLeaf", bytes([0xC0]) + compact_size(len(script)) + script)
+
+
+def tap_branch(a: bytes, b: bytes) -> bytes:
+    return tagged_hash("TapBranch", (a + b) if a <= b else (b + a))
+
+
+def gen_ext_taproot():
+    # Single-leaf script-path: leaf is <xA> OP_CHECKSIG.
+    internal = key_from_seed("kyutxo ext taproot internal key")
+    internal_x = xonly(point_mul(internal))
+
+    leaf_key = key_from_seed("kyutxo ext taproot leaf key")
+    leaf_script = b"\x20" + xonly(point_mul(leaf_key)) + b"\xac"
+    leaf_h = tap_leaf_hash(leaf_script)
+    parity, output_x = taproot_tweak(internal_x, leaf_h)
+    control = bytes([0xC0 | parity]) + internal_x
+    tx = bip322_txs(p2tr_script(output_x), EXT_MESSAGE, 0)
+    sig = schnorr_sign(bip341_sighash(tx, None, leaf_script, 0), leaf_key)
+    emit("EXT_P2TR_LEAF_ADDR", f"'{bech32m_encode_p2tr(output_x)}'")
+    emit("EXT_P2TR_LEAF_SIG", f"'{witness_b64([sig, leaf_script, control])}'")
+
+    # CHECKSIGADD 2-of-2: <xA> OP_CHECKSIG <xB> OP_CHECKSIGADD OP_2 OP_NUMEQUAL.
+    # Witness stack (execution order): [sigB, sigA, leafScript, controlBlock].
+    csa_a = key_from_seed("kyutxo ext taproot csa key A")
+    csa_b = key_from_seed("kyutxo ext taproot csa key B")
+    csa_script = (
+        b"\x20" + xonly(point_mul(csa_a)) + b"\xac"
+        + b"\x20" + xonly(point_mul(csa_b)) + b"\xba\x52\x9c"
+    )
+    csa_h = tap_leaf_hash(csa_script)
+    parity, output_x = taproot_tweak(internal_x, csa_h)
+    control = bytes([0xC0 | parity]) + internal_x
+    tx = bip322_txs(p2tr_script(output_x), EXT_MESSAGE, 0)
+    sighash = bip341_sighash(tx, None, csa_script, 0)
+    sig_a = schnorr_sign(sighash, csa_a)
+    sig_b = schnorr_sign(sighash, csa_b)
+    emit("EXT_P2TR_CSA_ADDR", f"'{bech32m_encode_p2tr(output_x)}'")
+    emit("EXT_P2TR_CSA_SIG", f"'{witness_b64([sig_b, sig_a, csa_script, control])}'")
+
+    # Multi-leaf trees: each leaf is <x_i> OP_CHECKSIG with its own key, so the
+    # control block carries a real merkle path verifyTaprootCommitment must fold.
+    leaf_keys = [key_from_seed(f"kyutxo ext taproot tree leaf key {i}") for i in range(4)]
+    leaf_scripts = [b"\x20" + xonly(point_mul(k)) + b"\xac" for k in leaf_keys]
+    leaf_hashes = [tap_leaf_hash(s) for s in leaf_scripts]
+
+    # 2-leaf tree, spending leaf 0: merkle path = [leafHash 1].
+    root2 = tap_branch(leaf_hashes[0], leaf_hashes[1])
+    parity, output_x = taproot_tweak(internal_x, root2)
+    control = bytes([0xC0 | parity]) + internal_x + leaf_hashes[1]
+    tx = bip322_txs(p2tr_script(output_x), EXT_MESSAGE, 0)
+    sig = schnorr_sign(bip341_sighash(tx, None, leaf_scripts[0], 0), leaf_keys[0])
+    emit("EXT_P2TR_2LEAF_ADDR", f"'{bech32m_encode_p2tr(output_x)}'")
+    emit("EXT_P2TR_2LEAF_SIG", f"'{witness_b64([sig, leaf_scripts[0], control])}'")
+
+    # 4-leaf tree ((L0,L1),(L2,L3)), spending leaf 2:
+    # merkle path = [leafHash 3, branch(L0,L1)] (2 levels).
+    branch01 = tap_branch(leaf_hashes[0], leaf_hashes[1])
+    branch23 = tap_branch(leaf_hashes[2], leaf_hashes[3])
+    root4 = tap_branch(branch01, branch23)
+    parity, output_x = taproot_tweak(internal_x, root4)
+    control = bytes([0xC0 | parity]) + internal_x + leaf_hashes[3] + branch01
+    tx = bip322_txs(p2tr_script(output_x), EXT_MESSAGE, 0)
+    sig = schnorr_sign(bip341_sighash(tx, None, leaf_scripts[2], 0), leaf_keys[2])
+    emit("EXT_P2TR_4LEAF_ADDR", f"'{bech32m_encode_p2tr(output_x)}'")
+    emit("EXT_P2TR_4LEAF_SIG", f"'{witness_b64([sig, leaf_scripts[2], control])}'")
+
+
 if __name__ == "__main__":
     print("// Independently generated BIP-322 Taproot vectors")
     print("// (client/src/lib/signatureVerify.test.ts)")
@@ -377,3 +619,7 @@ if __name__ == "__main__":
     gen_v2_key_path()
     print()
     gen_v2_script_path()
+    print()
+    gen_ext_p2wsh_multisig()
+    print()
+    gen_ext_taproot()

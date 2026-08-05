@@ -1327,32 +1327,39 @@ describe('verifyBitcoinSignature routing (BIP-322 Full)', () => {
  * to emit the Full witnesses below. A passing verify here therefore proves
  * KYUTXO's Full pipeline agrees with an external implementation, not merely with
  * itself.
+ *
+ * All EXT_* constants below are reproduced byte-for-byte by the committed
+ * deterministic generator scripts/generate-bip322-independent-vectors.py
+ * (gen_ext_p2wsh_multisig / gen_ext_taproot: seed-string keys, RFC-6979
+ * ECDSA, BIP-340 aux_rand = 32 zero bytes, version-0 to_sign). The original
+ * throwaway-key vectors were regenerated from those documented seeds so they
+ * can never be lost again.
  */
 const EXT_MSG = 'I certify that I control the following Bitcoin address.';
 
 // P2WSH 2-of-2 multisig, both cosigners signing.
 const EXT_P2WSH_2OF2_ADDR =
-  'bc1q28k22j4fgzh3yphtk68rdyn22s2e0nl5p5uxevjx9p7ccjn6hprsclnv2r';
+  'bc1qqylszz3q2s3adahkz3ecxz9f5mrnsqlkhvupvz7kt9w3jeup0ffqvm0w02';
 const EXT_P2WSH_2OF2_SIG =
-  'BABHMEQCIByoInsVkxn7YsdL2aZX0tnn5xGdvpsyLAusVC9abyJrAiBuSaZ8RPRDDwoRHEt58hdz1RqZK8z/VEtIRqdvoGsPyAFIMEUCIQDZRceVsZ57u4bYyeqlA9gqSs4bi156RQksPhk1zvZ6BwIgDguUd6AnRLkAEOQ7Z+EalO4CAOKd9fQGjnhkCe08opkBR1IhAjz720qCycp/Wt11nhmmYRPXMeTZgiq7S6e/+K1WpiUtIQMPpoXX/rnGmRfLTUEyUONU4lRrf8IH63zsoneS15CGyVKu';
+  'BABIMEUCIQDJ8cgMJjqKxdoimRqp523f6Ho7WxPO8SvfA+yJAFWScwIgQ5jwp3JNQc8D3bcXvRpyC2KoQiP78syEpslkVKBsEW0BSDBFAiEAvLmVVfJkJILQ7aSN/zAeBnPpUUxhED2+YcgDeXOjAzYCIH9kI/tF6s6Uvcs1arK2FK2TGX88lQG7PEbbFnuWXbbaAUdSIQLfL9aK5kA8qoUy3Bj6HAkUIO/BJcQY/P2asAOWANFiWCEDGmPTJ4LQ/FHyIFb81Qe5ze53bu8ggFe1WNvNyG2F2BNSrg==';
 
-// P2WSH 2-of-3 multisig, signed by two of three cosigners.
+// P2WSH 2-of-3 multisig, signed by NON-ADJACENT cosigners A and C.
 const EXT_P2WSH_2OF3_ADDR =
-  'bc1qw6myamt0mq4nyefqstmkdrs6p6pt4gkms3z9m8dzav4f2ew6jswsta88y3';
+  'bc1qzx0ptx6ceema44sgrh4nzpqcmzq6ukd088teln3jcdvhdkg6d20qm9l2uv';
 const EXT_P2WSH_2OF3_SIG =
-  'BABHMEQCIFuFxTxcXpkFUsviSGETid1bU8d0VEBYLrH2W7E4q5rbAiBd0SOoYTEZ2oNTk6xjf0RCPhmTab9sxJJ38nrtW1W5kgFHMEQCIBZfvDXFCql+FnoxpzZ1EttExrusbrlWAGCINeIp60aHAiAEmCTKN4cgxJTXBzrJ+S8IXKuteL0Yr2sQa4cxOfDFlgFpUiECPPvbSoLJyn9a3XWeGaZhE9cx5NmCKrtLp7/4rVamJS0hAw+mhdf+ucaZF8tNQTJQ41TiVGt/wgfrfOyid5LXkIbJIQLUWakxLWbqkW9G2Ta07MskqT8JwdAl3MZyt7u7KYvS0lOu';
+  'BABIMEUCIQDyGCPAtUwZ/Bp9Wcjip0zGHFxAt95o8UerlmKiamtLsgIgcxTeBngF5i8wydQ2sFMRLar9DBhFRCpk4fvTyeJTSt8BSDBFAiEAoz5ruf3594MTd2Tk370WdQiVpkIJMA4y05GcSkQ/VwkCIEVw/4cSnHhATd8w52froMujIH2AtWqB89m5loixfdibAWlSIQLfL9aK5kA8qoUy3Bj6HAkUIO/BJcQY/P2asAOWANFiWCEDGmPTJ4LQ/FHyIFb81Qe5ze53bu8ggFe1WNvNyG2F2BMhA4YRKXlt9RgyoddycLq05FvqmYwIWPFSE1fGXUWA5iUXU64=';
 
 // P2TR single-leaf script-path (<xA> OP_CHECKSIG).
 const EXT_P2TR_LEAF_ADDR =
-  'bc1pe5e99hvr2whxs95wtapl23yyfr38z46ne3gggdjkn84ty0fudansavhj3a';
+  'bc1p0jt6qdp3kvshnrcqyyz6wradhq8kwmd6d6twqdaptlx8gck2uhmq3uduys';
 const EXT_P2TR_LEAF_SIG =
-  'A0A2FPQYWIMyJ/zUYZfncd9rXzIW0odK6NUAoyKOBbX6FRbDSumXXE3KlaGJhKi+kQjDcsStRxw/nAqJ6+L06FdPIiCm90uo3iM0R8fDFIu+nu6HEyuyPxoqXVla98/bsUCYpqwhweHAAU/rJ6MbNvz95k9ajbiFF04vodpudzePjd2rT+Q9';
+  'A0AvXxAQU3CqLigTLWCSLRF+9wupZCI6vreKQat3kW/V5aiiqgxNPBObrtnlzLvNqm9XGeH0tcnKqHOKaLp25ePDIiDP4HlsJjc6Yq6KH4k5/vQrwuKTIqKkstAmFnXZ+dVJTqwhwWqVw1rYGYGTI9MNV5DDTyKky5Xx2imwJBS5veNuB84B';
 
 // P2TR CHECKSIGADD 2-of-2 (<xA> OP_CHECKSIG <xB> OP_CHECKSIGADD OP_2 OP_NUMEQUAL).
 const EXT_P2TR_CSA_ADDR =
-  'bc1p3wawevwa46quqrtmjj22rd58pp7vtchxl98zm27n5q7hxkdk8dss36y4gj';
+  'bc1pa4f4g2t5z237uxxs8j27yud2yr6r3t8j5qqjmsf5njwme9e3k7tswhdg90';
 const EXT_P2TR_CSA_SIG =
-  'BEBujq6LRmZ54+Yd2U61ZuZ8syMAjwEIDK8Khrmwv2Z0hVGWFyUS3Lzkojet3SUwHMI4NbmRb22abXpNOiivy/6LQD7Mq3nPb5EfSf0E99e1xlXyawmGZKuzdWfugY/Hz7uAD5itHlAaHSVO2F0665tTFRb/prdmCI++GqW8+gClSi9GIEFwbAfWkhruaXo8Q9iyvqp9dBG1hej+Epo7KpD4y/lrrCBQAWPlbIFWR5ZVgsKUVO1vkCo8UDo4tykH8BYT+FJd0rpSnCHAZZBkvVWi1jy8+EHSK0d4N/c6athPNZVcxUCmSHcE1d8=';
+  'BEBspIML4TDu4jZiBgfPfRCfETOYxfOUuCc5pTzpEOOa+PA/YQjnRC4KHzIdkfPOVYirOEl06gA3UUypNczQOam+QD5n0tp/xbCDHXsZPpvQz/xVgAFM8KQBwqZ8aY63PbylxsLg/XSuvl5FFRXUx9gAnBypwfuNTL05XziEaSxY4JVGID/EjsYDjn927oqSIlgFb6rTsel3ew6jHgvysYVJ7cwurCAFVCZyyBaf2WReBjH/ejkgx/NO+ixF/X7XI4kXiN9Ho7pSnCHBapXDWtgZgZMj0w1XkMNPIqTLlfHaKbAkFLm9424HzgE=';
 
 // P2TR multi-leaf taproot trees (deep multisig vaults). The signing leaf sits
 // alongside other committed scripts, so the control block carries a 32-byte-
@@ -1360,15 +1367,15 @@ const EXT_P2TR_CSA_SIG =
 // the output key — the branch a single-leaf tree never exercises.
 // 2-leaf tree, spending leaf 0 (1-node merkle path).
 const EXT_P2TR_2LEAF_ADDR =
-  'bc1pqpldgprlt26wnfepjwwjeckqf3xx209mv6cv5tmqg7yp3ce70t8qxkp6l9';
+  'bc1psf69zjjw4040srjx2dsfekny6476szxug7plymqxr524d7gwmgnsrelh9k';
 const EXT_P2TR_2LEAF_SIG =
-  'A0CE6iStiz/MJsj8mrO9eI7YlMePdDQ7ZNl1P3XG8basn3+HYQ2XlkLg27zIxVpGD7ck8d2dQ3rorgY85FZ/CZjlIiD5+3LJw5Ensu1OTWzVGRSdFTGiZpUYVjjhTZtBITS6bKxBwZ6Q385Z2IITzh0Nfr85F5IiQkLcp12/lSvSjOrYnsmaxjPBEYswVPX5yNRPREECRo1xdxuvKjl25u7FIMXmRdE=';
+  'A0CQyXTR8mJ6MYpd0TcM3I2KsAmSZX4lhohsReUJQrVdbaGWFWSM1tJUeGkW1y261xQEqT5Gz7IcXZbOnySRVxoDIiCgj7uvi2wJVffDfiG+rOpFzcQyEWP/8YkCQQQCl/RmeqxBwGqVw1rYGYGTI9MNV5DDTyKky5Xx2imwJBS5veNuB84BZq+57myr4LofkryldncmOL3DjKrxeiYX7lr1Ra4O4Sw=';
 
 // 4-leaf tree, spending leaf 2 (2-node merkle path).
 const EXT_P2TR_4LEAF_ADDR =
-  'bc1pw5uutnp49f5p6pddf5uzmdwq7rtqjy4q0rdfa6g9jc39q33w6zjq4y0eak';
+  'bc1pewxc8agt36vk40fukrpkaqn7la432q5xjgj6ah9z6cdhuff9wk6s404z7k';
 const EXT_P2TR_4LEAF_SIG =
-  'A0CAMxrmvcyZA+NoVD9dRm7/PBgXZOVzoSHBX2fKtLtkZLFv/oUnOE1J3tSE4k51dMCF6XROcQu8YZtbw0n4T8PfIiCjDjcKNN2qhu12YKD7QA1DzRFwisS72htM+LU/20N8OKxhwN1Kbqvq6udX4wtvGczBplOg2Us+14x+FIfa1XVd4KzpL5w6939n9dcX9+wB/l634de4ICixTur3OCOCZyWl7V6y/xMiWZiGC1HIJIW3B+vP4czzO+npe5J1GBWa9E2DHg==';
+  'A0DypCbk3xDu4g4PZrSGeWrStvCD0Wfb2CJBSUSMyW7WkqXOObnCc4ruftw7C53a4GGd4C0T4JVDhBoTgkGVXiJZIiCamaWQmAG0tLcXOverH88sAsMTbIDPO+oinYbLl3IteqxhwGqVw1rYGYGTI9MNV5DDTyKky5Xx2imwJBS5veNuB84BXmDvxczb8yYI5pRDa01Q6+LGOrRsbcmbrUdqd88S2bpfRW9jp+UNv/2BLL+aHPJqKyNJ3gLB8HlnV3Jnylw/ag==';
 
 describe('BIP-322 Full verification (external independent vectors)', () => {
   it('verifies an externally-produced P2WSH 2-of-2 multisig witness', async () => {
