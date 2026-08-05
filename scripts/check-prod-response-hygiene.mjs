@@ -209,6 +209,63 @@ async function main() {
       `status=${badJson.status}, header=${badJson.headers.get('x-content-type-options')}`,
     );
 
+    // ── 4b. Dev-only restart-simulation hook is hidden in production ───────
+    // POST /api/tor/settings/reset (which can wipe pushed proxy settings and,
+    // with rotateToken:true, rotate the loopback settings bearer token) must
+    // return 404 in a real NODE_ENV=production server EVEN for a loopback
+    // caller presenting the valid settings token. A regression dropping the
+    // NODE_ENV guard would show up here as a non-404.
+    const tokenRes = await fetch(`${BASE_URL}/api/tor/settings-token`, {
+      headers: { [TOKEN_HEADER]: LAUNCH_TOKEN },
+    });
+    const tokenBody = await tokenRes.json().catch(() => ({}));
+    const settingsToken = tokenBody.token;
+    step(
+      'loopback client can obtain the tor settings token (control)',
+      tokenRes.status === 200 && typeof settingsToken === 'string' && settingsToken.length > 0,
+      `status=${tokenRes.status}`,
+    );
+    const resetProbes = [
+      ['plain reset', {}],
+      ['reset with rotateToken:true', { rotateToken: true }],
+    ];
+    for (const [label, payload] of resetProbes) {
+      const resetRes = await fetch(`${BASE_URL}/api/tor/settings/reset`, {
+        method: 'POST',
+        headers: {
+          [TOKEN_HEADER]: LAUNCH_TOKEN,
+          'x-tor-settings-token': settingsToken ?? '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      const resetBody = await resetRes.text();
+      let rotated;
+      try { rotated = JSON.parse(resetBody).rotated; } catch { /* asserted via status */ }
+      step(
+        `dev-only /api/tor/settings/reset (${label}) returns 404 in production even with valid tokens`,
+        resetRes.status === 404 && rotated === undefined,
+        `status=${resetRes.status}, rotated=${JSON.stringify(rotated)}`,
+      );
+    }
+    // The rejected rotateToken call must NOT have rotated the token: the same
+    // token still authorizes a settings push.
+    const pushAfterReset = await fetch(`${BASE_URL}/api/tor/settings`, {
+      method: 'POST',
+      headers: {
+        [TOKEN_HEADER]: LAUNCH_TOKEN,
+        'x-tor-settings-token': settingsToken ?? '',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    await pushAfterReset.text();
+    step(
+      'settings token still valid after rejected reset (no rotation happened)',
+      pushAfterReset.status === 200,
+      `status=${pushAfterReset.status}`,
+    );
+
     // ── 5. DNS-rebinding defense: rogue Host headers are rejected ──────────
     // fetch/undici normalizes the Host header, so use node:http to send a
     // literal forged Host against the loopback socket — exactly what a

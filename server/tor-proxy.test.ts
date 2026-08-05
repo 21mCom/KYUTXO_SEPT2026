@@ -468,16 +468,42 @@ describe("/api/tor endpoints", () => {
     expect(body.errorCode).toBe("TOR_SETTINGS_NOT_INITIALIZED");
   });
 
-  it("/settings/reset is hidden (404) in production", async () => {
+  it("/settings/reset is hidden (404) in production, even with a valid token and rotateToken:true", async () => {
+    // Configure settings first so we can prove the rejected call touched nothing.
+    const configured = await post(
+      "/api/tor/settings",
+      { customProviderUrl: "https://esplora.example.org" },
+      authHeader(),
+    );
+    expect(configured.status).toBe(200);
+
     const prevEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "production";
     try {
+      // Plain reset with a valid token: hidden.
       const res = await post("/api/tor/settings/reset", {}, authHeader());
       expect(res.status).toBe(404);
+
+      // rotateToken path with a valid token: also hidden — the 404 guard must
+      // run before both the reset and the token rotation.
+      const rotate = await post("/api/tor/settings/reset", { rotateToken: true }, authHeader());
+      expect(rotate.status).toBe(404);
+      const rotateBody = await rotate.json();
+      expect(rotateBody.rotated).toBeUndefined();
     } finally {
       if (prevEnv === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = prevEnv;
     }
+
+    // Settings survived: the rejected calls performed no reset.
+    expect(isAllowedUrl("https://esplora.example.org/api/blocks/tip/height").allowed).toBe(true);
+    // The settings token survived: it still authorizes a settings push.
+    const repush = await post(
+      "/api/tor/settings",
+      { customProviderUrl: "https://esplora.example.org" },
+      authHeader(),
+    );
+    expect(repush.status).toBe(200);
   });
 
   it("bounds concurrency and rejects overflow with 429", async () => {
