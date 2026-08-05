@@ -18,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 import {
   assertPackagedBundleFresh,
   assertPackagedAsarFresh,
+  repoRootFromModuleUrl,
+  ROOT as FRESHNESS_ROOT,
 } from './packaged-bundle-freshness.mjs';
 
 const HOUR = 60 * 60 * 1000;
@@ -339,3 +341,48 @@ for (const script of PACKAGED_CHECK_SCRIPTS) {
     );
   });
 }
+
+// ── Windows-safe root derivation (task 2017) ────────────────────────────────
+//
+// The module used to compute ROOT via `new URL(import.meta.url).pathname`,
+// which on Windows is `/D:/a/.../scripts/x.mjs`; path.win32.resolve mangles
+// that into `\\D:\a\repo`, readdirSync throws (silently caught), and the guard
+// reported "no dist/public/assets/index-*.js bundle found" on windows-2022
+// even though vite had just emitted the bundle. These tests pin the
+// fileURLToPath-based derivation so a refactor back to a platform-naive
+// pathname derivation fails the suite on any OS.
+
+test('repoRootFromModuleUrl handles a win32-style /D:/... module URL without UNC mangling', () => {
+  const winUrl = 'file:///D:/a/KYUTXO/repo/scripts/packaged-bundle-freshness.mjs';
+  const root = repoRootFromModuleUrl(winUrl);
+  assert.ok(path.isAbsolute(root), `derived root must be absolute, got ${root}`);
+  // The exact failure mode: a leading `\\D:` UNC-ish path that readdirSync
+  // rejects on Windows. Never acceptable, on any platform.
+  assert.ok(
+    !root.startsWith('\\\\'),
+    `derived root must not be UNC-ish (the win32 breakage), got ${root}`,
+  );
+  if (process.platform === 'win32') {
+    // Drive-absolute, e.g. D:\a\KYUTXO\repo — not /D:/... and not \\D:\...
+    assert.match(root, /^D:[\\/]/i);
+    assert.match(root.replace(/\\/g, '/'), /\/repo$/);
+  } else {
+    assert.equal(root, path.resolve('/D:/a/KYUTXO/repo'));
+  }
+});
+
+test('repoRootFromModuleUrl agrees with the naive derivation on POSIX paths', () => {
+  const posixUrl = 'file:///home/runner/repo/scripts/packaged-bundle-freshness.mjs';
+  assert.equal(repoRootFromModuleUrl(posixUrl), path.resolve('/home/runner/repo'));
+});
+
+test('the module default ROOT is the real repo root and contains repo landmarks', () => {
+  const expected = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  assert.equal(FRESHNESS_ROOT, expected);
+  for (const landmark of ['package.json', 'vite.config.ts', 'scripts', 'client', 'shared']) {
+    assert.ok(
+      fs.existsSync(path.join(FRESHNESS_ROOT, landmark)),
+      `default ROOT must contain ${landmark} (got ROOT=${FRESHNESS_ROOT})`,
+    );
+  }
+});
