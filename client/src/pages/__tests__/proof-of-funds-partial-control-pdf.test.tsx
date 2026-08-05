@@ -30,6 +30,26 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import {
+  CONTROL_INCLUDED_FRAGMENT,
+  ALL_ADDRESSES_FRAGMENT,
+  NO_CONTROL_DISCLAIMER_LINE,
+  buildFormatPhrase,
+  buildControlDisclaimerLine,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
+
+// The disclaimer scaffolding comes from pof-pdf-strings; its exact wording is
+// pinned once in proof-of-funds-mixed-format-pdf.test.tsx, so a deliberate
+// wording change doesn't cascade into false failures here. Both formats are
+// verified (legacy + BIP-322), so the expected partial line is built with the
+// combined format phrase.
+const PARTIAL_DISCLAIMER_LINE = buildControlDisclaimerLine({
+  allVerified: false,
+  hasVerified: true,
+  verifiedCount: 2,
+  totalCount: 3,
+  formatPhrase: buildFormatPhrase(new Set(["legacy", "bip322"])),
+});
 
 // Two addresses we will verify (legacy + taproot) and one we leave unverified.
 const LEGACY_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
@@ -186,37 +206,25 @@ describe("ProofOfFundsDeclaration — partial proof-of-control PDF", () => {
 
     await waitFor(() => {
       expect(
-        pdfTextLines.some((l) => l.includes("proof-of-control is included")),
+        pdfTextLines.some((l) => l.includes(CONTROL_INCLUDED_FRAGMENT)),
       ).toBe(true);
     });
 
-    // (1) Disclaimer reports the correct N of M count with plural "addresses".
-    const partialDisclaimer = pdfTextLines.find(
-      (l) =>
-        l.includes("proof-of-control is included") &&
-        l.includes("for 2 of 3 addresses"),
-    );
-    expect(partialDisclaimer).toBeTruthy();
-
-    // (2) Disclaimer states the remaining addresses are self-declared.
-    expect(partialDisclaimer!).toContain(
-      "The remaining addresses are self-declared.",
-    );
+    // (1) + (2) Disclaimer reports the correct N of M count with plural
+    // "addresses" and states the remaining addresses are self-declared —
+    // asserted as the exact partial-branch line built from pof-pdf-strings.
+    expect(pdfTextLines).toContain(PARTIAL_DISCLAIMER_LINE);
 
     // (3) The all-verified phrasing must NOT be used for a partial set.
     expect(
       pdfTextLines.some(
         (l) =>
-          l.includes("proof-of-control is included") &&
-          l.includes("for all addresses"),
+          l.includes(CONTROL_INCLUDED_FRAGMENT) &&
+          l.includes(ALL_ADDRESSES_FRAGMENT),
       ),
     ).toBe(false);
     // Nor the "No cryptographic proof-of-control" (none-verified) phrasing.
-    expect(
-      pdfTextLines.some((l) =>
-        l.includes("No cryptographic proof-of-control is included"),
-      ),
-    ).toBe(false);
+    expect(pdfTextLines).not.toContain(NO_CONTROL_DISCLAIMER_LINE);
 
     // (4) Appendix contains entries ONLY for the two verified addresses.
     expect(pdfTextLines).toContain(`Address: ${LEGACY_ADDR}`);

@@ -22,6 +22,14 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import {
+  CONTROL_INCLUDED_FRAGMENT,
+  NO_CONTROL_DISCLAIMER_LINE,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
+
+// The disclaimer scaffolding comes from pof-pdf-strings; its exact wording is
+// pinned once in proof-of-funds-mixed-format-pdf.test.tsx, so a deliberate
+// wording change doesn't cascade into false failures here.
 
 const ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
 
@@ -152,11 +160,7 @@ describe("ProofOfFundsDeclaration — appendix omitted when nothing is verified"
 
     // (3) The statement line must declare everything self-declared and must NOT
     // claim cryptographic proof-of-control is included.
-    expect(
-      pdfHas(
-        "No cryptographic proof-of-control is included. All addresses are self-declared by the declarant.",
-      ),
-    ).toBe(true);
-    expect(pdfHas("Cryptographic proof-of-control is included")).toBe(false);
+    expect(pdfHas(NO_CONTROL_DISCLAIMER_LINE)).toBe(true);
+    expect(pdfHas(`Cryptographic ${CONTROL_INCLUDED_FRAGMENT}`)).toBe(false);
   });
 });

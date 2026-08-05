@@ -31,6 +31,25 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import {
+  CONTROL_INCLUDED_FRAGMENT,
+  ALL_ADDRESSES_FRAGMENT,
+  buildFormatPhrase,
+  buildControlDisclaimerLine,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
+
+// The disclaimer scaffolding comes from pof-pdf-strings; its exact wording is
+// pinned once in proof-of-funds-mixed-format-pdf.test.tsx, so a deliberate
+// wording change doesn't cascade into false failures here. Case (B) verifies
+// one legacy address of two, so the expected partial line uses the legacy
+// format phrase.
+const PARTIAL_1_OF_2_LINE = buildControlDisclaimerLine({
+  allVerified: false,
+  hasVerified: true,
+  verifiedCount: 1,
+  totalCount: 2,
+  formatPhrase: buildFormatPhrase(new Set(["legacy"])),
+});
 
 const LEGACY_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
 const SELF_DECLARED_ADDR = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
@@ -170,7 +189,7 @@ describe("ProofOfFundsDeclaration — singular proof-of-control boundary", () =>
 
     await waitFor(() => {
       expect(
-        pdfTextLines.some((l) => l.includes("proof-of-control is included")),
+        pdfTextLines.some((l) => l.includes(CONTROL_INCLUDED_FRAGMENT)),
       ).toBe(true);
     });
 
@@ -178,8 +197,8 @@ describe("ProofOfFundsDeclaration — singular proof-of-control boundary", () =>
     expect(
       pdfTextLines.some(
         (l) =>
-          l.includes("proof-of-control is included") &&
-          l.includes("for all addresses"),
+          l.includes(CONTROL_INCLUDED_FRAGMENT) &&
+          l.includes(ALL_ADDRESSES_FRAGMENT),
       ),
     ).toBe(true);
 
@@ -245,17 +264,14 @@ describe("ProofOfFundsDeclaration — singular proof-of-control boundary", () =>
 
     await waitFor(() => {
       expect(
-        pdfTextLines.some((l) => l.includes("proof-of-control is included")),
+        pdfTextLines.some((l) => l.includes(CONTROL_INCLUDED_FRAGMENT)),
       ).toBe(true);
     });
 
-    // The "1 of N" edge must stay pluralized off the TOTAL → "for 1 of 2 addresses".
-    const partialDisclaimer = pdfTextLines.find(
-      (l) =>
-        l.includes("proof-of-control is included") &&
-        l.includes("for 1 of 2 addresses"),
-    );
-    expect(partialDisclaimer).toBeTruthy();
+    // The "1 of N" edge must stay pluralized off the TOTAL → "for 1 of 2
+    // addresses" — asserted as the exact partial-branch line built from
+    // pof-pdf-strings.
+    expect(pdfTextLines).toContain(PARTIAL_1_OF_2_LINE);
 
     // It must NOT read the ungrammatical "for 1 of 2 address".
     expect(

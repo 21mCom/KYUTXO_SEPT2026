@@ -29,6 +29,16 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import {
+  CONTROL_INCLUDED_FRAGMENT,
+  ALL_ADDRESSES_FRAGMENT,
+  REMAINING_SELF_DECLARED_FRAGMENT,
+  NO_CONTROL_DISCLAIMER_LINE,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
+
+// The disclaimer scaffolding comes from pof-pdf-strings; its exact wording is
+// pinned once in proof-of-funds-mixed-format-pdf.test.tsx, so a deliberate
+// wording change doesn't cascade into false failures here.
 
 const VERIFIED_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
 const SELF_DECLARED_ADDR = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
@@ -185,22 +195,18 @@ describe("ProofOfFundsDeclaration — partially-verified PDF only proves verifie
     // (1) The disclaimer reports the correct verified/total counts and flags the
     // remaining addresses as self-declared.
     expect(
-      pdfHas(
-        "Cryptographic proof-of-control is included for 1 of 2 addresses",
-      ),
+      pdfHas(`Cryptographic ${CONTROL_INCLUDED_FRAGMENT} for 1 of 2 addresses`),
     ).toBe(true);
-    expect(pdfHas("The remaining addresses are self-declared.")).toBe(true);
+    expect(pdfHas(REMAINING_SELF_DECLARED_FRAGMENT)).toBe(true);
 
     // (2) The disclaimer must NOT overstate the proof (all-verified language) or
     // understate it (none-verified language).
     expect(
-      pdfHas("Cryptographic proof-of-control is included for all addresses"),
-    ).toBe(false);
-    expect(
       pdfHas(
-        "No cryptographic proof-of-control is included. All addresses are self-declared by the declarant.",
+        `Cryptographic ${CONTROL_INCLUDED_FRAGMENT} ${ALL_ADDRESSES_FRAGMENT}`,
       ),
     ).toBe(false);
+    expect(pdfHas(NO_CONTROL_DISCLAIMER_LINE)).toBe(false);
 
     // (3) The appendix contains a per-address signature block for the verified
     // address: its heading, the verified Status line.

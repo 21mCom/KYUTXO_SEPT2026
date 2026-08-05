@@ -30,6 +30,16 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import {
+  CONTROL_INCLUDED_FRAGMENT,
+  ALL_ADDRESSES_FRAGMENT,
+  REMAINING_SELF_DECLARED_FRAGMENT,
+  NO_CONTROL_DISCLAIMER_LINE,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
+
+// The disclaimer scaffolding comes from pof-pdf-strings; its exact wording is
+// pinned once in proof-of-funds-mixed-format-pdf.test.tsx, so a deliberate
+// wording change doesn't cascade into false failures here.
 
 // One legacy P2PKH address and one mainnet Taproot (P2TR) address — both verified.
 const LEGACY_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
@@ -183,15 +193,15 @@ describe("ProofOfFundsDeclaration — fully-verified proof-of-control PDF", () =
 
     await waitFor(() => {
       expect(
-        pdfTextLines.some((l) => l.includes("proof-of-control is included")),
+        pdfTextLines.some((l) => l.includes(CONTROL_INCLUDED_FRAGMENT)),
       ).toBe(true);
     });
 
     // (1) Disclaimer uses the all-verified phrasing.
     const allVerifiedDisclaimer = pdfTextLines.find(
       (l) =>
-        l.includes("proof-of-control is included") &&
-        l.includes("for all addresses"),
+        l.includes(CONTROL_INCLUDED_FRAGMENT) &&
+        l.includes(ALL_ADDRESSES_FRAGMENT),
     );
     expect(allVerifiedDisclaimer).toBeTruthy();
 
@@ -202,16 +212,10 @@ describe("ProofOfFundsDeclaration — fully-verified proof-of-control PDF", () =
 
     // (3) The partial tail "remaining addresses are self-declared" must NOT appear.
     expect(
-      pdfTextLines.some((l) =>
-        l.includes("The remaining addresses are self-declared."),
-      ),
+      pdfTextLines.some((l) => l.includes(REMAINING_SELF_DECLARED_FRAGMENT)),
     ).toBe(false);
 
     // (4) The none-verified phrasing must NOT appear.
-    expect(
-      pdfTextLines.some((l) =>
-        l.includes("No cryptographic proof-of-control is included"),
-      ),
-    ).toBe(false);
+    expect(pdfTextLines).not.toContain(NO_CONTROL_DISCLAIMER_LINE);
   });
 });
