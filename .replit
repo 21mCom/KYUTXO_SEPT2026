@@ -2498,7 +2498,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/lineageEngine.ownedOriginScan.test.ts client/src/lib/data/transaction-crud.opReturnBooleanScan.test.ts"
+args = "npx vitest run client/src/lib/lineageEngine.ownedOriginScan.test.ts client/src/lib/lineageEngine.custodySplit.test.ts client/src/lib/data/transaction-crud.opReturnBooleanScan.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

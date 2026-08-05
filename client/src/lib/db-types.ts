@@ -855,6 +855,10 @@ export interface CustodySegment {
   currentAmount: number;      // Current amount (may be less after partial spends)
   status: CustodyStatus;      // Current custody status
   // Segment relationships
+  // RESERVED, currently never populated: buildCustodySegment in
+  // lineageEngine.ts leaves both undefined. Split custody is represented by
+  // the change output becoming its own independent segment (owned lineage
+  // origin), not by parent/child linkage. Do not rely on these being set.
   parentSegmentId?: string;   // Parent segment if this is from a split
   childSegmentIds?: string[]; // Child segments if this was split
   // Hop tracking

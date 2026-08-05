@@ -384,6 +384,13 @@ export async function buildCustodySegment(
   let hopCount = 0;
   let status: CustodyStatus = 'active';
   const evidenceTxids: string[] = [originTxid];
+  // NOTE: child-segment linkage is intentionally not populated here. When a
+  // partial spend splits custody, the owned change output becomes its own
+  // origin in scanOwnedLineageOrigins (createdOwned lineage row), so the
+  // "child" is built as an independent segment keyed by its own outpoint
+  // rather than linked via parentSegmentId/childSegmentIds. Those fields
+  // remain reserved in CustodySegment (see db-types.ts) but are always
+  // undefined today — consumers must not rely on them being set.
   const childSegmentIds: string[] = [];
   
   // Get original amount from participants (load by txid, filter)
