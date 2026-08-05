@@ -19,6 +19,7 @@ import {
   ensureWalletName,
   ensureSeedName,
   ensureWalletSoftware,
+  ensureSelectableVocabularyEntry,
   syncTagsToMaster,
   syncCategoriesToMaster,
 } from "@/lib/data/vocabulary-crud";
@@ -78,6 +79,44 @@ describe("tolerant ensure* vocabulary helpers", () => {
   it("createTag still throws on duplicates (strict path unchanged)", async () => {
     await createTag("dup");
     await expect(createTag("dup")).rejects.toThrow(/already exists/i);
+  });
+
+  describe("ensureSelectableVocabularyEntry (interactive Add new)", () => {
+    it("creates a new entry and returns the trimmed name", async () => {
+      const name = await ensureSelectableVocabularyEntry("owner", "  Alice  ");
+      expect(name).toBe("Alice");
+      expect(await db.owners.count()).toBe(1);
+    });
+
+    it("returns the existing canonical name on a case-insensitive duplicate instead of throwing", async () => {
+      await createOwner("Alice");
+      const name = await ensureSelectableVocabularyEntry("owner", "ALICE");
+      expect(name).toBe("Alice");
+      expect(await db.owners.count()).toBe(1);
+    });
+
+    it("handles duplicates for every kind", async () => {
+      await createTag("Cold Storage");
+      await createCategory("Savings");
+      await expect(ensureSelectableVocabularyEntry("tag", "cold storage")).resolves.toBe("Cold Storage");
+      await expect(ensureSelectableVocabularyEntry("category", "SAVINGS")).resolves.toBe("Savings");
+      await ensureSelectableVocabularyEntry("walletName", "Vault");
+      await expect(ensureSelectableVocabularyEntry("walletName", "vault")).resolves.toBe("Vault");
+      await ensureSelectableVocabularyEntry("seedName", "seed-1");
+      await expect(ensureSelectableVocabularyEntry("seedName", "SEED-1")).resolves.toBe("seed-1");
+      await ensureSelectableVocabularyEntry("walletSoftware", "Sparrow");
+      await expect(ensureSelectableVocabularyEntry("walletSoftware", "sparrow")).resolves.toBe("Sparrow");
+      expect(await db.walletNames.count()).toBe(1);
+      expect(await db.seedNames.count()).toBe(1);
+      expect(await db.walletSoftware.count()).toBe(1);
+    });
+
+    it("still surfaces real validation errors (empty, over-length seed name)", async () => {
+      await expect(ensureSelectableVocabularyEntry("owner", "   ")).rejects.toThrow(/cannot be empty/i);
+      await expect(
+        ensureSelectableVocabularyEntry("seedName", "this-name-is-way-too-long-for-a-seed")
+      ).rejects.toThrow(/are limited to/i);
+    });
   });
 
   it("syncTagsToMaster/syncCategoriesToMaster survive rows created concurrently after the snapshot", async () => {

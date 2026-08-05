@@ -5,14 +5,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ChevronsUpDown, Check, Plus, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import {
-  createTag,
-  createCategory,
-  createOwner,
-  createWalletNameEntry,
-  createSeedNameEntry,
-  createWalletSoftwareEntry,
-} from "@/lib/dataFacade";
+import { ensureSelectableVocabularyEntry } from "@/lib/dataFacade";
+
+const VOCABULARY_KIND_MAP = {
+  tags: 'tag',
+  categories: 'category',
+  owners: 'owner',
+  walletNames: 'walletName',
+  seedNames: 'seedName',
+  walletSoftware: 'walletSoftware',
+} as const;
 
 interface VocabularyComboboxProps {
   fieldKey: string;
@@ -57,32 +59,16 @@ export function VocabularyCombobox({
     setIsCreating(true);
 
     try {
-      switch (vocabularyKey) {
-        case 'tags':
-          await createTag(trimmedValue);
-          break;
-        case 'categories':
-          await createCategory(trimmedValue);
-          break;
-        case 'owners':
-          await createOwner(trimmedValue);
-          break;
-        case 'walletNames':
-          await createWalletNameEntry(trimmedValue);
-          break;
-        case 'seedNames':
-          await createSeedNameEntry(trimmedValue);
-          break;
-        case 'walletSoftware':
-          await createWalletSoftwareEntry(trimmedValue);
-          break;
-      }
+      const addedValue = await ensureSelectableVocabularyEntry(
+        VOCABULARY_KIND_MAP[vocabularyKey],
+        trimmedValue,
+      );
 
-      onChange(trimmedValue);
+      onChange(addedValue);
       setOpen(false);
       toast({
         title: "Created",
-        description: `"${trimmedValue}" has been added`,
+        description: `"${addedValue}" has been added`,
       });
     } catch (error) {
       toast({
@@ -203,33 +189,17 @@ export function VocabularyMultiSelect({
     setIsCreating(true);
 
     try {
-      switch (vocabularyKey) {
-        case 'tags':
-          await createTag(trimmedValue);
-          break;
-        case 'categories':
-          await createCategory(trimmedValue);
-          break;
-        case 'owners':
-          await createOwner(trimmedValue);
-          break;
-        case 'walletNames':
-          await createWalletNameEntry(trimmedValue);
-          break;
-        case 'seedNames':
-          await createSeedNameEntry(trimmedValue);
-          break;
-        case 'walletSoftware':
-          await createWalletSoftwareEntry(trimmedValue);
-          break;
-      }
-      if (!values.includes(trimmedValue)) {
-        onChange([...values, trimmedValue]);
+      const addedValue = await ensureSelectableVocabularyEntry(
+        VOCABULARY_KIND_MAP[vocabularyKey],
+        trimmedValue,
+      );
+      if (!values.includes(addedValue)) {
+        onChange([...values, addedValue]);
       }
       setSearchInput("");
       toast({
         title: "Created",
-        description: `Added "${trimmedValue}" to vocabulary`,
+        description: `Added "${addedValue}" to vocabulary`,
       });
     } catch (error) {
       console.error('Failed to create vocabulary item:', error);

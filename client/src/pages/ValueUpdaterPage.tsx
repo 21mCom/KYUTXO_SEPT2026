@@ -15,24 +15,19 @@ import { useSeedNames, SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { 
   updateRecord, 
-  createTag, 
   updateTag, 
   deleteTag, 
-  createCategory, 
   updateCategory, 
   deleteCategory,
-  createOwner,
   updateOwner,
   deleteOwner,
-  createWalletNameEntry,
   updateWalletNameEntry,
   deleteWalletNameEntry,
-  createSeedNameEntry,
   updateSeedNameEntry,
   deleteSeedNameEntry,
-  createWalletSoftwareEntry,
   updateWalletSoftwareEntry,
   deleteWalletSoftwareEntry,
+  ensureSelectableVocabularyEntry,
 } from "@/lib/dataFacade";
 import { useToast } from "@/hooks/use-toast";
 import { 
@@ -606,18 +601,19 @@ export default function ValueUpdaterPage() {
     if (!config?.hasMasterList) return;
     
     try {
+      let addedValue = trimmedValue;
       switch (field) {
         case 'tags':
-          await createTag(trimmedValue);
+          addedValue = await ensureSelectableVocabularyEntry('tag', trimmedValue);
           break;
         case 'categories':
-          await createCategory(trimmedValue);
+          addedValue = await ensureSelectableVocabularyEntry('category', trimmedValue);
           break;
         case 'owner':
-          await createOwner(trimmedValue);
+          addedValue = await ensureSelectableVocabularyEntry('owner', trimmedValue);
           break;
         case 'walletName':
-          await createWalletNameEntry(trimmedValue);
+          addedValue = await ensureSelectableVocabularyEntry('walletName', trimmedValue);
           break;
         case 'seedName':
           if (trimmedValue.length > SEED_NAME_MAX_LENGTH) {
@@ -628,16 +624,16 @@ export default function ValueUpdaterPage() {
             });
             return;
           }
-          await createSeedNameEntry(trimmedValue);
+          addedValue = await ensureSelectableVocabularyEntry('seedName', trimmedValue);
           break;
         case 'walletSoftware':
-          await createWalletSoftwareEntry(trimmedValue);
+          addedValue = await ensureSelectableVocabularyEntry('walletSoftware', trimmedValue);
           break;
       }
       
       toast({
         title: `${config.label} Created`,
-        description: `"${trimmedValue}" has been created`,
+        description: `"${addedValue}" has been created`,
       });
       
       setNewItemField(null);

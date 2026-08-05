@@ -37,10 +37,11 @@ import { MultiSelectCombobox } from '@/components/ui/multi-select-combobox';
 import { useToast } from '@/hooks/use-toast';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/database';
-import { useSeedNames, createSeedName, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
-import { useOwners, createOwner } from '@/hooks/use-owners';
-import { useWalletNames, createWalletName } from '@/hooks/use-wallet-names';
-import { useWalletSoftware, createWalletSoftware } from '@/hooks/use-wallet-software';
+import { useSeedNames, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
+import { useOwners } from '@/hooks/use-owners';
+import { useWalletNames } from '@/hooks/use-wallet-names';
+import { useWalletSoftware } from '@/hooks/use-wallet-software';
+import { ensureSelectableVocabularyEntry } from '@/lib/data/vocabulary-crud';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Check, ChevronsUpDown, Wallet } from 'lucide-react';
@@ -160,8 +161,8 @@ export default function WalletImport() {
       return;
     }
     try {
-      await createSeedName(newSeedName.trim());
-      setSeedNameInput(newSeedName.trim());
+      const selectedName = await ensureSelectableVocabularyEntry('seedName', newSeedName);
+      setSeedNameInput(selectedName);
       setNewSeedName('');
       setSeedNameOpen(false);
     } catch (e) {
@@ -176,8 +177,8 @@ export default function WalletImport() {
   const addNewOwner = async () => {
     if (!newOwnerName.trim()) return;
     try {
-      await createOwner(newOwnerName.trim());
-      setOwnerInput(newOwnerName.trim());
+      const selectedName = await ensureSelectableVocabularyEntry('owner', newOwnerName);
+      setOwnerInput(selectedName);
       setNewOwnerName('');
       setOwnerOpen(false);
     } catch (e) {
@@ -192,8 +193,8 @@ export default function WalletImport() {
   const addNewWalletName = async () => {
     if (!newWalletNameValue.trim()) return;
     try {
-      await createWalletName(newWalletNameValue.trim());
-      setWalletNameInput(newWalletNameValue.trim());
+      const selectedName = await ensureSelectableVocabularyEntry('walletName', newWalletNameValue);
+      setWalletNameInput(selectedName);
       setNewWalletNameValue('');
       setWalletNameOpen(false);
     } catch (e) {
@@ -208,8 +209,8 @@ export default function WalletImport() {
   const addNewWalletSoftware = async () => {
     if (!newWalletSoftwareName.trim()) return;
     try {
-      await createWalletSoftware(newWalletSoftwareName.trim());
-      setWalletSoftwareInput(newWalletSoftwareName.trim());
+      const selectedName = await ensureSelectableVocabularyEntry('walletSoftware', newWalletSoftwareName);
+      setWalletSoftwareInput(selectedName);
       setNewWalletSoftwareName('');
       setWalletSoftwareOpen(false);
     } catch (e) {

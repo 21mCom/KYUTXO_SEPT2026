@@ -396,6 +396,55 @@ function isExpectedVocabularyError(err: unknown): boolean {
   return EXPECTED_VOCABULARY_ERRORS.some(pattern => msg.includes(pattern));
 }
 
+type SelectableVocabularyKind = 'tag' | 'category' | 'owner' | 'walletName' | 'seedName' | 'walletSoftware';
+
+const SELECTABLE_VOCABULARY: Record<SelectableVocabularyKind, {
+  create: (name: string) => Promise<number>;
+  findExisting: (name: string) => Promise<{ name: string } | undefined>;
+}> = {
+  tag: { create: createTag, findExisting: (n) => db.tags.where('name').equalsIgnoreCase(n).first() },
+  category: { create: createCategory, findExisting: (n) => db.categories.where('name').equalsIgnoreCase(n).first() },
+  owner: { create: createOwner, findExisting: (n) => db.owners.where('name').equalsIgnoreCase(n).first() },
+  walletName: { create: createWalletName, findExisting: (n) => db.walletNames.where('name').equalsIgnoreCase(n).first() },
+  seedName: { create: createSeedName, findExisting: (n) => db.seedNames.where('name').equalsIgnoreCase(n).first() },
+  walletSoftware: { create: createWalletSoftware, findExisting: (n) => db.walletSoftware.where('name').equalsIgnoreCase(n).first() },
+};
+
+/**
+ * Interactive "Add new" helper: creates the entry, or — if it already exists
+ * (any case) — returns the existing entry's canonical name instead of throwing.
+ * Real validation errors (empty name, over-length seed name) still throw.
+ * Returns the canonical stored name to select.
+ */
+export async function ensureSelectableVocabularyEntry(
+  kind: SelectableVocabularyKind,
+  name: string,
+): Promise<string> {
+  const trimmedName = name.trim();
+  const { create, findExisting } = SELECTABLE_VOCABULARY[kind];
+  try {
+    await create(trimmedName);
+    return trimmedName;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('already exists')) {
+      const existing = await findExisting(trimmedName);
+      if (existing) return existing.name;
+      // Raced with a delete: retry the create once, else fall back to input.
+      try {
+        await create(trimmedName);
+        return trimmedName;
+      } catch (retryErr) {
+        if (retryErr instanceof Error && retryErr.message.includes('already exists')) {
+          const raced = await findExisting(trimmedName);
+          return raced?.name ?? trimmedName;
+        }
+        throw retryErr;
+      }
+    }
+    throw err;
+  }
+}
+
 export async function ensureTag(name: string, color?: string): Promise<void> {
   try {
     await createTag(name, color);
