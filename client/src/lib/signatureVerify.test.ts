@@ -1169,6 +1169,59 @@ describe("BIP-322 Full rejects structurally-valid-but-insufficient multisig (P2W
     expect(result.error).toBeTruthy();
     expect(result.error).not.toMatch(/witness script does not hash/i);
   });
+
+  /**
+   * Forged proofs that reuse ONE cosigner's signature twice — a lone cosigner
+   * filling both signature slots with their own (individually valid)
+   * signature. checkMultisig's sequential key matching must reject this: the
+   * duplicated signature verifies against its own key but not any later one,
+   * so the proof can never reach the m-of-n threshold. These use the
+   * internally-generated P2WSH vectors (FULL_MSG), mirroring the bare-P2SH
+   * duplicate-signature forgery tests.
+   */
+  it("rejects a 2-of-2 P2WSH proof where one cosigner signature is duplicated", async () => {
+    // Sanity: the original proof still verifies, so the only difference in
+    // the forged proofs is the duplicated signature.
+    const genuine = await verifyBip322Full(P2WSH_2OF2_ADDR, FULL_MSG, P2WSH_2OF2_SIG);
+    expect(genuine.verified).toBe(true);
+
+    // Stack: [<empty dummy>, sigA, sigB, <witnessScript>].
+    const stack = splitWitness(P2WSH_2OF2_SIG);
+
+    // First cosigner fills both slots with their own signature.
+    const dupFirst = joinWitness([stack[0], stack[1], stack[1], stack[3]]);
+    const r1 = await verifyBip322Full(P2WSH_2OF2_ADDR, FULL_MSG, dupFirst);
+    expect(r1.verified).toBe(false);
+    expect(r1.error).toMatch(/did not verify/i);
+    expect(r1.error).not.toMatch(/witness script does not hash/i);
+
+    // Second cosigner fills both slots with their own signature.
+    const dupSecond = joinWitness([stack[0], stack[2], stack[2], stack[3]]);
+    const r2 = await verifyBip322Full(P2WSH_2OF2_ADDR, FULL_MSG, dupSecond);
+    expect(r2.verified).toBe(false);
+    expect(r2.error).toMatch(/did not verify/i);
+    expect(r2.error).not.toMatch(/witness script does not hash/i);
+  });
+
+  it("rejects a 2-of-3 P2WSH proof where one cosigner signature is duplicated", async () => {
+    const genuine = await verifyBip322Full(P2WSH_2OF3_ADDR, FULL_MSG, P2WSH_2OF3_SIG);
+    expect(genuine.verified).toBe(true);
+
+    // Stack: [<empty dummy>, sigA, sigC, <witnessScript>].
+    const stack = splitWitness(P2WSH_2OF3_SIG);
+
+    const dupFirst = joinWitness([stack[0], stack[1], stack[1], stack[3]]);
+    const r1 = await verifyBip322Full(P2WSH_2OF3_ADDR, FULL_MSG, dupFirst);
+    expect(r1.verified).toBe(false);
+    expect(r1.error).toMatch(/did not verify/i);
+    expect(r1.error).not.toMatch(/witness script does not hash/i);
+
+    const dupSecond = joinWitness([stack[0], stack[2], stack[2], stack[3]]);
+    const r2 = await verifyBip322Full(P2WSH_2OF3_ADDR, FULL_MSG, dupSecond);
+    expect(r2.verified).toBe(false);
+    expect(r2.error).toMatch(/did not verify/i);
+    expect(r2.error).not.toMatch(/witness script does not hash/i);
+  });
 });
 
 describe("BIP-322 Full rejects structurally-valid-but-insufficient multisig (P2TR script-path)", () => {
@@ -1271,6 +1324,43 @@ describe("BIP-322 P2SH-P2WSH rejects structurally-valid-but-insufficient wrapped
     expect(result.verified).toBe(false);
     expect(result.error).toBeTruthy();
     expect(result.error).not.toMatch(/does not correspond/i);
+  });
+
+  /**
+   * Forged wrapped proofs that reuse ONE cosigner's signature twice. The
+   * untouched witnessScript still reconstructs the correct redeem script, so
+   * these get past the hash160 address check and must be rejected by
+   * checkMultisig's sequential signature matching — a lone cosigner must not
+   * be able to forge a 2-of-N wrapped proof.
+   */
+  it("rejects a wrapped 2-of-2 proof where one cosigner signature is duplicated", async () => {
+    // First cosigner fills both slots with their own signature.
+    const dupFirst = joinWitness([twoOfTwo[0], twoOfTwo[1], twoOfTwo[1], twoOfTwo[3]]);
+    const r1 = await verifyBip322P2SH(P2SH_P2WSH_2OF2_ADDR, FULL_MSG, dupFirst);
+    expect(r1.verified).toBe(false);
+    expect(r1.error).toMatch(/did not verify/i);
+    expect(r1.error).not.toMatch(/does not correspond/i);
+
+    // Second cosigner fills both slots with their own signature.
+    const dupSecond = joinWitness([twoOfTwo[0], twoOfTwo[2], twoOfTwo[2], twoOfTwo[3]]);
+    const r2 = await verifyBip322P2SH(P2SH_P2WSH_2OF2_ADDR, FULL_MSG, dupSecond);
+    expect(r2.verified).toBe(false);
+    expect(r2.error).toMatch(/did not verify/i);
+    expect(r2.error).not.toMatch(/does not correspond/i);
+  });
+
+  it("rejects a wrapped 2-of-3 proof where one cosigner signature is duplicated", async () => {
+    const dupFirst = joinWitness([twoOfThree[0], twoOfThree[1], twoOfThree[1], twoOfThree[3]]);
+    const r1 = await verifyBip322P2SH(P2SH_P2WSH_2OF3_ADDR, FULL_MSG, dupFirst);
+    expect(r1.verified).toBe(false);
+    expect(r1.error).toMatch(/did not verify/i);
+    expect(r1.error).not.toMatch(/does not correspond/i);
+
+    const dupSecond = joinWitness([twoOfThree[0], twoOfThree[2], twoOfThree[2], twoOfThree[3]]);
+    const r2 = await verifyBip322P2SH(P2SH_P2WSH_2OF3_ADDR, FULL_MSG, dupSecond);
+    expect(r2.verified).toBe(false);
+    expect(r2.error).toMatch(/did not verify/i);
+    expect(r2.error).not.toMatch(/does not correspond/i);
   });
 });
 
