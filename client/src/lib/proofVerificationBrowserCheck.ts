@@ -95,6 +95,27 @@ const P2TR_KEYPATH_ANNEX_STRIPPED_SIG =
 const P2TR_KEYPATH_ANNEX_ALTERED_SIG =
   'AkB0LAZp8vfFceQJjuzSUFIrAQ0Bx/xMCaGLit27LpKGQ3XRwffFKX3Bn6535GjlfoWG9jWpRWECe83msMERysNmHFBreXV0eW8ga2V5cGF0aCBhbm5leCB2ZWN0b3I=';
 
+// BIP-322 Full, Taproot SCRIPT-PATH witness carrying a BIP-341 ANNEX
+// ([64-byte Schnorr sig (SIGHASH_DEFAULT), leaf script, control block, annex]),
+// shared verbatim with signatureVerify.test.ts (P2TR_ANNEX_*). The verifier
+// must peel the annex before locating the control block / leaf script AND
+// feed sha_annex into the BIP-341 script-path sighash.
+// annex = 0x50 || "kyutxo annex test vector". Signed over EXT_MSG (below),
+// not "Hello World".
+const P2TR_ANNEX_ADDR = 'bc1pmwz5hs7aar3r8d4mgzzsz20rxsgykhal3e79mpvs43um9fz28zfqy9e44x';
+const P2TR_ANNEX_SIG =
+  'BEAz61jegCjGU9ZgSvlBsFwAF7kxgjKEHsVvd5IQVWkhbzVsVIxNhV+v2EVWn7xJdNgChQ7Q3t3vgkgQd1lhQs7JIiChGt5CBUOD2ZkjpdEbVXdSDJxje9gAwgo43TC5D9QfFqwhwBO5exbdJ0AP3yLZUQDpHjznziYp68dWZ/dq5Fob/Sh7GVBreXV0eG8gYW5uZXggdGVzdCB2ZWN0b3I=';
+// Same signature but with the annex item removed from the stack — the sig
+// committed to sha_annex, so verification must fail with a clear error.
+const P2TR_ANNEX_STRIPPED_SIG =
+  'A0Az61jegCjGU9ZgSvlBsFwAF7kxgjKEHsVvd5IQVWkhbzVsVIxNhV+v2EVWn7xJdNgChQ7Q3t3vgkgQd1lhQs7JIiChGt5CBUOD2ZkjpdEbVXdSDJxje9gAwgo43TC5D9QfFqwhwBO5exbdJ0AP3yLZUQDpHjznziYp68dWZ/dq5Fob/Sh7';
+// Same stack but with one payload byte of the annex flipped.
+const P2TR_ANNEX_ALTERED_SIG =
+  'BEAz61jegCjGU9ZgSvlBsFwAF7kxgjKEHsVvd5IQVWkhbzVsVIxNhV+v2EVWn7xJdNgChQ7Q3t3vgkgQd1lhQs7JIiChGt5CBUOD2ZkjpdEbVXdSDJxje9gAwgo43TC5D9QfFqwhwBO5exbdJ0AP3yLZUQDpHjznziYp68dWZ/dq5Fob/Sh7GVBreXV0eW8gYW5uZXggdGVzdCB2ZWN0b3I=';
+// The script-path annex vectors were signed over this message (EXT_MSG in
+// signatureVerify.test.ts), which happens to match LEGACY_MSG.
+const EXT_MSG = 'I certify that I control the following Bitcoin address.';
+
 // BIP-322 Full, Taproot single-leaf script-path (<xA> OP_CHECKSIG).
 const P2TR_LEAF_ADDR = 'bc1pcnljf6kcnlqvltg0fu08egg8s6hkesl4d33pss4vuydslpkam6kqxnvn7f';
 const P2TR_LEAF_SIG =
@@ -309,6 +330,32 @@ export async function runProofVerificationBrowserCheck(
   await expectClearFailure(
     'a P2WSH multisig proof against the wrong message reports a clear failure',
     () => verifyBitcoinSignature(P2WSH_2OF2_ADDR, 'Goodbye World', P2WSH_2OF2_SIG),
+  );
+
+  // ---------------------------------------------------------------------
+  // BIP-322 Full: Taproot SCRIPT-PATH witness carrying a BIP-341 annex.
+  // ---------------------------------------------------------------------
+  await expectVerified(
+    'verifyBip322Full verifies an annex-carrying Taproot script-path witness',
+    'bip322',
+    () => verifyBip322Full(P2TR_ANNEX_ADDR, EXT_MSG, P2TR_ANNEX_SIG),
+  );
+  await expectVerified(
+    'verifyBitcoinSignature routes the annex-carrying script-path proof and verifies it',
+    'bip322',
+    () => verifyBitcoinSignature(P2TR_ANNEX_ADDR, EXT_MSG, P2TR_ANNEX_SIG),
+  );
+  await expectClearFailure(
+    'an annex-stripped script-path witness reports a clear failure (sig committed to sha_annex)',
+    () => verifyBip322Full(P2TR_ANNEX_ADDR, EXT_MSG, P2TR_ANNEX_STRIPPED_SIG),
+  );
+  await expectClearFailure(
+    'a script-path witness with an altered annex byte reports a clear failure',
+    () => verifyBip322Full(P2TR_ANNEX_ADDR, EXT_MSG, P2TR_ANNEX_ALTERED_SIG),
+  );
+  await expectClearFailure(
+    'an annex-carrying script-path proof against the wrong message reports a clear failure',
+    () => verifyBip322Full(P2TR_ANNEX_ADDR, 'Goodbye World', P2TR_ANNEX_SIG),
   );
 
   await expectVerified(
