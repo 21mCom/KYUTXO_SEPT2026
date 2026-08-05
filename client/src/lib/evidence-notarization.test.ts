@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   findNotarizationsForAttachment,
   setPendingNotarization,
   peekPendingNotarization,
   clearPendingNotarization,
+  subscribePendingNotarization,
+  PENDING_NOTARIZATION_TTL_MS,
 } from './evidence-notarization';
 import type { SavedPsbt } from './database';
 
@@ -31,6 +33,11 @@ function makeSavedPsbt(overrides: Partial<SavedPsbt> = {}): SavedPsbt {
 }
 
 describe('pending notarization handoff', () => {
+  afterEach(() => {
+    clearPendingNotarization();
+    vi.useRealTimers();
+  });
+
   it('stores, peeks, and clears the intent', () => {
     clearPendingNotarization();
     expect(peekPendingNotarization()).toBeNull();
@@ -38,6 +45,53 @@ describe('pending notarization handoff', () => {
     expect(peekPendingNotarization()?.payloadHex).toBe(PAYLOAD_A);
     clearPendingNotarization();
     expect(peekPendingNotarization()).toBeNull();
+  });
+
+  it('stamps a unique nonce and createdAt on set', () => {
+    const a = setPendingNotarization({ payloadHex: PAYLOAD_A });
+    const b = setPendingNotarization({ payloadHex: PAYLOAD_B });
+    expect(a.nonce).not.toBe(b.nonce);
+    expect(typeof b.createdAt).toBe('number');
+    expect(peekPendingNotarization()?.nonce).toBe(b.nonce);
+  });
+
+  it('nonce-scoped clear only removes the matching intent', () => {
+    const stale = setPendingNotarization({ payloadHex: PAYLOAD_A });
+    const fresh = setPendingNotarization({ payloadHex: PAYLOAD_B });
+    // A dismiss from the abandoned (stale) flow must not wipe the new handoff.
+    clearPendingNotarization(stale.nonce);
+    expect(peekPendingNotarization()?.nonce).toBe(fresh.nonce);
+    clearPendingNotarization(fresh.nonce);
+    expect(peekPendingNotarization()).toBeNull();
+  });
+
+  it('expires a stale intent after the TTL so it cannot resurrect later', () => {
+    vi.useFakeTimers();
+    setPendingNotarization({ payloadHex: PAYLOAD_A });
+    vi.advanceTimersByTime(PENDING_NOTARIZATION_TTL_MS + 1);
+    expect(peekPendingNotarization()).toBeNull();
+    // Also gone on a subsequent peek (removed, not just filtered).
+    vi.useRealTimers();
+    expect(peekPendingNotarization()).toBeNull();
+  });
+
+  it('notifies subscribers on set and clear, and unsubscribes cleanly', () => {
+    const seen: (string | null)[] = [];
+    const unsubscribe = subscribePendingNotarization(() => {
+      seen.push(peekPendingNotarization()?.payloadHex ?? null);
+    });
+    const intent = setPendingNotarization({ payloadHex: PAYLOAD_A });
+    clearPendingNotarization(intent.nonce);
+    expect(seen).toEqual([PAYLOAD_A, null]);
+    unsubscribe();
+    setPendingNotarization({ payloadHex: PAYLOAD_B });
+    expect(seen).toEqual([PAYLOAD_A, null]);
+  });
+
+  it('a mismatched nonce leaves the current intent untouched', () => {
+    const current = setPendingNotarization({ payloadHex: PAYLOAD_A });
+    clearPendingNotarization('not-the-nonce');
+    expect(peekPendingNotarization()?.nonce).toBe(current.nonce);
   });
 });
 

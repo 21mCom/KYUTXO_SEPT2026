@@ -76,6 +76,7 @@ import { SavedPsbtsDialog } from "@/components/SavedPsbtsDialog";
 import {
   peekPendingNotarization,
   clearPendingNotarization,
+  subscribePendingNotarization,
   type NotarizationIntent,
 } from "@/lib/evidence-notarization";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
@@ -594,10 +595,19 @@ export default function UTXOs() {
   const [notarization, setNotarization] = useState<NotarizationIntent | null>(() =>
     peekPendingNotarization(),
   );
-  const dismissNotarization = useCallback(() => {
-    clearPendingNotarization();
-    setNotarization(null);
+  // Pick up an intent set while this page is already mounted (e.g. the app is
+  // open in this tab and the Evidence page hands off without a route remount).
+  useEffect(() => {
+    const sync = () => setNotarization(peekPendingNotarization());
+    sync();
+    return subscribePendingNotarization(sync);
   }, []);
+  const dismissNotarization = useCallback(() => {
+    // Clear only the intent currently shown; the subscription keeps state in
+    // sync, so a newer handoff (different nonce) is never wiped by accident.
+    if (notarization) clearPendingNotarization(notarization.nonce);
+    setNotarization(null);
+  }, [notarization]);
   
   // Smart filtering: exclude blockchain-discovered addresses by default
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
