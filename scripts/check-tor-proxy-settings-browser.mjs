@@ -486,6 +486,108 @@ async function main() {
       !!got428 && !!rePush && !!retryOk,
       `428=${!!got428}, rePush=${!!rePush}, retry200=${!!retryOk}`,
     );
+
+    // ── Restart WITH token rotation: the stale-token retry path ───────────
+    // A REAL server restart also regenerates SETTINGS_BOOTSTRAP_TOKEN, so the
+    // client's cached token goes stale. Reset with rotateToken:true, then call
+    // the provider again: it must hit 428, re-push with the STALE token (403),
+    // refetch the token, re-push (200), and retry to success. The previous
+    // scenario left the client library's dedup cache warm and its token cached,
+    // which is exactly the state a real restart invalidates.
+    const callsBeforeRotation = torCalls.length;
+    const rotation = await page.evaluate(
+      async ({ customUrl }) => {
+        const { CustomElectrsProvider } = await import('/src/lib/providers/custom-electrs.ts');
+        const provider = new CustomElectrsProvider(`${customUrl}/api`, 30000, true, undefined, ['127.0.0.1']);
+
+        const out = { resetStatus: null, rotated: null, rawStatus: null, rawErrorCode: null, recoveredHeight: null, error: null };
+        try {
+          // Grab the CURRENT (soon-to-be-stale) token to authorize the reset.
+          const tokenRes = await fetch('/api/tor/settings-token');
+          const tokenBody = await tokenRes.json().catch(() => null);
+          const resetRes = await fetch('/api/tor/settings/reset', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-tor-settings-token': tokenBody?.token ?? '',
+            },
+            body: JSON.stringify({ rotateToken: true }),
+          });
+          out.resetStatus = resetRes.status;
+          out.rotated = (await resetRes.json().catch(() => null))?.rotated ?? null;
+
+          // Sanity: raw proxied request now gets 428 (settings dropped).
+          const raw = await fetch('/api/tor/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: `${customUrl}/api/blocks/tip/height`, method: 'GET' }),
+          });
+          out.rawStatus = raw.status;
+          out.rawErrorCode = (await raw.json().catch(() => null))?.errorCode ?? null;
+
+          // The provider call must survive the stale token and recover.
+          out.recoveredHeight = await provider.getBlockHeight();
+        } catch (err) {
+          out.error = String(err && err.message ? err.message : err);
+        }
+        return out;
+      },
+      { customUrl: CUSTOM_PROVIDER_URL },
+    );
+    step(
+      'reset hook with rotateToken simulated a real restart (settings dropped AND token rotated)',
+      rotation.resetStatus === 200 &&
+        rotation.rotated === true &&
+        rotation.rawStatus === 428 &&
+        rotation.rawErrorCode === 'TOR_SETTINGS_NOT_INITIALIZED',
+      `reset=${rotation.resetStatus}, rotated=${rotation.rotated}, raw=${rotation.rawStatus}/${rotation.rawErrorCode}, error=${rotation.error}`,
+    );
+    step(
+      'client provider call recovered to success despite the rotated token (no 428/403 surfaced)',
+      rotation.error === null && rotation.recoveredHeight === Number(UPSTREAM_TIP_HEIGHT),
+      `recoveredHeight=${rotation.recoveredHeight}, error=${rotation.error}`,
+    );
+
+    // Prove the FULL stale-token sequence on the wire: 428 on /request →
+    // settings push rejected 403 (stale token) → fresh token fetched
+    // (GET /settings-token 200) → settings re-push 200 → retried request 200.
+    const rotationCalls = torCalls.slice(callsBeforeRotation);
+    const rot428 = rotationCalls.find((c) => c.url.includes('/api/tor/request') && c.status === 428);
+    const stalePush = rotationCalls.find(
+      (c) =>
+        c.method === 'POST' &&
+        c.url.includes('/api/tor/settings') &&
+        !c.url.includes('settings-token') &&
+        !c.url.includes('/settings/reset') &&
+        c.status === 403 &&
+        (!rot428 || c.at >= rot428.at),
+    );
+    const tokenRefetch = rotationCalls.find(
+      (c) =>
+        c.method === 'GET' &&
+        c.url.includes('/api/tor/settings-token') &&
+        c.status === 200 &&
+        stalePush &&
+        c.at >= stalePush.at,
+    );
+    const freshPush = rotationCalls.find(
+      (c) =>
+        c.method === 'POST' &&
+        c.url.includes('/api/tor/settings') &&
+        !c.url.includes('settings-token') &&
+        !c.url.includes('/settings/reset') &&
+        c.status === 200 &&
+        stalePush &&
+        c.at >= stalePush.at,
+    );
+    const rotRetryOk = rotationCalls.find(
+      (c) => c.url.includes('/api/tor/request') && c.status === 200 && freshPush && c.at >= freshPush.at,
+    );
+    step(
+      'stale-token sequence observed on the wire: 428 → push 403 (stale token) → token refetch (200) → re-push (200) → retried request (200)',
+      !!rot428 && !!stalePush && !!tokenRefetch && !!freshPush && !!rotRetryOk,
+      `428=${!!rot428}, stalePush403=${!!stalePush}, tokenRefetch=${!!tokenRefetch}, freshPush200=${!!freshPush}, retry200=${!!rotRetryOk}`,
+    );
   } finally {
     await browser.close().catch(() => {});
     upstream.close();

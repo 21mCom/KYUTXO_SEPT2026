@@ -638,6 +638,11 @@ router.post("/settings", (req: Request, res: Response) => {
 // 428 → invalidate → re-push → retry-once recovery loop without bouncing the
 // dev-server process. Guarded by the same loopback-only settings token as
 // /settings, and hidden (404) when NODE_ENV=production.
+//
+// Optional `rotateToken: true` in the body ALSO regenerates the per-process
+// settings bootstrap token, modelling a REAL restart (which mints a fresh
+// token). This lets the browser check exercise the client's stale-token path:
+// 428 → re-push with the old token → 403 → token refetch → re-push → retry.
 router.post("/settings/reset", (req: Request, res: Response) => {
   if (process.env.NODE_ENV === "production") {
     return res.status(404).json({ success: false, error: "Not found" });
@@ -649,7 +654,11 @@ router.post("/settings/reset", (req: Request, res: Response) => {
     });
   }
   resetTorProxySettings();
-  res.json({ success: true });
+  const rotate = (req.body as Record<string, unknown> | undefined)?.rotateToken === true;
+  if (rotate) {
+    SETTINGS_BOOTSTRAP_TOKEN = randomBytes(32).toString("hex");
+  }
+  res.json({ success: true, rotated: rotate });
 });
 
 router.post("/request", async (req: Request, res: Response) => {
@@ -857,4 +866,6 @@ function isLoopbackRequest(req: Request): boolean {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
-const SETTINGS_BOOTSTRAP_TOKEN = randomBytes(32).toString("hex");
+// `let` (not const) solely so the dev-only /settings/reset hook can rotate it
+// when simulating a full server restart; production never mutates it.
+let SETTINGS_BOOTSTRAP_TOKEN = randomBytes(32).toString("hex");
