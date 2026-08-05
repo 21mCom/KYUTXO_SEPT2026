@@ -382,8 +382,8 @@ export default function QuickTagger() {
         if (currentRecordId) {
           const existingRecord = await getRecord(currentRecordId);
           if (existingRecord) {
-            const mergedTags = Array.from(new Set([...existingRecord.tags, ...selectedTags]));
-            const mergedCategories = Array.from(new Set([...existingRecord.categories, ...selectedCategories]));
+            const mergedTags = Array.from(new Set([...(existingRecord.tags ?? []), ...selectedTags]));
+            const mergedCategories = Array.from(new Set([...(existingRecord.categories ?? []), ...selectedCategories]));
             
             await updateRecord(currentRecordId, {
               ...updateData,

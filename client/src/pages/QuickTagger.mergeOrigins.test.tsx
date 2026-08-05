@@ -173,4 +173,58 @@ describe("QuickTagger merge path — origin capture", () => {
     const conflicts = detectSingularFieldConflicts(updated, origins);
     expect(conflicts.map((c) => c.field.key)).toContain("label");
   }, 20000);
+
+  // Task #1957 — real vaults contain records saved WITHOUT tags/categories
+  // arrays (fields stored undefined). The merge branch used to spread
+  // existingRecord.tags/categories unguarded, so bulk apply crashed with
+  // "TypeError: existingRecord.tags is not iterable" and zero records updated.
+  it("bulk apply succeeds on a record saved without tags/categories arrays", async () => {
+    const id = (await createRecord({
+      type: "address",
+      inputString: ADDR,
+      label: "Sparse row",
+      source: "manual",
+      // No tags, no categories — stored as undefined, as in real vaults.
+    } as any)) as number;
+    const sparse = (await getRecord(id))!;
+    expect(sparse.tags).toBeUndefined();
+    expect(sparse.categories).toBeUndefined();
+
+    render(
+      <TestProviders>
+        <QuickTagger />
+      </TestProviders>,
+    );
+
+    fireEvent.change(await screen.findByTestId("textarea-paste-input"), {
+      target: { value: ADDR },
+    });
+    fireEvent.click(screen.getByTestId("button-parse-entries"));
+
+    const continueBtn = await screen.findByTestId("button-continue-to-metadata");
+    await waitFor(() => {
+      expect((continueBtn as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(continueBtn);
+
+    fireEvent.change(await screen.findByTestId("input-label"), {
+      target: { value: "Tagged now" },
+    });
+    fireEvent.click(screen.getByTestId("button-apply-metadata"));
+
+    // The merge must complete (update + baseline/incoming origins) instead of
+    // crashing on the missing arrays.
+    await waitFor(
+      async () => {
+        expect(await getRecordOriginsByRecordId(id)).toHaveLength(2);
+      },
+      { timeout: 10000 },
+    );
+
+    const updated = (await getRecord(id))!;
+    expect(updated.label).toBe("Tagged now");
+    // Missing arrays are treated as empty, not dropped or crashed on.
+    expect(updated.tags).toEqual([]);
+    expect(updated.categories).toEqual([]);
+  }, 20000);
 });
