@@ -728,6 +728,11 @@ args = "githooks-delegation-guard"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "githooks-delegation-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "proof-vector-generators-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -2587,6 +2592,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-custody-segment-build-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "proof-vector-generators-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-proof-vector-generators.js"
 
 [workflows.workflow.metadata]
 isValidation = true
