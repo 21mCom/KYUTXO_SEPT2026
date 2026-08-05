@@ -13,8 +13,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { assertPackagedBundleFresh } from './packaged-bundle-freshness.mjs';
+import {
+  assertPackagedBundleFresh,
+  assertPackagedAsarFresh,
+} from './packaged-bundle-freshness.mjs';
 
 const HOUR = 60 * 60 * 1000;
 const NOW = Date.now();
@@ -194,3 +198,144 @@ test('picks the newest index-*.js when several bundles exist', () => {
     assert.match(path.basename(result.bundle.file), /index-abc123\.js/);
   });
 });
+
+// ── assertPackagedAsarFresh (task 1959 stale-asar guard; task 1983 tests) ────
+//
+// A KYUTXO_PACKAGED_SKIP_BUILD=1 run reuses release/.../app.asar, which also
+// carries the MAIN PROCESS (electron/**) — these tests keep the guard honest
+// against fixture trees, and the static checks below keep it WIRED into the
+// three packaged check scripts' skip-build paths.
+
+/** Fixture with electron/ + dist/public inputs at OLD and an asar at asarTime. */
+function makeAsarFixture({ asarTime = BUNDLE_TIME, withAsar = true } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asar-freshness-test-'));
+  writeFileAt(root, 'electron/main.cjs', OLD);
+  writeFileAt(root, 'electron/engine/engine-worker.bundle.cjs', OLD);
+  writeFileAt(root, 'dist/public/assets/index-abc123.js', OLD);
+  const asarPath = path.join(root, 'release', 'linux-unpacked', 'resources', 'app.asar');
+  if (withAsar) writeFileAt(root, path.relative(root, asarPath), asarTime, 'asar-bytes');
+  return { root, asarPath };
+}
+
+function withAsarFixture(opts, fn) {
+  if (typeof opts === 'function') {
+    fn = opts;
+    opts = undefined;
+  }
+  const { root, asarPath } = makeAsarFixture(opts);
+  try {
+    return fn(root, asarPath);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('asar guard passes when the asar is newer than electron/ and dist/public', () => {
+  withAsarFixture((root, asarPath) => {
+    const result = assertPackagedAsarFresh({ root, asarPath, tag: '[test]' });
+    assert.equal(result.asar.file, asarPath);
+    assert.ok(result.asar.mtimeMs >= result.source.mtimeMs);
+  });
+});
+
+test('asar guard fails when an electron/ main-process file is newer than the asar', () => {
+  withAsarFixture((root, asarPath) => {
+    writeFileAt(root, 'electron/main.cjs', NEW);
+    assert.throws(
+      () => assertPackagedAsarFresh({ root, asarPath, tag: '[test]' }),
+      /STALE ASAR.*main\.cjs/s,
+    );
+  });
+});
+
+test('asar guard fails when dist/public is newer than the asar', () => {
+  withAsarFixture((root, asarPath) => {
+    writeFileAt(root, 'dist/public/assets/index-abc123.js', NEW);
+    assert.throws(
+      () => assertPackagedAsarFresh({ root, asarPath, tag: '[test]' }),
+      /STALE ASAR.*index-abc123\.js/s,
+    );
+  });
+});
+
+test('asar guard fails clearly when the asar is missing', () => {
+  withAsarFixture({ withAsar: false }, (root, asarPath) => {
+    assert.throws(
+      () => assertPackagedAsarFresh({ root, asarPath, tag: '[test]' }),
+      /asar not found.*run electron-builder/s,
+    );
+  });
+});
+
+test('asar guard requires an asarPath', () => {
+  withAsarFixture((root) => {
+    assert.throws(() => assertPackagedAsarFresh({ root, tag: '[test]' }), /requires an asarPath/);
+  });
+});
+
+test('asar guard fails when there are no electron/ or dist/public inputs to compare', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asar-freshness-test-'));
+  try {
+    const asarPath = path.join(root, 'app.asar');
+    writeFileAt(root, 'app.asar', BUNDLE_TIME, 'asar-bytes');
+    assert.throws(
+      () => assertPackagedAsarFresh({ root, asarPath, tag: '[test]' }),
+      /could not find any files under electron\/ or dist\/public/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('asar guard ignores dot-dirs and skip-dirs under electron/', () => {
+  withAsarFixture((root, asarPath) => {
+    writeFileAt(root, 'electron/node_modules/pkg/index.js', NEW);
+    writeFileAt(root, 'electron/.cache/tmp.js', NEW);
+    const result = assertPackagedAsarFresh({ root, asarPath, tag: '[test]' });
+    assert.ok(result.asar.mtimeMs >= result.source.mtimeMs);
+  });
+});
+
+// ── Static wiring checks (task 1983): the three packaged check scripts must
+// keep calling assertPackagedAsarFresh in their KYUTXO_PACKAGED_SKIP_BUILD
+// reuse paths. A refactor that drops the call would silently test stale
+// main-process code again. Pattern: scripts/check-engine-bridge-shared.test.mjs.
+const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGED_CHECK_SCRIPTS = [
+  'check-wrong-password-packaged.mjs',
+  'check-packaged-electron-browser.mjs',
+  'check-packaged-native-engine.mjs',
+];
+
+for (const script of PACKAGED_CHECK_SCRIPTS) {
+  test(`${script} imports assertPackagedAsarFresh and calls it in its skip-build path`, () => {
+    const source = fs.readFileSync(path.join(SCRIPTS_DIR, script), 'utf8');
+
+    // Imported from the shared module (not copy-pasted).
+    assert.match(
+      source,
+      /import\s*\{[^}]*\bassertPackagedAsarFresh\b[^}]*\}\s*from\s*['"]\.\/packaged-bundle-freshness\.mjs['"]/,
+      `${script} must import assertPackagedAsarFresh from ./packaged-bundle-freshness.mjs`,
+    );
+
+    // Called inside the KYUTXO_PACKAGED_SKIP_BUILD reuse branch: the call must
+    // appear between the skip-build env check and the end of that early-return
+    // block (the first `return;` after it).
+    const skipIdx = source.indexOf('KYUTXO_PACKAGED_SKIP_BUILD');
+    assert.ok(skipIdx !== -1, `${script} must have a KYUTXO_PACKAGED_SKIP_BUILD reuse path`);
+    const returnIdx = source.indexOf('return;', skipIdx);
+    assert.ok(returnIdx !== -1, `${script}: skip-build branch must end with an early return`);
+    const branch = source.slice(skipIdx, returnIdx);
+    assert.match(
+      branch,
+      /assertPackagedAsarFresh\s*\(\s*\{[^}]*asarPath\s*:/s,
+      `${script} must call assertPackagedAsarFresh({ ..., asarPath: ... }) in its skip-build reuse path`,
+    );
+    // The bundle-freshness guard must stay alongside it.
+    assert.match(
+      branch,
+      /assertPackagedBundleFresh\s*\(/,
+      `${script} must also keep assertPackagedBundleFresh in its skip-build reuse path`,
+    );
+  });
+}
