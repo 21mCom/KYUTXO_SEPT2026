@@ -271,6 +271,10 @@ args = "notarization-restore-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "notarization-merge-restore-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dust-badge-audit-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2502,6 +2506,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-notarization-restore-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "notarization-merge-restore-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-notarization-merge-restore-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
