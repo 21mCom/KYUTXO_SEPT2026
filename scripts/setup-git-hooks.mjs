@@ -18,8 +18,9 @@ try {
     process.exit(0);
   }
   execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: ROOT });
-  // Ensure the hook is executable (fresh checkouts on some systems drop the bit).
+  // Ensure the hooks are executable (fresh checkouts on some systems drop the bit).
   fs.chmodSync(path.join(ROOT, '.githooks', 'pre-push'), 0o755);
+  fs.chmodSync(path.join(ROOT, '.githooks', 'pre-commit'), 0o755);
   console.log('[setup-git-hooks] core.hooksPath set to .githooks (pre-push lockfile check active)');
 } catch (error) {
   // Never fail an install over hook wiring.
