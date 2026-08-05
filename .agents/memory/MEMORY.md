@@ -108,3 +108,4 @@
 - [Workflow-runner phantom rg entries](workflow-runner-phantom-rg.md) — runner rg scan can hit dangling .local/skills mounts invisible shell-side; ignores/renames useless; consent + kill 1 rebuilds.
 - [Balance page vs seeded cached stats](balance-page-seeded-stats.md) — pre-set balanceFormulaVersion=2 or the page's one-time recompute wipes seeded cached stats to zero.
 - [Held-tx liveQuery lag](dexie-held-tx-livequery-lag.md) — deterministically stale useLiveQuery list: insert in a held rw tx (Dexie.waitFor), click, then release; never race timers or same-task cmdk clicks.
+- [Independent proof-vector generators](independent-vector-generators.md) — BIP-322 vectors must ship with their deterministic generator (seed-string keys, aux=zeros); see pitfalls before re-deriving.

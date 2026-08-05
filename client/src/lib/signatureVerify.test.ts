@@ -598,12 +598,15 @@ describe('BIP-322 Taproot verification over a version-2 to_sign', () => {
  * sighash — no bitcoinjs-lib / noble code), the same approach used for the
  * annex vectors below. Both commit to a to_sign with nVersion = 2 and use
  * SIGHASH_DEFAULT, message "Hello World".
+ *
+ * Both vectors are reproduced deterministically (byte-for-byte) by the
+ * committed generator: scripts/generate-bip322-independent-vectors.py
  */
 const P2TR_KEYPATH_V2_INDEP_ADDR =
-  'bc1php84dg7r79622q4p0t4chq62292t9qv4fqy4nlksxvk2fy2gstnqapr4qx';
+  'bc1pj9fy27ujha59t3em8svqcwpjhhnkstss2vn6cgly300qrx4kx7sq0un35k';
 // Witness stack: [64-byte Schnorr sig]
 const P2TR_KEYPATH_V2_INDEP_SIG =
-  'AUC9XpHFnLxCT1Pp8MRVUL33qtAGJ9iO7hT38U9Xh+qGoXBToJ+HXfI3VK5KY7YYAb5XlAfMqa8oCsWxUjr/IbOW';
+  'AUBtgo6Le8fiOKeHD6veV8/ZWmxyflgKBW7Ci5GxoaB9mhGqb/ihSB29n0JhjvipLGVifdoS9pFKtQmoHMab0JbT';
 
 const P2TR_SCRIPT_V2_INDEP_ADDR =
   'bc1pt02ndhhj4kksff2l7k0efetqj3jlav8pqqegp2ut8vyhtrx5nmzsja8ng2';
@@ -711,6 +714,9 @@ describe('BIP-322 Full verification (Taproot script-path)', () => {
  * implementation. The witness stack is
  * [64-byte Schnorr sig (SIGHASH_DEFAULT), leaf script, control block, annex],
  * annex = 0x50 || "kyutxo annex test vector".
+ *
+ * Reproduced deterministically (byte-for-byte) by the committed generator:
+ * scripts/generate-bip322-independent-vectors.py
  */
 const P2TR_ANNEX_ADDR = 'bc1pmwz5hs7aar3r8d4mgzzsz20rxsgykhal3e79mpvs43um9fz28zfqy9e44x';
 const P2TR_ANNEX_SIG =
@@ -735,6 +741,9 @@ const P2TR_ANNEX_ALTERED_SIG =
  * bitcoinjs-lib / noble code), so a passing verify proves annex handling
  * agrees with an external implementation.
  * annex = 0x50 || "kyutxo keypath annex vector".
+ *
+ * Reproduced deterministically (byte-for-byte) by the committed generator:
+ * scripts/generate-bip322-independent-vectors.py
  */
 const P2TR_KEYPATH_ANNEX_ADDR =
   'bc1pddrn4apn0qt2j5cjfr6c33cttsx09pc8kdlm6nlh3yapwws4dpgq98vxan';
