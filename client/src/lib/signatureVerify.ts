@@ -1036,18 +1036,31 @@ export async function verifyBip322Full(
       };
     }
     const inputStack = witness.slice(0, witness.length - 1);
-    const computeSighash = (hashType: number): Uint8Array =>
-      new Uint8Array(
-        toSign.hashForWitnessV0(0, witnessScript as Buffer, BigInt(0), hashType),
-      );
-    let ok: boolean;
-    try {
-      ok = execWitnessScriptV0(witnessScript, inputStack, computeSighash);
-    } catch (err) {
+    // BIP-322 permits the virtual to_sign transaction to carry nVersion 0 or
+    // 2, and the BIP-143 sighash commits to nVersion. Try v0 first (the
+    // common case) and fall back to v2 before rejecting.
+    let ok = false;
+    let execError: unknown = null;
+    for (const toSignVersion of [0, 2]) {
+      toSign.version = toSignVersion;
+      const computeSighash = (hashType: number): Uint8Array =>
+        new Uint8Array(
+          toSign.hashForWitnessV0(0, witnessScript as Buffer, BigInt(0), hashType),
+        );
+      try {
+        ok = execWitnessScriptV0(witnessScript, inputStack, computeSighash);
+        execError = null;
+      } catch (err) {
+        ok = false;
+        execError = err;
+      }
+      if (ok) break;
+    }
+    if (execError !== null) {
       return {
         verified: false,
         error: `BIP-322 Full (P2WSH) verification failed: ${
-          err instanceof Error ? err.message : String(err)
+          execError instanceof Error ? execError.message : String(execError)
         }`,
       };
     }
@@ -1269,18 +1282,31 @@ export async function verifyBip322P2SH(
   const redeemHashWSH = new Uint8Array(bitcoin.crypto.hash160(redeemScriptWSH));
   if (bytesEqual(redeemHashWSH, scriptHash)) {
     const inputStack = witness.slice(0, witness.length - 1);
-    const computeSighash = (hashType: number): Uint8Array =>
-      new Uint8Array(
-        toSign.hashForWitnessV0(0, witnessScript as Buffer, BigInt(0), hashType),
-      );
-    let ok: boolean;
-    try {
-      ok = execWitnessScriptV0(witnessScript, inputStack, computeSighash);
-    } catch (err) {
+    // BIP-322 permits the virtual to_sign transaction to carry nVersion 0 or
+    // 2, and the BIP-143 sighash commits to nVersion. Try v0 first (the
+    // common case) and fall back to v2 before rejecting.
+    let ok = false;
+    let execError: unknown = null;
+    for (const toSignVersion of [0, 2]) {
+      toSign.version = toSignVersion;
+      const computeSighash = (hashType: number): Uint8Array =>
+        new Uint8Array(
+          toSign.hashForWitnessV0(0, witnessScript as Buffer, BigInt(0), hashType),
+        );
+      try {
+        ok = execWitnessScriptV0(witnessScript, inputStack, computeSighash);
+        execError = null;
+      } catch (err) {
+        ok = false;
+        execError = err;
+      }
+      if (ok) break;
+    }
+    if (execError !== null) {
       return {
         verified: false,
         error: `BIP-322 (P2SH-P2WSH) verification failed: ${
-          err instanceof Error ? err.message : String(err)
+          execError instanceof Error ? execError.message : String(execError)
         }`,
       };
     }
@@ -1325,8 +1351,15 @@ export async function verifyBip322P2SH(
         scriptCode[23] = 0x88; // OP_EQUALVERIFY
         scriptCode[24] = 0xac; // OP_CHECKSIG
 
-        const sighash = toSign.hashForWitnessV0(0, scriptCode, BigInt(0), hashType);
-        const ok = ecc.verify(sighash, pubkey, sig64);
+        // BIP-322 permits a version-0 or version-2 to_sign, and BIP-143
+        // commits to nVersion — try both before rejecting.
+        let ok = false;
+        for (const toSignVersion of [0, 2]) {
+          toSign.version = toSignVersion;
+          const sighash = toSign.hashForWitnessV0(0, scriptCode, BigInt(0), hashType);
+          ok = ecc.verify(sighash, pubkey, sig64);
+          if (ok) break;
+        }
         if (ok) return { verified: true, format: 'bip322' };
         return {
           verified: false,
@@ -1552,8 +1585,15 @@ export async function verifyBip322P2WPKH(
     scriptCode[23] = 0x88; // OP_EQUALVERIFY
     scriptCode[24] = 0xac; // OP_CHECKSIG
 
-    const sighash = toSign.hashForWitnessV0(0, scriptCode, BigInt(0), hashType);
-    const ok = ecc.verify(sighash, pubkey, sig64);
+    // BIP-322 permits a version-0 or version-2 to_sign, and BIP-143 commits
+    // to nVersion — try both before rejecting.
+    let ok = false;
+    for (const toSignVersion of [0, 2]) {
+      toSign.version = toSignVersion;
+      const sighash = toSign.hashForWitnessV0(0, scriptCode, BigInt(0), hashType);
+      ok = ecc.verify(sighash, pubkey, sig64);
+      if (ok) break;
+    }
     if (ok) {
       return { verified: true, format: 'bip322' };
     }

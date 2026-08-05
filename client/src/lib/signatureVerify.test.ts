@@ -271,6 +271,85 @@ describe('BIP-322 Full verification (P2WSH multisig)', () => {
     expect(result.verified).toBe(false);
     expect(result.error).toMatch(/base64/i);
   });
+
+  it('verifies a 2-of-2 P2WSH proof signed over a version-2 to_sign', async () => {
+    const result = await verifyBip322Full(P2WSH_V2_ADDR, FULL_MSG, P2WSH_V2_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('rejects a v2-committed P2WSH proof against the wrong message', async () => {
+    const result = await verifyBip322Full(P2WSH_V2_ADDR, 'Goodbye World', P2WSH_V2_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
+});
+
+/**
+ * SegWit vectors whose signatures commit to a VERSION-2 to_sign transaction.
+ * BIP-322 permits the virtual to_sign to carry nVersion 0 or 2, and the
+ * BIP-143 sighash commits to nVersion, so verification must accept both.
+ * Produced deterministically offline from fixed keys.
+ */
+const P2WSH_V2_ADDR =
+  'bc1q9gexaq82ggrp9p9220np32n2qvgydqxzgy3atzuk6ftdnhc4dq4qg5d0w7';
+const P2WSH_V2_SIG =
+  'BABIMEUCIQDGYas5C3Zz8B30Uvi0jG68lPrycUq65fsodatNZhg7LAIgGtjUGjg1jjtFqa22jkVfXvFHFMb6P7K8RaMobCmhSnsBRzBEAiABH1vmtR/S6krzxIC/21zZ30kyKkTvPe/iWIBCPAvxQQIgNs3K7K11+BNh0JnS2fjmsUFUFoQDFhsatsazK8NoOaoBR1IhAo8HBaVOOkp7CJjWUPf8qtPZkGBPMHWKf/pvce1ixnApIQNMFNzYcOyQ3v/jgKAjd6eB06sbEJknnGfTi3Sf+sso5lKu';
+
+const P2SH_P2WSH_V2_ADDR = '3A3SSg474cvR36nFQtgteQkpKkxJSXcbZH';
+const P2SH_P2WSH_V2_SIG =
+  'BABHMEQCIHMh3Vi+mPP57Ln6Zsv0ZQiOUpG6m3wkLSrSwe3XtejXAiAuBxmITE7OwH0uXsqzZ2yHCH1ebGOfZqSf4gJdcheWxwFHMEQCIHBUHbZLazPzmRK+eW91focgp2JeH4AzxKlzTcKYlm8TAiBVL3r6FLEu1hj27vawo51anbWiQSX1Mxf2do9EiDK3+AFHUiECjwcFpU46SnsImNZQ9/yq09mQYE8wdYp/+m9x7WLGcCkhA0wU3Nhw7JDe/+OAoCN3p4HTqxsQmSecZ9OLdJ/6yyjmUq4=';
+
+const P2SH_P2WPKH_V2_ADDR = '3H56shu16YuA7XTEKNecxEDBTVLiETMcfm';
+const P2SH_P2WPKH_V2_SIG =
+  'AkgwRQIhANsUlWVcK3vdDDjSbUNsdBhc4kdf3yG89TzbaJXqzKlSAiBquWtCZag8aBwEUmcC5gHHiz9riPvwpi2nLlE0UbltrAEhAo8HBaVOOkp7CJjWUPf8qtPZkGBPMHWKf/pvce1ixnAp';
+
+const P2WPKH_V2_ADDR = 'bc1qpc4x84ky2wqr0qjukgdma9mslywvhmg4jvpq5t';
+const P2WPKH_V2_SIG =
+  'AkcwRAIgFu59nELktokDU4nCsCY1rCX7YpZxWoj6eGp9GxGtb6QCIEUDiqg/UdZY9gwtTSgkhnSpIE2QjJOt/ZDBIwgF4mA5ASECjwcFpU46SnsImNZQ9/yq09mQYE8wdYp/+m9x7WLGcCk=';
+
+describe('BIP-322 SegWit verification over a version-2 to_sign', () => {
+  it('verifies a P2SH-P2WSH multisig proof signed over a version-2 to_sign', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WSH_V2_ADDR, FULL_MSG, P2SH_P2WSH_V2_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('verifies a P2SH-P2WPKH proof signed over a version-2 to_sign', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WPKH_V2_ADDR, FULL_MSG, P2SH_P2WPKH_V2_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('verifies a native P2WPKH proof signed over a version-2 to_sign', async () => {
+    const result = await verifyBip322P2WPKH(P2WPKH_V2_ADDR, FULL_MSG, P2WPKH_V2_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('rejects a v2-committed P2SH-P2WSH proof against the wrong message', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WSH_V2_ADDR, 'Goodbye World', P2SH_P2WSH_V2_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
+
+  it('rejects a v2-committed P2WPKH proof against the wrong message', async () => {
+    const result = await verifyBip322P2WPKH(P2WPKH_V2_ADDR, 'Goodbye World', P2WPKH_V2_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
+
+  it('rejects a v2-committed P2SH-P2WPKH proof against the wrong message', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WPKH_V2_ADDR, 'Goodbye World', P2SH_P2WPKH_V2_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
+
+  it('routes a v2-committed SegWit proof through verifyBitcoinSignature', async () => {
+    const result = await verifyBitcoinSignature(P2SH_P2WSH_V2_ADDR, FULL_MSG, P2SH_P2WSH_V2_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
 });
 
 describe('BIP-322 Full verification (Taproot script-path)', () => {
