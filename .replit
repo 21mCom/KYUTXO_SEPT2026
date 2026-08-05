@@ -439,6 +439,14 @@ args = "engine-bridge-guard-tests"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "packaged-freshness-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-freshness-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "saved-template-derive-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2527,6 +2535,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/check-githooks-delegation.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-freshness-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-freshness-guard.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-freshness-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-packaged-freshness-guard.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
