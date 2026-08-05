@@ -116,3 +116,64 @@ export function assertPackagedBundleFresh(opts = {}) {
   );
   return { bundle, source };
 }
+
+/**
+ * Sibling guard for reused asars (task 1959): a KYUTXO_PACKAGED_SKIP_BUILD=1
+ * run can also carry a stale MAIN PROCESS. electron-builder packages
+ * `electron/**` and `dist/**` into app.asar, so edits to electron/*.cjs (CSP
+ * meta tag, protocol.handle asset remap, IPC handlers) after the asar was
+ * built would go untested. Fails fast when the reused asar predates the
+ * newest electron/ source file OR the newest file in dist/public.
+ *
+ * Call it in every KYUTXO_PACKAGED_SKIP_BUILD reuse path, right after (or
+ * alongside) assertPackagedBundleFresh.
+ *
+ * @param {{ tag?: string, root?: string, asarPath: string }} opts
+ */
+export function assertPackagedAsarFresh(opts) {
+  const tag = (opts && opts.tag) || '[asar-freshness]';
+  const root = (opts && opts.root) || ROOT;
+  const asarPath = opts && opts.asarPath;
+  if (!asarPath) {
+    throw new Error(`${tag} assertPackagedAsarFresh requires an asarPath.`);
+  }
+
+  let asarStat;
+  try {
+    asarStat = fs.statSync(asarPath);
+  } catch {
+    throw new Error(
+      `${tag} asar not found at ${path.relative(root, asarPath)} — run electron-builder before the packaged check.`,
+    );
+  }
+
+  // Newest input the asar was packaged from: electron/ main-process source
+  // (electron-builder packages electron/**/*) and the built renderer output
+  // in dist/public.
+  let newestInput = { mtimeMs: 0, file: null };
+  for (const dir of [path.join(root, 'electron'), path.join(root, 'dist', 'public')]) {
+    const sub = newestMtimeInTree(dir);
+    if (sub.mtimeMs > newestInput.mtimeMs) newestInput = sub;
+  }
+  if (!newestInput.file) {
+    throw new Error(`${tag} could not find any files under electron/ or dist/public to compare against.`);
+  }
+
+  if (asarStat.mtimeMs < newestInput.mtimeMs) {
+    const fmt = (ms) => new Date(ms).toISOString();
+    throw new Error(
+      `${tag} STALE ASAR: ${path.relative(root, asarPath)} (packaged ${fmt(asarStat.mtimeMs)}) ` +
+        `predates ${path.relative(root, newestInput.file)} (modified ${fmt(newestInput.mtimeMs)}). ` +
+        `The reused asar would test a stale desktop-app shell (main process / renderer bundle). ` +
+        `Rebuild the package first: re-run this check WITHOUT KYUTXO_PACKAGED_SKIP_BUILD ` +
+        `(or run electron-builder --dir again after \`npx vite build\`).`,
+    );
+  }
+
+  console.log(
+    `${tag} asar freshness OK: ${path.relative(root, asarPath)} ` +
+      `(packaged ${new Date(asarStat.mtimeMs).toISOString()}) is newer than the latest ` +
+      `electron/ + dist/public change (${path.relative(root, newestInput.file)}).`,
+  );
+  return { asar: { mtimeMs: asarStat.mtimeMs, file: asarPath }, source: newestInput };
+}

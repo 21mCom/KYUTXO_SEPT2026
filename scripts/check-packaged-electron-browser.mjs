@@ -42,7 +42,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { assertPackagedBundleFresh } from './packaged-bundle-freshness.mjs';
+import { assertPackagedBundleFresh, assertPackagedAsarFresh } from './packaged-bundle-freshness.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -100,8 +100,11 @@ function buildAsar() {
     }
     console.log(`${TAG} reusing existing asar: ${ASAR}`);
     // Reused asars are the highest-risk stale path: fail fast if dist/public
-    // (which the asar was packaged from) predates the current source.
+    // (which the asar was packaged from) predates the current source, or if
+    // the asar itself predates electron/ main-process source or dist/public
+    // (task 1959: a stale shell would test months-old CSP/remap/IPC code).
     assertPackagedBundleFresh({ tag: TAG });
+    assertPackagedAsarFresh({ tag: TAG, asarPath: ASAR });
     return;
   }
   // Mirrors scripts/electron-build.sh steps 1-3, but packages an unpacked dir

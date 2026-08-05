@@ -50,7 +50,7 @@
 //     step (Windows) has already built it.
 
 import { execFileSync, spawn } from 'node:child_process';
-import { assertPackagedBundleFresh } from './packaged-bundle-freshness.mjs';
+import { assertPackagedBundleFresh, assertPackagedAsarFresh } from './packaged-bundle-freshness.mjs';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -93,8 +93,11 @@ function buildAsar() {
     }
     console.log(`${TAG} reusing existing asar: ${ASAR}`);
     // The reused asar was packaged from dist/public — fail fast if that
-    // bundle predates the current source (task 1925 stale-bundle trap).
+    // bundle predates the current source (task 1925 stale-bundle trap), or
+    // if the asar itself predates electron/ main-process source or
+    // dist/public (task 1959: stale shell = months-old CSP/remap/IPC code).
     assertPackagedBundleFresh({ tag: TAG });
+    assertPackagedAsarFresh({ tag: TAG, asarPath: ASAR });
     return;
   }
   // dist is only rebuilt when missing: this gate cares about the electron/ +
