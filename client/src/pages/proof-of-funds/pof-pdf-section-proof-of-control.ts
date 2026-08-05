@@ -3,7 +3,12 @@
 import { sanitizePdfText } from "@/lib/pdfText";
 import { buildChallengeMessage, signatureFormatLabel } from "@/lib/signatureVerify";
 import type { PdfLayout, PofPdfData } from "./pof-pdf-context";
-import { signatureBoxHeading } from "./pof-pdf-strings";
+import {
+  signatureBoxHeading,
+  PROOF_OF_CONTROL_APPENDIX_HEADING,
+  HOW_TO_VERIFY_HEADING,
+  CHALLENGE_MESSAGE_FORMAT_HEADING,
+} from "./pof-pdf-strings";
 
 export function renderProofOfControlSection(L: PdfLayout, d: PofPdfData) {
   const { doc, margin, contentW } = L;
@@ -27,7 +32,7 @@ export function renderProofOfControlSection(L: PdfLayout, d: PofPdfData) {
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(0, 0, 0);
-  doc.text("APPENDIX: PROOF-OF-CONTROL EVIDENCE", margin, L.y);
+  doc.text(PROOF_OF_CONTROL_APPENDIX_HEADING, margin, L.y);
   L.y += 8;
 
   doc.setLineWidth(0.5);
@@ -53,7 +58,7 @@ export function renderProofOfControlSection(L: PdfLayout, d: PofPdfData) {
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(0, 0, 0);
-  doc.text("HOW TO INDEPENDENTLY VERIFY", margin, L.y);
+  doc.text(HOW_TO_VERIFY_HEADING, margin, L.y);
   L.y += 6;
 
   doc.setFontSize(8.5);
@@ -89,7 +94,7 @@ export function renderProofOfControlSection(L: PdfLayout, d: PofPdfData) {
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(0, 0, 0);
-  doc.text("CHALLENGE MESSAGE FORMAT", margin, L.y);
+  doc.text(CHALLENGE_MESSAGE_FORMAT_HEADING, margin, L.y);
   L.y += 6;
 
   doc.setFontSize(8.5);

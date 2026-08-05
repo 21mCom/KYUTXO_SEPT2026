@@ -30,6 +30,9 @@ import { signatureFormatLabel } from "@/lib/signatureVerify";
 import {
   WALLET_SIGNATURE_HEADING,
   BIP322_WITNESS_HEADING,
+  PROOF_OF_CONTROL_APPENDIX_HEADING,
+  HOW_TO_VERIFY_HEADING,
+  CHALLENGE_MESSAGE_FORMAT_HEADING,
   CONTROL_INCLUDED_FRAGMENT,
   REMAINING_SELF_DECLARED_FRAGMENT,
   ALL_ADDRESSES_FRAGMENT,
@@ -242,6 +245,11 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
   // deliberate wording change means updating pof-pdf-strings.ts plus this test
   // only — no cascade of hand-edits across the suite.
   it("pins the exact appendix-heading and disclaimer wording", () => {
+    expect(PROOF_OF_CONTROL_APPENDIX_HEADING).toBe(
+      "APPENDIX: PROOF-OF-CONTROL EVIDENCE",
+    );
+    expect(HOW_TO_VERIFY_HEADING).toBe("HOW TO INDEPENDENTLY VERIFY");
+    expect(CHALLENGE_MESSAGE_FORMAT_HEADING).toBe("CHALLENGE MESSAGE FORMAT");
     expect(WALLET_SIGNATURE_HEADING).toBe("Wallet Signature (base64):");
     expect(BIP322_WITNESS_HEADING).toBe("BIP-322 Witness (base64):");
     expect(CONTROL_INCLUDED_FRAGMENT).toBe("proof-of-control is included");

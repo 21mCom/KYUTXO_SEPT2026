@@ -34,6 +34,7 @@ import {
   ALL_ADDRESSES_FRAGMENT,
   REMAINING_SELF_DECLARED_FRAGMENT,
   NO_CONTROL_DISCLAIMER_LINE,
+  PROOF_OF_CONTROL_APPENDIX_HEADING,
 } from "@/pages/proof-of-funds/pof-pdf-strings";
 
 // The disclaimer scaffolding comes from pof-pdf-strings; its exact wording is
@@ -189,7 +190,7 @@ describe("ProofOfFundsDeclaration — partially-verified PDF only proves verifie
     // Wait until the appendix has been written (it only renders when at least
     // one address is verified).
     await waitFor(() => {
-      expect(pdfHas("APPENDIX: PROOF-OF-CONTROL EVIDENCE")).toBe(true);
+      expect(pdfHas(PROOF_OF_CONTROL_APPENDIX_HEADING)).toBe(true);
     });
 
     // (1) The disclaimer reports the correct verified/total counts and flags the

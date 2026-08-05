@@ -27,6 +27,11 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import {
+  PROOF_OF_CONTROL_APPENDIX_HEADING,
+  HOW_TO_VERIFY_HEADING,
+  CHALLENGE_MESSAGE_FORMAT_HEADING,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
 
 const ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
 
@@ -169,11 +174,11 @@ describe("ProofOfFundsDeclaration — re-verify instructions in PDF appendix", (
 
     // Wait until the appendix has been written.
     await waitFor(() => {
-      expect(pdfHas("APPENDIX: PROOF-OF-CONTROL EVIDENCE")).toBe(true);
+      expect(pdfHas(PROOF_OF_CONTROL_APPENDIX_HEADING)).toBe(true);
     });
 
     // (1) "HOW TO INDEPENDENTLY VERIFY" heading and each verifier method.
-    expect(pdfHas("HOW TO INDEPENDENTLY VERIFY")).toBe(true);
+    expect(pdfHas(HOW_TO_VERIFY_HEADING)).toBe(true);
     expect(pdfHas("bitcoin-cli")).toBe(true);
     expect(pdfHas("verifymessage")).toBe(true);
     expect(pdfHas("Electrum")).toBe(true);
@@ -183,7 +188,7 @@ describe("ProofOfFundsDeclaration — re-verify instructions in PDF appendix", (
 
     // (2) "CHALLENGE MESSAGE FORMAT" heading and the nonce / Declaration
     // Reference explanation.
-    expect(pdfHas("CHALLENGE MESSAGE FORMAT")).toBe(true);
+    expect(pdfHas(CHALLENGE_MESSAGE_FORMAT_HEADING)).toBe(true);
     expect(pdfHas("Declaration Reference")).toBe(true);
     expect(pdfHas("nonce:")).toBe(true);
     expect(

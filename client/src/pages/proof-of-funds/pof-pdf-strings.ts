@@ -19,6 +19,12 @@ export function signatureBoxHeading(format: SignatureFormat | undefined): string
   return format === "bip322" ? BIP322_WITNESS_HEADING : WALLET_SIGNATURE_HEADING;
 }
 
+// ── Appendix section headings ───────────────────────────────────────────────
+export const PROOF_OF_CONTROL_APPENDIX_HEADING =
+  "APPENDIX: PROOF-OF-CONTROL EVIDENCE";
+export const HOW_TO_VERIFY_HEADING = "HOW TO INDEPENDENTLY VERIFY";
+export const CHALLENGE_MESSAGE_FORMAT_HEADING = "CHALLENGE MESSAGE FORMAT";
+
 // ── Disclaimer scaffolding fragments (used by tests to locate the line) ─────
 export const CONTROL_INCLUDED_FRAGMENT = "proof-of-control is included";
 export const REMAINING_SELF_DECLARED_FRAGMENT =

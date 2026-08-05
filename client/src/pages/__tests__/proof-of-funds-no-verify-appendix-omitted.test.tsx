@@ -25,6 +25,9 @@ import { renderWithProviders } from "@/test/testProviders";
 import {
   CONTROL_INCLUDED_FRAGMENT,
   NO_CONTROL_DISCLAIMER_LINE,
+  PROOF_OF_CONTROL_APPENDIX_HEADING,
+  HOW_TO_VERIFY_HEADING,
+  CHALLENGE_MESSAGE_FORMAT_HEADING,
 } from "@/pages/proof-of-funds/pof-pdf-strings";
 
 // The disclaimer scaffolding comes from pof-pdf-strings; its exact wording is
@@ -154,9 +157,9 @@ describe("ProofOfFundsDeclaration — appendix omitted when nothing is verified"
 
     // (1) + (2) The appendix and all of its verification language must be
     // completely absent.
-    expect(pdfHas("APPENDIX: PROOF-OF-CONTROL EVIDENCE")).toBe(false);
-    expect(pdfHas("HOW TO INDEPENDENTLY VERIFY")).toBe(false);
-    expect(pdfHas("CHALLENGE MESSAGE FORMAT")).toBe(false);
+    expect(pdfHas(PROOF_OF_CONTROL_APPENDIX_HEADING)).toBe(false);
+    expect(pdfHas(HOW_TO_VERIFY_HEADING)).toBe(false);
+    expect(pdfHas(CHALLENGE_MESSAGE_FORMAT_HEADING)).toBe(false);
 
     // (3) The statement line must declare everything self-declared and must NOT
     // claim cryptographic proof-of-control is included.
