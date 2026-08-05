@@ -15,6 +15,11 @@ always reproduces the committed constants byte-for-byte.
 
 Usage:  python3 scripts/generate-bip322-independent-vectors.py
 Output: the vector constants, labelled with the test-file constant names.
+
+Related: the independent SegWit v2 / P2SH-wrapped vectors (P2WPKH_V2_INDEP_*,
+P2WSH_V2_INDEP_*, P2SH_P2WPKH_V2_INDEP_*, P2SH_P2WSH_V2_INDEP_*) are
+reproduced by scripts/proof-vectors/generate_segwit_v2_independent.py
+(seed-string key + RFC-6979 deterministic ECDSA, so equally re-derivable).
 """
 
 import hashlib

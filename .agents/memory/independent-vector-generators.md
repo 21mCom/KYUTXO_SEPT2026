@@ -13,4 +13,5 @@ Rules / lessons:
 - Seed-string conventions found in this repo: `"kyutxo-annex-internal-key"`, `"kyutxo keypath annex vector seed"`, `"kyutxo v2 taproot scriptpath internal key"` — sha256(seed) mod n.
 - When a re-derived sig mismatches, check WHICH message the test passes (some vectors sign EXT_MSG "I certify that I control…", not "Hello World") before suspecting the nonce.
 - The app verifier tries to_sign nVersion 0 AND 2 (fallback loop), so a "passing" vector doesn't tell you which version it committed to.
-- Same exposure likely exists for the SegWit v2 / wrapped-multisig independent vectors added by sibling tasks; extend the same generator rather than new throwaway scripts.
+- The SegWit v2 + P2SH-wrapped independent vectors ARE covered: `scripts/proof-vectors/generate_segwit_v2_independent.py` (seed `"vault-independent-segwit-v2-vector-key"`, RFC-6979 deterministic ECDSA) reproduces all four constants byte-for-byte; verified 2026-08-05.
+- Still exposed: the EXT_* "external independent vectors" (P2WSH 2-of-2/2-of-3 multisig, P2TR leaf/CSA/multi-leaf) in signatureVerify.test.ts have NO committed generator; their keys may be unrecoverable throwaways.
