@@ -407,21 +407,24 @@ export async function buildCustodySegment(
     let lineage = forwardChain[i];
     if (lineage.spentAddress === currentAddress) {
       // A partial spend emits multiple lineage rows for the same consuming
-      // tx (owned change leg + external payment leg). Which one appears
+      // tx (owned change leg(s) + external payment leg). Which one appears
       // first after the stable blockTime sort is insertion-order dependent,
       // so deterministically prefer the owned change leg: custody continues
-      // at the change output ('split') rather than ending as 'spent'.
-      if (!(lineage.createdOwned && lineage.isChange)) {
-        const changeLeg = forwardChain.find(
+      // at the change output ('split') rather than ending as 'spent'. When a
+      // consuming tx produces MORE THAN ONE owned change output, tie-break
+      // on the lowest createdVout so the outcome never depends on insertion
+      // order.
+      {
+        const changeLegs = forwardChain.filter(
           (other) =>
-            other !== lineage &&
             other.consumingTxid === lineage.consumingTxid &&
             other.spentAddress === currentAddress &&
             other.createdOwned &&
             other.isChange
         );
-        if (changeLeg) {
-          lineage = changeLeg;
+        if (changeLegs.length > 0) {
+          changeLegs.sort((a, b) => a.createdVout - b.createdVout);
+          lineage = changeLegs[0];
         }
       }
       evidenceTxids.push(lineage.consumingTxid);

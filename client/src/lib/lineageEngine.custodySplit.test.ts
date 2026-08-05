@@ -302,4 +302,157 @@ describe("partial spend (change output) custody segments", () => {
     expect(seg!.hopCount).toBe(1);
     expect(seg!.evidenceTxids).toEqual([TX_FUND, TX_SPEND]);
   });
+
+  it("tie-breaks multiple owned change legs by lowest createdVout, regardless of insertion order", async () => {
+    // A partial spend with TWO owned change outputs (vout 1 and vout 2).
+    // Whichever leg the blockTime-stable sort surfaces first must not decide
+    // the outcome: custody deterministically continues at the LOWEST
+    // createdVout change outpoint.
+    const CHANGE_ADDR_2 = "bc1q-split-change-2";
+
+    const buildRows = (): UtxoLineage[] => {
+      const now = Date.now();
+      const base = {
+        spentTxid: TX_FUND,
+        spentVout: 0,
+        spentAddress: ORIGIN_ADDR,
+        spentAmount: 100_000,
+        consumingTxid: TX_SPEND,
+        createdTxid: TX_SPEND,
+        spentOwned: true,
+        confidence: "high" as const,
+        blockTime: T_SPEND,
+        blockHeight: 800_010,
+        createdAt: now,
+      };
+      return [
+        // Funding: external -> owned origin.
+        {
+          spentTxid: "",
+          spentVout: 0,
+          spentAddress: EXT_ADDR,
+          spentAmount: 101_000,
+          consumingTxid: TX_FUND,
+          createdTxid: TX_FUND,
+          createdVout: 0,
+          createdAddress: ORIGIN_ADDR,
+          createdAmount: 100_000,
+          spentOwned: false,
+          createdOwned: true,
+          isChange: false,
+          confidence: "high",
+          blockTime: T_FUND,
+          blockHeight: 800_000,
+          createdAt: now,
+        },
+        // Owned change leg A (vout 1).
+        {
+          ...base,
+          createdVout: 1,
+          createdAddress: CHANGE_ADDR,
+          createdAmount: 25_000,
+          createdOwned: true,
+          isChange: true,
+        },
+        // Owned change leg B (vout 2).
+        {
+          ...base,
+          createdVout: 2,
+          createdAddress: CHANGE_ADDR_2,
+          createdAmount: 15_000,
+          createdOwned: true,
+          isChange: true,
+        },
+        // External payment leg (vout 0).
+        {
+          ...base,
+          createdVout: 0,
+          createdAddress: EXT_ADDR,
+          createdAmount: 55_000,
+          createdOwned: false,
+          isChange: false,
+        },
+      ] as UtxoLineage[];
+    };
+
+    const seedRecordsAndTxs = async () => {
+      await testDb.records.bulkAdd([
+        {
+          type: "address",
+          inputString: ORIGIN_ADDR,
+          label: "Split origin",
+          addressImportance: "manual",
+          acquisitionMethod: "purchase",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+        {
+          type: "address",
+          inputString: CHANGE_ADDR,
+          label: "Split change 1",
+          addressImportance: "manual",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+        {
+          type: "address",
+          inputString: CHANGE_ADDR_2,
+          label: "Split change 2",
+          addressImportance: "manual",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ] as VaultRecord[]);
+      await testDb.blockchainTransactions.bulkAdd([
+        { txid: TX_FUND, blockHeight: 800_000, blockTime: T_FUND, fee: 200, feeRate: 2, syncedAt: Date.now() },
+        { txid: TX_SPEND, blockHeight: 800_010, blockTime: T_SPEND, fee: 5_000, feeRate: 5, syncedAt: Date.now() },
+      ] as BlockchainTransaction[]);
+      await testDb.transactionParticipants.bulkAdd([
+        { txid: TX_FUND, role: "input", address: EXT_ADDR, amount: 101_000 },
+        { txid: TX_FUND, role: "output", address: ORIGIN_ADDR, amount: 100_000, vout: 0 },
+        { txid: TX_SPEND, role: "input", address: ORIGIN_ADDR, amount: 100_000 },
+        { txid: TX_SPEND, role: "output", address: EXT_ADDR, amount: 55_000, vout: 0 },
+        { txid: TX_SPEND, role: "output", address: CHANGE_ADDR, amount: 25_000, vout: 1 },
+        { txid: TX_SPEND, role: "output", address: CHANGE_ADDR_2, amount: 15_000, vout: 2 },
+      ] as TransactionParticipant[]);
+    };
+
+    const traceWithOrder = async (order: (rows: UtxoLineage[]) => UtxoLineage[]) => {
+      // Fresh DB per ordering so segment caching can't cross-contaminate.
+      testDb = new TestDb(`KYUTXO-custody-split-${Date.now()}-${Math.random()}`);
+      await seedRecordsAndTxs();
+      await testDb.utxoLineage.bulkAdd(order(buildRows()));
+      const seg = await buildCustodySegment(ORIGIN_ADDR, TX_FUND, 0);
+      await testDb.delete();
+      return seg;
+    };
+
+    // Insertion order 1: change legs in vout order (1 before 2).
+    const segForward = await traceWithOrder((rows) => rows);
+    // Insertion order 2: higher-vout change leg (and payment leg) first.
+    const segReversed = await traceWithOrder((rows) => [
+      rows[0],
+      rows[3], // external payment leg
+      rows[2], // change vout 2
+      rows[1], // change vout 1
+    ]);
+
+    for (const seg of [segForward, segReversed]) {
+      expect(seg).not.toBeNull();
+      expect(seg!.status).toBe("split");
+      // Deterministic tie-break: custody continues at the LOWEST createdVout
+      // owned change output (vout 1), never the insertion-order winner.
+      expect(seg!.currentTxid).toBe(TX_SPEND);
+      expect(seg!.currentVout).toBe(1);
+      expect(seg!.currentAddress).toBe(CHANGE_ADDR);
+      expect(seg!.currentAmount).toBe(25_000);
+      expect(seg!.hopCount).toBe(1);
+      expect(seg!.evidenceTxids).toEqual([TX_FUND, TX_SPEND]);
+    }
+
+    // Both orderings produce byte-identical custody outcomes (modulo ids).
+    const { segmentId: _a, createdAt: _c1, updatedAt: _u1, ...fwd } = segForward! as any;
+    const { segmentId: _b, createdAt: _c2, updatedAt: _u2, ...rev } = segReversed! as any;
+    expect(rev).toEqual(fwd);
+  });
 });
