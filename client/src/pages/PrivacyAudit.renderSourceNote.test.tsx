@@ -88,6 +88,9 @@ describe("renderSourceNote", () => {
   });
 
   it("does not perform any network request at render time", () => {
+    // Strict no-fetch assertion is safe here: this test renders only the pure
+    // renderSourceNote output with no app providers or hooks mounted, so no
+    // unrelated background fetch (e.g. settings-token sync) can ever fire.
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);

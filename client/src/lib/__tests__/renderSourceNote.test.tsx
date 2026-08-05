@@ -280,6 +280,9 @@ describe("renderSourceNote offline-first guarantees", () => {
     // Stub every render-time network entry point. If a regression ever pre-fetches
     // a URL (fetch), kicks off an XHR, opens a WebSocket/EventSource, or pre-renders
     // an <img>/preload that loads the URL, one of these spies will catch it.
+    // Strict no-fetch assertion is safe here: this test renders only the pure
+    // renderSourceNote output with no app providers or hooks mounted, so no
+    // unrelated background fetch (e.g. settings-token sync) can ever fire.
     const fetchSpy = vi.fn(() => Promise.resolve(new Response("")));
     vi.stubGlobal("fetch", fetchSpy);
 

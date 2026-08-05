@@ -18,6 +18,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { fetchCallsWithNoteUrl } from "@/test/noteFetchCalls";
 
 // Reimplement Dexie's live query hook with a plain promise-resolving effect so
 // the page renders our fixture evidence without ever touching IndexedDB. This
@@ -139,8 +140,10 @@ describe("evidence notes link rendering (offline-first)", () => {
     expect(link.getAttribute("href")).toBe(url);
     expect(link.textContent).toBe(url);
 
-    // Offline-first: nothing is fetched merely by rendering the note.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Offline-first: the note URL is never fetched merely by rendering.
+    // (Unrelated app-level background fetches may fire during mount, so we
+    // assert on the note URL rather than on fetch never being called.)
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
   });
 
   it("opens the evidence note link via window.open only on click (preventing navigation)", async () => {
@@ -151,7 +154,7 @@ describe("evidence notes link rendering (offline-first)", () => {
 
     // No open and no fetch before the user interacts.
     expect(openSpy).not.toHaveBeenCalled();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
 
     const clickEvent = new MouseEvent("click", {
       bubbles: true,
@@ -163,8 +166,8 @@ describe("evidence notes link rendering (offline-first)", () => {
     expect(openSpy).toHaveBeenCalledTimes(1);
     expect(openSpy).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
     expect(clickEvent.defaultPrevented).toBe(true);
-    // Still no fetch — opening is delegated to the browser, not fetched in-app.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Still no fetch of the URL — opening is delegated to the browser.
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
   });
 
   it("renders an evidence note without a URL as plain text (no link)", async () => {
@@ -190,7 +193,7 @@ describe("evidence notes link rendering (offline-first)", () => {
     // overflowing the evidence card.
     expect(link.classList.contains("break-all")).toBe(true);
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, longUrl)).toEqual([]);
   });
 
   it("renders the note URL as a link in the quick-view preview dialog too", async () => {
@@ -206,7 +209,7 @@ describe("evidence notes link rendering (offline-first)", () => {
     expect(link.getAttribute("href")).toBe(url);
     expect(link.textContent).toBe(url);
 
-    // Rendering the preview surface still performs no network fetch.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Rendering the preview surface still never fetches the note URL.
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
   });
 });

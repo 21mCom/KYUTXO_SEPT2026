@@ -5,9 +5,15 @@
 // offline-first guarantee: a URL is only ever opened on an explicit user
 // click (window.open) and is NEVER fetched at load time. Notes without a URL
 // must still render as plain text.
+//
+// The provider harness mounts RecordPreviewProvider, which queries Dexie at
+// mount — jsdom has no IndexedDB, so the shim below is required or the
+// db-error-noise guard fails the tests.
+import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { screen, fireEvent, cleanup, within } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { fetchCallsWithNoteUrl } from "@/test/noteFetchCalls";
 
 // The detail panel's effects call into the data layer; stub it so rendering a
 // record never touches IndexedDB or the network. Each function resolves to an
@@ -70,8 +76,10 @@ describe("record notes link rendering (offline-first)", () => {
     expect(link.getAttribute("href")).toBe(url);
     expect(link.textContent).toBe(url);
 
-    // Offline-first: nothing is fetched merely by rendering the note.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Offline-first: the note URL is never fetched merely by rendering.
+    // (Unrelated app-level background fetches may fire during mount, so we
+    // assert on the note URL rather than on fetch never being called.)
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
   });
 
   it("opens the link via window.open only on click (preventing navigation)", () => {
@@ -82,7 +90,7 @@ describe("record notes link rendering (offline-first)", () => {
 
     // No open and no fetch before the user interacts.
     expect(openSpy).not.toHaveBeenCalled();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
 
     const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
     fireEvent(link, clickEvent);
@@ -91,8 +99,8 @@ describe("record notes link rendering (offline-first)", () => {
     expect(openSpy).toHaveBeenCalledTimes(1);
     expect(openSpy).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
     expect(clickEvent.defaultPrevented).toBe(true);
-    // Still no fetch — opening is delegated to the browser, not fetched in-app.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Still no fetch of the URL — opening is delegated to the browser.
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
   });
 
   it("renders notes without a URL as plain text (no link)", () => {
@@ -116,7 +124,7 @@ describe("record notes link rendering (offline-first)", () => {
     // overflowing the detail panel.
     expect(link.classList.contains("break-all")).toBe(true);
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, longUrl)).toEqual([]);
     expect(openSpy).not.toHaveBeenCalled();
   });
 });

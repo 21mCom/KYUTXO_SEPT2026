@@ -14,6 +14,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
+import { fetchCallsWithNoteUrl } from "@/test/noteFetchCalls";
 
 vi.mock("@/hooks/use-owners", () => ({
   useOwners: () => ({ owners: [], isLoading: false }),
@@ -120,8 +121,10 @@ describe("Reports privacy finding link rendering (offline-first)", () => {
     expect(descLink).toBeDefined();
     expect(descLink!.textContent).toBe(DESC_URL);
 
-    // Offline-first: nothing is fetched merely by rendering the findings.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Offline-first: the finding URLs are never fetched merely by rendering.
+    // (Unrelated app-level background fetches may fire during mount, so we
+    // assert on the finding URLs rather than on fetch never being called.)
+    expect(fetchCallsWithNoteUrl(fetchSpy, DESC_URL, FIX_URL)).toEqual([]);
     expect(openSpy).not.toHaveBeenCalled();
   });
 
@@ -134,7 +137,7 @@ describe("Reports privacy finding link rendering (offline-first)", () => {
       .find((l) => l.getAttribute("href") === DESC_URL)!;
 
     expect(openSpy).not.toHaveBeenCalled();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, DESC_URL, FIX_URL)).toEqual([]);
 
     const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
     fireEvent(descLink, clickEvent);
@@ -143,7 +146,7 @@ describe("Reports privacy finding link rendering (offline-first)", () => {
     expect(openSpy).toHaveBeenCalledWith(DESC_URL, "_blank", "noopener,noreferrer");
     expect(clickEvent.defaultPrevented).toBe(true);
     // Opening is delegated to the browser, never fetched in-app.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, DESC_URL, FIX_URL)).toEqual([]);
   });
 
   it("renders a URL in the 'Fix:' correction text as a click-only link", async () => {
@@ -155,13 +158,13 @@ describe("Reports privacy finding link rendering (offline-first)", () => {
       .find((l) => l.getAttribute("href") === FIX_URL);
     expect(fixLink).toBeDefined();
     expect(fixLink!.textContent).toBe(FIX_URL);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, DESC_URL, FIX_URL)).toEqual([]);
 
     const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
     fireEvent(fixLink!, clickEvent);
     expect(openSpy).toHaveBeenCalledWith(FIX_URL, "_blank", "noopener,noreferrer");
     expect(clickEvent.defaultPrevented).toBe(true);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, DESC_URL, FIX_URL)).toEqual([]);
   });
 
   it("renders plain finding text (no URL) without any link", async () => {
@@ -173,7 +176,7 @@ describe("Reports privacy finding link rendering (offline-first)", () => {
     expect(row.textContent).toContain("Dust outputs detected with no links.");
     expect(row.textContent).toContain("Avoid spending dust.");
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, DESC_URL, FIX_URL)).toEqual([]);
     expect(openSpy).not.toHaveBeenCalled();
   });
 });

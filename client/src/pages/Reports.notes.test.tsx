@@ -80,6 +80,9 @@ describe("Reports privacy-finding link rendering (offline-first)", () => {
   });
 
   it("opens a finding-description link via window.open without fetching at render", () => {
+    // Strict no-fetch assertion is safe here: this test renders replica
+    // markup fed by the pure renderSourceNote util, with no app providers
+    // or hooks mounted, so no unrelated background fetch can ever fire.
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
@@ -115,6 +118,9 @@ describe("Reports privacy-finding link rendering (offline-first)", () => {
   });
 
   it("opens a remediation link via window.open without fetching at render", () => {
+    // Strict no-fetch assertion is safe here: this test renders replica
+    // markup fed by the pure renderSourceNote util, with no app providers
+    // or hooks mounted, so no unrelated background fetch can ever fire.
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);

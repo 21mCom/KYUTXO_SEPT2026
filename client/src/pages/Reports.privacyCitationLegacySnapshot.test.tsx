@@ -47,6 +47,7 @@ import {
   type EntityListStatus,
 } from "@/lib/data/entity-list-store";
 import { putSettings } from "@/lib/data/settings-crud";
+import { fetchCallsWithNoteUrl } from "@/test/noteFetchCalls";
 import type { Settings } from "@/lib/db-types";
 
 // OWNED1 pays directly to ENTITY_ADDR in TX1 — a hop-1 (direct) contact that
@@ -190,6 +191,8 @@ describe("a legacy (no-mode) persisted snapshot re-hydrates as a plain REPLACE",
 
   it("never fetches the embedded sourceNote URL across load and audit", async () => {
     await runPrivacyAudit([OWNED1]);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Unrelated app-level background fetches may legitimately fire; the
+    // guarantee here is that the embedded sourceNote URL is never requested.
+    expect(fetchCallsWithNoteUrl(fetchSpy, SOURCE_URL)).toEqual([]);
   });
 });

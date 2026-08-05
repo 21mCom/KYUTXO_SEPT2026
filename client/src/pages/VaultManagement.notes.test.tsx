@@ -19,6 +19,7 @@ import {
   within,
   waitFor,
 } from "@testing-library/react";
+import { fetchCallsWithNoteUrl } from "@/test/noteFetchCalls";
 
 const VAULT_NOTE_URL = "https://example.com/vault-recovery";
 const COSIGNER_NOTE_URL = "https://cosigner.example.org/alice";
@@ -121,8 +122,10 @@ describe("VaultManagement notes link rendering (offline-first)", () => {
     expect(link.textContent).toBe(VAULT_NOTE_URL);
     expect(notes.textContent).toBe(`Recovery steps ${VAULT_NOTE_URL} here`);
 
-    // Offline-first: nothing is fetched merely by rendering the notes.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Offline-first: the note URL is never fetched merely by rendering.
+    // (Unrelated app-level background fetches may fire during mount, so we
+    // assert on the note URLs rather than on fetch never being called.)
+    expect(fetchCallsWithNoteUrl(fetchSpy, VAULT_NOTE_URL)).toEqual([]);
     expect(openSpy).not.toHaveBeenCalled();
   });
 
@@ -137,7 +140,7 @@ describe("VaultManagement notes link rendering (offline-first)", () => {
     const link = within(notes).getByRole("link");
 
     expect(openSpy).not.toHaveBeenCalled();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, VAULT_NOTE_URL)).toEqual([]);
 
     const clickEvent = new MouseEvent("click", {
       bubbles: true,
@@ -155,7 +158,7 @@ describe("VaultManagement notes link rendering (offline-first)", () => {
     // The wrapping span stops propagation, so the click never opens edit mode.
     expect(queryByTestId("textarea-vault-notes-0")).toBeNull();
     // Opening is delegated to the browser, never fetched in-app.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, VAULT_NOTE_URL)).toEqual([]);
   });
 
   it("renders a URL in a per-cosigner note as a click-only link and opens it via window.open on click", async () => {
@@ -174,7 +177,7 @@ describe("VaultManagement notes link rendering (offline-first)", () => {
     expect(link.getAttribute("href")).toBe(COSIGNER_NOTE_URL);
     expect(link.textContent).toBe(COSIGNER_NOTE_URL);
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, COSIGNER_NOTE_URL)).toEqual([]);
     expect(openSpy).not.toHaveBeenCalled();
 
     fireEvent.click(getByTestId("text-cosigner-notes-0-0").querySelector("a")!);
@@ -185,7 +188,7 @@ describe("VaultManagement notes link rendering (offline-first)", () => {
       "_blank",
       "noopener,noreferrer",
     );
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, COSIGNER_NOTE_URL)).toEqual([]);
   });
 
   it("wraps a very long unbroken URL (break-all) so it can't break the vault layout", async () => {
@@ -208,7 +211,7 @@ describe("VaultManagement notes link rendering (offline-first)", () => {
     expect(cosignerLink.getAttribute("href")).toBe(longUrl);
     expect(cosignerLink.classList.contains("break-all")).toBe(true);
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, longUrl)).toEqual([]);
     expect(openSpy).not.toHaveBeenCalled();
   });
 
@@ -230,7 +233,9 @@ describe("VaultManagement notes link rendering (offline-first)", () => {
       "Key held by a trusted family member",
     );
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(
+      fetchCallsWithNoteUrl(fetchSpy, VAULT_NOTE_URL, COSIGNER_NOTE_URL),
+    ).toEqual([]);
     expect(openSpy).not.toHaveBeenCalled();
   });
 });
