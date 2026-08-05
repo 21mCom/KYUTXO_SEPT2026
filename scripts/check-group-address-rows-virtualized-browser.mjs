@@ -31,6 +31,19 @@
 //      sort pins it to the very end — is mounted; then clicks its per-row
 //      copy button and asserts the clipboard holds exactly that address
 //      (per-row actions still target the right row after deep scrolling).
+//   5. Per-row Resolve targeting: the tail row AND its immediate neighbor
+//      (second-lowest balance, rendered directly above it) are each seeded
+//      with ONE resolvable pending spend — a blank-address input participant
+//      whose (prevTxid, prevVout) maps to a locally-known output owned by that
+//      row's record. Both rows therefore show the yellow "N pending" badge and
+//      "Resolve" button. Clicking the deep-scrolled tail row's Resolve runs
+//      handleResolveAddress -> resolvePrevouts({ restrictToRecordIds:
+//      new Set([recordId]) }), which is LOCAL-only (never hits the network),
+//      so targeting is proven via database effects instead of intercepted
+//      provider requests: exactly the tail's blank input must gain
+//      address/recordId, while the adjacent neighbor's must stay blank. A
+//      virtualization/keying regression (off-by-one row index, stale key)
+//      would resolve the neighbor instead and fail both assertions.
 //
 // NOTE for reviewers: the list under test renders at /balance via
 // client/src/pages/BalanceOverview.tsx (GroupAddressRows); rows carry
@@ -58,6 +71,10 @@ const WALLET_NAME = 'VirtualCheckWallet';
 // bech32 string so the copied clipboard value is a plausible address.
 const FAKE_COUNT = 3000;
 const TAIL_ADDR = 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq'; // valid bech32 (BIP-173 test vector)
+// Rendered directly ABOVE the tail row (second-lowest balance). Gets its own
+// pending spend so a Resolve keying/off-by-one regression has a concrete wrong
+// target to hit — and we can assert it was NOT touched.
+const NEIGHBOR_ADDR = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4'; // valid bech32 (BIP-173 test vector)
 // Mounted-row ceiling: ~384px viewport (max-h-96) / ~34px rows + overscan 12
 // both sides (~36 expected). 120 leaves headroom for measurement jitter while
 // still failing loudly if all 3001 rows mount.
@@ -231,9 +248,10 @@ async function main() {
     // sats DESC when the group is expanded, so the tail address gets the
     // SMALLEST balance to pin it to the very bottom of the list.
     const seed = await page.evaluate(
-      async ({ fakeCount, tailAddr, walletName }) => {
+      async ({ fakeCount, tailAddr, neighborAddr, walletName }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
         const settingsCrud = await import('/src/lib/data/settings-crud.ts');
+        const txCrud = await import('/src/lib/data/transaction-crud.ts');
         // Mark the balance formula as current, or the page's one-time
         // formula-upgrade recompute would run recomputeAddressStats and wipe
         // the seeded cached stats (no real tx data backs them).
@@ -261,6 +279,7 @@ async function main() {
             ),
           );
         }
+        records.push(mk(neighborAddr, 2)); // second-lowest => second-to-last row
         records.push(mk(tailAddr, 1)); // lowest balance => last row after sort
         const batch = 500;
         let created = 0;
@@ -271,14 +290,46 @@ async function main() {
           });
           created += ids.length;
         }
-        return { created };
+
+        // Look up the two real record ids (bulkCreateRecords returns ids in
+        // insert order, but resolving by inputString is unambiguous).
+        const [tailRecord] = await recordCrud.getRecordsByInputString(tailAddr);
+        const [neighborRecord] = await recordCrud.getRecordsByInputString(neighborAddr);
+        const tailId = tailRecord?.id ?? null;
+        const neighborId = neighborRecord?.id ?? null;
+
+        // One resolvable pending spend for EACH of the two bottom rows:
+        //  - an OUTPUT participant on a source tx, owned by the row's record;
+        //  - a blank-address INPUT participant on a spend tx whose
+        //    prevTxid/prevVout point at that output.
+        // getUnresolvedSpendBreakdown maps each blank input to its source
+        // record, which is what puts the "1 pending" badge + Resolve button on
+        // both rows. resolvePrevouts (restricted) attributes the input by
+        // filling in address/amount/recordId from the locally-known output.
+        const srcTailTxid = 'f1'.repeat(32);
+        const spendTailTxid = 'f2'.repeat(32);
+        const srcNeighborTxid = 'f3'.repeat(32);
+        const spendNeighborTxid = 'f4'.repeat(32);
+        await txCrud.bulkAddParticipants(
+          [
+            { txid: srcTailTxid, role: 'output', vout: 0, address: tailAddr, amount: 5000, recordId: tailId ?? undefined },
+            { txid: spendTailTxid, role: 'input', address: '', amount: 0, prevTxid: srcTailTxid, prevVout: 0 },
+            { txid: srcNeighborTxid, role: 'output', vout: 0, address: neighborAddr, amount: 7000, recordId: neighborId ?? undefined },
+            { txid: spendNeighborTxid, role: 'input', address: '', amount: 0, prevTxid: srcNeighborTxid, prevVout: 0 },
+          ],
+          { skipNotification: true },
+        );
+        return { created, tailId, neighborId, spendTailTxid, spendNeighborTxid };
       },
-      { fakeCount: FAKE_COUNT, tailAddr: TAIL_ADDR, walletName: WALLET_NAME },
+      { fakeCount: FAKE_COUNT, tailAddr: TAIL_ADDR, neighborAddr: NEIGHBOR_ADDR, walletName: WALLET_NAME },
     );
     steps.push({
-      name: `seeded ${FAKE_COUNT + 1} curated address records in one wallet group`,
-      passed: seed.created === FAKE_COUNT + 1,
-      detail: `created=${seed.created}`,
+      name: `seeded ${FAKE_COUNT + 2} curated address records + 2 pending spends (tail & neighbor)`,
+      passed:
+        seed.created === FAKE_COUNT + 2 &&
+        Number.isInteger(seed.tailId) &&
+        Number.isInteger(seed.neighborId),
+      detail: `created=${seed.created}, tailId=${seed.tailId}, neighborId=${seed.neighborId}`,
     });
 
     // ── Balance page: navigate AFTER seeding so the aggregation sees the
@@ -289,8 +340,8 @@ async function main() {
     const groupCard = page.getByTestId(`card-group-${WALLET_NAME}`);
     await groupCard.waitFor({ state: 'visible', timeout: 120_000 });
     const groupText = await groupCard.textContent();
-    const expectedCount = `${(FAKE_COUNT + 1).toLocaleString('en-US')} addr`;
-    const plainCount = `${FAKE_COUNT + 1} addr`;
+    const expectedCount = `${(FAKE_COUNT + 2).toLocaleString('en-US')} addr`;
+    const plainCount = `${FAKE_COUNT + 2} addr`;
     steps.push({
       name: 'group card reports the full thousands-scale address count',
       passed: groupText.includes(expectedCount) || groupText.includes(plainCount),
@@ -310,7 +361,7 @@ async function main() {
 
     const initial = await sampleMountedRows(page);
     steps.push({
-      name: `only a small row window mounts at the top (<= ${MAX_MOUNTED_ROWS} of ${FAKE_COUNT + 1})`,
+      name: `only a small row window mounts at the top (<= ${MAX_MOUNTED_ROWS} of ${FAKE_COUNT + 2})`,
       passed: initial.count > 0 && initial.count <= MAX_MOUNTED_ROWS,
       detail: `${initial.count} row-address-* nodes in the DOM`,
     });
@@ -334,7 +385,7 @@ async function main() {
     steps.push({
       name: 'virtual scroll height covers all rows',
       passed: scrollInfo.scrollHeight > FAKE_COUNT * 25,
-      detail: `scrollHeight=${scrollInfo.scrollHeight}px for ${FAKE_COUNT + 1} rows (clientHeight=${scrollInfo.clientHeight}px)`,
+      detail: `scrollHeight=${scrollInfo.scrollHeight}px for ${FAKE_COUNT + 2} rows (clientHeight=${scrollInfo.clientHeight}px)`,
     });
 
     let maxMounted = initial.count;
@@ -432,6 +483,71 @@ async function main() {
           ? `clipboard contains "${TAIL_ADDR}"`
           : `clipboard read gave ${JSON.stringify(clipboardText)}`,
     });
+
+    // ── Per-row Resolve still targets the right record after deep scrolling.
+    //    Both bottom rows carry a pending badge + Resolve button; clicking the
+    //    tail's must resolve ONLY the tail's blank input. The restricted
+    //    resolve is local-only (no network), so the proof is the database
+    //    effect, not intercepted provider requests. ───────────────────────────
+    const tailResolveBtn = page.getByTestId(`button-resolve-address-${TAIL_ADDR}`);
+    const neighborBadge = page.getByTestId(`badge-address-unresolved-${NEIGHBOR_ADDR}`);
+    const badgesReady =
+      (await tailResolveBtn.waitFor({ state: 'visible', timeout: 30_000 }).then(() => true).catch(() => false)) &&
+      (await neighborBadge.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true).catch(() => false));
+    steps.push({
+      name: 'tail Resolve button and neighbor pending badge are both mounted at the bottom',
+      passed: badgesReady,
+      detail: badgesReady
+        ? 'both bottom rows show their pending-spend UI'
+        : 'pending badge / Resolve button never appeared on the bottom rows',
+    });
+    if (!badgesReady) throw new Error('pending-spend UI missing; aborting resolve check');
+
+    await tailResolveBtn.click();
+
+    // Wait for the tail's blank input to be attributed, then read both spend
+    // inputs back out of Dexie via the live module singletons.
+    const resolveResult = await page.evaluate(
+      async ({ spendTailTxid, spendNeighborTxid, tailAddr }) => {
+        const { db } = await import('/src/lib/database.ts');
+        const readInput = async (txid) => {
+          const rows = await db.transactionParticipants.where('txid').equals(txid).toArray();
+          const input = rows.find((p) => p.role === 'input');
+          return input
+            ? { address: input.address ?? '', recordId: input.recordId ?? null, amount: input.amount }
+            : null;
+        };
+        const deadline = Date.now() + 30_000;
+        let tailInput = null;
+        while (Date.now() < deadline) {
+          tailInput = await readInput(spendTailTxid);
+          if (tailInput && tailInput.address === tailAddr) break;
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        const neighborInput = await readInput(spendNeighborTxid);
+        return { tailInput, neighborInput };
+      },
+      { spendTailTxid: seed.spendTailTxid, spendNeighborTxid: seed.spendNeighborTxid, tailAddr: TAIL_ADDR },
+    );
+
+    const tailResolved =
+      resolveResult.tailInput &&
+      resolveResult.tailInput.address === TAIL_ADDR &&
+      resolveResult.tailInput.recordId === seed.tailId;
+    steps.push({
+      name: 'per-row Resolve attributed exactly the clicked row\'s pending spend',
+      passed: !!tailResolved,
+      detail: `tail spend input after resolve: ${JSON.stringify(resolveResult.tailInput)} (expected address=${TAIL_ADDR}, recordId=${seed.tailId})`,
+    });
+    const neighborUntouched =
+      resolveResult.neighborInput &&
+      resolveResult.neighborInput.address === '' &&
+      resolveResult.neighborInput.recordId === null;
+    steps.push({
+      name: 'adjacent row\'s pending spend was NOT resolved (no off-by-one targeting)',
+      passed: !!neighborUntouched,
+      detail: `neighbor spend input after resolve: ${JSON.stringify(resolveResult.neighborInput)} (must remain blank/unattributed)`,
+    });
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -460,7 +576,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    '[group-rows-virtual] PASSED: with thousands of addresses in an expanded wallet group only a small row window mounts, scrolling stays responsive, and per-row copy targets the correct address after deep scrolling.',
+    '[group-rows-virtual] PASSED: with thousands of addresses in an expanded wallet group only a small row window mounts, scrolling stays responsive, and per-row copy AND per-row Resolve target the correct address/record after deep scrolling.',
   );
 }
 
