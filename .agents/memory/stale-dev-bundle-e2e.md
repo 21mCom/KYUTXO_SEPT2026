@@ -33,7 +33,11 @@ login screen remounted to "Loading vault..." and swallowed the error, plus
 phantom TrustedHTML crashes — all vanished after a real `npx vite build` +
 electron-builder repackage. Before trusting a packaged failure, grep the
 bundle in `dist/public/assets/index-*.js` for the fixed code (or check the
-file's mtime) and rebuild if stale.
+file's mtime) and rebuild if stale. Packaged check scripts now share
+`scripts/packaged-bundle-freshness.mjs` (`assertPackagedBundleFresh`) which
+fails fast when the newest `dist/public/assets/index-*.js` predates the newest
+renderer source (client/src, shared/, client/index.html, vite.config.ts) —
+reuse it in any new packaged check instead of copy-pasting mtime logic.
 
 **Same trap, different tool — the `typecheck` workflow:** the registered
 `typecheck` validation step (`npm run check` = `tsc`) can report a phantom

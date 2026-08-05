@@ -42,6 +42,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { assertPackagedBundleFresh } from './packaged-bundle-freshness.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -98,6 +99,9 @@ function buildAsar() {
       throw new Error(`${TAG} KYUTXO_PACKAGED_SKIP_BUILD=1 but ${ASAR} does not exist.`);
     }
     console.log(`${TAG} reusing existing asar: ${ASAR}`);
+    // Reused asars are the highest-risk stale path: fail fast if dist/public
+    // (which the asar was packaged from) predates the current source.
+    assertPackagedBundleFresh({ tag: TAG });
     return;
   }
   // Mirrors scripts/electron-build.sh steps 1-3, but packages an unpacked dir
@@ -107,6 +111,9 @@ function buildAsar() {
   // does not involve the native module — that packaging surface is covered by
   // the companion gate scripts/check-packaged-native-engine.mjs.
   run('npm', ['run', 'build']);
+  // `npm run build` has been seen to "succeed" without refreshing dist/public
+  // (task 1925) — verify the bundle is actually newer than the source.
+  assertPackagedBundleFresh({ tag: TAG });
   run('node', ['scripts/build-native-engine.mjs']);
   run('npx', [
     'electron-builder',

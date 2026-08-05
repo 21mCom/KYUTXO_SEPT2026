@@ -50,6 +50,7 @@
 //     step (Windows) has already built it.
 
 import { execFileSync, spawn } from 'node:child_process';
+import { assertPackagedBundleFresh } from './packaged-bundle-freshness.mjs';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -91,6 +92,9 @@ function buildAsar() {
       throw new Error(`${TAG} KYUTXO_PACKAGED_SKIP_BUILD=1 but ${ASAR} does not exist.`);
     }
     console.log(`${TAG} reusing existing asar: ${ASAR}`);
+    // The reused asar was packaged from dist/public — fail fast if that
+    // bundle predates the current source (task 1925 stale-bundle trap).
+    assertPackagedBundleFresh({ tag: TAG });
     return;
   }
   // dist is only rebuilt when missing: this gate cares about the electron/ +
@@ -100,6 +104,10 @@ function buildAsar() {
   if (!fs.existsSync(path.join(ROOT, 'dist', 'public'))) {
     run('npm', ['run', 'build']);
   }
+  // Even though this gate targets the electron/node_modules surface, the asar
+  // still packages dist/public — refuse to package a stale renderer bundle
+  // (task 1925: `npm run build` can "succeed" without refreshing dist/public).
+  assertPackagedBundleFresh({ tag: TAG });
   run('node', ['scripts/build-native-engine.mjs']);
   run('npx', [
     'electron-builder',
