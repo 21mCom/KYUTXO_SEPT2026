@@ -20,6 +20,9 @@
 //   5. assert the Import Complete step shows alert-metadata-kept listing
 //      "Owner: kept the existing value on 1 address"
 //   6. assert the record's owner in the vault is STILL "Alice"
+//   7. INVERSE: seed a second record with a BLANK owner, import over it with
+//      owner "Bob", and assert alert-metadata-kept is ABSENT while the owner
+//      IS applied — guards against keptFieldCounts counting applied fields.
 //
 // Usage: node scripts/check-mobile-import-kept-metadata-browser.mjs
 // Requires: `chromium` on PATH (Nix) and `playwright-core`.
@@ -38,15 +41,24 @@ const IMPORT_URL = `${BASE_URL}mobile-wallet-import`;
 const SETUP_PASSWORD = 'kept-metadata-check-123';
 
 const EXISTING_ADDR = 'bc1qkeptownerexistingaddresszzzzzzzzzzzz';
+const BLANK_OWNER_ADDR = 'bc1qblankownerexistingaddressyyyyyyyyyyy';
 const EXISTING_OWNER = 'Alice';
 const IMPORT_OWNER = 'Bob';
 const TXID = 'd4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5';
+const TXID2 = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2';
 
 // Mycelium CSV: filename containing "mycelium" + these headers get detected
 // as mycelium/csv; the row's Destination Address becomes an address record.
 const CSV_CONTENT = [
   'Account,Transaction ID,Destination Address,Timestamp,Value,Currency,Transaction Label',
   `Main,${TXID},${EXISTING_ADDR},2024-05-01T12:00:00Z,0.5,BTC,Test deposit`,
+].join('\n');
+
+// Inverse-scenario CSV: hits an existing record whose owner is BLANK, so the
+// chosen owner must be APPLIED and no kept-metadata notice must appear.
+const CSV_CONTENT_BLANK = [
+  'Account,Transaction ID,Destination Address,Timestamp,Value,Currency,Transaction Label',
+  `Main,${TXID2},${BLANK_OWNER_ADDR},2024-05-02T12:00:00Z,0.25,BTC,Second deposit`,
 ].join('\n');
 
 function resolveChromium() {
@@ -280,6 +292,95 @@ async function main() {
       passed: after.length === 1 && after[0].owner === EXISTING_OWNER,
       detail: JSON.stringify(after),
     });
+
+    // ════════ Inverse scenario: existing record has a BLANK owner ═══════════
+    // The chosen owner must be APPLIED and the kept-metadata notice must NOT
+    // appear (a regression counting applied fields as kept would show it).
+
+    // Seed a second existing address record with NO owner set.
+    const seed2 = await page.evaluate(
+      async ({ addr }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const recordId = await recordCrud.createRecord({
+          type: 'address',
+          inputString: addr,
+          label: 'Existing unowned address',
+        });
+        const rows = await recordCrud.getRecordsByInputString(addr);
+        return { recordId, owner: rows[0]?.owner ?? null };
+      },
+      { addr: BLANK_OWNER_ADDR },
+    );
+    steps.push({
+      name: 'seed: second existing address record has a BLANK owner',
+      passed: typeof seed2.recordId === 'number' && !seed2.owner,
+      detail: `recordId=${seed2.recordId}, owner=${JSON.stringify(seed2.owner)}`,
+    });
+
+    // Reset the wizard via "Import Another File" and run the second import.
+    await page.getByTestId('button-import-another').click();
+    await page.getByTestId('dropzone-mobile-wallet').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByTestId('input-file-mobile-wallet').setInputFiles({
+      name: 'mycelium-export-2.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(CSV_CONTENT_BLANK, 'utf8'),
+    });
+    await page
+      .getByTestId('wallet-option-mycelium')
+      .getByText('Selected')
+      .waitFor({ state: 'visible', timeout: 15_000 });
+
+    await page.getByTestId('button-proceed-setup').click();
+    const ownerSelect2 = page.getByTestId('select-owner');
+    await ownerSelect2.waitFor({ state: 'visible', timeout: 30_000 });
+    await ownerSelect2.click();
+    const ownerOption2 = page.locator('[cmdk-item]', { hasText: IMPORT_OWNER });
+    await ownerOption2.first().waitFor({ state: 'visible', timeout: 15_000 });
+    await ownerOption2.first().click();
+    const ownerShown2 = ((await ownerSelect2.textContent().catch(() => '')) ?? '').trim();
+    steps.push({
+      name: `inverse setup step: owner "${IMPORT_OWNER}" selected for the import`,
+      passed: ownerShown2.includes(IMPORT_OWNER),
+      detail: `select-owner shows ${JSON.stringify(ownerShown2)}`,
+    });
+
+    await page.getByTestId('button-proceed-preview').click();
+    const startBtn2 = page.getByTestId('button-start-import');
+    await startBtn2.waitFor({ state: 'visible', timeout: 30_000 });
+    await startBtn2.click();
+
+    // Wait until the Import Complete step has fully rendered (the reset
+    // button only exists on that step), THEN assert the notice is absent —
+    // checking earlier could pass vacuously while the import is still running.
+    await page.getByTestId('button-import-another').waitFor({ state: 'visible', timeout: 60_000 });
+    const keptAlertCount = await page.getByTestId('alert-metadata-kept').count();
+    steps.push({
+      name: 'inverse: alert-metadata-kept is ABSENT when nothing was kept',
+      passed: keptAlertCount === 0,
+      detail:
+        keptAlertCount === 0
+          ? 'no kept-metadata notice on Import Complete'
+          : `alert-metadata-kept unexpectedly present: ${JSON.stringify(
+              ((await page.getByTestId('alert-metadata-kept').textContent().catch(() => '')) ?? '')
+                .trim()
+                .slice(0, 300),
+            )}`,
+    });
+
+    // The blank owner must have been APPLIED (record now owned by "Bob").
+    const after2 = await page.evaluate(
+      async ({ addr }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const rows = await recordCrud.getRecordsByInputString(addr);
+        return rows.map((r) => ({ owner: r.owner, label: r.label }));
+      },
+      { addr: BLANK_OWNER_ADDR },
+    );
+    steps.push({
+      name: `inverse: owner "${IMPORT_OWNER}" was APPLIED to the blank-owner record`,
+      passed: after2.length === 1 && after2[0].owner === IMPORT_OWNER,
+      detail: JSON.stringify(after2),
+    });
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -311,7 +412,7 @@ async function main() {
   }
 
   console.log(
-    '[mobile-import-kept-browser] PASSED: a real mobile-wallet import over an existing owned address keeps the existing owner and surfaces the kept-metadata notice on the Import Complete step — end-to-end in a real browser.',
+    '[mobile-import-kept-browser] PASSED: a real mobile-wallet import over an existing owned address keeps the existing owner and surfaces the kept-metadata notice on the Import Complete step, while an import over a BLANK-owner record applies the owner with NO kept-metadata notice — end-to-end in a real browser.',
   );
 }
 
