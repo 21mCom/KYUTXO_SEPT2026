@@ -633,6 +633,23 @@ describe('BIP-322 P2SH-P2WSH 2-of-3 multisig v2 to_sign — independently genera
     );
     expect(result.verified).toBe(false);
   });
+
+  it('rejects the same proof with the two signatures swapped out of script order', async () => {
+    // OP_CHECKMULTISIG requires signatures in script pubkey order. Witness
+    // stack is [empty dummy, sig1, sig3, witness script]; putting sig3 before
+    // sig1 must fail. A lax verifier that tries every signature/pubkey pairing
+    // would accept this swapped stack and pass every other vector in this file.
+    const items = splitWitness(P2SH_P2WSH_2OF3_V2_INDEP_SIG);
+    expect(items).toHaveLength(4);
+    const swapped = [items[0], items[2], items[1], items[3]];
+    const result = await verifyBip322P2SH(
+      P2SH_P2WSH_2OF3_V2_INDEP_ADDR,
+      FULL_MSG,
+      joinWitness(swapped),
+    );
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/did not verify/i);
+  });
 });
 
 /**
