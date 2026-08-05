@@ -667,6 +667,10 @@ args = "database-doctor-resolve-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "database-doctor-type-fields-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "address-checker-invault-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2448,6 +2452,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-notarization-restore-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-type-fields-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-type-fields-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
