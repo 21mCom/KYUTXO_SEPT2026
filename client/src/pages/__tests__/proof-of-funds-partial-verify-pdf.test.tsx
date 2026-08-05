@@ -27,13 +27,19 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
-import { signatureFormatLabel } from "@/lib/signatureVerify";
+import {
+  CONTROL_INCLUDED_FRAGMENT,
+  REMAINING_SELF_DECLARED_FRAGMENT,
+  ALL_ADDRESSES_FRAGMENT,
+  NO_CONTROL_DISCLAIMER_LINE,
+  buildFormatPhrase,
+  viaFormatPhrase,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
 
-// Expected label derives from the real signatureFormatLabel so a deliberate
-// wording change doesn't cascade into false failures here; the exact wording
-// is pinned once in client/src/lib/signatureVerify.test.ts.
-const LEGACY_LABEL = signatureFormatLabel("legacy");
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// The disclaimer scaffolding comes from pof-pdf-strings; its exact wording is
+// pinned once in proof-of-funds-mixed-format-pdf.test.tsx, so a deliberate
+// wording change doesn't cascade into false failures here.
+const LEGACY_VIA = viaFormatPhrase(buildFormatPhrase(new Set(["legacy"])));
 
 // Two legacy P2PKH addresses — verifying only the first leaves the second
 // self-declared, so doneRows.length (2) !== verifiedRows.length (1).
@@ -183,7 +189,7 @@ describe("ProofOfFundsDeclaration — partial-verification proof-of-control PDF"
 
     await waitFor(() => {
       expect(
-        pdfTextLines.some((l) => l.includes("proof-of-control is included")),
+        pdfTextLines.some((l) => l.includes(CONTROL_INCLUDED_FRAGMENT)),
       ).toBe(true);
     });
 
@@ -191,10 +197,10 @@ describe("ProofOfFundsDeclaration — partial-verification proof-of-control PDF"
     //     addresses are self-declared" phrasing with the legacy formatPhrase.
     const partialDisclaimer = pdfTextLines.find(
       (l) =>
-        l.includes("proof-of-control is included") &&
+        l.includes(CONTROL_INCLUDED_FRAGMENT) &&
         l.includes("1 of 2 addresses") &&
-        new RegExp(`via ${escapeRegExp(LEGACY_LABEL)} signatures\\.`).test(l) &&
-        l.includes("The remaining addresses are self-declared"),
+        l.includes(LEGACY_VIA) &&
+        l.includes(REMAINING_SELF_DECLARED_FRAGMENT),
     );
     expect(partialDisclaimer).toBeTruthy();
 
@@ -202,16 +208,12 @@ describe("ProofOfFundsDeclaration — partial-verification proof-of-control PDF"
     expect(
       pdfTextLines.some(
         (l) =>
-          l.includes("proof-of-control is included") &&
-          l.includes("for all addresses"),
+          l.includes(CONTROL_INCLUDED_FRAGMENT) &&
+          l.includes(ALL_ADDRESSES_FRAGMENT),
       ),
     ).toBe(false);
 
     // The "No cryptographic proof-of-control" branch must also NOT appear.
-    expect(
-      pdfTextLines.some((l) =>
-        l.includes("No cryptographic proof-of-control is included"),
-      ),
-    ).toBe(false);
+    expect(pdfTextLines).not.toContain(NO_CONTROL_DISCLAIMER_LINE);
   });
 });

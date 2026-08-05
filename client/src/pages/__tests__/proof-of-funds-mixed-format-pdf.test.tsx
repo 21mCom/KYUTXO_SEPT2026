@@ -27,13 +27,28 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
 import { signatureFormatLabel } from "@/lib/signatureVerify";
+import {
+  WALLET_SIGNATURE_HEADING,
+  BIP322_WITNESS_HEADING,
+  CONTROL_INCLUDED_FRAGMENT,
+  REMAINING_SELF_DECLARED_FRAGMENT,
+  ALL_ADDRESSES_FRAGMENT,
+  NO_CONTROL_DISCLAIMER_LINE,
+  buildFormatPhrase,
+  buildControlDisclaimerLine,
+  viaFormatPhrase,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
 
 // Expected labels derive from the real signatureFormatLabel so a deliberate
 // wording change doesn't cascade into false failures here; the exact wording
-// is pinned once in client/src/lib/signatureVerify.test.ts.
+// is pinned once in client/src/lib/signatureVerify.test.ts. The appendix
+// headings and disclaimer scaffolding come from pof-pdf-strings, and their
+// exact wording is pinned by the dedicated test at the bottom of this file.
 const LEGACY_LABEL = signatureFormatLabel("legacy");
 const BIP322_LABEL = signatureFormatLabel("bip322");
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const COMBINED_PHRASE = buildFormatPhrase(new Set(["legacy", "bip322"]));
+const LEGACY_VIA = viaFormatPhrase(buildFormatPhrase(new Set(["legacy"])));
+const BIP322_VIA = viaFormatPhrase(buildFormatPhrase(new Set(["bip322"])));
 
 // A legacy P2PKH address and a mainnet Taproot (P2TR) address.
 const LEGACY_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
@@ -199,30 +214,83 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
     expect(pdfTextLines).toContain(`Signature Format: ${BIP322_LABEL}`);
 
     // (2) Appendix signature-box headings switch on format.
-    expect(pdfTextLines).toContain("Wallet Signature (base64):");
-    expect(pdfTextLines).toContain("BIP-322 Witness (base64):");
+    expect(pdfTextLines).toContain(WALLET_SIGNATURE_HEADING);
+    expect(pdfTextLines).toContain(BIP322_WITNESS_HEADING);
 
     // (3) Disclaimer uses the combined-format phrasing for the mixed set.
     const combinedDisclaimer = pdfTextLines.find(
       (l) =>
-        l.includes("proof-of-control is included") &&
-        l.includes(`${LEGACY_LABEL} and ${BIP322_LABEL} signatures`),
+        l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(COMBINED_PHRASE),
     );
     expect(combinedDisclaimer).toBeTruthy();
     // The single-format phrasings must NOT be the one used here.
     expect(
       pdfTextLines.some(
-        (l) =>
-          l.includes("proof-of-control is included") &&
-          new RegExp(`via ${escapeRegExp(BIP322_LABEL)} signatures\\.`).test(l),
+        (l) => l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(BIP322_VIA),
       ),
     ).toBe(false);
     expect(
       pdfTextLines.some(
-        (l) =>
-          l.includes("proof-of-control is included") &&
-          new RegExp(`via ${escapeRegExp(LEGACY_LABEL)} signatures\\.`).test(l),
+        (l) => l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(LEGACY_VIA),
       ),
     ).toBe(false);
+  });
+
+  // ── Exact-wording pin ─────────────────────────────────────────────────────
+  // The ONE place the exact appendix-heading and disclaimer wording is pinned.
+  // Every other PDF test derives its expectations from pof-pdf-strings, so a
+  // deliberate wording change means updating pof-pdf-strings.ts plus this test
+  // only — no cascade of hand-edits across the suite.
+  it("pins the exact appendix-heading and disclaimer wording", () => {
+    expect(WALLET_SIGNATURE_HEADING).toBe("Wallet Signature (base64):");
+    expect(BIP322_WITNESS_HEADING).toBe("BIP-322 Witness (base64):");
+    expect(CONTROL_INCLUDED_FRAGMENT).toBe("proof-of-control is included");
+    expect(REMAINING_SELF_DECLARED_FRAGMENT).toBe(
+      "The remaining addresses are self-declared",
+    );
+    expect(ALL_ADDRESSES_FRAGMENT).toBe("for all addresses");
+    expect(NO_CONTROL_DISCLAIMER_LINE).toBe(
+      "2. No cryptographic proof-of-control is included. All addresses are self-declared by the declarant.",
+    );
+
+    expect(buildFormatPhrase(new Set(["legacy"]))).toBe(
+      "Bitcoin Signed Message signatures",
+    );
+    expect(buildFormatPhrase(new Set(["bip322"]))).toBe("BIP-322 signatures");
+    expect(buildFormatPhrase(new Set(["legacy", "bip322"]))).toBe(
+      "Bitcoin Signed Message and BIP-322 signatures",
+    );
+
+    expect(
+      buildControlDisclaimerLine({
+        allVerified: true,
+        hasVerified: true,
+        verifiedCount: 2,
+        totalCount: 2,
+        formatPhrase: COMBINED_PHRASE,
+      }),
+    ).toBe(
+      "2. Cryptographic proof-of-control is included for all addresses via Bitcoin Signed Message and BIP-322 signatures. An appendix contains the challenge messages and signatures for independent re-verification.",
+    );
+    expect(
+      buildControlDisclaimerLine({
+        allVerified: false,
+        hasVerified: true,
+        verifiedCount: 1,
+        totalCount: 2,
+        formatPhrase: buildFormatPhrase(new Set(["legacy"])),
+      }),
+    ).toBe(
+      "2. Cryptographic proof-of-control is included for 1 of 2 addresses via Bitcoin Signed Message signatures. The remaining addresses are self-declared. An appendix contains the challenge messages and signatures for verified addresses.",
+    );
+    expect(
+      buildControlDisclaimerLine({
+        allVerified: false,
+        hasVerified: false,
+        verifiedCount: 0,
+        totalCount: 2,
+        formatPhrase: buildFormatPhrase(new Set()),
+      }),
+    ).toBe(NO_CONTROL_DISCLAIMER_LINE);
   });
 });

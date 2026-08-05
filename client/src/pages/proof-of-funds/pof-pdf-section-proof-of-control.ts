@@ -3,6 +3,7 @@
 import { sanitizePdfText } from "@/lib/pdfText";
 import { buildChallengeMessage, signatureFormatLabel } from "@/lib/signatureVerify";
 import type { PdfLayout, PofPdfData } from "./pof-pdf-context";
+import { signatureBoxHeading } from "./pof-pdf-strings";
 
 export function renderProofOfControlSection(L: PdfLayout, d: PofPdfData) {
   const { doc, margin, contentW } = L;
@@ -171,13 +172,7 @@ export function renderProofOfControlSection(L: PdfLayout, d: PofPdfData) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(0, 0, 0);
-    doc.text(
-      row.verifiedFormat === "bip322"
-        ? "BIP-322 Witness (base64):"
-        : "Wallet Signature (base64):",
-      margin,
-      L.y
-    );
+    doc.text(signatureBoxHeading(row.verifiedFormat), margin, L.y);
     L.y += 4;
 
     doc.setFont("courier", "normal");

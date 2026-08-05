@@ -30,13 +30,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
 import { signatureFormatLabel } from "@/lib/signatureVerify";
+import {
+  WALLET_SIGNATURE_HEADING,
+  BIP322_WITNESS_HEADING,
+  CONTROL_INCLUDED_FRAGMENT,
+  buildFormatPhrase,
+  viaFormatPhrase,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
 
 // Expected labels derive from the real signatureFormatLabel so a deliberate
 // wording change doesn't cascade into false failures here; the exact wording
-// is pinned once in client/src/lib/signatureVerify.test.ts.
+// is pinned once in client/src/lib/signatureVerify.test.ts. The appendix
+// headings and disclaimer scaffolding come from pof-pdf-strings; their exact
+// wording is pinned once in proof-of-funds-mixed-format-pdf.test.tsx.
 const LEGACY_LABEL = signatureFormatLabel("legacy");
 const BIP322_LABEL = signatureFormatLabel("bip322");
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const COMBINED_PHRASE = buildFormatPhrase(new Set(["legacy", "bip322"]));
+const LEGACY_VIA = viaFormatPhrase(buildFormatPhrase(new Set(["legacy"])));
+const BIP322_VIA = viaFormatPhrase(buildFormatPhrase(new Set(["bip322"])));
 
 // A mainnet Taproot (P2TR) address.
 const TAPROOT_ADDR =
@@ -194,29 +205,24 @@ describe("ProofOfFundsDeclaration — Taproot (BIP-322) proof-of-control PDF", (
 
     // (2) Appendix signature-box heading is the BIP-322 witness heading; the
     //     legacy heading must NOT be present.
-    expect(pdfTextLines).toContain("BIP-322 Witness (base64):");
-    expect(pdfTextLines).not.toContain("Wallet Signature (base64):");
+    expect(pdfTextLines).toContain(BIP322_WITNESS_HEADING);
+    expect(pdfTextLines).not.toContain(WALLET_SIGNATURE_HEADING);
 
     // (3) The DISCLAIMERS statement line uses the single-format BIP-322
     //     phrasing — not the legacy or combined phrasing.
     const bip322Disclaimer = pdfTextLines.find(
-      (l) =>
-        l.includes("proof-of-control is included") &&
-        new RegExp(`via ${escapeRegExp(BIP322_LABEL)} signatures\\.`).test(l),
+      (l) => l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(BIP322_VIA),
     );
     expect(bip322Disclaimer).toBeTruthy();
     expect(
       pdfTextLines.some(
-        (l) =>
-          l.includes("proof-of-control is included") &&
-          new RegExp(`via ${escapeRegExp(LEGACY_LABEL)} signatures\\.`).test(l),
+        (l) => l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(LEGACY_VIA),
       ),
     ).toBe(false);
     expect(
       pdfTextLines.some(
         (l) =>
-          l.includes("proof-of-control is included") &&
-          l.includes(`${LEGACY_LABEL} and ${BIP322_LABEL} signatures`),
+          l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(COMBINED_PHRASE),
       ),
     ).toBe(false);
   });

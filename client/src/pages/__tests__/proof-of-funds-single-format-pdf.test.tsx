@@ -26,13 +26,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
 import { signatureFormatLabel } from "@/lib/signatureVerify";
+import {
+  CONTROL_INCLUDED_FRAGMENT,
+  buildFormatPhrase,
+  viaFormatPhrase,
+} from "@/pages/proof-of-funds/pof-pdf-strings";
 
 // Expected labels derive from the real signatureFormatLabel so a deliberate
 // wording change doesn't cascade into false failures here; the exact wording
-// is pinned once in client/src/lib/signatureVerify.test.ts.
+// is pinned once in client/src/lib/signatureVerify.test.ts. The disclaimer
+// scaffolding comes from pof-pdf-strings; its exact wording is pinned once in
+// proof-of-funds-mixed-format-pdf.test.tsx.
 const LEGACY_LABEL = signatureFormatLabel("legacy");
 const BIP322_LABEL = signatureFormatLabel("bip322");
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const COMBINED_PHRASE = buildFormatPhrase(new Set(["legacy", "bip322"]));
+const LEGACY_VIA = viaFormatPhrase(buildFormatPhrase(new Set(["legacy"])));
+const BIP322_VIA = viaFormatPhrase(buildFormatPhrase(new Set(["bip322"])));
 
 // Two legacy P2PKH addresses and two mainnet Taproot (P2TR) addresses.
 const LEGACY_ADDR_1 = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
@@ -208,9 +217,7 @@ describe("ProofOfFundsDeclaration — single-format proof-of-control PDF", () =>
 
     // (2) Disclaimer uses the single legacy phrasing.
     const legacyDisclaimer = pdfTextLines.find(
-      (l) =>
-        l.includes("proof-of-control is included") &&
-        new RegExp(`via ${escapeRegExp(LEGACY_LABEL)} signatures\\.`).test(l),
+      (l) => l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(LEGACY_VIA),
     );
     expect(legacyDisclaimer).toBeTruthy();
 
@@ -218,15 +225,12 @@ describe("ProofOfFundsDeclaration — single-format proof-of-control PDF", () =>
     expect(
       pdfTextLines.some(
         (l) =>
-          l.includes("proof-of-control is included") &&
-          l.includes(`${LEGACY_LABEL} and ${BIP322_LABEL} signatures`),
+          l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(COMBINED_PHRASE),
       ),
     ).toBe(false);
     expect(
       pdfTextLines.some(
-        (l) =>
-          l.includes("proof-of-control is included") &&
-          new RegExp(`via ${escapeRegExp(BIP322_LABEL)} signatures\\.`).test(l),
+        (l) => l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(BIP322_VIA),
       ),
     ).toBe(false);
   });
@@ -241,9 +245,7 @@ describe("ProofOfFundsDeclaration — single-format proof-of-control PDF", () =>
 
     // (2) Disclaimer uses the single BIP-322 phrasing.
     const bip322Disclaimer = pdfTextLines.find(
-      (l) =>
-        l.includes("proof-of-control is included") &&
-        new RegExp(`via ${escapeRegExp(BIP322_LABEL)} signatures\\.`).test(l),
+      (l) => l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(BIP322_VIA),
     );
     expect(bip322Disclaimer).toBeTruthy();
 
@@ -251,15 +253,12 @@ describe("ProofOfFundsDeclaration — single-format proof-of-control PDF", () =>
     expect(
       pdfTextLines.some(
         (l) =>
-          l.includes("proof-of-control is included") &&
-          l.includes(`${LEGACY_LABEL} and ${BIP322_LABEL} signatures`),
+          l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(COMBINED_PHRASE),
       ),
     ).toBe(false);
     expect(
       pdfTextLines.some(
-        (l) =>
-          l.includes("proof-of-control is included") &&
-          new RegExp(`via ${escapeRegExp(LEGACY_LABEL)} signatures\\.`).test(l),
+        (l) => l.includes(CONTROL_INCLUDED_FRAGMENT) && l.includes(LEGACY_VIA),
       ),
     ).toBe(false);
   });

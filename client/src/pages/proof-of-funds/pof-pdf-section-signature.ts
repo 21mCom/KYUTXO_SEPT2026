@@ -3,6 +3,7 @@
 // builder — zero behavior change.
 import { sanitizePdfText } from "@/lib/pdfText";
 import { type SignatureFormat } from "@/lib/signatureVerify";
+import { buildControlDisclaimerLine, buildFormatPhrase } from "./pof-pdf-strings";
 import { formatUnix } from "./address-helpers";
 import { KYUTXO_APP_VERSION } from "./declaration-prefs";
 import type { PdfLayout, PofPdfData } from "./pof-pdf-context";
@@ -29,18 +30,15 @@ export function renderDisclaimersAndSignature(L: PdfLayout, d: PofPdfData) {
       .map((r) => r.verifiedFormat)
       .filter((f): f is SignatureFormat => !!f)
   );
-  const formatPhrase =
-    verifiedFormats.has("legacy") && verifiedFormats.has("bip322")
-      ? "Bitcoin Signed Message and BIP-322 signatures"
-      : verifiedFormats.has("bip322")
-      ? "BIP-322 signatures"
-      : "Bitcoin Signed Message signatures";
+  const formatPhrase = buildFormatPhrase(verifiedFormats);
 
-  const controlDisclaimerLine = allVerified
-    ? `2. Cryptographic proof-of-control is included for all addresses via ${formatPhrase}. An appendix contains the challenge messages and signatures for independent re-verification.`
-    : hasVerified
-    ? `2. Cryptographic proof-of-control is included for ${effVerifiedRows.length} of ${effRows.length} address${effRows.length !== 1 ? "es" : ""} via ${formatPhrase}. The remaining addresses are self-declared. An appendix contains the challenge messages and signatures for verified addresses.`
-    : "2. No cryptographic proof-of-control is included. All addresses are self-declared by the declarant.";
+  const controlDisclaimerLine = buildControlDisclaimerLine({
+    allVerified,
+    hasVerified,
+    verifiedCount: effVerifiedRows.length,
+    totalCount: effRows.length,
+    formatPhrase,
+  });
 
   const disclaimers = [
     "1. This is a declaration produced by the declarant personally attesting to ownership of the above Bitcoin addresses.",
