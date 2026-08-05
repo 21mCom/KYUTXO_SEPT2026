@@ -123,6 +123,38 @@ describe("runAmlScreening participant cap", () => {
     expect(result.nearestHopDistance).toBeNull();
   });
 
+  it("caps fanned-out txids at MAX_TXIDS (2000) before batching", async () => {
+    // 3000 unique own txids exceed the 2000-txid cap. Only the first 2000
+    // may be fanned out: exactly 4 batches of 500, covering owntxid00000000
+    // through owntxid00001999, and never any later txid.
+    const own = Array.from({ length: 3000 }, (_, i) => ownParticipant(i));
+    getParticipantsByAddressesWithOutpointSpendsMock.mockResolvedValue(own);
+    // 1 participant per txid keeps the total (2000) far below the
+    // participant cap, so batch count is governed solely by the txid slice.
+    getParticipantsByTxidsMock.mockImplementation(async (txids: string[]) =>
+      oversizedBatch(txids, 1),
+    );
+
+    const result = await runAmlScreening(["bc1qowned0000000000000000000000000000000000"]);
+
+    expect(getParticipantsByTxidsMock).toHaveBeenCalledTimes(4);
+    const requested = getParticipantsByTxidsMock.mock.calls.flatMap(
+      (c) => c[0] as string[],
+    );
+    expect(requested).toHaveLength(2000);
+    expect(new Set(requested).size).toBe(2000);
+    // Exactly the first 2000 txids, in slice order.
+    expect(requested).toEqual(
+      Array.from({ length: 2000 }, (_, i) => ownParticipant(i).txid),
+    );
+    for (const call of getParticipantsByTxidsMock.mock.calls) {
+      expect(call[0]).toHaveLength(BATCH);
+    }
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(result.hasGraphData).toBe(true);
+  });
+
   it("does not warn or truncate when under the cap", async () => {
     const own = Array.from({ length: 10 }, (_, i) => ownParticipant(i));
     getParticipantsByAddressesWithOutpointSpendsMock.mockResolvedValue(own);
