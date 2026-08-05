@@ -107,6 +107,14 @@ args = "crud-guards"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "boolean-where-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "lineage-owned-origin-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "input-string-canonicalization"
 
 [[workflows.workflow.tasks]]
@@ -2354,6 +2362,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-adversary-scenario-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "boolean-where-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-boolean-where.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "lineage-owned-origin-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/lineageEngine.ownedOriginScan.test.ts client/src/lib/data/transaction-crud.opReturnBooleanScan.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

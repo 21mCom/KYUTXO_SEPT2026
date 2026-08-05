@@ -516,6 +516,56 @@ function generateNarrative(
   return narrative;
 }
 
+// Scan utxoLineage for unique owned-created origins (the seeds of custody
+// segments).
+//
+// NOTE: createdOwned is stored as a BOOLEAN, and booleans are not valid
+// IndexedDB keys — `where('createdOwned').equals(true)` throws DataError, and
+// the previous `.equals(1)` variant silently matched ZERO rows (booleans never
+// equal the number 1 as IDB keys), so buildAllCustodySegments found no
+// origins. Scan with a boolean-safe `.filter()` instead, paged by primary key
+// so each batch is a keyset continuation rather than an O(n²) offset re-scan.
+export async function scanOwnedLineageOrigins(
+  signal?: AbortSignal
+): Promise<Map<string, { createdAddress: string; createdTxid: string; createdVout: number }>> {
+  const uniqueOrigins = new Map<string, { createdAddress: string; createdTxid: string; createdVout: number }>();
+
+  const ORIGIN_SCAN_BATCH = 1000;
+  let lastId = 0;
+  while (true) {
+    if (signal?.aborted) {
+      return uniqueOrigins;
+    }
+
+    const batch = await db.utxoLineage
+      .where('id')
+      .above(lastId)
+      .filter(lineage => lineage.createdOwned === true)
+      .limit(ORIGIN_SCAN_BATCH)
+      .toArray();
+
+    if (batch.length === 0) break;
+
+    for (const lineage of batch) {
+      const key = `${lineage.createdTxid}:${lineage.createdVout}`;
+      if (!uniqueOrigins.has(key)) {
+        uniqueOrigins.set(key, {
+          createdAddress: lineage.createdAddress,
+          createdTxid: lineage.createdTxid,
+          createdVout: lineage.createdVout
+        });
+      }
+      if (typeof lineage.id === 'number' && lineage.id > lastId) {
+        lastId = lineage.id;
+      }
+    }
+
+    if (batch.length < ORIGIN_SCAN_BATCH) break;
+  }
+
+  return uniqueOrigins;
+}
+
 // Build all custody segments from owned addresses
 export async function buildAllCustodySegments(
   onProgress?: (current: number, total: number) => void,
@@ -532,37 +582,9 @@ export async function buildAllCustodySegments(
   } catch {}
 
   try {
-    const uniqueOrigins = new Map<string, { createdAddress: string; createdTxid: string; createdVout: number }>();
-
-    const ORIGIN_SCAN_BATCH = 1000;
-    let originScanOffset = 0;
-    while (true) {
-      if (signal?.aborted) {
-        return { processed: 0, created: 0 };
-      }
-
-      const batch = await db.utxoLineage
-        .where('createdOwned')
-        .equals(1)
-        .offset(originScanOffset)
-        .limit(ORIGIN_SCAN_BATCH)
-        .toArray();
-
-      if (batch.length === 0) break;
-
-      for (const lineage of batch) {
-        const key = `${lineage.createdTxid}:${lineage.createdVout}`;
-        if (!uniqueOrigins.has(key)) {
-          uniqueOrigins.set(key, {
-            createdAddress: lineage.createdAddress,
-            createdTxid: lineage.createdTxid,
-            createdVout: lineage.createdVout
-          });
-        }
-      }
-
-      originScanOffset += batch.length;
-      if (batch.length < ORIGIN_SCAN_BATCH) break;
+    const uniqueOrigins = await scanOwnedLineageOrigins(signal);
+    if (signal?.aborted) {
+      return { processed: 0, created: 0 };
     }
 
     const origins = Array.from(uniqueOrigins.values());
