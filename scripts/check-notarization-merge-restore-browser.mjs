@@ -65,6 +65,10 @@ const TX_B = 'df'.repeat(32);
 const EVIDENCE_TITLE = 'Notarize-merge-restore fixture';
 const EVIDENCE_DOC_TYPE = 'contract';
 const EVIDENCE_FILE_NAME = 'notarize-merge-restore-me.txt';
+// Round 2: the live copy of the SAME document carries a RENAMED file, so the
+// merge's filename map finds no match and the saved-PSBT attachment reference
+// must be DROPPED (never left dangling at an unrelated live attachment).
+const EVIDENCE_RENAMED_FILE_NAME = 'renamed-after-notarization.txt';
 const EVIDENCE_FILE_CONTENT = 'kyutxo notarization MERGE restore fixture file\n';
 const EXPECTED_DIGEST = createHash('sha256').update(EVIDENCE_FILE_CONTENT, 'utf8').digest('hex');
 
@@ -531,6 +535,179 @@ async function main() {
         .catch(() => false);
     }
     step('Verify re-hashes the surviving live bytes and reports a match', verifyToast);
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ROUND 2: the live copy of the duplicate document was RENAMED before the
+    // merge. The evidence row still de-dupes by identity (title + documentType
+    // + originalDate), but the filename map finds NO live attachment matching
+    // the backup's filename — restoreSavedPsbtRows must DROP the attachment
+    // reference (undefined), never leave the backup's stale numeric id
+    // pointing at an unrelated live attachment. payloadHex + title/filename
+    // hints must survive, and no Notarized badge may appear on any attachment.
+    // ════════════════════════════════════════════════════════════════════════
+
+    // ── Phase 8: wipe + recreate the SAME document with a RENAMED file ─────
+    const renamed = await page.evaluate(
+      async ({ title, docType, renamedFilename, content }) => {
+        const evCrud = await import('/src/lib/data/evidence-crud.ts');
+        const psbtCrud = await import('/src/lib/data/saved-psbts-crud.ts');
+        const attachments = await import('/src/lib/attachments.ts');
+        await evCrud.clearAllEvidenceData();
+        await psbtCrud.clearSavedPsbts();
+        // Decoys again so any dangling numeric id WOULD collide with an
+        // unrelated live attachment if the drop path regressed.
+        const decoyAttachmentIds = [];
+        for (let i = 0; i < 3; i++) {
+          const dId = await evCrud.addEvidence({
+            title: `Decoy renamed-round doc ${i}`,
+            documentType: 'other',
+            tags: [],
+          });
+          const aId = await evCrud.addEvidenceAttachment({
+            evidenceId: dId,
+            filename: `renamed-round-decoy-${i}.bin`,
+            mimeType: 'application/octet-stream',
+            size: 3,
+            objectStoragePath: `zz/notarize-merge-renamed-decoy-${i}.bin`,
+          });
+          decoyAttachmentIds.push(aId);
+        }
+        // Same document identity, but the file was RENAMED: the backup's
+        // filename no longer exists under the surviving live document.
+        const file = new File([content], renamedFilename, { type: 'text/plain' });
+        const storagePath = await attachments.uploadFile(file);
+        const liveEvidenceId = await evCrud.addEvidence({
+          title,
+          documentType: docType,
+          tags: [],
+        });
+        const liveAttachmentId = await evCrud.addEvidenceAttachment({
+          evidenceId: liveEvidenceId,
+          filename: renamedFilename,
+          mimeType: 'text/plain',
+          size: content.length,
+          objectStoragePath: storagePath,
+        });
+        const evCount = (await evCrud.getAllEvidence()).length;
+        const psbtCount = (await psbtCrud.getAllSavedPsbts()).length;
+        return { liveEvidenceId, liveAttachmentId, decoyAttachmentIds, evCount, psbtCount };
+      },
+      {
+        title: EVIDENCE_TITLE,
+        docType: EVIDENCE_DOC_TYPE,
+        renamedFilename: EVIDENCE_RENAMED_FILE_NAME,
+        content: EVIDENCE_FILE_CONTENT,
+      },
+    );
+    step(
+      'wiped + recreated the SAME document with a RENAMED attachment file',
+      renamed.evCount === 4 && renamed.psbtCount === 0 && renamed.liveAttachmentId !== seed.attachmentId,
+      `liveEvidenceId=${renamed.liveEvidenceId} liveAttachmentId=${renamed.liveAttachmentId} decoyAtts=${renamed.decoyAttachmentIds.join(',')}`,
+    );
+
+    // ── Phase 9: merge the SAME backup again via the Settings dialog ───────
+    await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
+    const openBtn2 = page.getByTestId('button-open-restore');
+    await openBtn2.scrollIntoViewIfNeeded();
+    await openBtn2.click();
+    await page.getByTestId('input-restore-file').setInputFiles({
+      name: 'notarize-merge-restore-check-backup.zip',
+      mimeType: 'application/zip',
+      buffer: Buffer.from(zipB64, 'base64'),
+    });
+    await page.getByText('Backup Date:', { exact: false }).waitFor({ state: 'visible', timeout: 20_000 });
+    await page.getByTestId('radio-merge').click();
+    await page.getByTestId('button-continue-restore').click();
+    await page.getByTestId('restore-preferences-preview').waitFor({ state: 'visible', timeout: 20_000 });
+    await page.getByTestId('button-confirm-restore').click();
+    await page
+      .getByText('Restore Successful', { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 120_000 });
+    step('renamed-file merge restore completed via the Settings dialog', true);
+
+    // ── Phase 10: attachment reference DROPPED, hints + payload preserved ──
+    const post2 = await page.evaluate(async ({ title, filename }) => {
+      const evCrud = await import('/src/lib/data/evidence-crud.ts');
+      const psbtCrud = await import('/src/lib/data/saved-psbts-crud.ts');
+      const evidence = await evCrud.getAllEvidence();
+      const fixtureDocs = evidence.filter((e) => e.title === title);
+      const fixture = fixtureDocs[0];
+      const atts = fixture?.id !== undefined
+        ? await evCrud.getEvidenceAttachmentsByEvidenceId(fixture.id)
+        : [];
+      const allAtts = await evCrud.getAllEvidenceAttachments();
+      const rows = await psbtCrud.getAllSavedPsbts();
+      const notarized = rows.find((r) => r.outputs?.some((o) => o.dataOutput));
+      const dataOut = notarized?.outputs?.find((o) => o.dataOutput)?.dataOutput;
+      return {
+        fixtureDocCount: fixtureDocs.length,
+        survivingEvidenceId: fixture?.id,
+        fixtureAttachmentFilenames: atts.map((a) => a.filename),
+        allAttachmentIds: allAtts.map((a) => a.id),
+        savedPsbtCount: rows.length,
+        dataOutput: dataOut
+          ? {
+              evidenceId: dataOut.evidenceId,
+              evidenceAttachmentId: dataOut.evidenceAttachmentId,
+              payloadHex: dataOut.payloadHex,
+              isNotarization: dataOut.isNotarization,
+              evidenceTitle: dataOut.evidenceTitle,
+              evidenceFilename: dataOut.evidenceFilename,
+            }
+          : null,
+      };
+    }, { title: EVIDENCE_TITLE, filename: EVIDENCE_FILE_NAME });
+
+    step(
+      'renamed-round merge still de-duped the document onto the surviving live row',
+      post2.fixtureDocCount === 1 && post2.survivingEvidenceId === renamed.liveEvidenceId,
+      `docs=${post2.fixtureDocCount} evidenceId=${post2.survivingEvidenceId} (live ${renamed.liveEvidenceId})`,
+    );
+    step(
+      'restored notarization output DROPPED the attachment reference (no evidenceAttachmentId)',
+      !!post2.dataOutput &&
+        post2.dataOutput.evidenceAttachmentId === undefined &&
+        post2.dataOutput.evidenceId === renamed.liveEvidenceId,
+      `dataOutput=${JSON.stringify(post2.dataOutput)}`,
+    );
+    step(
+      'dropped reference cannot dangle at any live attachment id',
+      !!post2.dataOutput &&
+        !post2.allAttachmentIds.includes(post2.dataOutput.evidenceAttachmentId),
+      `attachmentIds=${post2.allAttachmentIds.join(',')} ref=${post2.dataOutput?.evidenceAttachmentId}`,
+    );
+    step(
+      'payloadHex and title/filename hints survived the drop',
+      !!post2.dataOutput &&
+        post2.dataOutput.payloadHex === EXPECTED_DIGEST &&
+        post2.dataOutput.isNotarization === true &&
+        post2.dataOutput.evidenceTitle === EVIDENCE_TITLE &&
+        post2.dataOutput.evidenceFilename === EVIDENCE_FILE_NAME,
+      `dataOutput=${JSON.stringify(post2.dataOutput)}`,
+    );
+
+    // ── Phase 11: Evidence page shows NO Notarized badge on any attachment ─
+    await page.goto(`${BASE_URL}evidence`, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page);
+    const card3 = page.getByTestId(`card-evidence-${renamed.liveEvidenceId}`);
+    await card3.waitFor({ state: 'visible', timeout: 30_000 });
+    await card3.click();
+    await page.getByTestId('button-preview-edit').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByTestId('button-preview-edit').click();
+    // The renamed live attachment's row must be rendered (its Notarize button
+    // exists) but carry NO Notarized badge — the reference was dropped, so
+    // nothing links the saved PSBT to it.
+    await page
+      .getByTestId(`button-notarize-${renamed.liveAttachmentId}`)
+      .waitFor({ state: 'visible', timeout: 15_000 });
+    const badgeCount = await page.locator('[data-testid^="badge-notarized-"]').count();
+    step(
+      'Evidence page shows NO Notarized badge on the renamed (or any other) attachment',
+      badgeCount === 0,
+      `badges=${badgeCount}`,
+    );
 
     await context.close();
   } finally {
