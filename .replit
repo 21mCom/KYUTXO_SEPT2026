@@ -2332,7 +2332,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/backup/compare.test.ts client/src/lib/backup/compare.runtime.test.ts"
+args = "npx vitest run client/src/lib/backup/compare.test.ts client/src/lib/backup/compare.runtime.test.ts client/src/components/BackupCompareDialog.diffLinks.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

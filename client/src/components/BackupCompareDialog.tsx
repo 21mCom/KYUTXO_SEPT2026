@@ -6,7 +6,7 @@
 // (compareBackups streams both ZIPs; attachment file bytes are never read),
 // with progress + cancellation, and the result can be exported to CSV.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowLeftRight,
@@ -32,6 +32,12 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { compareBackups, type BackupDiffResult, type TableDiff } from "@/lib/backup/compare";
+import {
+  diffKeyIdentifier,
+  canonicalDiffIdentifier,
+  resolveDiffIdentifiers,
+} from "@/lib/backup/compare-link-resolution";
+import { AddressLink } from "@/components/AddressLink";
 import { blobChunks } from "@/lib/backup/zip-stream";
 import { BackupCancelledError, downloadBlob } from "@/lib/backup/sink";
 
@@ -49,7 +55,8 @@ function formatDate(iso: string): string {
 
 // One drill-down list for a table's diff entries, virtualized so a huge diff
 // (thousands of changed rows) never mounts more than the visible window.
-function TableDrillDown({ diff }: { diff: TableDiff }) {
+// Exported for the jsdom test (BackupCompareDialog.diffLinks.test.tsx).
+export function TableDrillDown({ diff }: { diff: TableDiff }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: diff.entries.length,
@@ -58,6 +65,73 @@ function TableDrillDown({ diff }: { diff: TableDiff }) {
     overscan: 8,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
+
+  // Read-only live-vault link resolution for the visible window: canonical
+  // identifier -> live record id. Batched per window and debounced so a huge
+  // diff (or fast scrolling) never fires per-row queries; identifiers that
+  // were already attempted (hit or miss) are never re-queried.
+  const [links, setLinks] = useState<Map<string, number>>(new Map());
+  const attemptedRef = useRef<Set<string>>(new Set());
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const pendingIdentifiers: string[] = [];
+  for (const vi of virtualItems) {
+    const entry = diff.entries[vi.index];
+    const identifier = entry ? diffKeyIdentifier(diff.table, entry.key) : null;
+    if (!identifier) continue;
+    const canonical = canonicalDiffIdentifier(identifier);
+    if (!attemptedRef.current.has(canonical)) pendingIdentifiers.push(canonical);
+  }
+  const pendingSignature = pendingIdentifiers.join("\n");
+
+  useEffect(() => {
+    if (pendingSignature === "") return;
+    const batch = pendingSignature.split("\n");
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      for (const id of batch) attemptedRef.current.add(id);
+      try {
+        const resolved = await resolveDiffIdentifiers(batch);
+        if (cancelled || resolved.size === 0) return;
+        setLinks((prev) => {
+          const next = new Map(prev);
+          for (const [k, v] of resolved) next.set(k, v);
+          return next;
+        });
+      } catch {
+        // Resolution is best-effort decoration: on failure the rows simply
+        // stay plain text (retry is possible after collapse/expand).
+        if (!cancelled) for (const id of batch) attemptedRef.current.delete(id);
+      }
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [pendingSignature]);
+
+  // Render the entry key as the app's standard record/address link when the
+  // identifier matched a live-vault record, plain text otherwise. dustFlags
+  // keys are outpoints (`txid:vout`): only the txid part links.
+  const renderKey = (key: string) => {
+    const identifier = diffKeyIdentifier(diff.table, key);
+    const recordId = identifier ? links.get(canonicalDiffIdentifier(identifier)) : undefined;
+    if (identifier == null || recordId == null) {
+      return <span className="break-all font-mono">{key}</span>;
+    }
+    const suffix = key.length > identifier.length ? key.slice(identifier.length) : "";
+    return (
+      <span className="break-all font-mono" data-testid={`compare-key-link-${diff.table}`}>
+        <AddressLink
+          address={identifier}
+          recordId={recordId}
+          truncate={false}
+          showCopy={false}
+        />
+        {suffix}
+      </span>
+    );
+  };
 
   return (
     <div
@@ -90,7 +164,7 @@ function TableDrillDown({ diff }: { diff: TableDiff }) {
                 >
                   {entry.change}
                 </Badge>
-                <span className="break-all font-mono">{entry.key}</span>
+                {renderKey(entry.key)}
               </div>
               {entry.deltas && (
                 <div className="mt-1 space-y-0.5 pl-14">
