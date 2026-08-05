@@ -11,7 +11,10 @@ Run: python3 scripts/proof-vectors/generate_segwit_v2_independent.py
 Outputs the address + base64 witness for:
   - native P2WPKH
   - P2WSH single-key (<pk> OP_CHECKSIG)
-Both commit to a to_sign transaction with nVersion = 2.
+  - P2SH-P2WPKH (base58check P2SH address; redeem-script push in scriptSig
+    is implied by the wrapper — the exported proof is the witness stack)
+  - P2SH-P2WSH single-key
+All commit to a to_sign transaction with nVersion = 2.
 """
 import hashlib
 import hmac
@@ -181,6 +184,29 @@ def convertbits(data, frombits, tobits):
     return ret
 
 
+# --- base58check (for P2SH addresses) -----------------------------------------
+B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def base58check(payload):
+    data = payload + dsha256(payload)[:4]
+    n = int.from_bytes(data, "big")
+    out = ""
+    while n:
+        n, rem = divmod(n, 58)
+        out = B58[rem] + out
+    for b in data:
+        if b == 0:
+            out = "1" + out
+        else:
+            break
+    return out
+
+
+def p2sh_address(redeem_script):
+    return base58check(b"\x05" + hash160(redeem_script))
+
+
 # --- BIP-322 tx construction ---------------------------------------------------
 
 def to_spend_tx(scriptpubkey, msg):
@@ -261,6 +287,33 @@ def main():
     sig = der(r, s) + b"\x01"
     print("P2WSH addr:", addr)
     print("P2WSH sig :", witness_b64([sig, wscript]))
+
+    # --- P2SH-P2WPKH ---
+    # Redeem script is the v0 witness program (0x00 0x14 <pkh>); the to_spend
+    # scriptPubKey is P2SH of it, and the BIP-143 script_code is the implied
+    # P2PKH. The redeem-script push in the to_sign scriptSig doesn't enter the
+    # BIP-143 digest; the exported proof is the witness stack alone.
+    redeem = b"\x00\x14" + pkh
+    spk = b"\xa9\x14" + hash160(redeem) + b"\x87"
+    addr = p2sh_address(redeem)
+    txid = dsha256(to_spend_tx(spk, MSG))
+    script_code = b"\x76\xa9\x14" + pkh + b"\x88\xac"
+    sighash = bip143_sighash_v2(txid, script_code)
+    r, s = ecdsa_sign(priv, sighash)
+    sig = der(r, s) + b"\x01"
+    print("P2SH-P2WPKH addr:", addr)
+    print("P2SH-P2WPKH sig :", witness_b64([sig, pub]))
+
+    # --- P2SH-P2WSH single-key (<pk> OP_CHECKSIG) ---
+    redeem = b"\x00\x20" + sha256(wscript)
+    spk = b"\xa9\x14" + hash160(redeem) + b"\x87"
+    addr = p2sh_address(redeem)
+    txid = dsha256(to_spend_tx(spk, MSG))
+    sighash = bip143_sighash_v2(txid, wscript)
+    r, s = ecdsa_sign(priv, sighash)
+    sig = der(r, s) + b"\x01"
+    print("P2SH-P2WSH addr:", addr)
+    print("P2SH-P2WSH sig :", witness_b64([sig, wscript]))
 
 
 if __name__ == "__main__":
