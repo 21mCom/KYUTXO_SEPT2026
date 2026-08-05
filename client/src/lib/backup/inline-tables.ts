@@ -74,6 +74,12 @@ import {
   deleteSavedPsbt,
 } from "@/lib/data/saved-psbts-crud";
 import {
+  getAllAdversaryScenarios,
+  clearAdversaryScenarios,
+  restoreAdversaryScenarioRows,
+  deleteAdversaryScenario,
+} from "@/lib/data/adversary-scenarios-crud";
+import {
   getAllNodeSettings,
   putNodeSettings,
   clearNodeSettings,
@@ -338,6 +344,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     nodeSettings,
     dustFlags,
     savedPsbts,
+    adversaryScenarios,
   ] = await Promise.all([
     getAllRecordOrigins(),
     getAllCustomFields(),
@@ -349,6 +356,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     getAllNodeSettings(),
     getAllDustFlags(),
     getAllSavedPsbts(),
+    getAllAdversaryScenarios(),
   ]);
 
   return {
@@ -368,6 +376,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     nodeSettings,
     dustFlags,
     savedPsbts,
+    adversaryScenarios,
   };
 }
 
@@ -387,6 +396,7 @@ export async function clearInlineTables(): Promise<void> {
   await clearNodeSettings({ skipNotification: true });
   await clearDustFlags({ skipNotification: true });
   await clearSavedPsbts({ skipNotification: true });
+  await clearAdversaryScenarios({ skipNotification: true });
   // NOTE: settings is intentionally not cleared (matches legacy restore).
   // utxoLineage, custodySegments and lineageSnapshots are streamed tables now;
   // the restore orchestrator clears them, not this inline path.
@@ -457,6 +467,7 @@ export async function restoreInlineTables(
         priceDataIds: [] as number[],
         dustFlagOutpoints: [] as string[],
         savedPsbtIds: [] as number[],
+        adversaryScenarioIds: [] as number[],
       }
     : null;
 
@@ -641,6 +652,18 @@ export async function restoreInlineTables(
     },
   );
 
+  // adversaryScenarios (Privacy Audit "what if they knew?" counterparty
+  // scenarios, Dexie v39) ride inline like savedPsbts. Older backups have no
+  // `adversaryScenarios` key and restore cleanly. Rows carry no foreign keys
+  // (addresses/txids are stable strings), so no id remap is needed; in merge
+  // mode rows whose (name, counterparty) identity already exists are skipped.
+  await restoreAdversaryScenarioRows(
+    arr("adversaryScenarios"),
+    restoreMode,
+    { skipNotification: true },
+    meta ? { insertedIds: meta.adversaryScenarioIds } : undefined,
+  );
+
   // utxoLineage and custodySegments are streamed tables now, so NEW backups
   // carry them as NDJSON (handled by the restore orchestrator) and won't have
   // them inline. But OLDER v3 backups stored them inline — restore those here
@@ -764,6 +787,9 @@ export async function restoreInlineTables(
       for (const id of meta.savedPsbtIds) {
         await deleteSavedPsbt(id);
       }
+      for (const id of meta.adversaryScenarioIds) {
+        await deleteAdversaryScenario(id, { skipNotification: true });
+      }
       await db.tags.bulkDelete(meta.tagIds);
       await db.categories.bulkDelete(meta.categoryIds);
       await db.owners.bulkDelete(meta.ownerIds);
@@ -783,7 +809,8 @@ export async function restoreInlineTables(
         meta.evidenceAttachmentIds.length +
         meta.priceDataIds.length +
         meta.dustFlagOutpoints.length +
-        meta.savedPsbtIds.length
+        meta.savedPsbtIds.length +
+        meta.adversaryScenarioIds.length
       );
     };
   }

@@ -125,6 +125,11 @@ const GUARDED_TABLES = [
     crudFile: path.resolve(ROOT, 'client/src/lib/data/saved-psbts-crud.ts'),
     label: 'saved-psbts-crud.ts',
   },
+  {
+    table: 'adversaryScenarios',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/adversary-scenarios-crud.ts'),
+    label: 'adversary-scenarios-crud.ts',
+  },
 ];
 
 // Files that legitimately need direct table access — e.g. database initialization,

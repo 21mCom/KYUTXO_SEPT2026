@@ -239,6 +239,14 @@ args = "adversary-view-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "adversary-scenario-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "adversary-scenario-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dust-badge-audit-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2324,6 +2332,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/components/RecordDetailPanel.sparseRecord.test.tsx client/src/components/RecordTable.test.tsx client/src/pages/Dashboard.sparseRecords.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "adversary-scenario-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/adversary-scenario.test.ts client/src/lib/adversary-scenario.extend.test.ts client/src/lib/data/adversary-scenarios-crud.test.ts client/src/lib/backup/adversary-scenarios-roundtrip.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "adversary-scenario-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-adversary-scenario-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

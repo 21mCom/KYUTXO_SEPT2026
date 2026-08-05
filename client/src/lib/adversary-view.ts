@@ -30,9 +30,9 @@
  * Runs entirely offline. Makes no network requests.
  */
 
-import { db } from "@/lib/database";
 import type { TransactionParticipant } from "@/lib/db-types";
 import { getParticipantsByAddressesWithOutpointSpends } from "@/lib/data/record-queries";
+import { getParticipantsByTxids } from "@/lib/data/transaction-crud";
 import { getRecordsByInputStrings } from "@/lib/data/record-crud";
 import type { Record as DbRecord } from "@/lib/db-types";
 
@@ -115,9 +115,31 @@ export interface AdversaryViewResult {
 
 // ─── Internal: adversary context ─────────────────────────────────────────────
 
-interface AdversaryContext {
+/**
+ * Assumed counterparty knowledge for "what if they knew?" scenarios.
+ * `knownAddresses` are treated as adversary-attributed to the user even
+ * without on-chain linkage; `knownTxids` contribute their full participant
+ * graphs as adversary-visible evidence.
+ */
+export interface AssumedKnowledge {
+  knownAddresses: string[];
+  knownTxids: string[];
+}
+
+export interface AdversaryContext {
   userAddresses: Set<string>;
   participantsByTxid: Map<string, TransactionParticipant[]>;
+  /**
+   * Scenario runs only: normalized assumed knowledge. When present, the seed
+   * addresses (known addresses + the user's participants of known
+   * transactions) collapse into one certain-tier cluster in BOTH union-find
+   * graphs before ground-truth comparison. Undefined on the baseline path,
+   * which is byte-for-byte unchanged.
+   */
+  assumed?: {
+    knownAddresses: Set<string>;
+    knownTxids: Set<string>;
+  };
 }
 
 // ─── Internal: Union-Find with txid tracking ──────────────────────────────────
@@ -284,7 +306,7 @@ const PARTICIPANT_BATCH = 500;
  * Loads all transaction participants that touch those addresses, then also
  * loads all participants for those same transactions (for the full tx picture).
  */
-async function buildAdversaryContext(
+export async function buildAdversaryContext(
   userAddresses: string[],
   report: (msg: string) => void,
   signal?: AbortSignal,
@@ -309,30 +331,43 @@ async function buildAdversaryContext(
   for (let i = 0; i < txidArray.length; i += PARTICIPANT_BATCH) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const batch = txidArray.slice(i, i + PARTICIPANT_BATCH);
-    const batchParts = await db.transactionParticipants
-      .where("txid")
-      .anyOf(batch)
-      .toArray();
+    const batchParts = await getParticipantsByTxids(batch);
     allParts.push(...batchParts);
     if (i + PARTICIPANT_BATCH < txidArray.length) {
       await new Promise((r) => setTimeout(r, 0));
     }
   }
 
-  // Attribute blank-address (Electrum-synced) spend inputs back to the
-  // address that owns the spent output. A real chain adversary sees the true
-  // prevout address on the public chain, so the blind heuristics (CIO,
-  // change-guess) must not skip those rows just because our local sync
-  // stored them with an empty address.
   const addrByOutpoint = new Map<string, string>();
-  for (const p of allParts) {
+  const participantsByTxid = new Map<string, TransactionParticipant[]>();
+  indexParticipants(allParts, participantsByTxid, addrByOutpoint);
+
+  return { userAddresses: userSet, participantsByTxid };
+}
+
+/**
+ * Index participant rows by txid, attributing blank-address (Electrum-synced)
+ * spend inputs back to the address that owns the spent output. A real chain
+ * adversary sees the true prevout address on the public chain, so the blind
+ * heuristics (CIO, change-guess) must not skip those rows just because our
+ * local sync stored them with an empty address.
+ *
+ * Two-phase: every output outpoint in `parts` is recorded BEFORE any input is
+ * attributed, so attribution never depends on row order. `addrByOutpoint` may
+ * already contain entries from previously indexed batches (scenario context
+ * extension) — those are kept and extended.
+ */
+function indexParticipants(
+  parts: TransactionParticipant[],
+  participantsByTxid: Map<string, TransactionParticipant[]>,
+  addrByOutpoint: Map<string, string>,
+): void {
+  for (const p of parts) {
     if (p.role === "output" && p.vout !== undefined && p.vout !== null && p.address) {
       addrByOutpoint.set(`${p.txid}:${p.vout}`, p.address);
     }
   }
-
-  const participantsByTxid = new Map<string, TransactionParticipant[]>();
-  for (const raw of allParts) {
+  for (const raw of parts) {
     let p = raw;
     if (p.role === "input" && !p.address && p.prevTxid && p.prevVout !== undefined && p.prevVout !== null) {
       const owner = addrByOutpoint.get(`${p.prevTxid}:${p.prevVout}`);
@@ -342,8 +377,93 @@ async function buildAdversaryContext(
     if (list) list.push(p);
     else participantsByTxid.set(p.txid, [p]);
   }
+}
 
-  return { userAddresses: userSet, participantsByTxid };
+/**
+ * Extend an already-built adversary context with assumed counterparty
+ * knowledge (scenario runs). The baseline context is never mutated — a new
+ * context is returned.
+ *
+ * Two things change relative to the baseline:
+ *   1. Participants touching known addresses NOT already covered, and the full
+ *      participant graphs of known txids NOT already in the graph, are loaded
+ *      and indexed (blank Electrum inputs attributed via the combined
+ *      outpoint map). This is what "known transactions contribute their full
+ *      participant graphs as adversary-visible evidence" means at the data
+ *      level.
+ *   2. Known addresses join the owned-address set: they are the user's
+ *      addresses (picked from vault records), so the counterparty's knowledge
+ *      that "these are yours" makes them ground-truth owned for the
+ *      comparison layer.
+ *
+ * The certain-tier seed union itself happens inside
+ * `runAdversaryViewFromContext` (driven by `ctx.assumed`), so the synthetic
+ * test seam exercises the exact same code path.
+ */
+export async function extendAdversaryContextWithAssumed(
+  ctx: AdversaryContext,
+  assumed: AssumedKnowledge,
+  report?: (msg: string) => void,
+  signal?: AbortSignal,
+): Promise<AdversaryContext> {
+  const knownAddresses = new Set(
+    assumed.knownAddresses.filter((a) => typeof a === "string" && a.trim()),
+  );
+  const knownTxids = new Set(
+    assumed.knownTxids.filter((t) => typeof t === "string" && t.trim()),
+  );
+
+  // Rebuild the outpoint→address map from the existing context (pure memory
+  // walk, no DB) so blank inputs in newly loaded txs attribute correctly even
+  // when their prevout lives in an already-indexed transaction.
+  const addrByOutpoint = new Map<string, string>();
+  for (const parts of ctx.participantsByTxid.values()) {
+    for (const p of parts) {
+      if (p.role === "output" && p.vout !== undefined && p.vout !== null && p.address) {
+        addrByOutpoint.set(`${p.txid}:${p.vout}`, p.address);
+      }
+    }
+  }
+
+  const participantsByTxid = new Map(ctx.participantsByTxid);
+  const userAddresses = new Set(ctx.userAddresses);
+
+  // 1. Known addresses not already covered: pull the transactions that touch
+  //    them into the adversary's tx universe.
+  const extraAddrs = [...knownAddresses].filter((a) => !ctx.userAddresses.has(a));
+  const extraTxids = new Set<string>();
+  if (extraAddrs.length > 0) {
+    report?.("Scenario: loading known-address transactions…");
+    const extraParts = await getParticipantsByAddressesWithOutpointSpends(extraAddrs, signal);
+    for (const p of extraParts) {
+      if (!participantsByTxid.has(p.txid)) extraTxids.add(p.txid);
+    }
+  }
+
+  // 2. Known txids are force-included even when nothing in the local graph
+  //    references them (e.g. the owning address is filtered out of this run).
+  for (const txid of knownTxids) {
+    if (!participantsByTxid.has(txid)) extraTxids.add(txid);
+  }
+
+  const txidArray = [...extraTxids];
+  for (let i = 0; i < txidArray.length; i += PARTICIPANT_BATCH) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const batch = txidArray.slice(i, i + PARTICIPANT_BATCH);
+    const batchParts = await getParticipantsByTxids(batch);
+    indexParticipants(batchParts, participantsByTxid, addrByOutpoint);
+    if (i + PARTICIPANT_BATCH < txidArray.length) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+
+  for (const a of knownAddresses) userAddresses.add(a);
+
+  return {
+    userAddresses,
+    participantsByTxid,
+    assumed: { knownAddresses, knownTxids },
+  };
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -358,24 +478,32 @@ async function buildAdversaryContext(
  * @param userAddresses Owned Bitcoin addresses to analyse
  * @param report        Optional progress callback
  * @param signal        Optional AbortSignal to cancel the DB-loading phase
+ * @param assumed       Optional assumed counterparty knowledge (scenario run);
+ *                      omit for the untouched baseline path
  */
 export async function runAdversaryView(
   userAddresses: string[],
   report?: (msg: string) => void,
   signal?: AbortSignal,
+  assumed?: AssumedKnowledge,
 ): Promise<AdversaryViewResult> {
   const progress = (msg: string) => report?.(msg);
 
-  if (userAddresses.length === 0) {
+  if (userAddresses.length === 0 && !assumed?.knownAddresses.length) {
     return emptyResult();
   }
 
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
   // Build the adversary context (load DB participants)
-  const ctx = await buildAdversaryContext(userAddresses, progress, signal);
+  let ctx = await buildAdversaryContext(userAddresses, progress, signal);
 
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  if (assumed) {
+    ctx = await extendAdversaryContextWithAssumed(ctx, assumed, progress, signal);
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  }
 
   return runAdversaryViewFromContext(ctx, progress);
 }
@@ -463,6 +591,62 @@ export async function runAdversaryViewFromContext(
     }
   }
 
+  // ── Step 2b: Assumed-knowledge seeds (scenario runs only) ─────────────────
+  // A named counterparty is ASSUMED to know the seeded addresses are the
+  // user's and to know the seeded transactions involve them. That knowledge is
+  // a certain-tier attribution: every seed address collapses into ONE cluster
+  // in BOTH graphs, so any on-chain link reaching a seed now attributes the
+  // whole cluster to the user — even addresses with no on-chain tie between
+  // them. Known transactions contribute their full participant graph as
+  // adversary-visible evidence: the counterparty sees the user's inputs (CIO —
+  // the payer signs every input) and can pick out the user's owned outputs
+  // among the tx's outputs (their own payment address is known to them, so
+  // the remaining owned outputs are attributable by elimination).
+  //
+  // Baseline runs never enter this branch (ctx.assumed is undefined), leaving
+  // the blind analysis byte-for-byte unchanged.
+  if (ctx.assumed) {
+    const seedEvidenceTxid = new Map<string, string>();
+    const seedOrder: string[] = [];
+    const addSeed = (address: string, txid?: string) => {
+      if (!address) return;
+      const existing = seedEvidenceTxid.get(address);
+      if (existing === undefined) {
+        seedOrder.push(address);
+        seedEvidenceTxid.set(address, txid ?? "");
+      } else if (existing === "" && txid) {
+        seedEvidenceTxid.set(address, txid);
+      }
+    };
+    for (const a of ctx.assumed.knownAddresses) addSeed(a);
+    for (const txid of ctx.assumed.knownTxids) {
+      const parts = ctx.participantsByTxid.get(txid);
+      if (!parts) continue;
+      for (const p of parts) {
+        if (p.role === "input" && p.address) {
+          addSeed(p.address, txid);
+        } else if (
+          p.role === "output" &&
+          p.address &&
+          ctx.userAddresses.has(p.address)
+        ) {
+          addSeed(p.address, txid);
+        }
+      }
+    }
+
+    if (seedOrder.length > 0) {
+      const anchor = seedOrder[0];
+      certainUF.find(anchor);
+      likelyUF.find(anchor);
+      for (let i = 1; i < seedOrder.length; i++) {
+        const evidence = seedEvidenceTxid.get(seedOrder[i]) || undefined;
+        certainUF.union(anchor, seedOrder[i], evidence);
+        likelyUF.union(anchor, seedOrder[i], evidence);
+      }
+    }
+  }
+
   // ── Step 3: Load ground truth from records ────────────────────────────────
   progress("Adversary view: loading ground-truth metadata\u2026");
 
@@ -542,10 +726,18 @@ export async function runAdversaryViewFromContext(
       confidence === "certain"
         ? "co-spent as inputs"
         : "linked via co-input and change-output inference";
+    // Scenario runs can produce clusters linked purely by assumed
+    // counterparty knowledge (no contributing transaction). Baseline clusters
+    // always have at least one linking txid, so this phrasing never appears on
+    // the baseline path.
     const narrative =
-      ownedInCluster.length === 2
-        ? `${fmtAddr(ownedInCluster[0])} and ${fmtAddr(ownedInCluster[1])} were ${linkDesc} in ${linkingTxids.length} ${txWord}. A chain analyst clusters them as the same wallet${confidence === "likely" ? " with high likelihood" : " with certainty"}.`
-        : `${ownedInCluster.length} of your addresses are ${linkDesc} across ${linkingTxids.length} ${txWord}. A chain analyst treats them as one wallet${confidence === "likely" ? " with high likelihood" : ""}.`;
+      linkingTxids.length === 0
+        ? ownedInCluster.length === 2
+          ? `${fmtAddr(ownedInCluster[0])} and ${fmtAddr(ownedInCluster[1])} are linked through the assumed counterparty knowledge alone — no on-chain connection is needed. A chain analyst with that knowledge treats them as one wallet with certainty.`
+          : `${ownedInCluster.length} of your addresses are linked through the assumed counterparty knowledge alone — no on-chain connection is needed. A chain analyst with that knowledge treats them as one wallet with certainty.`
+        : ownedInCluster.length === 2
+          ? `${fmtAddr(ownedInCluster[0])} and ${fmtAddr(ownedInCluster[1])} were ${linkDesc} in ${linkingTxids.length} ${txWord}. A chain analyst clusters them as the same wallet${confidence === "likely" ? " with high likelihood" : " with certainty"}.`
+          : `${ownedInCluster.length} of your addresses are ${linkDesc} across ${linkingTxids.length} ${txWord}. A chain analyst treats them as one wallet${confidence === "likely" ? " with high likelihood" : ""}.`;
 
     exposureFindings.push({
       category: "exposure",

@@ -59,6 +59,10 @@ import {
 } from "@/lib/data/price-data-crud";
 import { getAllDustFlags, toOutpoint } from "@/lib/data/dust-flags-crud";
 import { getAllSavedPsbts } from "@/lib/data/saved-psbts-crud";
+import {
+  getAllAdversaryScenarios,
+  adversaryScenarioIdentity,
+} from "@/lib/data/adversary-scenarios-crud";
 import { isPrunableRecordShape } from "./compact";
 import { CSV_EXPORT_HEADER, recordToCsvRow, type CsvExportableRecord } from "@/lib/csv-export";
 import type { Record as VaultRecord } from "@/lib/db-types";
@@ -119,11 +123,13 @@ export interface InlineMetadataAnalysis {
   // Other inline data tables a merge also restores, classified with the same
   // natural keys the shared restore helpers de-dupe by (evidence:
   // evidenceIdentity — attachment rows follow their document; priceData:
-  // [date+currency+asset]; dustFlags: outpoint; savedPsbts: psbtBase64).
+  // [date+currency+asset]; dustFlags: outpoint; savedPsbts: psbtBase64;
+  // adversaryScenarios: name+counterparty identity).
   evidence: MergeTableAnalysis;
   priceData: MergeTableAnalysis;
   dustFlags: MergeTableAnalysis;
   savedPsbts: MergeTableAnalysis;
+  adversaryScenarios: MergeTableAnalysis;
 }
 
 export interface MergeAnalysisResult {
@@ -648,6 +654,31 @@ async function analyzeInlineMetadata(
     }
   }
 
+  // Adversary scenarios de-dupe by their (name, counterparty) identity
+  // (restoreAdversaryScenarioRows). Every row is restorable — the helper only
+  // normalizes fields — so nothing counts as dropped.
+  const adversaryScenarios = blank();
+  {
+    const rows = arr("adversaryScenarios");
+    if (rows.length) {
+      throwIfAborted();
+      const seen = new Set<string>();
+      for (const s of await getAllAdversaryScenarios()) {
+        seen.add(adversaryScenarioIdentity(s));
+      }
+      for (const row of rows) {
+        adversaryScenarios.total += 1;
+        const key = adversaryScenarioIdentity(row ?? {});
+        if (seen.has(key)) {
+          adversaryScenarios.alreadyPresent += 1;
+          continue;
+        }
+        seen.add(key);
+        adversaryScenarios.added += 1;
+      }
+    }
+  }
+
   return {
     tags: await vocab("tags", getTags),
     categories: await vocab("categories", getCategories),
@@ -662,5 +693,6 @@ async function analyzeInlineMetadata(
     priceData,
     dustFlags,
     savedPsbts,
+    adversaryScenarios,
   };
 }

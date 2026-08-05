@@ -130,6 +130,7 @@ import { formatHistoryDate, PrivacyHistoryCard } from "./privacy-audit/privacy-h
 import { FindingCard } from "./privacy-audit/finding-card";
 export { FindingCard } from "./privacy-audit/finding-card";
 import { AdversaryViewPanel } from "./privacy-audit/adversary-view-panel";
+import { AdversaryScenariosPanel } from "./privacy-audit/adversary-scenarios-panel";
 
 // Re-exports so existing imports (tests + other pages) keep working without
 // changing their import paths.
@@ -322,6 +323,39 @@ export default function PrivacyAudit() {
   const { walletNames } = useWalletNames();
   const { toast } = useToast();
 
+  // Shared owned-address loader: the same filtered, paged walk the audit
+  // itself uses. Adversary knowledge scenarios consume it too so a scenario
+  // always runs over exactly the address set the audit would analyse.
+  const loadUserAddresses = useCallback(
+    async (onProgress?: (msg: string) => void): Promise<string[]> => {
+      const totalAddresses = await countRecordsByType("address");
+      const userAddresses: string[] = [];
+      let beforeIdExclusive: number | undefined = undefined;
+      let scanned = 0;
+      while (true) {
+        const batch = await getRecordsPageByTypeIdReverseKeyset("address", {
+          limit: AUDIT_INPUT_BATCH,
+          beforeIdExclusive,
+        });
+        if (batch.length === 0) break;
+        for (const r of batch) {
+          if (selectedOwner !== "all" && r.owner !== selectedOwner) continue;
+          if (selectedWallet !== "all" && r.walletName !== selectedWallet) continue;
+          if (r.inputString) userAddresses.push(r.inputString);
+        }
+        scanned += batch.length;
+        onProgress?.(
+          `Loading address records… ${scanned.toLocaleString()} / ${totalAddresses.toLocaleString()}`
+        );
+        beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
+        if (batch.length < AUDIT_INPUT_BATCH || beforeIdExclusive == null) break;
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      return userAddresses;
+    },
+    [selectedOwner, selectedWallet],
+  );
+
   const runAudit = useCallback(async () => {
     try {
       // Abort a previous adversary view still running from an earlier audit.
@@ -370,28 +404,7 @@ export default function PrivacyAudit() {
         return;
       }
 
-      const userAddresses: string[] = [];
-      let beforeIdExclusive: number | undefined = undefined;
-      let scanned = 0;
-      while (true) {
-        const batch = await getRecordsPageByTypeIdReverseKeyset("address", {
-          limit: AUDIT_INPUT_BATCH,
-          beforeIdExclusive,
-        });
-        if (batch.length === 0) break;
-        for (const r of batch) {
-          if (selectedOwner !== "all" && r.owner !== selectedOwner) continue;
-          if (selectedWallet !== "all" && r.walletName !== selectedWallet) continue;
-          if (r.inputString) userAddresses.push(r.inputString);
-        }
-        scanned += batch.length;
-        setStatusMessage(
-          `Loading address records… ${scanned.toLocaleString()} / ${totalAddresses.toLocaleString()}`
-        );
-        beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
-        if (batch.length < AUDIT_INPUT_BATCH || beforeIdExclusive == null) break;
-        await new Promise((r) => setTimeout(r, 0));
-      }
+      const userAddresses = await loadUserAddresses((msg) => setStatusMessage(msg));
 
       if (userAddresses.length === 0) {
         toast({ title: "No Matching Records", description: "No address records match the selected filters." });
@@ -516,7 +529,7 @@ export default function PrivacyAudit() {
       });
       setScanState("idle");
     }
-  }, [selectedOwner, selectedWallet, toast]);
+  }, [selectedOwner, selectedWallet, toast, loadUserAddresses]);
 
   const hasProximityFindings = useMemo(() => {
     if (!result) return false;
@@ -1126,6 +1139,10 @@ export default function PrivacyAudit() {
             />
           </>
         )}
+
+        {/* Adversary knowledge scenarios ("what if they knew?") — persisted,
+            so they stay manageable whether or not an audit has been run. */}
+        <AdversaryScenariosPanel loadUserAddresses={loadUserAddresses} />
       </div>
     </ScrollArea>
   );

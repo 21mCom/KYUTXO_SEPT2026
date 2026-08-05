@@ -17,7 +17,7 @@ import { reportDbUpgradeProgress } from './db-upgrade-progress';
  * KEEP IN SYNC when adding a new `this.version(N)` declaration — the
  * legacy-migration test asserts this matches the opened database.
  */
-export const CURRENT_SCHEMA_VERSION = 37;
+export const CURRENT_SCHEMA_VERSION = 39;
 
 // Import types needed for the class definition
 import type {
@@ -27,6 +27,7 @@ import type {
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
   PausedSyncState, SkippedAddress, AddressBlacklist, PartialExportBundle,
   TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag, SavedPsbt,
+  AdversaryScenario,
 } from './db-types';
 
 export class KYUTXODatabase extends Dexie {
@@ -87,9 +88,22 @@ export class KYUTXODatabase extends Dexie {
   // bulkPut, bulkDelete, modify, clear) on db.savedPsbts outside of
   // saved-psbts-crud.ts.
   savedPsbts!: Table<SavedPsbt>;
+  // Named "what if they knew?" counterparty-knowledge scenarios for the
+  // Privacy Audit's adversary view (assumed known addresses/transactions).
+  // IMPORTANT: Do not call write methods (add, put, update, delete, bulkAdd,
+  // bulkPut, bulkDelete, modify, clear) on db.adversaryScenarios outside of
+  // adversary-scenarios-crud.ts.
+  adversaryScenarios!: Table<AdversaryScenario>;
 
   constructor() {
     super('KYUTXODatabase');
+
+    // v39: add the adversaryScenarios table — named counterparty-knowledge
+    // scenarios ("what if they knew?") for the Privacy Audit's adversary view.
+    // Delta declaration — all other tables inherit unchanged from v38.
+    this.version(39).stores({
+      adversaryScenarios: '++id, name, counterpartyName, createdAt',
+    });
 
     // v38: savedPsbts outputs may now carry a zero-value OP_RETURN data output
     // (payload hex + evidence reference for on-chain notarization). The field

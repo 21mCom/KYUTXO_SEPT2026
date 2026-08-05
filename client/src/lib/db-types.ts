@@ -1069,7 +1069,17 @@ export interface SavedPsbt {
   updatedAt: number;
 }
 
-// Address blacklist - permanently skip these addresses during sync
+export interface AdversaryScenario {
+  id?: number;
+  name: string;
+  counterpartyName: string;
+  /** Vault addresses the counterparty is assumed to know are the user's. */
+  knownAddresses: string[];
+  /** Txids the counterparty is assumed to know involve the user. */
+  knownTxids: string[];
+  createdAt: number;
+  updatedAt: number;
+}
 export interface AddressBlacklist {
   id?: number;
   address: string;
