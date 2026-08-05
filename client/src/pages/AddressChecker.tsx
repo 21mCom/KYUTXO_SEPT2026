@@ -929,7 +929,10 @@ export default function AddressChecker() {
                 </Button>
               )}
 
-              {hasResults && !isRunning && !isHistoryRunning && (
+              {/* Reset stays available during a history run: handleReset also
+                  aborts the run (cancel flag + abort + run-token bump), so a
+                  mid-run Reset must wipe rows without leaving ghost workers. */}
+              {hasResults && !isRunning && (
                 <Button variant="outline" onClick={handleReset} data-testid="button-reset-check">
                   <RefreshCw className="h-4 w-4 mr-2" />
                   Reset
