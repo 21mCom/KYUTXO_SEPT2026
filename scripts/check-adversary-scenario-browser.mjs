@@ -289,6 +289,54 @@ async function main() {
       'newly-linked addresses render as record links',
     );
 
+    // ── Delete a referenced record: the live missing-assumptions notice ────
+    // The scenario's saved assumptions reference record B2 + transaction T3.
+    // Deleting B2's record must surface the "no longer match anything in this
+    // vault" notice via the live useLiveQuery wiring — WITHOUT a re-run.
+    const noticeBefore = await card.getByTestId('notice-scenario-unresolved-refs').count();
+    record(
+      'unresolved-notice-absent-before-delete',
+      noticeBefore === 0,
+      'no missing-assumptions notice while every reference resolves',
+    );
+
+    await page.evaluate(async ({ b2 }) => {
+      const recordCrud = await import('/src/lib/data/record-crud.ts');
+      const rows = await recordCrud.getRecordsByInputStrings([b2]);
+      if (rows.length !== 1 || rows[0].id == null) {
+        throw new Error(`Expected exactly one record for B2, got ${rows.length}`);
+      }
+      await recordCrud.deleteRecord(rows[0].id);
+    }, { b2: ADDR_B2 });
+
+    const notice = card.getByTestId('notice-scenario-unresolved-refs');
+    await notice.waitFor({ state: 'visible', timeout: 15_000 });
+    const noticeText = (await notice.textContent()) || '';
+    record(
+      'unresolved-notice-appears-live',
+      noticeText.includes('1 saved assumption no longer matches anything in this vault') &&
+        noticeText.includes('1 address'),
+      `notice appears live after deleting the referenced record: "${noticeText.trim()}"`,
+    );
+
+    // The scenario must still run with the unresolved reference excluded.
+    await card.getByTestId(`button-run-scenario-${scenarioId}`).click();
+    // The delta hides while the run is in flight; wait for it to settle back.
+    const deltaAfterDelete = card.getByTestId('container-scenario-delta');
+    try {
+      await deltaAfterDelete.waitFor({ state: 'hidden', timeout: 3_000 });
+    } catch {
+      /* run may complete faster than the hidden state is observable */
+    }
+    await deltaAfterDelete.waitFor({ state: 'visible', timeout: 60_000 });
+    const runFailedToast = await page.getByText('Scenario Run Failed').count();
+    const noticeStill = await card.getByTestId('notice-scenario-unresolved-refs').isVisible();
+    record(
+      'scenario-still-runs',
+      noticeStill && runFailedToast === 0,
+      'scenario re-runs to a delta (no failure toast) while the missing-assumptions notice stays visible',
+    );
+
     // ── Reload: the scenario persists (it rides the local database) ────────
     await page.reload({ waitUntil: 'load' });
     const unlockInput = page.getByTestId('input-password');
