@@ -1,0 +1,9 @@
+#!/bin/sh
+# core.hooksPath points at .githooks, which would otherwise disable the
+# installer-managed pre-commit hook in .git/hooks (scripts/install-hooks.sh).
+# Delegate to it so both hook systems keep working.
+legacy_hook="$(git rev-parse --git-dir)/hooks/pre-commit"
+if [ -x "$legacy_hook" ]; then
+  exec "$legacy_hook" "$@"
+fi
+exit 0
