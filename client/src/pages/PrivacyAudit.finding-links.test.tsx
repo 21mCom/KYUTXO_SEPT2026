@@ -7,9 +7,14 @@
 // a URL is only ever opened on an explicit user click (window.open) and is
 // NEVER fetched merely by rendering. Plain text (no URL) renders without a
 // link.
+// The provider harness (RecordPreviewProvider) queries Dexie at mount, so the
+// test needs an IndexedDB implementation or the noise guard trips on
+// MissingAPIError console noise.
+import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { screen, fireEvent, cleanup, within } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { fetchCallsWithNoteUrl } from "@/test/noteFetchCalls";
 import type { PrivacyFinding } from "@/lib/privacy-audit";
 import { FindingCard } from "./PrivacyAudit";
 
@@ -32,6 +37,12 @@ function renderCard(finding: PrivacyFinding) {
   );
 }
 
+// Unrelated app-level background fetches (e.g. the Tor proxy settings-token
+// sync triggered via use-node-settings) can legitimately fire while the real
+// providers mount. The offline-first guarantee we protect is narrower: the
+// finding's embedded URL must never be fetched. So each test asserts no fetch
+// call targeted the URL it embeds (or any absolute http(s) URL for the
+// plain-text case), rather than asserting fetch was never called at all.
 describe("PrivacyAudit FindingCard link rendering (offline-first)", () => {
   let openSpy: ReturnType<typeof vi.fn>;
   let fetchSpy: ReturnType<typeof vi.fn>;
@@ -59,7 +70,7 @@ describe("PrivacyAudit FindingCard link rendering (offline-first)", () => {
     expect(link.textContent).toBe(url);
 
     // Offline-first: nothing is fetched merely by rendering the finding.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
     expect(openSpy).not.toHaveBeenCalled();
   });
 
@@ -70,7 +81,7 @@ describe("PrivacyAudit FindingCard link rendering (offline-first)", () => {
     const link = screen.getByRole("link", { name: url });
 
     expect(openSpy).not.toHaveBeenCalled();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
 
     const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
     fireEvent(link, clickEvent);
@@ -79,7 +90,7 @@ describe("PrivacyAudit FindingCard link rendering (offline-first)", () => {
     expect(openSpy).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
     expect(clickEvent.defaultPrevented).toBe(true);
     // Opening is delegated to the browser, never fetched in-app.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
   });
 
   it("renders a URL in the remediation/correction text as a click-only link", () => {
@@ -93,13 +104,13 @@ describe("PrivacyAudit FindingCard link rendering (offline-first)", () => {
     const link = within(remediation).getByRole("link");
     expect(link.getAttribute("href")).toBe(url);
     expect(link.textContent).toBe(url);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
 
     const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
     fireEvent(link, clickEvent);
     expect(openSpy).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
     expect(clickEvent.defaultPrevented).toBe(true);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
   });
 
   it("renders a URL in a source citation note as a click-only link", () => {
@@ -126,13 +137,13 @@ describe("PrivacyAudit FindingCard link rendering (offline-first)", () => {
     const link = within(citation).getByRole("link");
     expect(link.getAttribute("href")).toBe(url);
     expect(link.textContent).toBe(url);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
 
     const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
     fireEvent(link, clickEvent);
     expect(openSpy).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
     expect(clickEvent.defaultPrevented).toBe(true);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchCallsWithNoteUrl(fetchSpy, url)).toEqual([]);
   });
 
   it("renders plain description and remediation text without any link", () => {
@@ -151,7 +162,8 @@ describe("PrivacyAudit FindingCard link rendering (offline-first)", () => {
     expect(remediation.textContent).toBe("Just a plain remediation with no links.");
     expect(within(remediation).queryByRole("link")).toBeNull();
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // No URL is embedded here; assert nothing fetched any absolute http(s) URL.
+    expect(fetchCallsWithNoteUrl(fetchSpy, "http://", "https://")).toEqual([]);
     expect(openSpy).not.toHaveBeenCalled();
   });
 });
