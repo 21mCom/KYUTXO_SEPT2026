@@ -389,6 +389,54 @@ async function main() {
       'scenario re-runs to a delta (no failure toast) while the missing-assumptions notice stays visible',
     );
 
+    // ── Wipe the synced transaction: combined address+txid notice ─────────
+    // The scenario also references transaction T3. Deleting its synced row
+    // (the same CRUD path a "clear synced history" flow uses) must update the
+    // SAME notice live to the combined wording — again without a re-run.
+    await page.evaluate(async ({ txid }) => {
+      const txCrud = await import('/src/lib/data/transaction-crud.ts');
+      const rows = await txCrud.getTransactionsByTxids([txid]);
+      if (rows.length !== 1 || rows[0].id == null) {
+        throw new Error(`Expected exactly one synced transaction for T3, got ${rows.length}`);
+      }
+      await txCrud.bulkDeleteTransactions([rows[0].id]);
+    }, { txid: T3 });
+
+    await page.waitForFunction(
+      ({ id }) => {
+        const cardEl = document.querySelector(`[data-testid="card-scenario-${id}"]`);
+        const noticeEl = cardEl?.querySelector('[data-testid="notice-scenario-unresolved-refs"]');
+        return (noticeEl?.textContent || '').includes('2 saved assumptions');
+      },
+      { id: scenarioId },
+      { timeout: 15_000 },
+    );
+    const combinedNoticeText =
+      (await card.getByTestId('notice-scenario-unresolved-refs').textContent()) || '';
+    record(
+      'unresolved-notice-combined-live',
+      combinedNoticeText.includes('2 saved assumptions no longer match anything in this vault') &&
+        combinedNoticeText.includes('1 address and 1 transaction'),
+      `notice updates live to the combined wording after wiping the synced tx: "${combinedNoticeText.trim()}"`,
+    );
+
+    // The scenario must still run with BOTH unresolved references excluded.
+    await card.getByTestId(`button-run-scenario-${scenarioId}`).click();
+    const deltaAfterTxWipe = card.getByTestId('container-scenario-delta');
+    try {
+      await deltaAfterTxWipe.waitFor({ state: 'hidden', timeout: 3_000 });
+    } catch {
+      /* run may complete faster than the hidden state is observable */
+    }
+    await deltaAfterTxWipe.waitFor({ state: 'visible', timeout: 60_000 });
+    const runFailedAfterTxWipe = await page.getByText('Scenario Run Failed').count();
+    const combinedNoticeStill = await card.getByTestId('notice-scenario-unresolved-refs').isVisible();
+    record(
+      'scenario-still-runs-after-tx-wipe',
+      combinedNoticeStill && runFailedAfterTxWipe === 0,
+      'scenario re-runs to a delta (no failure toast) with both unresolved references excluded',
+    );
+
     // ── Reload: the scenario persists (it rides the local database) ────────
     await page.reload({ waitUntil: 'load' });
     const unlockInput = page.getByTestId('input-password');
