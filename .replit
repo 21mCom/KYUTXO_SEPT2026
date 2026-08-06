@@ -737,6 +737,14 @@ args = "proof-vector-generators-check"
 task = "workflow.run"
 args = "proof-vector-generators-tests"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "win32-path-derivation-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "win32-path-derivation-guard-tests"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -2618,6 +2626,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/check-proof-vector-generators.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "win32-path-derivation-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-win32-path-derivation.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "win32-path-derivation-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-win32-path-derivation.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

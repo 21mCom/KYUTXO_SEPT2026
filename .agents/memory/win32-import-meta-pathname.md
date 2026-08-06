@@ -24,7 +24,10 @@ CI log showed the bundle emitted yet the guard reported it missing.
 
 **How to apply:** any script that can run on a Windows runner (build.yml steps,
 electron-builder hooks) must never derive filesystem paths from
-`new URL(...).pathname` without a win32 guard; grep
-`new URL(import.meta.url).pathname` in scripts/ when adding CI steps.
+`new URL(...).pathname` without a win32 guard. A static guard
+(`scripts/check-win32-path-derivation.js`, wired into validation) now scans
+scripts/**/*.{js,mjs} and fails on the naive pattern unless the same file
+uses fileURLToPath or a drive-letter strip; files OUTSIDE scripts/ (e.g.
+electron-builder hooks, build.yml inline node) are not covered — grep there.
 Same bug class as the win32 npm spawn trap (github-push-build-pipeline.md):
 Windows-only failures that Linux validation cannot see.
