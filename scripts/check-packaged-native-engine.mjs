@@ -50,7 +50,11 @@
 //     step (Windows) has already built it.
 
 import { execFileSync, spawn } from 'node:child_process';
-import { assertPackagedBundleFresh, assertPackagedAsarFresh } from './packaged-bundle-freshness.mjs';
+import {
+  assertPackagedBundleFresh,
+  assertPackagedAsarFresh,
+  repoRootFromModuleUrl,
+} from './packaged-bundle-freshness.mjs';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -58,9 +62,9 @@ import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 
-const ROOT = process.platform === 'win32'
-  ? path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, '')), '..')
-  : path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// Windows-safe (fileURLToPath): `new URL(...).pathname` is `/D:/...` on win32
+// and path.resolve mangles it — see repoRootFromModuleUrl.
+const ROOT = repoRootFromModuleUrl(import.meta.url);
 // electron-builder's --dir/unpacked layout is platform-named.
 const UNPACKED_DIR = path.join(
   ROOT,

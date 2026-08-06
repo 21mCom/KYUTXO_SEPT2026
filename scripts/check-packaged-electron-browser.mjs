@@ -42,11 +42,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { assertPackagedBundleFresh, assertPackagedAsarFresh } from './packaged-bundle-freshness.mjs';
+import {
+  assertPackagedBundleFresh,
+  assertPackagedAsarFresh,
+  repoRootFromModuleUrl,
+} from './packaged-bundle-freshness.mjs';
 
 await acquireBrowserCheckLock();
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// Windows-safe (fileURLToPath): `new URL(...).pathname` is `/D:/...` on win32
+// and path.resolve mangles it — see repoRootFromModuleUrl.
+const ROOT = repoRootFromModuleUrl(import.meta.url);
 const ASAR = path.join(ROOT, 'release', 'linux-unpacked', 'resources', 'app.asar');
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9223);
 const TAG = '[packaged-electron]';

@@ -31,9 +31,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { zipSync, strToU8 } from 'fflate';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+// Windows-safe (fileURLToPath): `new URL(...).pathname` is `/D:/...` on win32
+// and path.resolve mangles it into an invalid `\\D:\` path.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CACHE_DIR = path.join(ROOT, 'scripts', 'demo-vault', 'cache');
 const OUT_DIR = path.join(ROOT, 'demo');
 // Esplora-compatible public APIs, tried in order (mempool.space throttles
