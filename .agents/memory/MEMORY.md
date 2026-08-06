@@ -85,7 +85,8 @@
 - [Compact backup contract](compact-backup-contract.md) — prune only discovery-bare rows; restore rebuilds shells locally (sync can't recreate them); new tables/Record fields must be classified into the compact filters.
 - [Tier provenance classification](tier-provenance-classification.md) — never blanket-normalize invalid tiers; derive from source markers (substring match, "; "-merged sources) + syncDepth; repairs must bump updatedAt.
 - [Dexie inclusion vs exclusion parity](dexie-inclusion-vs-exclusion-parity.md) — anyOf narrowings hide unknown/missing enum keys that SQL exclusion shows; enumerate uniqueKeys dynamically + re-runnable repair; missing-key rows need alternate paths.
-- [GitHub push & build pipeline](github-push-build-pipeline.md) — gitPush callback can silently no-op; verify via ls-remote + credential-helper push; PAT lacks Actions read; win CI npm spawns need shell:true.
+- [GitHub push & build pipeline](github-push-build-pipeline.md) — gitPush callback can silently no-op; verify via ls-remote + credential-helper or GIT_ASKPASS push; win CI npm spawns need shell:true.
+- [Windows import.meta.url pathname trap](win32-import-meta-pathname.md) — new URL().pathname is /D:/... on win32 and resolve() mangles it to \\D:; use fileURLToPath for any script that can run on windows-2022.
 - [Electrum TOFU trust boundary](electrum-tofu-trust-boundary.md) — pin only proven self-signed leaves (not SELF_SIGNED_CERT_IN_CHAIN), independent checkServerIdentity, trust IPC validates against main-process observation never renderer metadata.
 - [Express always-on middleware order](express-always-on-middleware-order.md) — response-wide headers must be app.use'd BEFORE body parsers, or parser-rejected requests bypass them via error dispatch.
 - [Vault/backup KDF parameters](kdf-parameters.md) — KDF record (Argon2id current, PBKDF2 eras) travels with the salt (absent = legacy 100k); upgrade keeps the salt; packaged CSP needs 'wasm-unsafe-eval'.

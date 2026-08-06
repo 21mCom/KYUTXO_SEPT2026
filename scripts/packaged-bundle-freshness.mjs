@@ -13,8 +13,24 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+/**
+ * Derives the repo root from this module's URL. MUST use fileURLToPath:
+ * `new URL(import.meta.url).pathname` yields `/D:/a/.../scripts/x.mjs` on
+ * Windows, which path.win32.resolve mangles into `\\D:\a\repo` — readdirSync
+ * then throws (silently caught below) and the guard reports a missing bundle
+ * even though the build emitted one (windows-2022 CI break, task 2017).
+ *
+ * Exported so the node --test suite can pin the win32-style input behaviour.
+ */
+export function repoRootFromModuleUrl(moduleUrl) {
+  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), '..');
+}
+
+// Exported for the landmark regression test (a platform-naive derivation must
+// fail the suite on any OS instead of only surfacing on a Windows runner).
+export const ROOT = repoRootFromModuleUrl(import.meta.url);
 
 // Directories that never contain renderer source.
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'release']);
