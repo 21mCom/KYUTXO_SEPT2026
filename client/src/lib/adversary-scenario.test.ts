@@ -6,7 +6,7 @@
 // mocked; contexts are hand-built. The Dexie-backed context-extension path is
 // covered separately in adversary-scenario.extend.test.ts.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import type { TransactionParticipant } from "@/lib/db-types";
 
@@ -319,5 +319,95 @@ describe("computeScenarioDelta (pure)", () => {
       { address: "C", confidence: "certain" },
       { address: "D", confidence: "certain" },
     ]);
+  });
+});
+
+// ─── runAdversaryScenario abort handling ────────────────────────────────────
+//
+// The panel's Cancel button aborts an AbortController whose signal threads
+// through runAdversaryScenario. These tests replace the adversary-view engine
+// wholesale (full factory mock — no importOriginal, see vi-mock guidance) so
+// the abort seam between the baseline and scenario phases can be driven
+// deterministically.
+
+describe("runAdversaryScenario abort", () => {
+  afterEach(() => {
+    vi.doUnmock("@/lib/adversary-view");
+    vi.resetModules();
+  });
+
+  it("rejects with AbortError when the signal fires between the baseline and scenario phases", async () => {
+    vi.resetModules();
+    const controller = new AbortController();
+    const emptyResult = {
+      exposureFindings: [],
+      separationFindings: [],
+      contextMergeWarnings: [],
+    } as unknown as AdversaryViewResult;
+
+    const buildSpy = vi.fn(async () => ({
+      userAddresses: new Set<string>(),
+      participantsByTxid: new Map(),
+    }));
+    const runViewSpy = vi.fn(async () => {
+      // Baseline completes, then the user clicks Cancel before the scenario
+      // phase starts.
+      controller.abort();
+      return emptyResult;
+    });
+    const extendSpy = vi.fn();
+
+    vi.doMock("@/lib/adversary-view", () => ({
+      buildAdversaryContext: buildSpy,
+      runAdversaryViewFromContext: runViewSpy,
+      extendAdversaryContextWithAssumed: extendSpy,
+    }));
+
+    const { runAdversaryScenario } = await import("@/lib/adversary-scenario");
+
+    const messages: string[] = [];
+    await expect(
+      runAdversaryScenario(
+        ["addr1"],
+        { knownAddresses: ["kA"], knownTxids: [] },
+        { counterpartyName: "TestExchange" },
+        (m) => messages.push(m),
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    // Baseline ran exactly once; the scenario phase never started.
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+    expect(runViewSpy).toHaveBeenCalledTimes(1);
+    expect(extendSpy).not.toHaveBeenCalled();
+    // No progress messages after the abort (the "applying assumed…" phase
+    // message must never fire).
+    expect(messages.some((m) => m.includes("applying assumed"))).toBe(false);
+  });
+
+  it("rejects immediately when the signal is already aborted at entry", async () => {
+    vi.resetModules();
+    const controller = new AbortController();
+    controller.abort();
+
+    const buildSpy = vi.fn();
+    vi.doMock("@/lib/adversary-view", () => ({
+      buildAdversaryContext: buildSpy,
+      runAdversaryViewFromContext: vi.fn(),
+      extendAdversaryContextWithAssumed: vi.fn(),
+    }));
+
+    const { runAdversaryScenario } = await import("@/lib/adversary-scenario");
+
+    await expect(
+      runAdversaryScenario(
+        ["addr1"],
+        { knownAddresses: [], knownTxids: ["t1"] },
+        { counterpartyName: "X" },
+        undefined,
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(buildSpy).not.toHaveBeenCalled();
   });
 });

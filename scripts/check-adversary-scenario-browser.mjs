@@ -248,7 +248,59 @@ async function main() {
       `scenario card lists the counterparty badge ("${(cpBadge || '').trim()}")`,
     );
 
-    // ── Run the scenario and assert the delta panel ────────────────────────
+    // ── Cancel a run mid-analysis: the panel must stay usable ─────────────
+    // Slow every Dexie collection read while a window flag is set so the run
+    // stays in flight long enough to click Cancel deterministically (small
+    // seeds otherwise finish in milliseconds).
+    await page.evaluate(async () => {
+      const { db } = await import('/src/lib/database.ts');
+      const proto = Object.getPrototypeOf(db.transactionParticipants.toCollection());
+      const orig = proto.toArray;
+      proto.toArray = async function (...args) {
+        if (window.__scenarioReadDelay) {
+          await new Promise((r) => setTimeout(r, 750));
+        }
+        return orig.apply(this, args);
+      };
+      window.__scenarioReadDelay = true;
+    });
+
+    await card.getByTestId(`button-run-scenario-${scenarioId}`).click();
+    const cancelBtn = card.getByTestId(`button-cancel-scenario-${scenarioId}`);
+    await cancelBtn.waitFor({ state: 'visible', timeout: 10_000 });
+    // Wait until the ANALYSIS itself is in flight (adversary-view / scenario
+    // progress messages), not just the pre-run address load.
+    await page.waitForFunction(
+      (id) => {
+        const el = document.querySelector(
+          `[data-testid="card-scenario-${id}"] [data-testid="text-scenario-status"]`,
+        );
+        return !!el && /Adversary view|Scenario:/.test(el.textContent || '');
+      },
+      scenarioId,
+      { timeout: 30_000 },
+    );
+    await cancelBtn.click();
+    // The running state must clear (Cancel button + spinner/status go away).
+    await cancelBtn.waitFor({ state: 'hidden', timeout: 20_000 });
+    const statusGone = (await card.getByTestId('text-scenario-status').count()) === 0;
+    // Give any stray error toast a moment to fire before asserting.
+    await page.waitForTimeout(1_000);
+    const cancelToastCount = await page.getByText('Scenario Run Failed').count();
+    const deltaAfterCancel = await card.getByTestId('container-scenario-delta').count();
+    record(
+      'cancel-mid-run',
+      statusGone && cancelToastCount === 0 && deltaAfterCancel === 0,
+      `Cancel mid-analysis clears the running state without an error toast or a half-applied delta ` +
+        `(statusGone=${statusGone}, errorToasts=${cancelToastCount}, deltas=${deltaAfterCancel})`,
+    );
+    // Remove the read delay; the immediate re-run below must produce the
+    // correct delta, proving the panel stays fully usable after a cancel.
+    await page.evaluate(() => {
+      window.__scenarioReadDelay = false;
+    });
+
+    // ── Re-run the scenario immediately and assert the delta panel ────────
     await card.getByTestId(`button-run-scenario-${scenarioId}`).click();
     const delta = card.getByTestId('container-scenario-delta');
     await delta.waitFor({ state: 'visible', timeout: 60_000 });
@@ -388,7 +440,7 @@ async function main() {
   }
 
   console.log(
-    '[adversary-scenario-browser] PASSED: scenario create → run → delta panel (newly-linked badges, narrative, confidence) → persistence → delete all work in a real browser.',
+    '[adversary-scenario-browser] PASSED: scenario create → cancel mid-analysis → re-run → delta panel (newly-linked badges, narrative, confidence) → persistence → delete all work in a real browser.',
   );
 }
 
