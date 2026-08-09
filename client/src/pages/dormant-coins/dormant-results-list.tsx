@@ -15,6 +15,7 @@ import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
 import { useToast } from "@/hooks/use-toast";
 import { useNodeSettings } from "@/hooks/use-node-settings";
+import { useWindowedRows } from "@/hooks/use-windowed-rows";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
 import { transactionSyncService } from "@/lib/transaction-sync";
 import { checkOutpointLive, type LiveOutpointResult } from "@/lib/dormant-live-check";
@@ -30,7 +31,6 @@ import {
   getDormantRowWindow,
 } from "@/lib/data/dormant-coins-report-store";
 
-const WINDOW_SIZE = 100;
 const ROW_HEIGHT = 64;
 const GROUP_ROW_HEIGHT = 72;
 
@@ -54,79 +54,6 @@ export function clueBadgeClass(clue: DormantClueType): string {
     case "suspected-change":
       return "bg-purple-500 text-white no-default-hover-elevate no-default-active-elevate";
   }
-}
-
-/**
- * Generic windowed-list machinery: loads 100-row windows from IndexedDB for
- * the visible range and caches them by absolute index. `count` resets clear
- * the cache (a new run rewrote the store).
- */
-function useWindowedRows<T>(count: number, fetchWindow: (offset: number, limit: number) => Promise<T[]>) {
-  const rowCacheRef = useRef<Map<number, T>>(new Map());
-  const pendingRef = useRef<Set<number>>(new Set());
-  const [cacheVersion, setCacheVersion] = useState(0);
-  const [range, setRange] = useState<{ first: number; last: number }>({ first: 0, last: 0 });
-
-  useEffect(() => {
-    if (count === 0) {
-      rowCacheRef.current.clear();
-      pendingRef.current.clear();
-      setCacheVersion((v) => v + 1);
-    }
-  }, [count]);
-
-  useEffect(() => {
-    if (count === 0) return;
-    const { first, last } = range;
-    const startWindow = Math.floor(first / WINDOW_SIZE);
-    const endWindow = Math.floor(last / WINDOW_SIZE);
-    const windowsToLoad: number[] = [];
-    for (let w = startWindow; w <= endWindow; w++) {
-      if (pendingRef.current.has(w)) continue;
-      const offset = w * WINDOW_SIZE;
-      const end = Math.min(offset + WINDOW_SIZE, count);
-      let missing = false;
-      for (let i = offset; i < end; i++) {
-        if (!rowCacheRef.current.has(i)) {
-          missing = true;
-          break;
-        }
-      }
-      if (missing) windowsToLoad.push(w);
-    }
-    if (windowsToLoad.length === 0) return;
-
-    let cancelled = false;
-    for (const w of windowsToLoad) pendingRef.current.add(w);
-    (async () => {
-      try {
-        for (const w of windowsToLoad) {
-          // A cleanup ran (range/count changed): stop. The next effect run
-          // re-queues any windows that are still missing, because cleanup
-          // already removed them from pendingRef.
-          if (cancelled) return;
-          const offset = w * WINDOW_SIZE;
-          const rows = await fetchWindow(offset, WINDOW_SIZE);
-          rows.forEach((row, idx) => rowCacheRef.current.set(offset + idx, row));
-        }
-        setCacheVersion((v) => v + 1);
-      } finally {
-        for (const w of windowsToLoad) pendingRef.current.delete(w);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      // Remove immediately so the effect's next run (e.g. the visible range
-      // grew while a load was in flight) doesn't skip these windows forever
-      // after this load was cancelled — otherwise loaded rows would sit in
-      // the cache without a re-render ever being scheduled.
-      for (const w of windowsToLoad) pendingRef.current.delete(w);
-    };
-    // cacheVersion intentionally excluded: it would re-trigger after each load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.first, range.last, count, fetchWindow]);
-
-  return { rowCacheRef, setRange, cacheVersion };
 }
 
 // Per-row live node-check state, keyed by "txid:vout".

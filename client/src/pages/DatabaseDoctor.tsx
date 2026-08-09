@@ -95,6 +95,7 @@ import {
 } from "@/lib/vault";
 import { canonicalizeRecordIdentifier } from "@/lib/bitcoin";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
+import { useWindowedRows } from "@/hooks/use-windowed-rows";
 import { isEncryptedPlaceholder } from "@/lib/legacy-decrypt";
 import {
   detectStaleCachedBalances,
@@ -1716,19 +1717,13 @@ export function StaleAddressList({
   onSetManySelected: (recordIds: number[], select: boolean) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
-  // Loaded rows keyed by absolute row index; only visited windows are present.
-  const rowCacheRef = useRef<Map<number, StaleAddressDetail>>(new Map());
-  // Window indices currently being fetched, so we never double-load one.
-  const pendingRef = useRef<Set<number>>(new Set());
-  const [cacheVersion, setCacheVersion] = useState(0);
-
-  // A new run resets the store, so drop any cached rows when the count resets.
-  useEffect(() => {
-    if (count === 0) {
-      rowCacheRef.current.clear();
-      pendingRef.current.clear();
-    }
-  }, [count]);
+  // Shared windowed loader: rows keyed by absolute index, fetched in
+  // 100-row windows from the scratch store; a count reset clears the cache.
+  const { rowCacheRef, setRange, cacheVersion } = useWindowedRows<StaleAddressDetail>(
+    count,
+    getStaleReportWindow,
+    STALE_WINDOW_SIZE,
+  );
 
   const virtualizer = useVirtualizer({
     count,
@@ -1751,53 +1746,14 @@ export function StaleAddressList({
   const someLoadedSelected = loadedIds.some((id) => selectedIds.has(id));
   const headerChecked = allLoadedSelected ? true : someLoadedSelected ? "indeterminate" : false;
 
-  // Load any visible windows that aren't cached yet, then re-render.
+  // Feed the visible range to the shared loader. setRange is stable;
+  // virtualItems identity changes per scroll frame, so key off the boundary
+  // indices instead.
   useEffect(() => {
-    if (count === 0 || virtualItems.length === 0) return;
-    const startWindow = Math.floor(firstIndex / STALE_WINDOW_SIZE);
-    const endWindow = Math.floor(lastIndex / STALE_WINDOW_SIZE);
-    const windowsToLoad: number[] = [];
-    for (let w = startWindow; w <= endWindow; w++) {
-      if (pendingRef.current.has(w)) continue;
-      const offset = w * STALE_WINDOW_SIZE;
-      const end = Math.min(offset + STALE_WINDOW_SIZE, count);
-      let missing = false;
-      for (let i = offset; i < end; i++) {
-        if (!rowCacheRef.current.has(i)) { missing = true; break; }
-      }
-      if (missing) windowsToLoad.push(w);
-    }
-    if (windowsToLoad.length === 0) return;
-
-    let cancelled = false;
-    for (const w of windowsToLoad) pendingRef.current.add(w);
-    (async () => {
-      try {
-        for (const w of windowsToLoad) {
-          // A cleanup ran (range/count changed): stop. The next effect run
-          // re-queues any windows that are still missing, because cleanup
-          // already removed them from pendingRef.
-          if (cancelled) return;
-          const offset = w * STALE_WINDOW_SIZE;
-          const rows = await getStaleReportWindow(offset, STALE_WINDOW_SIZE);
-          rows.forEach((row, idx) => rowCacheRef.current.set(offset + idx, row));
-        }
-        setCacheVersion((v) => v + 1);
-      } finally {
-        for (const w of windowsToLoad) pendingRef.current.delete(w);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      // Remove immediately so the effect's next run (e.g. the visible range
-      // grew while a load was in flight) doesn't skip these windows forever
-      // after this load was cancelled — otherwise loaded rows would sit in
-      // the cache without a re-render ever being scheduled.
-      for (const w of windowsToLoad) pendingRef.current.delete(w);
-    };
-    // cacheVersion intentionally excluded: it would re-trigger after each load.
+    if (virtualItems.length === 0) return;
+    setRange({ first: firstIndex, last: lastIndex });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstIndex, lastIndex, count]);
+  }, [firstIndex, lastIndex]);
 
   return (
     <div className="border rounded-md" data-testid="list-stale-addresses">
