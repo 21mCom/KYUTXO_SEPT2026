@@ -111,7 +111,10 @@ class ResizeObserverStub {
 (globalThis as unknown as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver =
   ResizeObserverStub;
 
-vi.mock("@/lib/database", () => ({ db: {} }));
+vi.mock("@/lib/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/database")>();
+  return { ...actual, db: {} };
+});
 vi.mock("@/lib/dataFacade", () => ({ getParticipantsByAddresses: vi.fn() }));
 vi.mock("@/hooks/use-flow-data", () => ({
   useFlowData: () => ({ flowData, isLoading: false, error: null, dataSource: "local", fetchFlow: vi.fn() }),

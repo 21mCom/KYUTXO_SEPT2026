@@ -1774,16 +1774,27 @@ export function StaleAddressList({
     (async () => {
       try {
         for (const w of windowsToLoad) {
+          // A cleanup ran (range/count changed): stop. The next effect run
+          // re-queues any windows that are still missing, because cleanup
+          // already removed them from pendingRef.
+          if (cancelled) return;
           const offset = w * STALE_WINDOW_SIZE;
           const rows = await getStaleReportWindow(offset, STALE_WINDOW_SIZE);
           rows.forEach((row, idx) => rowCacheRef.current.set(offset + idx, row));
         }
-        if (!cancelled) setCacheVersion((v) => v + 1);
+        setCacheVersion((v) => v + 1);
       } finally {
         for (const w of windowsToLoad) pendingRef.current.delete(w);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Remove immediately so the effect's next run (e.g. the visible range
+      // grew while a load was in flight) doesn't skip these windows forever
+      // after this load was cancelled — otherwise loaded rows would sit in
+      // the cache without a re-render ever being scheduled.
+      for (const w of windowsToLoad) pendingRef.current.delete(w);
+    };
     // cacheVersion intentionally excluded: it would re-trigger after each load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firstIndex, lastIndex, count]);

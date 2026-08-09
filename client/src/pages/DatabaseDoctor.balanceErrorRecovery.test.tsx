@@ -25,7 +25,10 @@ import {
 } from "@/lib/data/address-stats";
 import type { BalanceIntegrityCard as BalanceIntegrityCardType } from "./DatabaseDoctor";
 
-vi.mock("@/lib/database", () => ({ db: {} }));
+vi.mock("@/lib/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/database")>();
+  return { ...actual, db: {} };
+});
 vi.mock("@/lib/data/address-stats", () => ({
   detectStaleCachedBalances: vi.fn(),
   recomputeAddressStats: vi.fn(),

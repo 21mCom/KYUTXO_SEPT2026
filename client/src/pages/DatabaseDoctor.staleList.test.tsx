@@ -22,7 +22,10 @@ import type { StaleAddressList as StaleAddressListType } from "./DatabaseDoctor"
 // StaleAddressList is a pure presentational component, so stub those heavy
 // imports to keep this test fast and isolated.
 import { vi } from "vitest";
-vi.mock("@/lib/database", () => ({ db: {} }));
+vi.mock("@/lib/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/database")>();
+  return { ...actual, db: {} };
+});
 vi.mock("@/lib/data/address-stats", () => ({
   detectStaleCachedBalances: vi.fn(),
   recomputeAddressStats: vi.fn(),
