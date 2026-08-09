@@ -88,6 +88,25 @@ export interface BlockchainProvider {
     onProgress?: (scanned: number) => void,
     signal?: AbortSignal,
   ): Promise<AddressHistoryDates>;
+  /**
+   * Optional: check whether a specific output (txid:vout) has been spent.
+   * Available on Esplora-compatible providers via the /tx/:txid/outspend/:vout
+   * endpoint. Returns null when the transaction/output is unknown to the node.
+   */
+  getTxOutspend?(
+    txid: string,
+    vout: number,
+    signal?: AbortSignal,
+  ): Promise<{ spent: boolean; spentTxid?: string } | null>;
+  /**
+   * Optional: list the currently-unspent outpoints for an address (Electrum
+   * listunspent). Used to verify a specific outpoint on providers that lack a
+   * direct outspend endpoint.
+   */
+  getAddressUtxoOutpoints?(
+    address: string,
+    signal?: AbortSignal,
+  ): Promise<Array<{ txid: string; vout: number; valueSats: number }>>;
 }
 
 export interface ApiTransaction {

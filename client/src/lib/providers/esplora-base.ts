@@ -337,6 +337,31 @@ export abstract class EsploraProvider implements BlockchainProvider {
     return { firstSeenTime, lastSeenTime };
   }
 
+  // Check whether a specific output (txid:vout) has been spent, via the
+  // Esplora outspend endpoint. Returns null when the tx/output is unknown.
+  async getTxOutspend(
+    txid: string,
+    vout: number,
+    signal?: AbortSignal,
+  ): Promise<{ spent: boolean; spentTxid?: string } | null> {
+    try {
+      const response = await this.rateLimitedFetch(
+        `${this.baseUrl}/tx/${txid}/outspend/${vout}`,
+        signal,
+      );
+      const data = await response.json();
+      if (!data || typeof data.spent !== 'boolean') {
+        throw new Error('Unexpected outspend response from node');
+      }
+      return { spent: data.spent, spentTxid: typeof data.txid === 'string' ? data.txid : undefined };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('404')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   async getTransaction(txid: string, signal?: AbortSignal): Promise<ApiTransaction | null> {
     try {
       const response = await this.rateLimitedFetch(`${this.baseUrl}/tx/${txid}`, signal);

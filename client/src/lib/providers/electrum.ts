@@ -480,6 +480,35 @@ export class ElectrumProvider implements BlockchainProvider {
     return balanceSats;
   }
 
+  // List the currently-unspent outpoints for an address (Electrum
+  // listunspent). Used to verify a specific outpoint against the node when no
+  // direct outspend endpoint exists on this protocol.
+  async getAddressUtxoOutpoints(
+    address: string,
+    signal?: AbortSignal,
+  ): Promise<Array<{ txid: string; vout: number; valueSats: number }>> {
+    this.ensureElectron();
+    if (signal?.aborted) throw new Error('Check cancelled');
+    const api = getElectronAPI();
+    const utxoResult = await api.electrumGetUtxos({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      address,
+      timeout: this.timeout,
+      ...this.torParams(),
+    });
+    if (signal?.aborted) throw new Error('Check cancelled');
+    if (!utxoResult.success) {
+      throw new Error(utxoResult.error || 'Failed to get address UTXOs via Electrum');
+    }
+    return (utxoResult.utxos || []).map((u) => ({
+      txid: u.tx_hash,
+      vout: u.tx_pos,
+      valueSats: u.value || 0,
+    }));
+  }
+
   // On-demand tier: walk every transaction to compute Received, Sent and the
   // first/last-seen block times. Electrum verbose txs do NOT carry prevout
   // addresses, so spends can't be detected by matching input addresses (that

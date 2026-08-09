@@ -21,6 +21,7 @@ import {
   type DormantOutputRow,
   type DormantScanParams,
 } from "@/lib/dormant-coins";
+import { checkOutpointLive } from "@/lib/dormant-live-check";
 import {
   appendDormantGroups,
   appendDormantRows,
@@ -465,5 +466,65 @@ describe("dormant coins report store", () => {
     expect(parsed.rows).toHaveLength(1);
     expect(parsed.rows[0].amountSats).toBe(123_456);
     expect(parsed.rows[0].seq).toBeUndefined(); // internal sequence stripped
+  });
+});
+
+describe("checkOutpointLive", () => {
+  const target = { txid: "aa".repeat(32), vout: 1, address: "bc1qlivechecktarget0000000000000000000" };
+
+  it("uses the Esplora outspend endpoint when available", async () => {
+    const getTxOutspend = vi.fn().mockResolvedValue({ spent: false });
+    const result = await checkOutpointLive({ name: "esplora", getTxOutspend } as never, target);
+    expect(result).toEqual({ status: "unspent", spentTxid: undefined });
+    expect(getTxOutspend).toHaveBeenCalledWith(target.txid, target.vout, undefined);
+
+    getTxOutspend.mockResolvedValue({ spent: true, spentTxid: "bb".repeat(32) });
+    const spent = await checkOutpointLive({ name: "esplora", getTxOutspend } as never, target);
+    expect(spent).toEqual({ status: "spent", spentTxid: "bb".repeat(32) });
+  });
+
+  it("throws when the node does not know the output (Esplora null)", async () => {
+    const getTxOutspend = vi.fn().mockResolvedValue(null);
+    await expect(
+      checkOutpointLive({ name: "esplora", getTxOutspend } as never, target),
+    ).rejects.toThrow(/does not know/i);
+  });
+
+  it("falls back to Electrum listunspent outpoint matching", async () => {
+    const getAddressUtxoOutpoints = vi.fn().mockResolvedValue([
+      { txid: target.txid, vout: 1, valueSats: 5000 },
+      { txid: "cc".repeat(32), vout: 0, valueSats: 100 },
+    ]);
+    const unspent = await checkOutpointLive(
+      { name: "electrum", getAddressUtxoOutpoints } as never,
+      target,
+    );
+    expect(unspent).toEqual({ status: "unspent" });
+    expect(getAddressUtxoOutpoints).toHaveBeenCalledWith(target.address, undefined);
+
+    // Same txid but different vout does NOT count — exact outpoint only.
+    getAddressUtxoOutpoints.mockResolvedValue([{ txid: target.txid, vout: 0, valueSats: 5000 }]);
+    const spent = await checkOutpointLive(
+      { name: "electrum", getAddressUtxoOutpoints } as never,
+      target,
+    );
+    expect(spent).toEqual({ status: "spent" });
+  });
+
+  it("throws for Electrum targets without an address", async () => {
+    const getAddressUtxoOutpoints = vi.fn();
+    await expect(
+      checkOutpointLive(
+        { name: "electrum", getAddressUtxoOutpoints } as never,
+        { ...target, address: "" },
+      ),
+    ).rejects.toThrow(/no address/i);
+    expect(getAddressUtxoOutpoints).not.toHaveBeenCalled();
+  });
+
+  it("throws for providers supporting neither strategy", async () => {
+    await expect(checkOutpointLive({ name: "bare" } as never, target)).rejects.toThrow(
+      /does not support/i,
+    );
   });
 });

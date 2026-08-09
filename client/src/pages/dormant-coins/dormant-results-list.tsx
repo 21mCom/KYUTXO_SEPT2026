@@ -6,11 +6,16 @@
 // demand and cached by absolute row index — the same pattern as the Balance
 // Integrity stale-address list.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { Loader2, RadioTower, AlertCircle, CheckCircle, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
+import { useNodeSettings } from "@/hooks/use-node-settings";
+import { createProviderFromSettings } from "@/lib/blockchain-api";
+import { checkOutpointLive, type LiveOutpointResult } from "@/lib/dormant-live-check";
 import {
   DORMANT_CLUE_LABELS,
   formatAgeYears,
@@ -122,6 +127,12 @@ function useWindowedRows<T>(count: number, fetchWindow: (offset: number, limit: 
   return { rowCacheRef, setRange, cacheVersion };
 }
 
+// Per-row live node-check state, keyed by "txid:vout".
+export type LiveCheckState =
+  | { phase: "checking" }
+  | { phase: "done"; result: LiveOutpointResult }
+  | { phase: "error"; message: string };
+
 export function DormantResultsList({
   count,
   nowSec,
@@ -131,6 +142,56 @@ export function DormantResultsList({
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const { rowCacheRef, setRange, cacheVersion } = useWindowedRows(count, getDormantRowWindow);
+  const { nodeSettings } = useNodeSettings();
+  const nodeSettingsRef = useRef(nodeSettings);
+  nodeSettingsRef.current = nodeSettings;
+
+  // Live node-check results, keyed by outpoint. Kept here (not in the row
+  // cache) so scrolling a row out of the window and back preserves its state.
+  const [liveChecks, setLiveChecks] = useState<ReadonlyMap<string, LiveCheckState>>(new Map());
+  // Aborts in-flight checks on unmount / when a new run rewrote the store.
+  const liveAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    // A new run rewrote the store — stale live results belong to old rows.
+    liveAbortRef.current?.abort();
+    liveAbortRef.current = null;
+    setLiveChecks(new Map());
+  }, [count]);
+
+  useEffect(() => {
+    return () => liveAbortRef.current?.abort();
+  }, []);
+
+  const runLiveCheck = useCallback(async (row: DormantOutputRow) => {
+    const key = `${row.txid}:${row.vout}`;
+    setLiveChecks((prev) => {
+      if (prev.get(key)?.phase === "checking") return prev; // already running
+      const next = new Map(prev);
+      next.set(key, { phase: "checking" });
+      return next;
+    });
+    if (!liveAbortRef.current) liveAbortRef.current = new AbortController();
+    const signal = liveAbortRef.current.signal;
+    try {
+      const provider = createProviderFromSettings(nodeSettingsRef.current);
+      const result = await checkOutpointLive(provider, row, signal);
+      if (signal.aborted) return;
+      setLiveChecks((prev) => {
+        const next = new Map(prev);
+        next.set(key, { phase: "done", result });
+        return next;
+      });
+    } catch (err) {
+      if (signal.aborted) return;
+      const message = err instanceof Error ? err.message : String(err);
+      setLiveChecks((prev) => {
+        const next = new Map(prev);
+        next.set(key, { phase: "error", message });
+        return next;
+      });
+    }
+  }, []);
 
   const virtualizer = useVirtualizer({
     count,
@@ -153,12 +214,13 @@ export function DormantResultsList({
 
   return (
     <div className="border rounded-md" data-testid="list-dormant-rows">
-      <div className="grid grid-cols-[minmax(0,2fr)_auto_auto_auto_auto] gap-3 px-3 py-2 bg-muted/50 border-b text-xs font-medium text-muted-foreground items-center">
+      <div className="grid grid-cols-[minmax(0,2fr)_auto_auto_auto_auto_auto] gap-3 px-3 py-2 bg-muted/50 border-b text-xs font-medium text-muted-foreground items-center">
         <span>Address</span>
         <span>Clue</span>
         <span className="text-right">Amount</span>
         <span className="text-right">Created</span>
         <span className="text-right">Funding tx</span>
+        <span className="text-right">Node check</span>
       </div>
       <div ref={parentRef} className="h-[420px] overflow-auto" data-testid="scroll-dormant-rows">
         <div
@@ -185,6 +247,8 @@ export function DormantResultsList({
                 key={`${row.txid}:${row.vout}`}
                 row={row}
                 nowSec={nowSec}
+                liveCheck={liveChecks.get(`${row.txid}:${row.vout}`)}
+                onLiveCheck={runLiveCheck}
                 style={{ height: `${ROW_HEIGHT}px`, transform: `translateY(${virtualRow.start}px)` }}
               />
             );
@@ -195,18 +259,102 @@ export function DormantResultsList({
   );
 }
 
+// Renders the "Node check" cell: the explicit per-row action that verifies
+// this exact outpoint against the configured node, and its result badge.
+function LiveCheckCell({
+  row,
+  state,
+  onCheck,
+}: {
+  row: DormantOutputRow;
+  state: LiveCheckState | undefined;
+  onCheck: (row: DormantOutputRow) => void;
+}) {
+  const key = `${row.txid.slice(0, 12)}-${row.vout}`;
+  if (state?.phase === "checking") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+        data-testid={`live-checking-${key}`}
+      >
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Checking…
+      </span>
+    );
+  }
+  if (state?.phase === "done") {
+    return state.result.status === "unspent" ? (
+      <Badge
+        variant="secondary"
+        className="gap-1 text-green-600 dark:text-green-400 text-[10px] px-1.5 py-0"
+        title="The node confirms this output is still unspent."
+        data-testid={`live-unspent-${key}`}
+      >
+        <CheckCircle className="h-3 w-3" />
+        Still unspent
+      </Badge>
+    ) : (
+      <Badge
+        variant="secondary"
+        className="gap-1 text-red-600 dark:text-red-400 text-[10px] px-1.5 py-0"
+        title={
+          state.result.spentTxid
+            ? `Spent by ${state.result.spentTxid} — your local history is behind. Re-sync this address.`
+            : "The node reports this output as spent — your local history is behind. Re-sync this address."
+        }
+        data-testid={`live-spent-${key}`}
+      >
+        <XCircle className="h-3 w-3" />
+        Spent
+      </Badge>
+    );
+  }
+  if (state?.phase === "error") {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => onCheck(row)}
+        className="text-destructive h-7 px-2"
+        title={`Could not verify (status unknown): ${state.message} Click to retry.`}
+        data-testid={`button-live-retry-${key}`}
+      >
+        <AlertCircle className="h-3 w-3 mr-1" />
+        Unknown — retry
+      </Button>
+    );
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => onCheck(row)}
+      className="h-7 px-2"
+      title="Check this exact output against your configured node (explicit network request)."
+      data-testid={`button-live-check-${key}`}
+    >
+      <RadioTower className="h-3 w-3 mr-1" />
+      Check node
+    </Button>
+  );
+}
+
 function DormantRow({
   row,
   nowSec,
+  liveCheck,
+  onLiveCheck,
   style,
 }: {
   row: DormantOutputRow;
   nowSec: number;
+  liveCheck: LiveCheckState | undefined;
+  onLiveCheck: (row: DormantOutputRow) => void;
   style: React.CSSProperties;
 }) {
   return (
     <div
-      className="absolute left-0 right-0 grid grid-cols-[minmax(0,2fr)_auto_auto_auto_auto] items-center gap-3 px-3 border-b last:border-b-0"
+      className="absolute left-0 right-0 grid grid-cols-[minmax(0,2fr)_auto_auto_auto_auto_auto] items-center gap-3 px-3 border-b last:border-b-0"
       style={style}
       data-testid={`row-dormant-${row.txid.slice(0, 12)}-${row.vout}`}
     >
@@ -252,6 +400,9 @@ function DormantRow({
       </span>
       <span className="text-right">
         <TxidLink txid={row.txid} className="text-xs" />
+      </span>
+      <span className="text-right whitespace-nowrap">
+        <LiveCheckCell row={row} state={liveCheck} onCheck={onLiveCheck} />
       </span>
     </div>
   );

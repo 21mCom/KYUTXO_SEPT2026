@@ -27,6 +27,20 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: toastSpy }),
 }));
 
+// The per-row "Check node" action creates a provider from node settings; stub
+// the factory so tests control the outpoint verdict without any network.
+const getTxOutspendMock = vi.fn();
+vi.mock("@/lib/blockchain-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/blockchain-api")>();
+  return {
+    ...actual,
+    createProviderFromSettings: () => ({
+      name: "Test Esplora",
+      getTxOutspend: getTxOutspendMock,
+    }),
+  };
+});
+
 // jsdom has no layout, so the real virtualizer measures a 0-height scroll
 // element and renders nothing. Render every row instead.
 vi.mock("@tanstack/react-virtual", () => ({
@@ -150,6 +164,42 @@ describe("DormantCoins page", () => {
     renderWithProviders(<DormantCoins />);
     await waitFor(() => expect(screen.getByTestId("alert-interrupted")).toBeTruthy());
     expect(screen.getByTestId("alert-interrupted").textContent).toContain("interrupted");
+  });
+
+  it("verifies a single outpoint against the node on demand and annotates the row", async () => {
+    await seedRelativeToRealNow();
+    renderWithProviders(<DormantCoins />);
+    fireEvent.click(screen.getByTestId("button-run-scan"));
+    const ownKey = `${TX_FUND.slice(0, 12)}-0`;
+    await waitFor(() => expect(screen.getByTestId(`row-dormant-${ownKey}`)).toBeTruthy());
+
+    // Still unspent.
+    getTxOutspendMock.mockResolvedValueOnce({ spent: false });
+    fireEvent.click(screen.getByTestId(`button-live-check-${ownKey}`));
+    await waitFor(() => expect(screen.getByTestId(`live-unspent-${ownKey}`)).toBeTruthy());
+    expect(getTxOutspendMock).toHaveBeenCalledWith(TX_FUND, 0, expect.anything());
+
+    // Spent: a different row reports spent with the spending txid.
+    const paidKey = `${TX_FUND.slice(0, 12)}-1`;
+    getTxOutspendMock.mockResolvedValueOnce({ spent: true, spentTxid: "12".repeat(32) });
+    fireEvent.click(screen.getByTestId(`button-live-check-${paidKey}`));
+    await waitFor(() => expect(screen.getByTestId(`live-spent-${paidKey}`)).toBeTruthy());
+
+    // Unknown: failures surface as a retry control, and retry can succeed.
+    const coKey = `${TX_CO_FUND.slice(0, 12)}-1`;
+    getTxOutspendMock.mockRejectedValueOnce(new Error("node unreachable"));
+    fireEvent.click(screen.getByTestId(`button-live-check-${coKey}`));
+    await waitFor(() => expect(screen.getByTestId(`button-live-retry-${coKey}`)).toBeTruthy());
+    expect(
+      (screen.getByTestId(`button-live-retry-${coKey}`) as HTMLElement).getAttribute("title"),
+    ).toContain("node unreachable");
+    getTxOutspendMock.mockResolvedValueOnce({ spent: false });
+    fireEvent.click(screen.getByTestId(`button-live-retry-${coKey}`));
+    await waitFor(() => expect(screen.getByTestId(`live-unspent-${coKey}`)).toBeTruthy());
+
+    // Earlier annotations are untouched.
+    expect(screen.getByTestId(`live-unspent-${ownKey}`)).toBeTruthy();
+    expect(screen.getByTestId(`live-spent-${paidKey}`)).toBeTruthy();
   });
 
   it("persists completed results across a remount", async () => {

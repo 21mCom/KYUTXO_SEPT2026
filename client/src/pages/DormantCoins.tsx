@@ -259,8 +259,9 @@ export default function DormantCoins() {
         <AlertDescription>
           This report is computed entirely from locally synced history, as of your last address
           sync. &ldquo;Still holds coins&rdquo; uses exact outpoint matching against local data
-          only — later counterparty spends may be unseen. No live network balance checks are
-          performed.
+          only — later counterparty spends may be unseen. The scan itself performs no network
+          requests; use a row&apos;s explicit &ldquo;Check node&rdquo; action to verify that exact
+          output against your configured node before hunting for keys.
         </AlertDescription>
       </Alert>
 
