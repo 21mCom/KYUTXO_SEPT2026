@@ -30,6 +30,7 @@ vi.mock("@/hooks/use-toast", () => ({
 // The per-row "Check node" action creates a provider from node settings; stub
 // the factory so tests control the outpoint verdict without any network.
 const getTxOutspendMock = vi.fn();
+const getBlockHeightMock = vi.fn();
 vi.mock("@/lib/blockchain-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/blockchain-api")>();
   return {
@@ -37,7 +38,22 @@ vi.mock("@/lib/blockchain-api", async (importOriginal) => {
     createProviderFromSettings: () => ({
       name: "Test Esplora",
       getTxOutspend: getTxOutspendMock,
+      getBlockHeight: getBlockHeightMock,
     }),
+  };
+});
+
+// The per-row Re-sync action delegates the actual network sync to the shared
+// transaction sync service; stub it so tests control the outcome.
+const syncSingleAddressMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/transaction-sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/transaction-sync")>();
+  return {
+    ...actual,
+    transactionSyncService: {
+      updateProvider: vi.fn(),
+      syncSingleAddress: syncSingleAddressMock,
+    },
   };
 });
 
@@ -200,6 +216,51 @@ describe("DormantCoins page", () => {
     // Earlier annotations are untouched.
     expect(screen.getByTestId(`live-unspent-${ownKey}`)).toBeTruthy();
     expect(screen.getByTestId(`live-spent-${paidKey}`)).toBeTruthy();
+  });
+
+  it("offers a one-click re-sync on a spent annotation and marks the row stale after it", async () => {
+    await seedRelativeToRealNow();
+    renderWithProviders(<DormantCoins />);
+    fireEvent.click(screen.getByTestId("button-run-scan"));
+    const ownKey = `${TX_FUND.slice(0, 12)}-0`;
+    await waitFor(() => expect(screen.getByTestId(`row-dormant-${ownKey}`)).toBeTruthy());
+
+    // Node reports the output as spent → the row exposes a Re-sync action.
+    getTxOutspendMock.mockResolvedValueOnce({ spent: true, spentTxid: "34".repeat(32) });
+    fireEvent.click(screen.getByTestId(`button-live-check-${ownKey}`));
+    await waitFor(() => expect(screen.getByTestId(`live-spent-${ownKey}`)).toBeTruthy());
+    expect(screen.getByTestId(`button-resync-${ownKey}`)).toBeTruthy();
+
+    // Failed re-sync: destructive toast, button comes back.
+    getBlockHeightMock.mockResolvedValue(800_000);
+    syncSingleAddressMock.mockResolvedValueOnce({ success: false });
+    toastSpy.mockClear();
+    fireEvent.click(screen.getByTestId(`button-resync-${ownKey}`));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Re-sync failed", variant: "destructive" }),
+      ),
+    );
+    expect(screen.getByTestId(`button-resync-${ownKey}`)).toBeTruthy();
+
+    // Successful re-sync: toast nudges a new scan, row is marked stale.
+    syncSingleAddressMock.mockResolvedValueOnce({ success: true });
+    toastSpy.mockClear();
+    fireEvent.click(screen.getByTestId(`button-resync-${ownKey}`));
+    await waitFor(() => expect(screen.getByTestId(`resynced-stale-${ownKey}`)).toBeTruthy());
+    expect(syncSingleAddressMock).toHaveBeenCalledWith(OWN);
+    expect(toastSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Address re-synced",
+        description: expect.stringContaining("Run a new dormant scan"),
+      }),
+    );
+    expect(screen.getByTestId(`resynced-stale-${ownKey}`).getAttribute("title")).toContain(
+      "Run a new dormant scan",
+    );
+    expect(screen.queryByTestId(`button-resync-${ownKey}`)).toBeNull();
+    // The Spent badge itself remains.
+    expect(screen.getByTestId(`live-spent-${ownKey}`)).toBeTruthy();
   });
 
   it("persists completed results across a remount", async () => {

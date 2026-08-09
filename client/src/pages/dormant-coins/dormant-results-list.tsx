@@ -8,13 +8,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Loader2, RadioTower, AlertCircle, CheckCircle, XCircle } from "lucide-react";
+import { Loader2, RadioTower, AlertCircle, CheckCircle, XCircle, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
+import { useToast } from "@/hooks/use-toast";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
+import { transactionSyncService } from "@/lib/transaction-sync";
 import { checkOutpointLive, type LiveOutpointResult } from "@/lib/dormant-live-check";
 import {
   DORMANT_CLUE_LABELS,
@@ -133,6 +135,10 @@ export type LiveCheckState =
   | { phase: "done"; result: LiveOutpointResult }
   | { phase: "error"; message: string };
 
+// Per-address re-sync state, keyed by address. "resynced" marks the row's
+// report data as stale — the user should re-run the dormant scan.
+export type ResyncState = "resyncing" | "resynced";
+
 export function DormantResultsList({
   count,
   nowSec,
@@ -145,6 +151,7 @@ export function DormantResultsList({
   const { nodeSettings } = useNodeSettings();
   const nodeSettingsRef = useRef(nodeSettings);
   nodeSettingsRef.current = nodeSettings;
+  const { toast } = useToast();
 
   // Live node-check results, keyed by outpoint. Kept here (not in the row
   // cache) so scrolling a row out of the window and back preserves its state.
@@ -152,11 +159,17 @@ export function DormantResultsList({
   // Aborts in-flight checks on unmount / when a new run rewrote the store.
   const liveAbortRef = useRef<AbortController | null>(null);
 
+  // Per-address re-sync state ("resyncing" while the network sync runs,
+  // "resynced" once local history was refreshed — meaning the report rows
+  // for that address are stale until the user re-runs the scan).
+  const [resyncStates, setResyncStates] = useState<ReadonlyMap<string, ResyncState>>(new Map());
+
   useEffect(() => {
     // A new run rewrote the store — stale live results belong to old rows.
     liveAbortRef.current?.abort();
     liveAbortRef.current = null;
     setLiveChecks(new Map());
+    setResyncStates(new Map());
   }, [count]);
 
   useEffect(() => {
@@ -192,6 +205,94 @@ export function DormantResultsList({
       });
     }
   }, []);
+
+  // One-click per-address re-sync for rows the node reported as spent —
+  // mirrors the Balance page's per-address Re-sync orchestration.
+  const runResync = useCallback(
+    async (address: string) => {
+      let started = false;
+      setResyncStates((prev) => {
+        if (prev.get(address) === "resyncing") return prev; // already running
+        started = true;
+        const next = new Map(prev);
+        next.set(address, "resyncing");
+        return next;
+      });
+      // React may re-run the updater; use the captured flag only as a guard
+      // against double-starting from rapid double clicks.
+      if (!started) return;
+
+      let ok = false;
+      try {
+        const nodeSettings = nodeSettingsRef.current;
+        if (!nodeSettings) {
+          toast({
+            title: "No blockchain provider configured",
+            description: "Configure a provider in Settings to re-sync this address.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        try {
+          const probe = createProviderFromSettings(nodeSettings);
+          await probe.getBlockHeight();
+        } catch (connErr) {
+          console.warn("[DormantCoins] Provider unreachable for re-sync:", connErr);
+          toast({
+            title: "Can't reach the blockchain provider",
+            description:
+              "Check your connection or provider settings in Settings, then try again.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        transactionSyncService.updateProvider(nodeSettings);
+        try {
+          const result = await transactionSyncService.syncSingleAddress(address);
+          ok = result.success;
+        } catch (err) {
+          console.warn(`[DormantCoins] Re-sync failed for ${address}:`, err);
+          ok = false;
+        }
+
+        if (ok) {
+          toast({
+            title: "Address re-synced",
+            description:
+              "Local history for this address was updated. Run a new dormant scan to refresh this report.",
+          });
+        } else {
+          toast({
+            title: "Re-sync failed",
+            description:
+              "Couldn't re-sync this address. Check your provider settings and try again.",
+            variant: "destructive",
+          });
+        }
+      } catch (err) {
+        console.warn("[DormantCoins] Re-sync failed:", err);
+        ok = false;
+        toast({
+          title: "Re-sync failed",
+          description: "Couldn't re-sync this address. Please try again.",
+          variant: "destructive",
+        });
+      } finally {
+        setResyncStates((prev) => {
+          const next = new Map(prev);
+          if (ok) {
+            next.set(address, "resynced");
+          } else {
+            next.delete(address);
+          }
+          return next;
+        });
+      }
+    },
+    [toast],
+  );
 
   const virtualizer = useVirtualizer({
     count,
@@ -249,6 +350,8 @@ export function DormantResultsList({
                 nowSec={nowSec}
                 liveCheck={liveChecks.get(`${row.txid}:${row.vout}`)}
                 onLiveCheck={runLiveCheck}
+                resyncState={resyncStates.get(row.address)}
+                onResync={runResync}
                 style={{ height: `${ROW_HEIGHT}px`, transform: `translateY(${virtualRow.start}px)` }}
               />
             );
@@ -265,10 +368,14 @@ function LiveCheckCell({
   row,
   state,
   onCheck,
+  resyncState,
+  onResync,
 }: {
   row: DormantOutputRow;
   state: LiveCheckState | undefined;
   onCheck: (row: DormantOutputRow) => void;
+  resyncState: ResyncState | undefined;
+  onResync: (address: string) => void;
 }) {
   const key = `${row.txid.slice(0, 12)}-${row.vout}`;
   if (state?.phase === "checking") {
@@ -294,19 +401,52 @@ function LiveCheckCell({
         Still unspent
       </Badge>
     ) : (
-      <Badge
-        variant="secondary"
-        className="gap-1 text-red-600 dark:text-red-400 text-[10px] px-1.5 py-0"
-        title={
-          state.result.spentTxid
-            ? `Spent by ${state.result.spentTxid} — your local history is behind. Re-sync this address.`
-            : "The node reports this output as spent — your local history is behind. Re-sync this address."
-        }
-        data-testid={`live-spent-${key}`}
-      >
-        <XCircle className="h-3 w-3" />
-        Spent
-      </Badge>
+      <span className="inline-flex items-center gap-1.5">
+        <Badge
+          variant="secondary"
+          className="gap-1 text-red-600 dark:text-red-400 text-[10px] px-1.5 py-0"
+          title={
+            state.result.spentTxid
+              ? `Spent by ${state.result.spentTxid} — your local history is behind. Re-sync this address.`
+              : "The node reports this output as spent — your local history is behind. Re-sync this address."
+          }
+          data-testid={`live-spent-${key}`}
+        >
+          <XCircle className="h-3 w-3" />
+          Spent
+        </Badge>
+        {resyncState === "resyncing" ? (
+          <span
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+            data-testid={`resyncing-${key}`}
+          >
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Re-syncing…
+          </span>
+        ) : resyncState === "resynced" ? (
+          <Badge
+            variant="secondary"
+            className="gap-1 text-amber-600 dark:text-amber-400 text-[10px] px-1.5 py-0"
+            title="Local history for this address was re-synced — this report row is stale. Run a new dormant scan to refresh it."
+            data-testid={`resynced-stale-${key}`}
+          >
+            <RefreshCw className="h-3 w-3" />
+            Re-synced — re-run scan
+          </Badge>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onResync(row.address)}
+            className="h-7 px-2"
+            title="Re-sync just this address from your configured node to catch up your local history."
+            data-testid={`button-resync-${key}`}
+          >
+            <RefreshCw className="h-3 w-3 mr-1" />
+            Re-sync
+          </Button>
+        )}
+      </span>
     );
   }
   if (state?.phase === "error") {
@@ -344,12 +484,16 @@ function DormantRow({
   nowSec,
   liveCheck,
   onLiveCheck,
+  resyncState,
+  onResync,
   style,
 }: {
   row: DormantOutputRow;
   nowSec: number;
   liveCheck: LiveCheckState | undefined;
   onLiveCheck: (row: DormantOutputRow) => void;
+  resyncState: ResyncState | undefined;
+  onResync: (address: string) => void;
   style: React.CSSProperties;
 }) {
   return (
@@ -402,7 +546,13 @@ function DormantRow({
         <TxidLink txid={row.txid} className="text-xs" />
       </span>
       <span className="text-right whitespace-nowrap">
-        <LiveCheckCell row={row} state={liveCheck} onCheck={onLiveCheck} />
+        <LiveCheckCell
+          row={row}
+          state={liveCheck}
+          onCheck={onLiveCheck}
+          resyncState={resyncState}
+          onResync={onResync}
+        />
       </span>
     </div>
   );
