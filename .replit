@@ -55,6 +55,10 @@ args = "dormant-resync-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "dormant-live-check-electrum-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "sparse-record-fixtures-node-check"
 
 [[workflows.workflow.tasks]]
@@ -2742,4 +2746,13 @@ args = "node scripts/check-dormant-resync-browser.mjs"
 [workflows.workflow.metadata]
 isValidation = true
 
+[[workflows.workflow]]
+name = "dormant-live-check-electrum-node-check"
+author = "agent"
 
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/dormant-live-check.electrum.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
