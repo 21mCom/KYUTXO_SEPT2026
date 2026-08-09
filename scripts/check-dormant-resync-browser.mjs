@@ -21,6 +21,9 @@
 //      "Re-synced — re-run scan" stale badge replaces the button.
 //   3. The real sync actually hit the network layer: the stub records the
 //      tip-height, address-summary, and address-txs endpoint calls.
+//   4. Full promise: the stubbed history returns the transaction that spends
+//      the re-synced outpoint, so re-running the scan drops that row and both
+//      sats totals shrink by exactly that output's amount.
 //
 // Seed design (mirrors check-dormant-live-check-browser.mjs, smaller N):
 //   - One owned address record OWN (manual tier).
@@ -58,6 +61,9 @@ const U2 = 'bc1qdormresyncu2' + 'v'.repeat(26);
 const TXC = 'cb'.repeat(32);
 const TXU1 = '1d'.repeat(32);
 const SPENDER_TXID = 'fe'.repeat(32);
+// Destination of the spending tx; below the min-amount floor (10k sats) so it
+// can never surface as a dormant candidate row of its own.
+const SPEND_DEST = 'bc1qdormresyncdst' + 'w'.repeat(25);
 // Must match the seeder's mkTx(0) below.
 const TX0 = (0).toString(16).padStart(8, '0') + 'ab'.repeat(28);
 
@@ -175,9 +181,43 @@ async function main() {
       if (p === `/api/address/${OWN}/txs` || p.startsWith(`/api/address/${OWN}/txs/`)) {
         calls.addressTxs++;
         if (!providerUp) return route.abort('failed');
-        // Empty confirmed history: the sync completes successfully with no
-        // new imports — enough to prove the real service ran end-to-end.
-        return json([]);
+        // Confirmed history containing the transaction that SPENDS the
+        // "Spent" row's outpoint (TX0:0). The real sync imports it, so a
+        // re-run of the dormant scan must drop that row. The spend is OLD
+        // (still before the dormancy cutoff) so OWN's other outputs stay
+        // dormant, and its own output is below the min-amount floor so it
+        // never becomes a candidate row itself. Single page (<25 txs).
+        return json([
+          {
+            txid: SPENDER_TXID,
+            version: 2,
+            locktime: 0,
+            vin: [
+              {
+                txid: TX0,
+                vout: 0,
+                sequence: 0xfffffffd,
+                prevout: {
+                  scriptpubkey_address: OWN,
+                  value: 20_000,
+                  scriptpubkey_type: 'v0_p2wpkh',
+                },
+              },
+            ],
+            vout: [
+              {
+                n: 0,
+                scriptpubkey_address: SPEND_DEST,
+                value: 9_000,
+                scriptpubkey_type: 'v0_p2wpkh',
+              },
+            ],
+            fee: 11_000,
+            size: 191,
+            weight: 764,
+            status: { confirmed: true, block_height: 750_000, block_time: OLD_5Y + 100_000 },
+          },
+        ]);
       }
       if (p === `/api/address/${OWN}`) {
         calls.addressSummary++;
@@ -320,6 +360,37 @@ async function main() {
     await page.getByTestId(`row-dormant-${kSpent}`).waitFor({ state: 'visible', timeout: 15_000 });
     const stalePersisted = await staleBadge.isVisible();
     record('persist-scroll', stalePersisted, `stale badge visible after scroll round-trip=${stalePersisted}`);
+
+    // ── Re-run the scan: the re-synced spent outpoint must drop out ───────
+    // The Re-sync imported SPENDER_TXID, whose input consumes TX0:0. Exact
+    // outpoint matching must now classify TX0:0 as spent: one fewer row and
+    // both sats totals shrink by exactly the row's 20,000-sat amount.
+    const parseSats = (t) => Number((t ?? '').replace(/[^0-9]/g, ''));
+    const totalBefore = parseSats(await page.getByTestId('text-summary-total-sats').textContent());
+    const ownBefore = parseSats(await page.getByTestId('text-summary-own-sats').textContent());
+
+    await page.getByTestId('button-run-scan').click();
+    await page.waitForFunction(
+      (expected) =>
+        document.querySelector('[data-testid="text-summary-rows"]')?.textContent === expected,
+      fmt(EXPECTED_ROWS - 1),
+      { timeout: 120_000 },
+    );
+    const rowsAfter = await page.getByTestId('text-summary-rows').textContent();
+    const spentRowGone = (await page.getByTestId(`row-dormant-${kSpent}`).count()) === 0;
+    record(
+      'rescan-drops-spent-row',
+      rowsAfter === fmt(EXPECTED_ROWS - 1) && spentRowGone,
+      `rows=${rowsAfter} (expected ${fmt(EXPECTED_ROWS - 1)}), spent row ${kSpent} gone=${spentRowGone}`,
+    );
+
+    const totalAfter = parseSats(await page.getByTestId('text-summary-total-sats').textContent());
+    const ownAfter = parseSats(await page.getByTestId('text-summary-own-sats').textContent());
+    record(
+      'rescan-shrinks-totals',
+      totalBefore - totalAfter === 20_000 && ownBefore - ownAfter === 20_000,
+      `total ${totalBefore}→${totalAfter} (Δ${totalBefore - totalAfter}), own ${ownBefore}→${ownAfter} (Δ${ownBefore - ownAfter}); expected Δ20,000 each`,
+    );
 
     await context.close();
   } finally {
