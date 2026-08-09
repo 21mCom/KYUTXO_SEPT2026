@@ -24,6 +24,9 @@
 //      scrolling to the middle/bottom of the 70k-row list swaps the window,
 //      loads real rows from IndexedDB (no permanent "Loading…"), and the main
 //      thread stays responsive (rAF probe)
+//   5. Export CSV / Export JSON stream all 70k rows out of the scratch store:
+//      the page keeps painting during each export (rAF gap recorder) and the
+//      downloaded files contain exactly the summary's row count
 //
 // Seed design (deterministic; expectations computed from N):
 //   - one owned address record OWN (manual tier)
@@ -370,6 +373,94 @@ async function main() {
       .isVisible()
       .catch(() => false);
     record('back-to-top', backTopVisible, 'oldest row visible again after scrolling back');
+
+    // ── Export at scale: page keeps painting + files have every row ───────
+    // For each format: start an in-page rAF gap recorder, trigger the export,
+    // capture the download, then assert the longest gap between consecutive
+    // animation frames stayed bounded (a frozen main thread = one huge gap)
+    // and the downloaded file's row count matches the summary.
+    const { readFileSync } = await import('node:fs');
+
+    const startRafRecorder = () =>
+      page.evaluate(() => {
+        window.__exportRafGaps = [];
+        window.__exportRafStop = false;
+        let last = performance.now();
+        const loop = () => {
+          const now = performance.now();
+          window.__exportRafGaps.push(now - last);
+          last = now;
+          if (!window.__exportRafStop) requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+      });
+    const stopRafRecorder = () =>
+      page.evaluate(() => {
+        window.__exportRafStop = true;
+        const gaps = window.__exportRafGaps ?? [];
+        return {
+          frames: gaps.length,
+          maxGapMs: gaps.length ? Math.max(...gaps) : -1,
+        };
+      });
+
+    const runExport = async (format) => {
+      await startRafRecorder();
+      const t0 = Date.now();
+      const [download] = await Promise.all([
+        page.waitForEvent('download', { timeout: 120_000 }),
+        page.getByTestId(`button-export-${format}`).click(),
+      ]);
+      // The download event fires when the blob is fully built; the button
+      // re-enables once the export handler finishes. Wait for that so the
+      // recorder covers the whole export, then stop it.
+      await page
+        .getByTestId(`button-export-${format}`)
+        .isEnabled({ timeout: 30_000 })
+        .catch(() => {});
+      const exportMs = Date.now() - t0;
+      const raf = await stopRafRecorder();
+      const path = await download.path();
+      return { download, path, exportMs, raf };
+    };
+
+    // CSV: header + one line per row.
+    {
+      const { download, path, exportMs, raf } = await runExport('csv');
+      const csv = readFileSync(path, 'utf8');
+      const lines = csv.split('\r\n').filter((l) => l.length > 0);
+      const dataLines = lines.length - 1; // minus header
+      const headerOk = lines[0]?.startsWith('Address,Clue,Ownership,Amount Sats');
+      record(
+        'export-csv-rows',
+        headerOk && dataLines === EXPECTED_ROWS,
+        `download=${download.suggestedFilename()} dataLines=${fmt(dataLines)} (expected ${fmt(EXPECTED_ROWS)}) headerOk=${headerOk} in ${exportMs}ms`,
+      );
+      record(
+        'export-csv-responsive',
+        raf.frames >= 10 && raf.maxGapMs >= 0 && raf.maxGapMs < 2_000,
+        `rAF frames during CSV export=${raf.frames}, max frame gap=${raf.maxGapMs.toFixed(0)}ms (< 2000ms)`,
+      );
+    }
+
+    // JSON: single object; rows array length must match the summary.
+    {
+      const { download, path, exportMs, raf } = await runExport('json');
+      const parsed = JSON.parse(readFileSync(path, 'utf8'));
+      const rowsLen = Array.isArray(parsed.rows) ? parsed.rows.length : -1;
+      const groupsLen = Array.isArray(parsed.groups) ? parsed.groups.length : -1;
+      const summaryRows = parsed.summary?.rowCount ?? -1;
+      record(
+        'export-json-rows',
+        rowsLen === EXPECTED_ROWS && summaryRows === EXPECTED_ROWS && groupsLen === 1,
+        `download=${download.suggestedFilename()} rows=${fmt(rowsLen)} summary.rowCount=${fmt(summaryRows)} groups=${groupsLen} in ${exportMs}ms`,
+      );
+      record(
+        'export-json-responsive',
+        raf.frames >= 10 && raf.maxGapMs >= 0 && raf.maxGapMs < 2_000,
+        `rAF frames during JSON export=${raf.frames}, max frame gap=${raf.maxGapMs.toFixed(0)}ms (< 2000ms)`,
+      );
+    }
 
     await context.close();
   } finally {
