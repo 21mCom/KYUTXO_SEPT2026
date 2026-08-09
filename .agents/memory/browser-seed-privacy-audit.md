@@ -34,3 +34,6 @@ plans here hit the 10-min wall).
 
 ## Legacy-migration overlay races clicks
 After any unlock/reload in a real-browser check, the `legacy-migration-overlay` (z-9999, intercepts all pointer events) can appear — as transient progress or a "Complete" card with `button-dismiss-migration`. It is timing-dependent (passed locally, failed under validation load). Always wait it out / dismiss it right after unlock before clicking anything.
+
+## Reload returns to the lock screen (and the unlock check races React mount)
+A full `page.reload()` locks the vault again (key is session-only), so every reload needs a re-unlock. But at `waitUntil:'load'` React hasn't mounted yet — a plain `input-password.isVisible()` returns false and skips the unlock. Race-wait for EITHER `input-password` OR the target page's own testid, then unlock only if the lock screen actually showed.

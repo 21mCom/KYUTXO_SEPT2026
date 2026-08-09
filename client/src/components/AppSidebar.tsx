@@ -44,7 +44,8 @@ import {
   Search,
   Droplets,
   KeyRound,
-  Biohazard
+  Biohazard,
+  Hourglass
 } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -127,6 +128,7 @@ const navGroups: NavGroup[] = [
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },
       { title: "Dusted", url: "/dusted", icon: Droplets },
       { title: "Address Poisoning", url: "/address-poisoning", icon: Biohazard },
+      { title: "Dormant Coins", url: "/dormant-coins", icon: Hourglass },
     ]
   },
   {
