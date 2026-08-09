@@ -51,6 +51,10 @@ args = "dormant-live-check-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "dormant-resync-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "sparse-record-fixtures-node-check"
 
 [[workflows.workflow.tasks]]
@@ -2723,6 +2727,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-dormant-live-check-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dormant-resync-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dormant-resync-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
