@@ -244,6 +244,16 @@ export async function getCustodySegmentsAfterId(
   return db.custodySegments.where('id').above(afterId).limit(limit).toArray();
 }
 
+// Newest-first (descending id) bounded page. `beforeId` is exclusive — pass
+// Number.MAX_SAFE_INTEGER for the first page. Used by the Continuity Proof
+// all-segments list so thousands of segments are never mounted at once.
+export async function getCustodySegmentsBeforeId(
+  beforeId: number,
+  limit: number
+): Promise<CustodySegment[]> {
+  return db.custodySegments.where('id').below(beforeId).reverse().limit(limit).toArray();
+}
+
 // Returns the set of `segmentId` values already present, read via the unique
 // `&segmentId` index (no full rows materialised). Used by merge-mode restore to
 // skip custody segments whose segmentId already exists — appending them would

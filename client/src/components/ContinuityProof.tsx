@@ -50,7 +50,7 @@ import {
   type CustodySegment,
   type UtxoLineage
 } from "@/lib/lineageEngine";
-import { countUtxoLineage, countCustodySegments } from "@/lib/data/lineage-crud";
+import { countUtxoLineage, countCustodySegments, getCustodySegmentsBeforeId } from "@/lib/data/lineage-crud";
 import { countTransactions } from "@/lib/data/transaction-crud";
 import { computeOverallProgress, decideCancelAction } from "@/lib/buildProgress";
 import { useSettings } from "@/hooks/use-settings";
@@ -63,6 +63,10 @@ interface ContinuityProofProps {
 
 const LAST_BUILD_DURATION_KEY = 'kyutxo_last_build_duration_seconds';
 const LAST_BUILD_META_KEY = 'kyutxo_last_build_meta';
+
+// Page size for the unselected "All Custody Segments" list. Tens, not
+// thousands — the vault can hold far more segments than can mount at once.
+const ALL_SEGMENTS_PAGE_SIZE = 50;
 
 interface LastBuildMeta {
   durationSeconds: number;
@@ -106,6 +110,10 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [segments, setSegments] = useState<CustodySegment[]>([]);
+  const [segmentsHasMore, setSegmentsHasMore] = useState(false);
+  const [segmentsLoading, setSegmentsLoading] = useState(false);
+  const segmentsCursorRef = useRef<number | null>(null);
+  const segmentsLoadTokenRef = useRef(0);
   const [lineage, setLineage] = useState<UtxoLineage[]>([]);
   const [lineageTruncated, setLineageTruncated] = useState(false);
   const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
@@ -247,17 +255,52 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     loadStats();
   }, [loadStats]);
   
-  // Load data for selected address
+  // Paged loader for the unselected "All Custody Segments" view. Keyset
+  // pagination by descending id (newest built first) so the whole table is
+  // never materialised or mounted. A load token guards against a stale page
+  // landing after the selection changed underneath an in-flight read.
+  const loadAllSegmentsPage = useCallback(async (reset: boolean) => {
+    if (reset) {
+      segmentsLoadTokenRef.current += 1;
+    }
+    const token = segmentsLoadTokenRef.current;
+    setSegmentsLoading(true);
+    try {
+      const beforeId = reset
+        ? Number.MAX_SAFE_INTEGER
+        : (segmentsCursorRef.current ?? Number.MAX_SAFE_INTEGER);
+      const page = await getCustodySegmentsBeforeId(beforeId, ALL_SEGMENTS_PAGE_SIZE);
+      if (token !== segmentsLoadTokenRef.current) return;
+      const lastId = page.length > 0 ? page[page.length - 1].id : undefined;
+      segmentsCursorRef.current = typeof lastId === 'number' ? lastId : null;
+      setSegmentsHasMore(page.length === ALL_SEGMENTS_PAGE_SIZE);
+      setSegments(prev => (reset ? page : [...prev, ...page]));
+    } finally {
+      if (token === segmentsLoadTokenRef.current) {
+        setSegmentsLoading(false);
+      }
+    }
+  }, []);
+
+  // Load data for the selected address, or the paged all-segments list when
+  // nothing is selected.
   useEffect(() => {
     if (selectedAddress) {
+      // Invalidate any in-flight all-segments page so it can't overwrite the
+      // per-address view.
+      segmentsLoadTokenRef.current += 1;
+      setSegmentsHasMore(false);
+      setSegmentsLoading(false);
       loadAddressData(selectedAddress);
+    } else {
+      void loadAllSegmentsPage(true);
     }
-  }, [selectedAddress]);
-  
+  }, [selectedAddress, loadAllSegmentsPage]);
+
   const loadAddressData = async (address: string) => {
     const addressSegments = await getSegmentsForAddress(address);
     setSegments(addressSegments);
-    
+
     const result = await getLineageChainForAddress(address, 20, 2000);
     setLineage(result.chain);
     setLineageTruncated(result.truncated);
@@ -388,6 +431,10 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
       await loadStats();
       if (selectedAddress) {
         await loadAddressData(selectedAddress);
+      } else {
+        // Refresh the paged all-segments list so newly built segments appear
+        // even when no address is selected.
+        await loadAllSegmentsPage(true);
       }
     }
   };
@@ -808,25 +855,54 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
           </h3>
           
           {segments.length === 0 ? (
+            !selectedAddress && segmentsLoading ? (
+              <div className="text-sm text-muted-foreground" data-testid="text-segments-loading">
+                Loading segments…
+              </div>
+            ) : (
             <Alert>
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>No Segments Found</AlertTitle>
               <AlertDescription>
-                {stats.lineageCount === 0 ? (
-                  <>Click "Build Lineage" to analyze your transaction history and create custody segments.</>
-                ) : selectedAddress ? (
+                {selectedAddress ? (
                   <>No custody segments found for this address. The address may not have any tracked transactions.</>
-                ) : (
+                ) : stats.segmentCount === 0 && stats.lineageCount === 0 ? (
+                  <>Click "Build Lineage" to analyze your transaction history and create custody segments.</>
+                ) : stats.segmentCount === 0 ? (
                   <>No custody segments built yet. This may indicate no owned addresses received funds in synced transactions.</>
+                ) : (
+                  <>No custody segments to display.</>
                 )}
               </AlertDescription>
             </Alert>
+            )
           ) : (
-            <ScrollArea className="max-h-[500px]">
-              <div className="space-y-3 pr-4">
-                {segments.map(segment => renderSegmentCard(segment))}
-              </div>
-            </ScrollArea>
+            <>
+              <ScrollArea className="max-h-[500px]">
+                <div className="space-y-3 pr-4">
+                  {segments.map(segment => renderSegmentCard(segment))}
+                </div>
+              </ScrollArea>
+              {!selectedAddress && (
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span data-testid="text-segments-showing">
+                    Showing {segments.length.toLocaleString()} of {stats.segmentCount.toLocaleString()} segments
+                  </span>
+                  {segmentsHasMore && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void loadAllSegmentsPage(false)}
+                      disabled={segmentsLoading}
+                      data-testid="button-load-more-segments"
+                    >
+                      {segmentsLoading && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                      Load more
+                    </Button>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
         

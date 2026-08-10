@@ -39,6 +39,10 @@ args = "dormant-coins-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "continuity-proof-all-segments-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dormant-coins-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2691,6 +2695,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/check-win32-path-derivation.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "continuity-proof-all-segments-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/ContinuityProof.allSegments.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
