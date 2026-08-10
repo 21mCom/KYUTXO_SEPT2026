@@ -243,6 +243,10 @@ args = "pof-addons-pdf-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "pof-offline-lastsynced-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "address-checker-cancel-history-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2843,6 +2847,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-lineage-build-segments-refresh-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-offline-lastsynced-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-offline-lastsynced-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
