@@ -30,6 +30,22 @@
 //      If a warm run outraces the cancel, the attempt retries with an
 //      escalating throttle rate.
 //
+// Session 3 (step-1 / lineage-phase cancellation):
+//   1. Fresh vault; same seed shape as session 2 (10 pre-existing segments,
+//      220 independent origins). utxoLineage is NOT pre-seeded.
+//   2. Clicks Build Lineage under CDP CPU throttling and cancels while the
+//      progress UI still shows Step 1 of 2 ("Building UTXO lineage") — the
+//      EARLIER return path in handleBuildLineage, before any custody work.
+//   3. Asserts NO custody segments were created (table still holds exactly the
+//      10 pre-seeded rows), the paged list is unchanged ("Showing 10 of 10",
+//      no stale empty-state), and utxoLineage stopped partially built
+//      (0 < rows < 220). Then re-runs a full un-throttled Build Lineage and
+//      asserts the partial lineage rows caused no duplicates: exactly 220
+//      lineage rows with unique (createdTxid, createdVout), 230 segments with
+//      unique segmentIds/origin outpoints, and the list refreshed to
+//      "Showing 50 of 230". If the cancel lands after step 1 already finished
+//      (warm run), the attempt retries with a higher throttle rate.
+//
 // NOTE for reviewers: the refresh-after-build path under test is the finally
 // block of handleBuildLineage in client/src/components/ContinuityProof.tsx
 // (loadStats + loadAllSegmentsPage(true)); /provenance is
@@ -354,6 +370,7 @@ async function runCancelSession(browser, step, throttleRate) {
           const m = counter && (counter.textContent || '').match(/^([\d,]+) of/);
           return !!m && parseInt(m[1].replace(/,/g, ''), 10) >= 3;
         },
+        undefined,
         { timeout: 300_000 },
       );
       await page.getByTestId('button-cancel-build').dispatchEvent('click');
@@ -421,6 +438,174 @@ async function runCancelSession(browser, step, throttleRate) {
   }
 }
 
+// --- Session 3: cancel during step 1 leaves segments list untouched ------
+async function runStep1CancelSession(browser, step, throttleRate) {
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  try {
+    const page = await openFreshVault(context);
+
+    const seeded = await page.evaluate(
+      async ({ preseed, origins, preSegmentSrc }) => {
+        const { createRecord } = await import('/src/lib/data/record-crud.ts');
+        const { bulkAddTransactions, bulkAddParticipants } = await import('/src/lib/data/transaction-crud.ts');
+        const { bulkAddCustodySegments } = await import('/src/lib/data/lineage-crud.ts');
+        const { db } = await import('/src/lib/database.ts');
+
+        const preSegment = new Function(`return (${preSegmentSrc})`)();
+        const pre = [];
+        for (let i = 0; i < preseed; i++) pre.push(preSegment('canceleone', i));
+        await bulkAddCustodySegments(pre, { skipNotification: true });
+
+        // Same recipe as session 2: many independent funding txs so BOTH
+        // phases have many abort checkpoints; here we cancel during phase 1.
+        const C = 'bc1qcancelearlyccccccccccccccccccccccccc';
+        const EXT = 'bc1qexternalpartyxxxxxxxxxxxxxxxxxxxxxxx';
+        await createRecord(
+          { type: 'address', inputString: C, label: 'Cancel early held', addressImportance: 'manual' },
+          { skipVocabularySync: true, skipNotification: true },
+        );
+
+        const txs = [];
+        const parts = [];
+        for (let i = 0; i < origins; i++) {
+          const txid = (i + 0x2000).toString(16).padStart(8, '0').repeat(8);
+          txs.push({
+            txid,
+            blockHeight: 810000 + i,
+            blockTime: 1710000000 + i * 600,
+            fee: 200,
+            feeRate: 2,
+            syncedAt: Date.now(),
+          });
+          parts.push(
+            { txid, role: 'input', address: EXT, amount: 51000 },
+            { txid, role: 'output', address: C, amount: 50000, vout: 0 },
+          );
+        }
+        await bulkAddTransactions(txs, { skipNotification: true });
+        await bulkAddParticipants(parts, { skipNotification: true });
+
+        return {
+          segments: await db.custodySegments.count(),
+          txs: txs.length,
+          lineage: await db.utxoLineage.count(),
+        };
+      },
+      { preseed: PRESEED_CANCEL, origins: CANCEL_ORIGINS, preSegmentSrc: preSegment.toString() },
+    );
+    step(
+      'step1-cancel: seeded pre-existing segments + many origins, no utxoLineage',
+      seeded.segments === PRESEED_CANCEL && seeded.txs === CANCEL_ORIGINS && seeded.lineage === 0,
+      `segments=${seeded.segments}, txs=${seeded.txs}, lineage=${seeded.lineage}`,
+    );
+
+    await gotoProvenance(page);
+    await waitForShowing(page, PRESEED_CANCEL, PRESEED_CANCEL);
+
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: throttleRate });
+
+    try {
+      await page.getByTestId('button-build-lineage').click();
+
+      // Wait for the LINEAGE phase (Step 1) to have processed a few
+      // transactions, then cancel while still in step 1 — the earlier return
+      // path in handleBuildLineage before any custody-segment work starts.
+      await page.waitForFunction(
+        () => {
+          const el = document.querySelector('[data-testid="lineage-build-progress"]');
+          if (!el || !/Step 1 of 2/.test(el.textContent || '')) return false;
+          if (!/Building UTXO lineage/.test(el.textContent || '')) return false;
+          const counter = document.querySelector('[data-testid="text-build-counter"]');
+          const m = counter && (counter.textContent || '').match(/^([\d,]+) of/);
+          return !!m && parseInt(m[1].replace(/,/g, ''), 10) >= 3;
+        },
+        undefined,
+        { timeout: 300_000 },
+      );
+      await page.getByTestId('button-cancel-build').dispatchEvent('click');
+      await page
+        .getByTestId('button-cancel-build-confirm')
+        .dispatchEvent('click', undefined, { timeout: 2_000 })
+        .catch(() => {});
+
+      await page.getByTestId('lineage-build-progress').waitFor({ state: 'hidden', timeout: 300_000 });
+    } finally {
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => {});
+    }
+
+    const post = await page.evaluate(async () => {
+      const { db } = await import('/src/lib/database.ts');
+      const rows = await db.custodySegments.toArray();
+      const ids = rows.map((s) => s.segmentId);
+      return {
+        segments: rows.length,
+        preseedIntact: ids.filter((id) => id.startsWith('canceleone-seg-')).length,
+        lineage: await db.utxoLineage.count(),
+      };
+    });
+
+    // If the throttled run outraced the cancel past step 1, segments exist —
+    // retry the attempt with a higher throttle rate.
+    if (post.segments > PRESEED_CANCEL) {
+      throw new Error(
+        `step1 cancel raced past the lineage phase at throttle ${throttleRate}x (segments=${post.segments}); retrying with a higher rate`,
+      );
+    }
+    step(
+      'step1-cancel: no custody segments created; lineage stopped partially built',
+      post.segments === PRESEED_CANCEL &&
+        post.preseedIntact === PRESEED_CANCEL &&
+        post.lineage > 0 &&
+        post.lineage < CANCEL_ORIGINS,
+      `segments=${post.segments} (=${PRESEED_CANCEL}), preseed=${post.preseedIntact}, lineage=${post.lineage} (0<x<${CANCEL_ORIGINS})`,
+    );
+
+    // Paged list must be untouched: same "Showing 10 of 10", no empty-state.
+    await waitForShowing(page, PRESEED_CANCEL, PRESEED_CANCEL, 60_000);
+    const staleEmptyCopy = await page.getByText(/No custody segments built yet/).count();
+    step(
+      'step1-cancel: paged list unchanged after lineage-phase cancel',
+      staleEmptyCopy === 0,
+      `Showing ${PRESEED_CANCEL} of ${PRESEED_CANCEL}, emptyStateMatches=${staleEmptyCopy}`,
+    );
+
+    // Full un-throttled re-run: partial lineage rows must not duplicate.
+    await page.getByTestId('button-build-lineage').click();
+    await page
+      .getByTestId('lineage-build-progress')
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .catch(() => {});
+    await page.getByTestId('lineage-build-progress').waitFor({ state: 'hidden', timeout: 300_000 });
+
+    const fullTotal = PRESEED_CANCEL + CANCEL_ORIGINS;
+    await waitForShowing(page, 50, fullTotal, 60_000);
+    const rerun = await page.evaluate(async () => {
+      const { db } = await import('/src/lib/database.ts');
+      const segs = await db.custodySegments.toArray();
+      const lin = await db.utxoLineage.toArray();
+      return {
+        segments: segs.length,
+        uniqueSegIds: new Set(segs.map((s) => s.segmentId)).size,
+        uniqueOutpoints: new Set(segs.map((s) => `${s.originTxid}:${s.originVout}`)).size,
+        lineage: lin.length,
+        uniqueLineage: new Set(lin.map((l) => `${l.createdTxid}:${l.createdVout}`)).size,
+      };
+    });
+    step(
+      'step1-cancel: full re-run builds correct segments with no duplicates from partial lineage',
+      rerun.segments === fullTotal &&
+        rerun.uniqueSegIds === fullTotal &&
+        rerun.uniqueOutpoints === fullTotal &&
+        rerun.lineage === CANCEL_ORIGINS &&
+        rerun.uniqueLineage === CANCEL_ORIGINS,
+      `segments=${rerun.segments}/${fullTotal}, uniqueIds=${rerun.uniqueSegIds}, uniqueOutpoints=${rerun.uniqueOutpoints}, lineage=${rerun.lineage}/${CANCEL_ORIGINS}, uniqueLineage=${rerun.uniqueLineage}`,
+    );
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
 async function main() {
   const exe = resolveChromium();
   let devProc = null;
@@ -451,6 +636,7 @@ async function main() {
       try {
         await runCompletionSession(browser, step);
         await runCancelSession(browser, step, THROTTLE_RATES[attempt - 1] ?? 20);
+        await runStep1CancelSession(browser, step, THROTTLE_RATES[attempt - 1] ?? 20);
         break;
       } catch (e) {
         const msg = e && e.message ? e.message : String(e);
