@@ -207,7 +207,7 @@ async function runSession(browser, step) {
     // Selecting an address switches to that address's segments only.
     await page.getByTestId('input-explorer-address').fill(SELECTED_ADDRESS);
     await page.waitForFunction(
-      () => !document.querySelector('[data-testid="text-segments-showing"]'),
+      () => !document.querySelector('[data-testid="text-segments-showing"]'), undefined,
       { timeout: 30_000 },
     );
     // The two selected-address segments (indices 3 and 7) and nothing else.

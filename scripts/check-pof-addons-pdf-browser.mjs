@@ -212,7 +212,7 @@ async function generatePdfBytes(page) {
     () => {
       const b = document.querySelector('[data-testid="button-generate-pdf"]');
       return b && !b.hasAttribute('disabled');
-    },
+    }, undefined,
     { timeout: 20_000 },
   );
   await pdfBtn.scrollIntoViewIfNeeded({ timeout: 10_000 });

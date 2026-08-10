@@ -303,7 +303,7 @@ async function main() {
       () => {
         const b = document.querySelector('[data-testid="button-generate-pdf"]');
         return b && !b.hasAttribute('disabled');
-      },
+      }, undefined,
       { timeout: 30_000 },
     );
     await pdfBtn.scrollIntoViewIfNeeded({ timeout: 10_000 });

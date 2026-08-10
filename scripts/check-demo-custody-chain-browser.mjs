@@ -175,7 +175,7 @@ async function runSession(browser, zipB64, step) {
         () => {
           const el = document.querySelector('[data-testid="text-segment-count"]');
           return el && parseInt(el.textContent || '0', 10) >= 20;
-        },
+        }, undefined,
         { timeout: 30_000 },
       )
       .catch(() => {});

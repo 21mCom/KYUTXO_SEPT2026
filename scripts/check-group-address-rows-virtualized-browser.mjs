@@ -354,7 +354,7 @@ async function main() {
     await scrollBox.waitFor({ state: 'visible', timeout: 60_000 });
     // Let the row load + virtualizer measureElement pass settle.
     await page.waitForFunction(
-      () => document.querySelectorAll('[data-testid^="row-address-"]').length > 0,
+      () => document.querySelectorAll('[data-testid^="row-address-"]').length > 0, undefined,
       { timeout: 60_000 },
     );
     await page.waitForTimeout(500);
