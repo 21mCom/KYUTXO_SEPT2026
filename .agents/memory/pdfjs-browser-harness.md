@@ -47,3 +47,7 @@ stream identically. Real users run modern Electron Chromium.
   → one full-page reload that destroys the evaluate context. It's a ONE-TIME event
   (cached in `node_modules/.vite/deps`); do NOT re-`goto` on retry (that interrupts
   the background optimize so it never settles) — retry the evaluate on the same page.
+
+## pdf.js 6.x notes (Aug 2026)
+- pdfjs-dist 6.x removed the `isEvalSupported` getDocument option — TS callers fail typecheck (drop it); plain-JS scripts passing it are harmlessly ignored.
+- The 6.x legacy build + legacy worker still run fine on the Nix-pinned Chromium v125 harness and in Node vitest; no other API changes bit the glyph/sample/PoF PDF checks.
