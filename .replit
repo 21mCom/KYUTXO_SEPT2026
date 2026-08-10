@@ -547,6 +547,10 @@ args = "custody-segment-build-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "continuity-proof-all-segments-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "address-checker-5k-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2798,6 +2802,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-network-analysis-dense-graph-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "continuity-proof-all-segments-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-continuity-proof-all-segments-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
