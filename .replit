@@ -139,6 +139,14 @@ args = "boolean-where-guard"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "waitforfunction-options-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "waitforfunction-options-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "lineage-owned-origin-node-check"
 
 [[workflows.workflow.tasks]]
@@ -2923,6 +2931,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-network-analysis-edge-refusal-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "waitforfunction-options-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-waitforfunction-options.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "waitforfunction-options-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-waitforfunction-options.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
