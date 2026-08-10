@@ -781,6 +781,10 @@ args = "win32-path-derivation-guard-tests"
 task = "workflow.run"
 args = "network-analysis-dense-graph-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "network-analysis-dense-graph-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -2783,6 +2787,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/network-analysis.denseGraph.test.ts client/src/pages/NetworkAnalysis.cancelLayout.test.tsx client/src/pages/NetworkAnalysis.nodeInteraction.test.tsx client/src/pages/NetworkAnalysis.graphContrast.test.tsx client/src/pages/NetworkAnalysis.copyButton.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "network-analysis-dense-graph-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-network-analysis-dense-graph-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
