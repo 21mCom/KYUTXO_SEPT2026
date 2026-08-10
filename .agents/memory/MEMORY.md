@@ -113,4 +113,5 @@
 - [Independent proof-vector generators](independent-vector-generators.md) — BIP-322 vectors must ship with their deterministic generator (seed-string keys, aux=zeros); see pitfalls before re-deriving.
 - [Windowed-list pending race](windowed-list-pending-race.md) — scratch-store window lists: cleanup must drop cancelled windows from the pending set immediately or rows stick on "Loading…".
 - [Unix timestamp unit contracts](unix-timestamp-units.md) — blockchain fields are seconds, app fields are ms; render via lib/unix-seconds helpers, never ad-hoc *1000.
+- [Edge-cap refusal seed geometry](network-analysis-edge-cap-seed.md) — affine-plane lines over Z_53² give exact disjoint pair counts: >1M edges from only 2,810 addresses, so the edge guard fires before the node guard.
 - [markTaskComplete RUN_LOST flake](marktaskcomplete-run-lost.md) — completion validation runs can be unreadable while checks pass; run checks via startValidationRun manually, then skip_validation_reason citing the run id.
