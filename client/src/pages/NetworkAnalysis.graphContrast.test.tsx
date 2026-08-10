@@ -132,6 +132,7 @@ const communities = new Map<number, string[]>(ADDRS.map((id, i) => [i, [id]]));
 const graph: NetworkGraph = {
   nodes,
   edges,
+  layoutEdges: edges,
   communities,
   stats: {
     nodeCount: 16,
@@ -141,6 +142,8 @@ const graph: NetworkGraph = {
     isolatedNodes: 0,
     avgDegree: 2,
     bridgeNodes: [],
+    skippedCliqueTransactions: 0,
+    hiddenEdgeCount: 0,
   },
 };
 

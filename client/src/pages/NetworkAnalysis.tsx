@@ -35,6 +35,7 @@ import { createGraphNodeActivation } from "@/lib/graph-node-interaction";
 import {
   buildNetworkGraph,
   MAX_NODES,
+  MAX_TX_CLIQUE_ADDRESSES,
   type NetworkGraph,
   type GraphNode,
   type GraphEdge,
@@ -213,7 +214,7 @@ export default function NetworkAnalysis() {
         setProgress("Analysis cancelled.");
         return;
       }
-      if (err?.message?.startsWith('TOO_MANY_NODES:')) {
+      if (err?.message?.startsWith('TOO_MANY_NODES:') || err?.message?.startsWith('TOO_MANY_EDGES:')) {
         const parts = err.message.split(':');
         setError(parts[2]);
       } else {
@@ -228,6 +229,14 @@ export default function NetworkAnalysis() {
 
   const cancelAnalysis = useCallback(() => {
     abortRef.current?.abort();
+    // Also cancel the layout phase: stop the force simulation so the page
+    // returns to an idle, non-stuck state (the graph stays visible, frozen at
+    // its last laid-out positions).
+    if (simulationRef.current) {
+      simulationRef.current.stop();
+      simulationRef.current = null;
+      setIsSimulating(false);
+    }
     setIsAnalyzing(false);
     setProgress("Cancelled.");
   }, []);
@@ -254,7 +263,10 @@ export default function NetworkAnalysis() {
     }));
 
     const nodeMap = new Map(sNodes.map(n => [n.id, n]));
-    const sLinks: SimLink[] = g.edges
+    // layoutEdges is the (possibly weight-pruned) display subset — the full
+    // edge set would freeze the simulation and the SVG renderer on dense
+    // graphs. Clusters/stats already describe the full graph.
+    const sLinks: SimLink[] = g.layoutEdges
       .map(e => {
         const source = nodeMap.get(e.source);
         const target = nodeMap.get(e.target);
@@ -265,6 +277,11 @@ export default function NetworkAnalysis() {
 
     setIsSimulating(true);
     tickCountRef.current = 0;
+    // Seed the first frame immediately so the graph is visible before the
+    // first simulation tick — and so cancelling the layout early still leaves
+    // a rendered (frozen) graph instead of an empty canvas.
+    setSimNodes([...sNodes]);
+    setSimLinks([...sLinks]);
 
     const throttleInterval = sNodes.length > 500 ? 5 : 2;
 
@@ -443,7 +460,7 @@ export default function NetworkAnalysis() {
             </div>
           )}
 
-          {!isAnalyzing ? (
+          {!isAnalyzing && !isSimulating ? (
             <Button
               onClick={runAnalysis}
               disabled={(filterMode === "by-owner" || filterMode === "by-wallet") && !filterValue}
@@ -506,7 +523,10 @@ export default function NetworkAnalysis() {
                   This is read-only analysis. No data is modified. Select a filter and click Analyze to begin.
                 </p>
                 <p className="text-xs">
-                  Safe for datasets up to {MAX_NODES.toLocaleString()} addresses. Larger datasets will prompt you to filter first.
+                  Safe for datasets up to {MAX_NODES.toLocaleString()} addresses. Very dense
+                  connection graphs are pruned to their strongest links for display (this is always
+                  disclosed), and oversized consolidation/CoinJoin transactions are not expanded
+                  into pairwise connections.
                 </p>
               </CardContent>
             </Card>
@@ -663,7 +683,41 @@ function StatsPanel({ stats }: { stats: GraphStats }) {
         <span className="font-medium">{stats.avgDegree}</span>
         <span className="text-muted-foreground">Bridge Nodes</span>
         <span className="font-medium">{stats.bridgeNodes.length}</span>
+        {stats.hiddenEdgeCount > 0 && (
+          <>
+            <span className="text-muted-foreground">Shown Connections</span>
+            <span className="font-medium" data-testid="text-stat-shown-edges">
+              {(stats.edgeCount - stats.hiddenEdgeCount).toLocaleString()}
+            </span>
+          </>
+        )}
+        {stats.skippedCliqueTransactions > 0 && (
+          <>
+            <span className="text-muted-foreground">Oversized Txs Skipped</span>
+            <span className="font-medium" data-testid="text-stat-skipped-cliques">
+              {stats.skippedCliqueTransactions.toLocaleString()}
+            </span>
+          </>
+        )}
       </div>
+      {stats.hiddenEdgeCount > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="notice-hidden-edges">
+          This graph is very dense — showing the strongest{" "}
+          {(stats.edgeCount - stats.hiddenEdgeCount).toLocaleString()} of{" "}
+          {stats.edgeCount.toLocaleString()} connections; {stats.hiddenEdgeCount.toLocaleString()}{" "}
+          lower-weight connections are hidden from the layout. All statistics above still describe
+          the full graph.
+        </p>
+      )}
+      {stats.skippedCliqueTransactions > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="notice-skipped-cliques">
+          {stats.skippedCliqueTransactions.toLocaleString()} oversized transaction
+          {stats.skippedCliqueTransactions === 1 ? "" : "s"} (more than {MAX_TX_CLIQUE_ADDRESSES}{" "}
+          addresses each — typically huge consolidations or CoinJoins){" "}
+          {stats.skippedCliqueTransactions === 1 ? "was" : "were"} not expanded into pairwise
+          connections. Their addresses still appear as nodes.
+        </p>
+      )}
     </div>
   );
 }

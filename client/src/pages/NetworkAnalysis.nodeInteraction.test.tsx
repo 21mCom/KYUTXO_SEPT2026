@@ -25,6 +25,7 @@ const node = (id: string): NetworkGraph["nodes"][number] => ({
 const graph: NetworkGraph = {
   nodes: [node(ALPHA), node(BRAVO)],
   edges: [{ source: ALPHA, target: BRAVO, weight: 1, txids: ["tx1"] }],
+  layoutEdges: [{ source: ALPHA, target: BRAVO, weight: 1, txids: ["tx1"] }],
   communities: new Map<number, string[]>([[0, [ALPHA, BRAVO]]]),
   stats: {
     nodeCount: 2,
@@ -34,6 +35,8 @@ const graph: NetworkGraph = {
     isolatedNodes: 0,
     avgDegree: 1,
     bridgeNodes: [],
+    skippedCliqueTransactions: 0,
+    hiddenEdgeCount: 0,
   },
 };
 

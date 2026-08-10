@@ -51,9 +51,12 @@ afterEach(() => {
 });
 
 describe("NetworkAnalysis CopyAddressButton", () => {
-  it("writes the correct address to the clipboard on click", () => {
+  it("writes the correct address to the clipboard on click", async () => {
     render(<CopyAddressButton address={ADDRESS} />);
     fireEvent.click(screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`));
+    // The guarded copy resolves the vault record (poisoning check) before
+    // writing, so the clipboard write lands on a later microtask.
+    await flush();
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
   });
@@ -80,7 +83,7 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     expect(btn.getAttribute("aria-label")).toBe("Copy address");
   });
 
-  it("does not trigger the parent click handler (stopPropagation)", () => {
+  it("does not trigger the parent click handler (stopPropagation)", async () => {
     const parentClick = vi.fn();
     render(
       <div onClick={parentClick} data-testid="parent">
@@ -88,6 +91,7 @@ describe("NetworkAnalysis CopyAddressButton", () => {
       </div>,
     );
     fireEvent.click(screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`));
+    await flush();
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
     expect(parentClick).not.toHaveBeenCalled();
   });
@@ -107,6 +111,7 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     expect(btn.getAttribute("aria-label")).toBe("Copied");
 
     fireEvent.keyDown(btn, { key: " " });
+    await flush();
     expect(writeText).toHaveBeenCalledTimes(2);
 
     expect(parentKeyDown).not.toHaveBeenCalled();

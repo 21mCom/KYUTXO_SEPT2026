@@ -25,7 +25,12 @@ export interface GraphEdge {
 
 export interface NetworkGraph {
   nodes: GraphNode[];
+  /** All discovered edges — clusters, centrality and stats describe this full
+   * graph. */
   edges: GraphEdge[];
+  /** The (possibly weight-pruned) edge subset to hand to the force simulation
+   * and SVG renderer. Identical to `edges` for normal-sized graphs. */
+  layoutEdges: GraphEdge[];
   communities: Map<number, string[]>;
   stats: GraphStats;
 }
@@ -38,10 +43,43 @@ export interface GraphStats {
   isolatedNodes: number;
   avgDegree: number;
   bridgeNodes: string[];
+  /** Transactions whose address-pair expansion was skipped (huge consolidation
+   * / CoinJoin-style transactions whose clique would add millions of
+   * near-meaningless edges). Their addresses still appear as nodes. */
+  skippedCliqueTransactions: number;
+  /** Full-graph edges that were pruned from the layout/render view because the
+   * graph was too dense for interactive SVG rendering. */
+  hiddenEdgeCount: number;
 }
 
 export const MAX_NODES = 3000;
 export const MAX_PARTICIPANTS_SCAN = 500000;
+/** Transactions touching more unique addresses than this are not expanded into
+ * a complete address-pair clique. Typical transactions involve a handful of
+ * addresses; huge consolidations/CoinJoins would otherwise each add millions
+ * of edges (a 2,500-address tx is ~3.1M pairs) and hang the layout. */
+export const MAX_TX_CLIQUE_ADDRESSES = 100;
+/** Hard cap on full-graph edges; beyond this analysis is refused up front. */
+export const MAX_EDGES = 1_000_000;
+/** Soft cap on edges handed to the force simulation and SVG renderer; denser
+ * graphs keep only the strongest edges for display (disclosed via
+ * stats.hiddenEdgeCount). */
+export const MAX_LAYOUT_EDGES = 50_000;
+
+/**
+ * Deterministically select the strongest edges for layout/rendering:
+ * highest weight first, ties broken by (source, target) so the selection is
+ * stable across runs. Returns the input untouched when under the cap.
+ */
+export function selectLayoutEdges(edges: GraphEdge[], max: number = MAX_LAYOUT_EDGES): GraphEdge[] {
+  if (edges.length <= max) return edges;
+  return [...edges]
+    .sort((a, b) =>
+      b.weight - a.weight ||
+      (a.source < b.source ? -1 : a.source > b.source ? 1 : 0) ||
+      (a.target < b.target ? -1 : a.target > b.target ? 1 : 0))
+    .slice(0, max);
+}
 
 export async function buildNetworkGraph(
   records: Record[],
@@ -84,12 +122,22 @@ export async function buildNetworkGraph(
   const edgeMap = new Map<string, { txids: Set<string> }>();
   const nodeAddresses = new Set<string>();
   let txProcessed = 0;
+  let skippedCliqueTransactions = 0;
 
   for (const [txid, addrs] of txToAddresses) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const addrArr = Array.from(addrs);
     for (const addr of addrArr) {
       nodeAddresses.add(addr);
+    }
+    if (addrArr.length > MAX_TX_CLIQUE_ADDRESSES) {
+      // A transaction this large (huge consolidation / CoinJoin) would add
+      // n*(n-1)/2 near-meaningless edges — e.g. 2,500 addresses is ~3.1M
+      // pairs, which hangs the layout. Skip its pair expansion; the addresses
+      // still appear as nodes and the skip is disclosed in the stats.
+      skippedCliqueTransactions++;
+      txProcessed++;
+      continue;
     }
     for (let i = 0; i < addrArr.length; i++) {
       for (let j = i + 1; j < addrArr.length; j++) {
@@ -114,6 +162,12 @@ export async function buildNetworkGraph(
   if (nodeAddresses.size > MAX_NODES) {
     throw new Error(
       `TOO_MANY_NODES:${nodeAddresses.size}:Your dataset contains ${nodeAddresses.size.toLocaleString()} addresses, which exceeds the safe limit of ${MAX_NODES.toLocaleString()}. Use the filters to narrow your data before running network analysis.`
+    );
+  }
+
+  if (edgeMap.size > MAX_EDGES) {
+    throw new Error(
+      `TOO_MANY_EDGES:${edgeMap.size}:These addresses are connected by ${edgeMap.size.toLocaleString()} edges, which exceeds the safe limit of ${MAX_EDGES.toLocaleString()}. Use the filters (e.g. a single owner or wallet) to narrow your data before running network analysis.`
     );
   }
 
@@ -184,6 +238,11 @@ export async function buildNetworkGraph(
     if (group.length > largestCommunitySize) largestCommunitySize = group.length;
   }
 
+  // The force simulation and the SVG renderer cannot stay interactive with
+  // hundreds of thousands of links — cap what reaches them to the strongest
+  // edges and disclose the pruning in the stats.
+  const layoutEdges = selectLayoutEdges(edges);
+
   const stats: GraphStats = {
     nodeCount: nodes.length,
     edgeCount: edges.length,
@@ -192,11 +251,13 @@ export async function buildNetworkGraph(
     isolatedNodes,
     avgDegree: Math.round(avgDegree * 100) / 100,
     bridgeNodes,
+    skippedCliqueTransactions,
+    hiddenEdgeCount: edges.length - layoutEdges.length,
   };
 
   onProgress?.('Analysis complete.');
 
-  return { nodes, edges, communities: communityGroups, stats };
+  return { nodes, edges, layoutEdges, communities: communityGroups, stats };
 }
 
 function louvainCommunities(
