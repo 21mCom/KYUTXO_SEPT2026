@@ -54,20 +54,14 @@ import { countUtxoLineage, countCustodySegments, getCustodySegmentsBeforeId } fr
 import { countTransactions } from "@/lib/data/transaction-crud";
 import { computeOverallProgress, decideCancelAction } from "@/lib/buildProgress";
 import { useSettings } from "@/hooks/use-settings";
-import { format, formatDistanceToNow, fromUnixTime } from "date-fns";
-
+import { formatDistanceToNow } from "date-fns";
 // CustodySegment.originDate is stored as Unix SECONDS (from
-// blockchainTransactions.blockTime); JS dates are milliseconds. Convert at
-// every render/export site. A 0/missing value means the origin transaction
-// has no block time (unconfirmed or missing) — render "Unknown", never the
-// 1970 epoch.
-const originDateMs = (originDate: number | undefined): Date | null =>
-  originDate && originDate > 0 ? fromUnixTime(originDate) : null;
-
-const formatOriginDate = (originDate: number | undefined, fmt: string): string => {
-  const d = originDateMs(originDate);
-  return d ? format(d, fmt) : "Unknown";
-};
+// blockchainTransactions.blockTime); the shared helpers convert to Date and
+// render "Unknown" (never the 1970 epoch) for 0/missing block times.
+import {
+  unixSecondsToDate as originDateMs,
+  formatUnixSeconds as formatOriginDate,
+} from "@/lib/unix-seconds";
 
 interface ContinuityProofProps {
   selectedAddress?: string;

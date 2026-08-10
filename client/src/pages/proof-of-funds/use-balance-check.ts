@@ -11,6 +11,7 @@ import {
 } from "@/lib/blockchain-api";
 import { computeStatsForAddresses } from "@/lib/data/address-stats";
 import { getRecordsByType } from "@/lib/data/record-crud";
+import { msToUnixSeconds } from "@/lib/unix-seconds";
 import {
   type BalanceSource,
   type AddressRow,
@@ -249,7 +250,12 @@ export function useBalanceCheck({ nodeSettings, onReset }: UseBalanceCheckParams
             .map((r) => r.statsComputedAt)
             .filter((t): t is number => t !== undefined && t > 0);
           if (syncTimes.length > 0) {
-            lastSyncTime = Math.max(...syncTimes);
+            // statsComputedAt is stored in MILLISECONDS (Date.now()), but the
+            // summary timestamp contract — shared with the live path's nowTs
+            // and rendered via formatUnix (which multiplies by 1000) — is
+            // Unix SECONDS. Convert, or the "last synced" date renders
+            // millennia in the future.
+            lastSyncTime = msToUnixSeconds(Math.max(...syncTimes));
           }
         } catch {
           // Non-fatal

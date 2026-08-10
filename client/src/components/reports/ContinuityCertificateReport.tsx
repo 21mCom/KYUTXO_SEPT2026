@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { type CustodySegment, type UtxoLineage } from "@/lib/database";
 import { getAllCustodySegments, getAllUtxoLineage } from "@/lib/data/lineage-crud";
+import { unixSecondsToDate } from "@/lib/unix-seconds";
 import { 
   generateEvidenceBundle, 
   downloadEvidenceBundle,
@@ -112,7 +113,9 @@ export function ContinuityCertificateReport() {
         l.spentAddress === segment.currentAddress
       );
 
-      const originDateVal = new Date(segment.originDate * 1000);
+      // originDate is Unix SECONDS; helper returns null for 0/missing block
+      // times (unconfirmed origin) instead of the 1970 epoch.
+      const originDateVal = unixSecondsToDate(segment.originDate) ?? new Date(0);
       const currentDate = new Date();
       
       const totalDuration = Math.floor((currentDate.getTime() - originDateVal.getTime()) / (1000 * 60 * 60 * 24));

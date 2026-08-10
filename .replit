@@ -2717,7 +2717,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/components/ContinuityProof.allSegments.test.tsx client/src/components/ContinuityProof.originDate.test.tsx"
+args = "npx vitest run client/src/components/ContinuityProof.allSegments.test.tsx client/src/components/ContinuityProof.originDate.test.tsx client/src/lib/unix-seconds.test.ts client/src/pages/proof-of-funds/use-balance-check.offlineLastSynced.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
