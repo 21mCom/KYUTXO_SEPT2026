@@ -789,6 +789,10 @@ args = "network-analysis-dense-graph-node-check"
 task = "workflow.run"
 args = "network-analysis-dense-graph-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "network-analysis-refusal-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -2813,6 +2817,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-continuity-proof-all-segments-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "network-analysis-refusal-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-network-analysis-refusal-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
