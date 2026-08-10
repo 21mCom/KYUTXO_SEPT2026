@@ -551,6 +551,10 @@ args = "continuity-proof-all-segments-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "lineage-build-segments-refresh-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "address-checker-5k-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2828,6 +2832,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-network-analysis-refusal-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "lineage-build-segments-refresh-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-lineage-build-segments-refresh-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
