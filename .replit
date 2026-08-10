@@ -251,6 +251,10 @@ args = "pof-live-anchor-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "pof-live-anchor-fallback-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "address-checker-cancel-history-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -812,6 +816,10 @@ args = "pof-offline-lastsynced-browser-check"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "pof-live-anchor-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-live-anchor-fallback-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -2893,6 +2901,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-pof-live-anchor-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-live-anchor-fallback-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-live-anchor-fallback-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
