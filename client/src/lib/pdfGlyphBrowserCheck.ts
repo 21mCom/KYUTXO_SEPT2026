@@ -152,11 +152,9 @@ async function extractRenderedText(
   pdfjs: typeof import('pdfjs-dist'),
   bytes: Uint8Array,
 ): Promise<string> {
-  const loadingTask = pdfjs.getDocument({
-    data: bytes,
-    // getTextContent never paints to canvas, so font/eval helpers are unused.
-    isEvalSupported: false,
-  });
+  // pdf.js 6.x removed the `isEvalSupported` option (eval-based font paths
+  // are gone entirely), so a plain init object is both correct and safest.
+  const loadingTask = pdfjs.getDocument({ data: bytes });
   const pdf = await loadingTask.promise;
   try {
     const page = await pdf.getPage(1);
