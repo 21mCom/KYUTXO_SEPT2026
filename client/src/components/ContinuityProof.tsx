@@ -54,7 +54,20 @@ import { countUtxoLineage, countCustodySegments, getCustodySegmentsBeforeId } fr
 import { countTransactions } from "@/lib/data/transaction-crud";
 import { computeOverallProgress, decideCancelAction } from "@/lib/buildProgress";
 import { useSettings } from "@/hooks/use-settings";
-import { format, formatDistanceToNow } from "date-fns";
+import { format, formatDistanceToNow, fromUnixTime } from "date-fns";
+
+// CustodySegment.originDate is stored as Unix SECONDS (from
+// blockchainTransactions.blockTime); JS dates are milliseconds. Convert at
+// every render/export site. A 0/missing value means the origin transaction
+// has no block time (unconfirmed or missing) — render "Unknown", never the
+// 1970 epoch.
+const originDateMs = (originDate: number | undefined): Date | null =>
+  originDate && originDate > 0 ? fromUnixTime(originDate) : null;
+
+const formatOriginDate = (originDate: number | undefined, fmt: string): string => {
+  const d = originDateMs(originDate);
+  return d ? format(d, fmt) : "Unknown";
+};
 
 interface ContinuityProofProps {
   selectedAddress?: string;
@@ -490,7 +503,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         txid: segment.originTxid,
         vout: segment.originVout,
         address: segment.originAddress,
-        date: new Date(segment.originDate).toISOString(),
+        date: originDateMs(segment.originDate)?.toISOString() ?? null,
         amount: formatBtc(segment.originAmount) + ' BTC',
       },
       current: segment.currentAddress ? {
@@ -569,14 +582,14 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
                       )}
                     </CardTitle>
                     <CardDescription className="mt-1">
-                      {segment.narrative || `Custody from ${format(segment.originDate, 'MMM d, yyyy')}`}
+                      {segment.narrative || `Custody from ${formatOriginDate(segment.originDate, 'MMM d, yyyy')}`}
                     </CardDescription>
                   </div>
                 </div>
                 <div className="text-right text-sm text-muted-foreground">
                   <div className="flex items-center gap-1">
                     <Calendar className="h-3 w-3" />
-                    {formatDistanceToNow(segment.originDate, { addSuffix: true })}
+                    {originDateMs(segment.originDate) ? formatDistanceToNow(originDateMs(segment.originDate)!, { addSuffix: true }) : "Unknown"}
                   </div>
                   {duration.totalDays > 0 && (
                     <div className="text-xs">{duration.totalDays} days custody</div>
@@ -607,7 +620,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Date:</span>
-                    <span>{format(segment.originDate, 'MMM d, yyyy HH:mm')}</span>
+                    <span>{formatOriginDate(segment.originDate, 'MMM d, yyyy HH:mm')}</span>
                   </div>
                   {segment.acquisitionMethod && (
                     <div className="flex justify-between">

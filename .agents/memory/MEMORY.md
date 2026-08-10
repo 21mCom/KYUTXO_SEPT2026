@@ -112,3 +112,4 @@
 - [CDP throttle for fast-op checks](cdp-throttle-fast-ops.md) — too-fast streaming ops: CDP CPU throttle (not bigger seeds), warm re-runs race cancels (dispatchEvent + escalating-rate retries), MutationObserver for progress frames.
 - [Independent proof-vector generators](independent-vector-generators.md) — BIP-322 vectors must ship with their deterministic generator (seed-string keys, aux=zeros); see pitfalls before re-deriving.
 - [Windowed-list pending race](windowed-list-pending-race.md) — scratch-store window lists: cleanup must drop cancelled windows from the pending set immediately or rows stick on "Loading…".
+- [markTaskComplete RUN_LOST flake](marktaskcomplete-run-lost.md) — completion validation runs can be unreadable while checks pass; run checks via startValidationRun manually, then skip_validation_reason citing the run id.
