@@ -304,7 +304,10 @@ async function main() {
         return b && !b.hasAttribute('disabled');
       },
       undefined,
-      { timeout: 30_000 },
+      // 60s: under parallel-validation load the generate-PDF button can take
+      // well over the old 30s to enable (observed full-run stretch to >2min
+      // with 5 concurrent browser checks).
+      { timeout: 60_000 },
     );
     await pdfBtn.scrollIntoViewIfNeeded({ timeout: 10_000 });
     const [download] = await Promise.all([
