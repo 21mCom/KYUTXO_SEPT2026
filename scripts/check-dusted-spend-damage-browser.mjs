@@ -20,6 +20,12 @@
 //   5. Expand the first row and assert the Spent section renders: outpoint,
 //      sats, harmful badge, spending TxidLink, owned AddressLink chips, and
 //      the external-address count.
+//   6. Scoped scan (pass 3c): switch scope to "By Wallet" → "Wallet A"
+//      (records alternate Wallet A / Wallet B), re-assert the banner counts
+//      for the scoped run, and prove the spend row still credits the other
+//      wallet's co-inputs as OWNED out-of-scope AddressLink chips (resolved
+//      via getRecordsByInputStrings) instead of lumping them into the
+//      external count.
 //
 // Everything runs offline against local IndexedDB — no network requests.
 //
@@ -45,10 +51,15 @@ const SPEND_TX_COUNT = N / K;
 const DUST_SATS = 500; // below the default 1000-sat threshold
 const fmt = (n) => n.toLocaleString('en-US');
 
-// Deterministic identifiers. All dust addresses share the "bc1qdust" prefix —
-// fine here because spend-row AddressLink chips are asserted by count within a
-// scoped row, not by unique testid.
-const dustAddr = (i) => (`bc1qdust${String(i).padStart(6, '0')}` + 'q'.repeat(42)).slice(0, 42);
+// Deterministic identifiers. Even-indexed dust addresses ("bc1qdust", Wallet A)
+// and odd-indexed ones ("bc1qothr", Wallet B) use distinct prefixes so the
+// scoped step can tell in-scope vs out-of-scope AddressLink chips apart by
+// their `link-address-<first8>` testid. Counts within a row are still the
+// primary assertion.
+const dustAddr = (i) =>
+  i % 2 === 0
+    ? (`bc1qdust${String(i).padStart(6, '0')}` + 'q'.repeat(42)).slice(0, 42)
+    : (`bc1qothr${String(i).padStart(6, '0')}` + 'q'.repeat(42)).slice(0, 42);
 const extAddr = (g) => (`bc1qext${String(g).padStart(6, '0')}` + 'x'.repeat(42)).slice(0, 42);
 const dustTxid = (i) => i.toString(16).padStart(8, '0') + 'dd'.repeat(28);
 // Offset spend txids so their first-8-char testid prefix never collides with a
@@ -186,8 +197,17 @@ async function main() {
       async ({ n, k, dustSats }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
         const txCrud = await import('/src/lib/data/transaction-crud.ts');
+        const vocabCrud = await import('/src/lib/data/vocabulary-crud.ts');
 
-        const dustAddr = (i) => (`bc1qdust${String(i).padStart(6, '0')}` + 'q'.repeat(42)).slice(0, 42);
+        // Wallet vocabulary rows so the "By Wallet" scope dropdown has values
+        // (bulk create below skips vocabulary sync for speed).
+        await vocabCrud.ensureWalletName('Wallet A');
+        await vocabCrud.ensureWalletName('Wallet B');
+
+        const dustAddr = (i) =>
+          i % 2 === 0
+            ? (`bc1qdust${String(i).padStart(6, '0')}` + 'q'.repeat(42)).slice(0, 42)
+            : (`bc1qothr${String(i).padStart(6, '0')}` + 'q'.repeat(42)).slice(0, 42);
         const extAddr = (g) => (`bc1qext${String(g).padStart(6, '0')}` + 'x'.repeat(42)).slice(0, 42);
         const dustTxid = (i) => i.toString(16).padStart(8, '0') + 'dd'.repeat(28);
         const spendTxid = (g) => (0x10000000 + g).toString(16).padStart(8, '0') + 'ee'.repeat(28);
@@ -202,6 +222,7 @@ async function main() {
               type: 'address',
               inputString: dustAddr(i),
               label: `Dust target ${i}`,
+              walletName: i % 2 === 0 ? 'Wallet A' : 'Wallet B',
             });
           }
           const ids = await recordCrud.bulkCreateRecords(chunk, {
@@ -361,6 +382,69 @@ async function main() {
       'spend-links',
       txLinkVisible && ownedChipCount === K - 1 && externalText.includes('1 external address'),
       `txLink=${txLinkVisible} ownedChips=${ownedChipCount} (expected ${K - 1}) external="${externalText.trim()}"`,
+    );
+
+    // ── Scoped scan (pass 3c): "By Wallet" → Wallet A ─────────────────────
+    // Even-indexed addresses (bc1qdust…) are Wallet A, odd (bc1qothr…) are
+    // Wallet B. A Wallet-A-scoped scan must classify each spend row's Wallet B
+    // co-inputs as OWNED out-of-scope chips, not external addresses.
+    await page.getByTestId('select-scope-type').click();
+    await page.getByRole('option', { name: 'By Wallet' }).click();
+    await page.getByTestId('select-scope-value').waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByTestId('select-scope-value').click();
+    await page.getByRole('option', { name: 'Wallet A' }).click();
+
+    // Selecting a scope value auto-runs the scan; wait for the banner to show
+    // the scoped counts (previous banner still shows the all-scope numbers).
+    const scopedN = N / 2; // in-scope spent dust outputs (Wallet A only)
+    await page.waitForFunction(
+      (expected) => {
+        const el = document.querySelector('[data-testid="text-spend-damage-summary"]');
+        return !!el && (el.textContent ?? '').includes(expected);
+      },
+      `${fmt(scopedN)}`,
+      { timeout: 180_000 },
+    );
+    const scopedBannerText = ((await banner.textContent()) ?? '').replace(/\s+/g, ' ');
+    // Every spending tx combines Wallet A + Wallet B dust, so all N owned
+    // addresses still count as linked even in the scoped run.
+    const scopedBannerOk =
+      scopedBannerText.includes(`${fmt(scopedN)} spent dust outputs`) &&
+      scopedBannerText.includes(`${fmt(SPEND_TX_COUNT)} transactions`) &&
+      scopedBannerText.includes(`linked ${fmt(N)} of your addresses together`);
+    record(
+      'scoped-banner',
+      scopedBannerOk,
+      `banner="${scopedBannerText.trim()}" (expected ${fmt(scopedN)} outputs / ${fmt(SPEND_TX_COUNT)} txs / ${fmt(N)} linked)`,
+    );
+
+    // Re-expand the target row if the re-scan collapsed it.
+    const scopedHeaderVisible = await page
+      .getByTestId(`header-spent-${targetRecordId}`)
+      .isVisible()
+      .catch(() => false);
+    if (!scopedHeaderVisible) {
+      const scopedToggle = page.getByTestId(`button-toggle-outputs-${targetRecordId}`);
+      await scopedToggle.waitFor({ state: 'visible', timeout: 15_000 });
+      await scopedToggle.dispatchEvent('click');
+      await page.getByTestId(`header-spent-${targetRecordId}`).waitFor({ state: 'visible', timeout: 15_000 });
+    }
+    const scopedSpendRow = page.getByTestId(`row-spend-${targetRecordId}-${TARGET_DUST_TXID}-0`);
+    await scopedSpendRow.waitFor({ state: 'visible', timeout: 15_000 });
+
+    // In-scope co-inputs: the other 9 Wallet A addresses (bc1qdust prefix).
+    // Out-of-scope owned co-inputs: all 10 Wallet B addresses (bc1qothr
+    // prefix). If pass 3c regressed, the bc1qothr chips vanish and the
+    // external count balloons to 11.
+    const inScopeChips = await scopedSpendRow.locator('[data-testid="link-address-bc1qdust"]').count();
+    const outOfScopeChips = await scopedSpendRow.locator('[data-testid="link-address-bc1qothr"]').count();
+    const scopedExternalText = (await page
+      .getByTestId(`text-spend-external-${targetRecordId}-${TARGET_DUST_TXID}-0`)
+      .textContent()) ?? '';
+    record(
+      'scoped-out-of-scope-chips',
+      inScopeChips === K / 2 - 1 && outOfScopeChips === K / 2 && scopedExternalText.includes('1 external address'),
+      `inScopeChips=${inScopeChips} (expected ${K / 2 - 1}) outOfScopeChips=${outOfScopeChips} (expected ${K / 2}) external="${scopedExternalText.trim()}"`,
     );
 
     await context.close();
