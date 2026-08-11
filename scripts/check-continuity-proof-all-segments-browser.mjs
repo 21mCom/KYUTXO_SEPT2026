@@ -12,15 +12,24 @@
 // This check:
 //   1. Creates a fresh vault via the setup form.
 //   2. Seeds 120 custody segments (>2 pages of 50) via the real CRUD helper,
-//      two of which belong to a distinct "selected" address.
+//      with mixed custody statuses, two rows belonging to a distinct
+//      "selected" address, five rows carrying a "zzfilter" address marker,
+//      and three SPARSE rows (missing evidenceTxids with hopCount > 0, like
+//      segments restored from older backups) placed on the LAST page.
 //   3. Opens /provenance and asserts: first page shows "Showing 50 of 120",
 //      exactly 50 cards mount, and the "No custody segments built yet" copy
 //      never appears while the count is non-zero.
 //   4. Clicks Load more twice: 50 → 100 → 120 cards; the button disappears
-//      once the table is exhausted.
+//      once the table is exhausted. Reaching the last page covers the
+//      reported regression where Load more "did nothing" because a sparse
+//      restored segment crashed the whole list render mid-append.
 //   5. Types the selected address into the explorer input: the list switches
 //      to that address's 2 segments (no paging indicator).
 //   6. Clears the selection: the full paged list returns at page one.
+//   7. Filters: soloing the Spent status chip narrows the paged query to the
+//      30 spent segments (filtered total, no Load more); the debounced
+//      address substring narrows to the 5 marked rows; clearing restores the
+//      full paged list.
 //
 // NOTE for reviewers: the paging UI under test lives in
 // client/src/components/ContinuityProof.tsx ("text-segments-showing",
@@ -111,23 +120,34 @@ async function runSession(browser, step) {
         const segments = [];
         for (let i = 0; i < total; i++) {
           const isSelected = i === 3 || i === 7; // two low-id rows off page one
-          segments.push({
+          const segment = {
             segmentId: `browser-seg-${i.toString().padStart(4, '0')}`,
             originTxid: (i + 1).toString(16).padStart(64, '0'),
             originVout: 0,
             originAddress: isSelected
               ? selectedAddress
-              : `bc1qallsegorigin${i.toString().padStart(6, '0')}`,
+              : i >= 40 && i <= 44
+                ? `bc1qzzfilterorigin${i.toString().padStart(6, '0')}`
+                : `bc1qallsegorigin${i.toString().padStart(6, '0')}`,
             originDate: Date.now() - (total - i) * 3_600_000,
             originAmount: 100_000 + i,
             currentAmount: 100_000 + i,
-            status: 'active',
+            status: ['active', 'spent', 'split', 'consolidated'][i % 4],
             hopCount: 0,
             evidenceTxids: [],
             narrative: `Browser segment ${i}`,
             createdAt: Date.now(),
             updatedAt: Date.now(),
-          });
+          };
+          // Sparse rows like segments restored from older backups: missing
+          // evidenceTxids but hopCount > 0. Lowest ids → last page, so the
+          // final Load more pulls them onto the screen (render-crash
+          // regression: this used to tear down the whole list).
+          if (i === 0 || i === 1 || i === 2) {
+            segment.hopCount = 2;
+            delete segment.evidenceTxids;
+          }
+          segments.push(segment);
         }
         await bulkAddCustodySegments(segments, { skipNotification: true });
         return db.custodySegments.count();
@@ -236,6 +256,74 @@ async function runSession(browser, step) {
       'clearing the selection restores the paged list at page one',
       clearedCards === 50 && loadMoreBack,
       `cards=${clearedCards}, loadMoreBack=${loadMoreBack}`,
+    );
+
+    // Filter: solo the Spent status chip — i % 4 === 1 → 30 spent segments.
+    await page.getByTestId('filter-status-spent').click();
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('[data-testid="text-segments-showing"]');
+        return el && el.textContent.includes('Showing 30 of 30 segments (filtered)');
+      },
+      undefined,
+      { timeout: 30_000 },
+    );
+    const spentCards = await cardCount();
+    const loadMoreFilteredOut = (await page.getByTestId('button-load-more-segments').count()) === 0;
+    step(
+      'status filter narrows the paged query to the 30 spent segments',
+      spentCards === 30 && loadMoreFilteredOut,
+      `cards=${spentCards}, loadMoreGone=${loadMoreFilteredOut}`,
+    );
+
+    // Clearing the status filter restores the unfiltered paged list.
+    await page.getByTestId('button-clear-segment-filters').click();
+    await page.waitForFunction(
+      (n) => {
+        const el = document.querySelector('[data-testid="text-segments-showing"]');
+        return el && el.textContent.includes(`Showing 50 of ${n} segments`) && !el.textContent.includes('(filtered)');
+      },
+      TOTAL_SEGMENTS,
+      { timeout: 30_000 },
+    );
+    step(
+      'clearing the status filter restores the unfiltered list',
+      (await cardCount()) === 50,
+      '',
+    );
+
+    // Filter: debounced address substring — 5 rows carry the "zzfilter" marker.
+    await page.getByTestId('input-filter-address').fill('zzfilter');
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('[data-testid="text-segments-showing"]');
+        return el && el.textContent.includes('Showing 5 of 5 segments (filtered)');
+      },
+      undefined,
+      { timeout: 30_000 },
+    );
+    const addrCards = await cardCount();
+    step(
+      'address substring filter narrows to the 5 marked segments',
+      addrCards === 5,
+      `cards=${addrCards}`,
+    );
+
+    // Clearing the address filter (debounced) returns the full paged list.
+    await page.getByTestId('input-filter-address').fill('');
+    await page.waitForFunction(
+      (n) => {
+        const el = document.querySelector('[data-testid="text-segments-showing"]');
+        return el && el.textContent.includes(`Showing 50 of ${n} segments`) && !el.textContent.includes('(filtered)');
+      },
+      TOTAL_SEGMENTS,
+      { timeout: 30_000 },
+    );
+    const clearedFilterCards = await cardCount();
+    step(
+      'clearing the address filter restores the paged list',
+      clearedFilterCards === 50,
+      `cards=${clearedFilterCards}`,
     );
   } finally {
     await context.close().catch(() => {});

@@ -6,13 +6,19 @@
 // card counting thousands of segments. These tests lock in that:
 //   1. the unselected view pages the custodySegments table (first page only,
 //      never a full-table mount) with a "Showing X of Y" indicator and a
-//      Load-more control,
+//      Load-more control — including the reported regression where Load more
+//      "did nothing" because a sparse restored segment (missing evidenceTxids
+//      with hopCount > 0) crashed the whole render the moment a later page
+//      pulled it onto the screen,
 //   2. the empty-state copy only claims "no segments built yet" when the
 //      segment count really is zero, and only shows the build guidance when
 //      BOTH counts are zero,
 //   3. a build (buildAllLineage + buildAllCustodySegments) refreshes the
 //      unselected list afterwards,
-//   4. the per-address view is unchanged (unpaged, no progress indicator).
+//   4. the per-address view is unchanged (unpaged, no progress indicator),
+//   5. the status/address/date filters narrow the paged query itself (with a
+//      filtered "Showing X of Y" total), and changing filters resets the
+//      paged list instead of appending stale pages.
 import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -40,7 +46,7 @@ import {
 import type { CustodySegment } from "@/lib/database";
 import { ContinuityProof } from "./ContinuityProof";
 
-function makeSegment(i: number): CustodySegment {
+function makeSegment(i: number, overrides: Partial<CustodySegment> = {}): CustodySegment {
   return {
     segmentId: `seg-${i.toString().padStart(4, "0")}`,
     originTxid: i.toString(16).padStart(64, "0"),
@@ -55,6 +61,7 @@ function makeSegment(i: number): CustodySegment {
     narrative: `Segment ${i}`,
     createdAt: 1_700_000_000 + i,
     updatedAt: 1_700_000_000 + i,
+    ...overrides,
   } as CustodySegment;
 }
 
@@ -72,6 +79,17 @@ beforeEach(async () => {
 afterEach(() => {
   cleanup();
 });
+
+// The filtered count query runs after each page lands, so Load more stays
+// disabled for a tick after the indicator updates. Clicking a disabled button
+// is swallowed by React — always wait for the enabled state first.
+async function clickLoadMoreWhenReady() {
+  const button = await screen.findByTestId("button-load-more-segments");
+  await waitFor(() => {
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+  });
+  fireEvent.click(button);
+}
 
 describe("ContinuityProof all-segments list", () => {
   it("pages the full segment table when no address is selected", async () => {
@@ -91,7 +109,7 @@ describe("ContinuityProof all-segments list", () => {
     // The stale "not built yet" copy must never show while the count is non-zero.
     expect(screen.queryByText(/No custody segments built yet/)).toBeNull();
 
-    fireEvent.click(screen.getByTestId("button-load-more-segments"));
+    await clickLoadMoreWhenReady();
 
     await waitFor(() => {
       expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 60 of 60 segments");
@@ -156,6 +174,191 @@ describe("ContinuityProof all-segments list", () => {
     expect(screen.getByText("Segment 3")).toBeTruthy();
     expect(buildAllLineageMock).toHaveBeenCalledOnce();
     expect(buildAllCustodySegmentsMock).toHaveBeenCalledOnce();
+  });
+
+  it("pages beyond the second page with Load more", async () => {
+    // 110 segments: 50 -> 100 -> 110 across two Load-more clicks.
+    await bulkAddCustodySegments(Array.from({ length: 110 }, (_, i) => makeSegment(i)));
+
+    renderWithProviders(<ContinuityProof />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 50 of 110 segments");
+    });
+
+    await clickLoadMoreWhenReady();
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 100 of 110 segments");
+    });
+    expect(screen.getAllByText(/^Segment \d+$/)).toHaveLength(100);
+
+    await clickLoadMoreWhenReady();
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 110 of 110 segments");
+    });
+    expect(screen.getAllByText(/^Segment \d+$/)).toHaveLength(110);
+    expect(screen.queryByTestId("button-load-more-segments")).toBeNull();
+  });
+
+  it("Load more survives sparse restored segments on a later page (render-crash regression)", async () => {
+    // The reported "Load more does nothing" regression: rows restored from an
+    // older backup can be sparse — evidenceTxids typed required but absent in
+    // the stored row. The moment a paged append pulled such a row onto the
+    // screen, `segment.evidenceTxids.map` threw during render and, with no
+    // error boundary, tore down the whole list. Sparse rows get the LOWEST
+    // ids here so they land exactly on the second page.
+    const sparse = Array.from({ length: 5 }, (_, i) => {
+      const s = makeSegment(i, { hopCount: 2 });
+      delete (s as Partial<CustodySegment>).evidenceTxids;
+      return s;
+    });
+    const normal = Array.from({ length: 55 }, (_, i) => makeSegment(i + 5));
+    await bulkAddCustodySegments([...sparse, ...normal]);
+
+    renderWithProviders(<ContinuityProof />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 50 of 60 segments");
+    });
+
+    await clickLoadMoreWhenReady();
+
+    // Pre-fix this click crashed the render and the list disappeared.
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 60 of 60 segments");
+    });
+    expect(screen.getAllByText(/^Segment \d+$/)).toHaveLength(60);
+    // The sparse rows render (their Transfer History section is tolerated).
+    expect(screen.getByText("Segment 0")).toBeTruthy();
+    expect(screen.queryByTestId("button-load-more-segments")).toBeNull();
+  });
+
+  it("filters segments by status with a filtered total and filtered paging", async () => {
+    // 120 segments, alternating spent (even i) / active (odd i) -> 60 spent.
+    await bulkAddCustodySegments(
+      Array.from({ length: 120 }, (_, i) =>
+        makeSegment(i, { status: i % 2 === 0 ? "spent" : "active" })
+      )
+    );
+
+    renderWithProviders(<ContinuityProof />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 50 of 120 segments");
+    });
+    // Newest odd segment is visible unfiltered.
+    expect(screen.getByText("Segment 119")).toBeTruthy();
+
+    // Solo the Spent chip: the query itself narrows (server-side), and the
+    // indicator switches to the filtered total.
+    fireEvent.click(screen.getByTestId("filter-status-spent"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 50 of 60 segments (filtered)");
+    });
+    // The stale unfiltered page must be replaced, not appended to.
+    expect(screen.getAllByText(/^Segment \d+$/)).toHaveLength(50);
+    expect(screen.queryByText("Segment 119")).toBeNull();
+    expect(screen.getByText("Segment 118")).toBeTruthy();
+
+    await clickLoadMoreWhenReady();
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 60 of 60 segments (filtered)");
+    });
+    expect(screen.getAllByText(/^Segment \d+$/)).toHaveLength(60);
+    expect(screen.queryByTestId("button-load-more-segments")).toBeNull();
+
+    // Clearing restores the unfiltered paged list at page one.
+    fireEvent.click(screen.getByTestId("button-clear-segment-filters"));
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 50 of 120 segments");
+    });
+    expect(screen.getByText("Segment 119")).toBeTruthy();
+  });
+
+  it("filters segments by an address substring (debounced) against origin address", async () => {
+    await bulkAddCustodySegments(Array.from({ length: 60 }, (_, i) => makeSegment(i)));
+
+    renderWithProviders(<ContinuityProof />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 50 of 60 segments");
+    });
+
+    // "origin00005" matches origins of i = 50..59 -> 10 rows.
+    fireEvent.change(screen.getByTestId("input-filter-address"), { target: { value: "origin00005" } });
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 10 of 10 segments (filtered)");
+      },
+      { timeout: 3000 }
+    );
+    expect(screen.getAllByText(/^Segment \d+$/)).toHaveLength(10);
+    expect(screen.queryByTestId("button-load-more-segments")).toBeNull();
+
+    // A query with no matches shows the filtered empty state, not "not built".
+    fireEvent.change(screen.getByTestId("input-filter-address"), { target: { value: "zzno-such-address" } });
+    await waitFor(
+      () => {
+        expect(screen.getByText(/No custody segments match the current filters/)).toBeTruthy();
+      },
+      { timeout: 3000 }
+    );
+    expect(screen.queryByText(/No custody segments built yet/)).toBeNull();
+
+    // Clearing the input returns the full paged list.
+    fireEvent.change(screen.getByTestId("input-filter-address"), { target: { value: "" } });
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 50 of 60 segments");
+      },
+      { timeout: 3000 }
+    );
+  });
+
+  it("filters segments by an origin-date range", async () => {
+    // One segment per day so a date range picks a contiguous block.
+    const day = 86_400;
+    await bulkAddCustodySegments(
+      Array.from({ length: 60 }, (_, i) => makeSegment(i, { originDate: 1_700_000_000 + i * day }))
+    );
+
+    renderWithProviders(<ContinuityProof />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 50 of 60 segments");
+    });
+
+    const toDateInput = (unixSeconds: number) =>
+      new Date(unixSeconds * 1000).toISOString().slice(0, 10);
+    // Rows 20..29 inclusive -> 10 rows.
+    fireEvent.change(screen.getByTestId("input-filter-origin-from"), {
+      target: { value: toDateInput(1_700_000_000 + 20 * day) },
+    });
+    fireEvent.change(screen.getByTestId("input-filter-origin-to"), {
+      target: { value: toDateInput(1_700_000_000 + 29 * day) },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("Showing 10 of 10 segments (filtered)");
+    });
+    expect(screen.getAllByText(/^Segment \d+$/)).toHaveLength(10);
+    expect(screen.getByText("Segment 29")).toBeTruthy();
+    expect(screen.getByText("Segment 20")).toBeTruthy();
+    expect(screen.queryByText("Segment 30")).toBeNull();
+  });
+
+  it("keeps filters hidden in the per-address view", async () => {
+    await bulkAddCustodySegments([makeSegment(1)]);
+    getSegmentsForAddressMock.mockResolvedValue([makeSegment(1)]);
+
+    renderWithProviders(<ContinuityProof selectedAddress="bc1qorigin000001" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Segment 1")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("segment-filters")).toBeNull();
   });
 
   it("keeps the per-address view unpaged with no progress indicator", async () => {

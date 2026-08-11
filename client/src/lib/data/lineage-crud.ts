@@ -1,4 +1,4 @@
-import { db, notifyDbChange, type UtxoLineage, type CustodySegment, type LineageSnapshot } from '../database';
+import { db, notifyDbChange, type UtxoLineage, type CustodySegment, type CustodyStatus, type LineageSnapshot } from '../database';
 
 export type CreateUtxoLineageData = Omit<UtxoLineage, 'id'>;
 export type CreateCustodySegmentData = Omit<CustodySegment, 'id'>;
@@ -252,6 +252,98 @@ export async function getCustodySegmentsBeforeId(
   limit: number
 ): Promise<CustodySegment[]> {
   return db.custodySegments.where('id').below(beforeId).reverse().limit(limit).toArray();
+}
+
+// Filters for the Continuity Proof all-segments list. All dimensions combine
+// with AND; an absent/empty dimension matches everything.
+export interface CustodySegmentListFilter {
+  statuses?: readonly CustodyStatus[]; // empty/undefined = all statuses
+  addressQuery?: string;               // case-insensitive substring vs origin OR current address
+  originDateFrom?: number;             // Unix SECONDS, inclusive (originDate is stored in seconds)
+  originDateTo?: number;               // Unix SECONDS, inclusive
+}
+
+interface NormalizedSegmentFilter {
+  statuses: ReadonlySet<CustodyStatus> | null;
+  addressQuery: string | null;
+  originDateFrom: number | null;
+  originDateTo: number | null;
+}
+
+function normalizeSegmentFilter(filter?: CustodySegmentListFilter): NormalizedSegmentFilter | null {
+  if (!filter) return null;
+  const statuses = filter.statuses && filter.statuses.length > 0 ? new Set(filter.statuses) : null;
+  const addressQuery = filter.addressQuery?.trim().toLowerCase() || null;
+  const originDateFrom =
+    typeof filter.originDateFrom === 'number' && Number.isFinite(filter.originDateFrom)
+      ? filter.originDateFrom
+      : null;
+  const originDateTo =
+    typeof filter.originDateTo === 'number' && Number.isFinite(filter.originDateTo)
+      ? filter.originDateTo
+      : null;
+  if (!statuses && !addressQuery && originDateFrom === null && originDateTo === null) return null;
+  return { statuses, addressQuery, originDateFrom, originDateTo };
+}
+
+// True when any filter dimension actually narrows the result. The list UI uses
+// this to decide whether the filtered count query is needed at all (the
+// unfiltered table count is already loaded for the stat card).
+export function isCustodySegmentFilterActive(filter?: CustodySegmentListFilter): boolean {
+  return normalizeSegmentFilter(filter) !== null;
+}
+
+function matchesSegmentFilter(segment: CustodySegment, filter: NormalizedSegmentFilter): boolean {
+  if (filter.statuses && !filter.statuses.has(segment.status)) return false;
+  if (filter.addressQuery) {
+    // Sparse rows restored from older backups may miss either address field.
+    const origin = (segment.originAddress || '').toLowerCase();
+    const current = (segment.currentAddress || '').toLowerCase();
+    if (!origin.includes(filter.addressQuery) && !current.includes(filter.addressQuery)) {
+      return false;
+    }
+  }
+  // Segments with a missing/unknown origin date (0/unset blockTime) never
+  // match a ranged query — any range excludes them rather than guessing.
+  if (filter.originDateFrom !== null || filter.originDateTo !== null) {
+    if (!(segment.originDate > 0)) return false;
+    if (filter.originDateFrom !== null && segment.originDate < filter.originDateFrom) return false;
+    if (filter.originDateTo !== null && segment.originDate > filter.originDateTo) return false;
+  }
+  return true;
+}
+
+// Filter-aware variant of getCustodySegmentsBeforeId: same newest-first id
+// keyset pagination, with the filter applied during the cursor scan so each
+// page genuinely narrows what is fetched (not client-side hiding of an
+// already-loaded page). The id keyset bounds the scan to rows below the
+// cursor and Dexie stops as soon as `limit` matches are found, so a page
+// never materialises the whole table. With no active filter this is exactly
+// the unfiltered query (no .filter() scan at all).
+export async function getCustodySegmentsBeforeIdFiltered(
+  beforeId: number,
+  limit: number,
+  filter?: CustodySegmentListFilter
+): Promise<CustodySegment[]> {
+  const normalized = normalizeSegmentFilter(filter);
+  const collection = db.custodySegments.where('id').below(beforeId).reverse();
+  if (!normalized) {
+    return collection.limit(limit).toArray();
+  }
+  return collection.filter((segment) => matchesSegmentFilter(segment, normalized)).limit(limit).toArray();
+}
+
+// Count companion to getCustodySegmentsBeforeIdFiltered — must stay in
+// lockstep with it so the "Showing X of Y" indicator reflects filtered
+// totals. Returns the plain table count when no filter is active.
+export async function countCustodySegmentsFiltered(
+  filter?: CustodySegmentListFilter
+): Promise<number> {
+  const normalized = normalizeSegmentFilter(filter);
+  if (!normalized) {
+    return db.custodySegments.count();
+  }
+  return db.custodySegments.filter((segment) => matchesSegmentFilter(segment, normalized)).count();
 }
 
 // Returns the set of `segmentId` values already present, read via the unique

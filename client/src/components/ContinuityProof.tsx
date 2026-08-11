@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -50,10 +50,21 @@ import {
   type CustodySegment,
   type UtxoLineage
 } from "@/lib/lineageEngine";
-import { countUtxoLineage, countCustodySegments, getCustodySegmentsBeforeId } from "@/lib/data/lineage-crud";
+import {
+  countUtxoLineage,
+  countCustodySegments,
+  getCustodySegmentsBeforeIdFiltered,
+  countCustodySegmentsFiltered,
+  isCustodySegmentFilterActive,
+  type CustodySegmentListFilter,
+} from "@/lib/data/lineage-crud";
 import { countTransactions } from "@/lib/data/transaction-crud";
 import { computeOverallProgress, decideCancelAction } from "@/lib/buildProgress";
 import { useSettings } from "@/hooks/use-settings";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { DEBOUNCE_DELAY } from "@/config/debounce";
+import { Input } from "@/components/ui/input";
+import type { CustodyStatus } from "@/lib/db-types";
 import { formatDistanceToNow } from "date-fns";
 // CustodySegment.originDate is stored as Unix SECONDS (from
 // blockchainTransactions.blockTime); the shared helpers convert to Date and
@@ -61,6 +72,7 @@ import { formatDistanceToNow } from "date-fns";
 import {
   unixSecondsToDate as originDateMs,
   formatUnixSeconds as formatOriginDate,
+  msToUnixSeconds,
 } from "@/lib/unix-seconds";
 
 interface ContinuityProofProps {
@@ -74,6 +86,15 @@ const LAST_BUILD_META_KEY = 'kyutxo_last_build_meta';
 // Page size for the unselected "All Custody Segments" list. Tens, not
 // thousands — the vault can hold far more segments than can mount at once.
 const ALL_SEGMENTS_PAGE_SIZE = 50;
+
+// Status filter chips for the all-segments list. An empty selection means
+// "no status filter" (all statuses) — the chips never represent "none".
+const SEGMENT_STATUS_FILTER_OPTIONS: Array<{ value: CustodyStatus; label: string }> = [
+  { value: 'active', label: 'Active' },
+  { value: 'spent', label: 'Spent' },
+  { value: 'split', label: 'Partial' },
+  { value: 'consolidated', label: 'Merged' },
+];
 
 interface LastBuildMeta {
   durationSeconds: number;
@@ -121,6 +142,21 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const [segmentsLoading, setSegmentsLoading] = useState(false);
   const segmentsCursorRef = useRef<number | null>(null);
   const segmentsLoadTokenRef = useRef(0);
+  // Mirror refs so the paged loader (stable callback, ref-driven) never reads
+  // stale state: loaded-row count for the exact hasMore check, and an
+  // in-flight flag so two appends can never overlap and duplicate rows.
+  const segmentsLoadedRef = useRef(0);
+  const segmentsLoadingRef = useRef(false);
+  const segmentsTotalRef = useRef<number | null>(null);
+  // Segment list filters (all-segments view only). Empty status selection =
+  // no status filter. The address query is debounced so typing doesn't fire a
+  // paged reload per keystroke.
+  const [statusFilter, setStatusFilter] = useState<CustodyStatus[]>([]);
+  const [addressFilterInput, setAddressFilterInput] = useState("");
+  const [debouncedAddressFilter] = useDebouncedValue(addressFilterInput, DEBOUNCE_DELAY.MEDIUM);
+  const [originFromInput, setOriginFromInput] = useState(""); // yyyy-mm-dd
+  const [originToInput, setOriginToInput] = useState("");
+  const [filteredSegmentCount, setFilteredSegmentCount] = useState<number | null>(null);
   const [lineage, setLineage] = useState<UtxoLineage[]>([]);
   const [lineageTruncated, setLineageTruncated] = useState(false);
   const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
@@ -262,32 +298,88 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     loadStats();
   }, [loadStats]);
   
+  // Applied segment filters. Date inputs are yyyy-mm-dd; originDate is stored
+  // as Unix SECONDS, so convert with UTC day bounds (start/end of day).
+  const segmentFilters = useMemo<CustodySegmentListFilter>(() => ({
+    statuses: statusFilter,
+    addressQuery: debouncedAddressFilter,
+    originDateFrom: originFromInput
+      ? msToUnixSeconds(Date.parse(`${originFromInput}T00:00:00Z`))
+      : undefined,
+    originDateTo: originToInput
+      ? msToUnixSeconds(Date.parse(`${originToInput}T23:59:59.999Z`))
+      : undefined,
+  }), [statusFilter, debouncedAddressFilter, originFromInput, originToInput]);
+  const segmentFiltersActive = isCustodySegmentFilterActive(segmentFilters);
+
   // Paged loader for the unselected "All Custody Segments" view. Keyset
   // pagination by descending id (newest built first) so the whole table is
   // never materialised or mounted. A load token guards against a stale page
-  // landing after the selection changed underneath an in-flight read.
+  // landing after the selection or the filters changed underneath an
+  // in-flight read — any filter change alters this callback's identity, which
+  // re-runs the reset effect below and bumps the token, so pages from a
+  // previous filter can never interleave with the new one.
   const loadAllSegmentsPage = useCallback(async (reset: boolean) => {
     if (reset) {
       segmentsLoadTokenRef.current += 1;
+    } else if (segmentsLoadingRef.current) {
+      // Never overlap appends: a second in-flight page would read the same
+      // cursor and append duplicate rows.
+      return;
     }
     const token = segmentsLoadTokenRef.current;
+    segmentsLoadingRef.current = true;
     setSegmentsLoading(true);
+    if (reset) {
+      // Never show a previous filter's total alongside the new filter.
+      setFilteredSegmentCount(null);
+      segmentsTotalRef.current = null;
+    }
     try {
       const beforeId = reset
         ? Number.MAX_SAFE_INTEGER
         : (segmentsCursorRef.current ?? Number.MAX_SAFE_INTEGER);
-      const page = await getCustodySegmentsBeforeId(beforeId, ALL_SEGMENTS_PAGE_SIZE);
+      const page = await getCustodySegmentsBeforeIdFiltered(beforeId, ALL_SEGMENTS_PAGE_SIZE, segmentFilters);
       if (token !== segmentsLoadTokenRef.current) return;
       const lastId = page.length > 0 ? page[page.length - 1].id : undefined;
       segmentsCursorRef.current = typeof lastId === 'number' ? lastId : null;
-      setSegmentsHasMore(page.length === ALL_SEGMENTS_PAGE_SIZE);
+      const loadedSoFar = (reset ? 0 : segmentsLoadedRef.current) + page.length;
+      segmentsLoadedRef.current = loadedSoFar;
       setSegments(prev => (reset ? page : [...prev, ...page]));
+      // Provisional: let the button render as soon as a full page lands.
+      setSegmentsHasMore(page.length === ALL_SEGMENTS_PAGE_SIZE);
+      // Deferred-count discipline: the count query only starts once the page
+      // rows are queued for render, and it runs once per reset — later pages
+      // of the same filter reuse the reset's total. The setter is
+      // token-guarded so a superseded load can never overwrite a newer
+      // filter's total.
+      let total = segmentsTotalRef.current;
+      if (total === null) {
+        total = await countCustodySegmentsFiltered(segmentFilters);
+        if (token !== segmentsLoadTokenRef.current) return;
+        segmentsTotalRef.current = total;
+        setFilteredSegmentCount(total);
+      }
+      // Exact hasMore (replaces the full-page heuristic once the total is
+      // known), so the button can't linger on an exact-multiple boundary.
+      setSegmentsHasMore(loadedSoFar < total);
+    } catch (error) {
+      // Surface load failures — a silently swallowed error leaves Load more
+      // looking dead with no explanation.
+      if (token === segmentsLoadTokenRef.current) {
+        toast({
+          variant: "destructive",
+          title: "Couldn't load segments",
+          description: error instanceof Error ? error.message : "An error occurred while loading custody segments.",
+        });
+      }
     } finally {
       if (token === segmentsLoadTokenRef.current) {
+        segmentsLoadingRef.current = false;
         setSegmentsLoading(false);
       }
     }
-  }, []);
+  }, [segmentFilters, toast]);
 
   // Load data for the selected address, or the paged all-segments list when
   // nothing is selected.
@@ -296,6 +388,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
       // Invalidate any in-flight all-segments page so it can't overwrite the
       // per-address view.
       segmentsLoadTokenRef.current += 1;
+      segmentsLoadingRef.current = false;
       setSegmentsHasMore(false);
       setSegmentsLoading(false);
       loadAddressData(selectedAddress);
@@ -303,6 +396,24 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
       void loadAllSegmentsPage(true);
     }
   }, [selectedAddress, loadAllSegmentsPage]);
+
+  const toggleSegmentStatusFilter = useCallback((status: CustodyStatus) => {
+    setStatusFilter(prev => {
+      // Empty selection means "all statuses". Clicking a chip while all are
+      // on solos that status; clicking the last active chip returns to all.
+      if (prev.length === 0) return [status];
+      if (prev.includes(status)) return prev.filter(s => s !== status);
+      const next = [...prev, status];
+      return next.length === SEGMENT_STATUS_FILTER_OPTIONS.length ? [] : next;
+    });
+  }, []);
+
+  const clearSegmentFilters = useCallback(() => {
+    setStatusFilter([]);
+    setAddressFilterInput("");
+    setOriginFromInput("");
+    setOriginToInput("");
+  }, []);
 
   const loadAddressData = async (address: string) => {
     const addressSegments = await getSegmentsForAddress(address);
@@ -510,7 +621,8 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         narrative: segment.narrative,
       },
       evidence: {
-        txids: segment.evidenceTxids,
+        // Sparse rows restored from older backups may lack array fields.
+        txids: Array.isArray(segment.evidenceTxids) ? segment.evidenceTxids : [],
       },
       metadata: {
         owner: segment.owner,
@@ -539,6 +651,12 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const renderSegmentCard = (segment: CustodySegment) => {
     const isExpanded = expandedSegments.has(segment.segmentId);
     const duration = getCustodyDuration([segment]);
+    // Segments restored from older backups can be sparse: evidenceTxids is
+    // typed required but may be absent in stored rows. One such row used to
+    // crash the whole list render (no error boundary), which surfaced as
+    // "Load more does nothing" the moment a paged append pulled a sparse row
+    // onto the page. Never let a sparse row take the list down.
+    const evidenceTxids = Array.isArray(segment.evidenceTxids) ? segment.evidenceTxids : [];
     
     return (
       <Collapsible
@@ -661,7 +779,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
                   <div className="pl-5">
                     <ScrollArea className="max-h-32">
                       <div className="space-y-1">
-                        {segment.evidenceTxids.map((txid, idx) => (
+                        {evidenceTxids.map((txid, idx) => (
                           <div key={txid} className="flex items-center gap-2 text-xs">
                             <span className="text-muted-foreground">{idx + 1}.</span>
                             <TxidLink txid={txid} />
@@ -860,7 +978,68 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
               <>All Custody Segments</>
             )}
           </h3>
-          
+
+          {/* Server-side filters for the paged all-segments list. The
+              per-address view takes precedence: filters are hidden while an
+              address is selected and do not affect it. */}
+          {!selectedAddress && (
+            <div className="flex flex-wrap items-center gap-2" data-testid="segment-filters">
+              <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by custody status">
+                {SEGMENT_STATUS_FILTER_OPTIONS.map((option) => {
+                  const active = statusFilter.length === 0 || statusFilter.includes(option.value);
+                  return (
+                    <Button
+                      key={option.value}
+                      variant={active ? "secondary" : "outline"}
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      aria-pressed={active}
+                      onClick={() => toggleSegmentStatusFilter(option.value)}
+                      data-testid={`filter-status-${option.value}`}
+                    >
+                      {option.label}
+                    </Button>
+                  );
+                })}
+              </div>
+              <Input
+                value={addressFilterInput}
+                onChange={(e) => setAddressFilterInput(e.target.value)}
+                placeholder="Filter by address…"
+                className="h-7 w-52 text-xs"
+                data-testid="input-filter-address"
+              />
+              <Input
+                type="date"
+                value={originFromInput}
+                onChange={(e) => setOriginFromInput(e.target.value)}
+                className="h-7 w-36 text-xs"
+                aria-label="Origin date from"
+                data-testid="input-filter-origin-from"
+              />
+              <span className="text-xs text-muted-foreground">to</span>
+              <Input
+                type="date"
+                value={originToInput}
+                onChange={(e) => setOriginToInput(e.target.value)}
+                className="h-7 w-36 text-xs"
+                aria-label="Origin date to"
+                data-testid="input-filter-origin-to"
+              />
+              {segmentFiltersActive && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={clearSegmentFilters}
+                  data-testid="button-clear-segment-filters"
+                >
+                  Clear filters
+                </Button>
+              )}
+            </div>
+          )}
+
           {segments.length === 0 ? (
             !selectedAddress && segmentsLoading ? (
               <div className="text-sm text-muted-foreground" data-testid="text-segments-loading">
@@ -873,6 +1052,8 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
               <AlertDescription>
                 {selectedAddress ? (
                   <>No custody segments found for this address. The address may not have any tracked transactions.</>
+                ) : segmentFiltersActive ? (
+                  <>No custody segments match the current filters. Adjust or clear the filters to see more.</>
                 ) : stats.segmentCount === 0 && stats.lineageCount === 0 ? (
                   <>Click "Build Lineage" to analyze your transaction history and create custody segments.</>
                 ) : stats.segmentCount === 0 ? (
@@ -893,7 +1074,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
               {!selectedAddress && (
                 <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span data-testid="text-segments-showing">
-                    Showing {segments.length.toLocaleString()} of {stats.segmentCount.toLocaleString()} segments
+                    Showing {segments.length.toLocaleString()} of {(filteredSegmentCount ?? stats.segmentCount).toLocaleString()} segments{segmentFiltersActive ? " (filtered)" : ""}
                   </span>
                   {segmentsHasMore && (
                     <Button

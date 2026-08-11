@@ -105,7 +105,7 @@
 - [Node-side message signing](node-side-message-signing.md) — sign the live per-session challenge in the check script (noble secp256k1 + header 27+rec+4) instead of pre-generated fixtures; block non-localhost to surface manual-anchor paths.
 - [Browser engine-bridge mock](browser-engine-bridge-mock.md) — test engine-served reads in Chromium via an addInitScript electronAPI.engine bridge (no isElectron flag) answering fingerprints/pages from live IDB.
 - [Detail-panel click races](detail-panel-click-races.md) — async badges (e.g. conflict count) shift layout mid-click and steal coordinate clicks in browser checks; dispatchEvent('click') + recover if URL changed.
-- [Optional Record fields in real vaults](optional-record-fields-real-vault.md) — rows created without tags/label store UNDEFINED; jsdom fixtures that always set them hide browser-only `.length` crashes.
+- [Optional Record fields in real vaults](optional-record-fields-real-vault.md) — stored rows can lack type-required fields (as-is creates, verbatim backup restores); jsdom fixtures that always set them hide browser-only render crashes, which present as dead controls.
 - [Workflow-runner phantom rg entries](workflow-runner-phantom-rg.md) — runner rg scan can hit dangling .local/skills mounts invisible shell-side; ignores/renames useless; consent + kill 1 rebuilds.
 - [Balance page vs seeded cached stats](balance-page-seeded-stats.md) — pre-set balanceFormulaVersion=2 or the page's one-time recompute wipes seeded cached stats to zero.
 - [Held-tx liveQuery lag](dexie-held-tx-livequery-lag.md) — deterministically stale useLiveQuery list: insert in a held rw tx (Dexie.waitFor), click, then release; never race timers or same-task cmdk clicks.
