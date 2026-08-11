@@ -47,6 +47,10 @@ args = "dormant-coins-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "dusted-spend-damage-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dormant-coins-scale-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2953,6 +2957,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/check-waitforfunction-options.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dusted-spend-damage-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dusted-spend-damage-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
