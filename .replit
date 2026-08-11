@@ -1896,7 +1896,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/pages/DustedPage.markAll.test.tsx client/src/pages/DustedPage.unmarkAll.test.tsx client/src/pages/DustedPage.per-output.test.tsx client/src/pages/DustedPage.dustScopeDedup.test.ts"
+args = "npx vitest run client/src/pages/DustedPage.markAll.test.tsx client/src/pages/DustedPage.unmarkAll.test.tsx client/src/pages/DustedPage.per-output.test.tsx client/src/pages/DustedPage.dustScopeDedup.test.ts client/src/pages/DustedPage.spendDamage.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true

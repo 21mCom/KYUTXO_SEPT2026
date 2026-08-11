@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Droplets, Loader2, X, RefreshCw, Flag, FlagOff, ChevronRight, ChevronDown } from "lucide-react";
+import { Droplets, Loader2, X, RefreshCw, Flag, FlagOff, ChevronRight, ChevronDown, Link2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { markOutpointsAsDust, unmarkDustOutpoints, getAllDustFlags, toOutpoint } from "@/lib/data/dust-flags-crud";
 import { Button } from "@/components/ui/button";
@@ -9,14 +9,16 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { AddressLink } from "@/components/AddressLink";
+import { TxidLink } from "@/components/TxidLink";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useOwners } from "@/hooks/use-owners";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
-import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
-import { db, type Record as DbRecord } from "@/lib/database";
+import { getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
+import { getParticipantsByPrevOutKeys, getParticipantsByTxids } from "@/lib/data/transaction-crud";
+import { db, type Record as DbRecord, type TransactionParticipant } from "@/lib/database";
 import { getGroupKeys, type GroupBy } from "@/lib/balance-grouping";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
@@ -24,6 +26,38 @@ const DEFAULT_DUST_THRESHOLD = 1000;
 const AGG_BATCH = 500;
 const PARTICIPANT_BATCH = 500;
 const MARK_ALL_CHUNK = 1000;
+
+/**
+ * One spent dust output and what it was combined with. The privacy damage of
+ * spending dust is the common-input-ownership linkage: every address that was
+ * a co-input of the spending transaction is publicly tied to the dust address.
+ */
+export interface DustSpendEvent {
+  /** The dust output that was spent (outpoint + sats). */
+  txid: string;
+  vout: number;
+  amountSats: number;
+  /** Txid of the transaction that spent the dust (null when not synced locally). */
+  spendingTxid: string | null;
+  /** Owned co-input addresses inside the scan's scope. */
+  ownedInScope: Array<{ address: string; recordId: number }>;
+  /** Owned co-input addresses outside the scan's scope (still user records). */
+  ownedOutOfScope: Array<{ address: string; recordId: number }>;
+  /** Co-input addresses with no record in the vault. */
+  external: string[];
+}
+
+/** Page-level damage rollup across all spent dust outputs of a scan. */
+export interface SpendDamageSummary {
+  spentOutputCount: number;
+  /** Distinct transactions that spent dust outputs. */
+  spendingTxCount: number;
+  /**
+   * Distinct owned addresses linked together by dust spends — i.e. addresses
+   * that shared a spending transaction with at least one other owned address.
+   */
+  linkedAddressCount: number;
+}
 
 interface DustingResult {
   recordId: number;
@@ -33,6 +67,8 @@ interface DustingResult {
   unspentCount: number;
   /** Unspent dust outputs for this address, used by the "Mark as dust" action. */
   unspentOutputs: Array<{ txid: string; vout: number; amountSats: number }>;
+  /** Spent dust outputs with their spending-tx linkage detail. */
+  spentOutputs: DustSpendEvent[];
 }
 
 type ScopeType = "all" | GroupBy;
@@ -56,6 +92,8 @@ interface DustScanOutcome {
   results: DustingResult[];
   /** Every address that was in scope for this scan (used for stale-flag detection). */
   scannedAddresses: Set<string>;
+  /** Rollup of the linkage damage caused by spent dust. */
+  spendDamage: SpendDamageSummary;
 }
 
 export async function computeDustings(
@@ -63,7 +101,7 @@ export async function computeDustings(
   scopeValue: string,
   threshold: number,
   signal: AbortSignal,
-  onProgress: (processed: number, phase: "addresses" | "participants") => void,
+  onProgress: (processed: number, phase: "addresses" | "participants" | "spends") => void,
 ): Promise<DustScanOutcome | null> {
   // ── Pass 1: collect in-scope address strings + their record ids ──────────
   const addressMap = new Map<string, { recordId: number }>();
@@ -103,7 +141,13 @@ export async function computeDustings(
 
   if (signal.aborted) return null;
   const scannedAddresses = new Set(addressMap.keys());
-  if (addressMap.size === 0) return { results: [], scannedAddresses };
+  if (addressMap.size === 0) {
+    return {
+      results: [],
+      scannedAddresses,
+      spendDamage: { spentOutputCount: 0, spendingTxCount: 0, linkedAddressCount: 0 },
+    };
+  }
 
   // ── Pass 2: gather ALL participant rows for in-scope addresses ───────────
   //
@@ -152,20 +196,176 @@ export async function computeDustings(
 
   const dustByAddress = new Map<
     string,
-    { spent: number; unspent: number; unspentOutputs: Array<{ txid: string; vout: number; amountSats: number }> }
+    {
+      spent: number;
+      unspent: number;
+      unspentOutputs: Array<{ txid: string; vout: number; amountSats: number }>;
+      spentOutputs: Array<{ txid: string; vout: number; amountSats: number }>;
+    }
   >();
   for (const out of allDustOutputs) {
     if (!addressMap.has(out.address)) continue;
     const outpoint = `${out.txid}:${out.vout}`;
     const isSpent = spentOutpoints.has(outpoint);
-    const entry = dustByAddress.get(out.address) ?? { spent: 0, unspent: 0, unspentOutputs: [] };
+    const entry =
+      dustByAddress.get(out.address) ?? { spent: 0, unspent: 0, unspentOutputs: [], spentOutputs: [] };
     if (isSpent) {
       entry.spent += 1;
+      entry.spentOutputs.push({ txid: out.txid, vout: out.vout, amountSats: out.amountSats });
     } else {
       entry.unspent += 1;
       entry.unspentOutputs.push({ txid: out.txid, vout: out.vout, amountSats: out.amountSats });
     }
     dustByAddress.set(out.address, entry);
+  }
+
+  // ── Pass 3: resolve what each spent dust output was combined WITH ────────
+  //
+  // Spending dust is where the real privacy damage happens: every address that
+  // was a co-input of the spending transaction is publicly linked to the dust
+  // address (common-input-ownership heuristic). For each spent dust output we
+  // find the spending transaction via the [prevTxid+prevVout] index, then load
+  // that transaction's inputs and split the co-input addresses into owned
+  // in-scope, owned out-of-scope (still a user record), and external.
+  const allSpentOutputs: Array<{ address: string; txid: string; vout: number; amountSats: number }> = [];
+  for (const [address, counts] of dustByAddress) {
+    for (const o of counts.spentOutputs) {
+      allSpentOutputs.push({ address, ...o });
+    }
+  }
+
+  const spendEventsByOutpoint = new Map<string, DustSpendEvent>();
+  const spendDamage: SpendDamageSummary = {
+    spentOutputCount: allSpentOutputs.length,
+    spendingTxCount: 0,
+    linkedAddressCount: 0,
+  };
+
+  if (allSpentOutputs.length > 0) {
+    // 3a — locate the spending txid for every spent dust outpoint.
+    const spendingTxidsByOutpoint = new Map<string, Set<string>>();
+    let spendProcessed = 0;
+    for (let i = 0; i < allSpentOutputs.length; i += PARTICIPANT_BATCH) {
+      if (signal.aborted) return null;
+      const chunk = allSpentOutputs.slice(i, i + PARTICIPANT_BATCH);
+      const spendingInputs = await getParticipantsByPrevOutKeys(
+        chunk.map((o) => [o.txid, o.vout] as [string, number]),
+      );
+      for (const inp of spendingInputs) {
+        if (inp.prevTxid === undefined || inp.prevVout === undefined) continue;
+        const key = `${inp.prevTxid}:${inp.prevVout}`;
+        const set = spendingTxidsByOutpoint.get(key) ?? new Set<string>();
+        set.add(inp.txid);
+        spendingTxidsByOutpoint.set(key, set);
+      }
+      spendProcessed += chunk.length;
+      onProgress(spendProcessed, "spends");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    if (signal.aborted) return null;
+
+    // 3b — batch-load every input participant of the spending transactions.
+    const spendingTxids = Array.from(
+      new Set(Array.from(spendingTxidsByOutpoint.values()).flatMap((s) => Array.from(s))),
+    );
+    const inputsByTxid = new Map<string, TransactionParticipant[]>();
+    for (let i = 0; i < spendingTxids.length; i += PARTICIPANT_BATCH) {
+      if (signal.aborted) return null;
+      const chunk = spendingTxids.slice(i, i + PARTICIPANT_BATCH);
+      const parts = await getParticipantsByTxids(chunk);
+      for (const p of parts) {
+        if (p.role !== "input") continue;
+        const arr = inputsByTxid.get(p.txid) ?? [];
+        arr.push(p);
+        inputsByTxid.set(p.txid, arr);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    if (signal.aborted) return null;
+
+    // 3c — co-input addresses not in scope may still be user records (e.g. a
+    // scoped scan over one wallet whose dust was spent with another wallet's
+    // address). Batch-resolve them against the records table.
+    const outOfScopeCandidates = new Set<string>();
+    for (const inputs of inputsByTxid.values()) {
+      for (const p of inputs) {
+        const addr = (p.address ?? "").trim();
+        if (!addr || addressMap.has(addr)) continue;
+        outOfScopeCandidates.add(addr);
+      }
+    }
+    const recordIdByAddress = new Map<string, number>();
+    const candidates = Array.from(outOfScopeCandidates);
+    for (let i = 0; i < candidates.length; i += PARTICIPANT_BATCH) {
+      if (signal.aborted) return null;
+      const chunk = candidates.slice(i, i + PARTICIPANT_BATCH);
+      const recs = await getRecordsByInputStrings(chunk);
+      for (const rec of recs) {
+        if (rec.type === "address" && rec.id != null && rec.inputString) {
+          recordIdByAddress.set(rec.inputString, rec.id);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    if (signal.aborted) return null;
+
+    // 3d — build one event per spent dust output + the page-level summary.
+    const ownedBySpendingTx = new Map<string, Set<string>>();
+    for (const out of allSpentOutputs) {
+      const outpoint = `${out.txid}:${out.vout}`;
+      const txids = spendingTxidsByOutpoint.get(outpoint);
+      const spendingTxid = txids && txids.size > 0 ? Array.from(txids).sort()[0] : null;
+
+      const inScope = new Map<string, number>();
+      const outScope = new Map<string, number>();
+      const external = new Set<string>();
+      if (spendingTxid) {
+        for (const p of inputsByTxid.get(spendingTxid) ?? []) {
+          // Skip the input that spends this very dust output, and any other
+          // input from the same address — those aren't "combined with" it.
+          if (p.prevTxid === out.txid && p.prevVout === out.vout) continue;
+          const addr = (p.address ?? "").trim();
+          if (!addr || addr === out.address) continue; // coinbase / unresolved inputs have no address
+          const inScopeMeta = addressMap.get(addr);
+          if (inScopeMeta) {
+            inScope.set(addr, inScopeMeta.recordId);
+          } else {
+            const rid = recordIdByAddress.get(addr);
+            if (rid != null) outScope.set(addr, rid);
+            else external.add(addr);
+          }
+        }
+      }
+
+      spendEventsByOutpoint.set(outpoint, {
+        txid: out.txid,
+        vout: out.vout,
+        amountSats: out.amountSats,
+        spendingTxid,
+        ownedInScope: Array.from(inScope, ([address, recordId]) => ({ address, recordId })),
+        ownedOutOfScope: Array.from(outScope, ([address, recordId]) => ({ address, recordId })),
+        external: Array.from(external).sort(),
+      });
+
+      if (spendingTxid) {
+        const owned = ownedBySpendingTx.get(spendingTxid) ?? new Set<string>();
+        owned.add(out.address);
+        for (const a of inScope.keys()) owned.add(a);
+        for (const a of outScope.keys()) owned.add(a);
+        ownedBySpendingTx.set(spendingTxid, owned);
+      }
+    }
+
+    // A transaction "links" addresses when at least two OWNED addresses were
+    // combined in it; every owned address in such a tx counts as linked.
+    const linkedAddresses = new Set<string>();
+    for (const owned of ownedBySpendingTx.values()) {
+      if (owned.size >= 2) {
+        for (const a of owned) linkedAddresses.add(a);
+      }
+    }
+    spendDamage.spendingTxCount = ownedBySpendingTx.size;
+    spendDamage.linkedAddressCount = linkedAddresses.size;
   }
 
   const results: DustingResult[] = [];
@@ -181,11 +381,14 @@ export async function computeDustings(
       spentCount: counts.spent,
       unspentCount: counts.unspent,
       unspentOutputs: counts.unspentOutputs,
+      spentOutputs: counts.spentOutputs
+        .map((o) => spendEventsByOutpoint.get(`${o.txid}:${o.vout}`))
+        .filter((e): e is DustSpendEvent => e !== undefined),
     });
   }
 
   results.sort((a, b) => b.totalCount - a.totalCount || a.address.localeCompare(b.address));
-  return { results, scannedAddresses };
+  return { results, scannedAddresses, spendDamage };
 }
 
 export default function DustedPage() {
@@ -536,7 +739,9 @@ export default function DustedPage() {
             setProgressMsg(
               phaseLabel === "addresses"
                 ? `Scanning addresses… ${count.toLocaleString()} checked`
-                : `Scanning transactions… ${count.toLocaleString()} participant rows loaded`,
+                : phaseLabel === "participants"
+                  ? `Scanning transactions… ${count.toLocaleString()} participant rows loaded`
+                  : `Resolving spent dust… ${count.toLocaleString()} outputs checked`,
             );
           }
         },
@@ -584,7 +789,9 @@ export default function DustedPage() {
 
   type FlatRow =
     | { type: "address"; row: DustingResult }
-    | { type: "output"; row: DustingResult; output: { txid: string; vout: number; amountSats: number } };
+    | { type: "output"; row: DustingResult; output: { txid: string; vout: number; amountSats: number } }
+    | { type: "spentHeader"; row: DustingResult }
+    | { type: "spend"; row: DustingResult; spend: DustSpendEvent };
 
   const flatRows = useMemo<FlatRow[]>(() => {
     if (!results) return [];
@@ -595,6 +802,12 @@ export default function DustedPage() {
         for (const output of row.unspentOutputs) {
           rows.push({ type: "output", row, output });
         }
+        if (row.spentOutputs.length > 0) {
+          rows.push({ type: "spentHeader", row });
+          for (const spend of row.spentOutputs) {
+            rows.push({ type: "spend", row, spend });
+          }
+        }
       }
     }
     return rows;
@@ -603,7 +816,13 @@ export default function DustedPage() {
   const virtualizer = useVirtualizer({
     count: flatRows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) => (flatRows[index]?.type === "output" ? 44 : 56),
+    estimateSize: (index) => {
+      const t = flatRows[index]?.type;
+      if (t === "output") return 44;
+      if (t === "spentHeader") return 28;
+      if (t === "spend") return 64;
+      return 56;
+    },
     overscan: 10,
   });
 
@@ -820,6 +1039,36 @@ export default function DustedPage() {
               )}
             </div>
 
+            {scanOutcome && scanOutcome.spendDamage.spentOutputCount > 0 && (
+              <div
+                className="flex-none px-4 py-2 border-b text-xs flex items-center gap-2"
+                data-testid="banner-spend-damage"
+              >
+                <Link2 className="h-3.5 w-3.5 text-amber-500 flex-none" />
+                <span className="flex-1 min-w-0" data-testid="text-spend-damage-summary">
+                  <span className="font-medium text-foreground">
+                    {scanOutcome.spendDamage.spentOutputCount.toLocaleString()}
+                  </span>{" "}
+                  spent dust output{scanOutcome.spendDamage.spentOutputCount !== 1 ? "s" : ""} across{" "}
+                  <span className="font-medium text-foreground">
+                    {scanOutcome.spendDamage.spendingTxCount.toLocaleString()}
+                  </span>{" "}
+                  transaction{scanOutcome.spendDamage.spendingTxCount !== 1 ? "s" : ""}
+                  {scanOutcome.spendDamage.linkedAddressCount > 0 ? (
+                    <>
+                      {" "}linked{" "}
+                      <span className="font-medium text-foreground">
+                        {scanOutcome.spendDamage.linkedAddressCount.toLocaleString()}
+                      </span>{" "}
+                      of your addresses together.
+                    </>
+                  ) : (
+                    <> — none combined your addresses with each other.</>
+                  )}
+                </span>
+              </div>
+            )}
+
             <div className="flex-none px-4 py-2 border-b grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wide">
               <span>Address</span>
               <span className="w-20 text-right">Total</span>
@@ -909,6 +1158,124 @@ export default function DustedPage() {
                     );
                   }
 
+                  if (flatRow.type === "spentHeader") {
+                    const { row } = flatRow;
+                    return (
+                      <div
+                        key={`${row.recordId}-spent-header`}
+                        data-testid={`header-spent-${row.recordId}`}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: `${vItem.size}px`,
+                          transform: `translateY(${vItem.start}px)`,
+                        }}
+                        className="flex items-center pl-12 pr-4 border-b last:border-b-0 bg-muted/10"
+                      >
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Spent — what the dust was combined with
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  if (flatRow.type === "spend") {
+                    const { row, spend } = flatRow;
+                    const ownedCoInputs = [...spend.ownedInScope, ...spend.ownedOutOfScope];
+                    const harmful = ownedCoInputs.length > 0;
+                    return (
+                      <div
+                        key={`${row.recordId}-spent-${spend.txid}-${spend.vout}`}
+                        data-testid={`row-spend-${row.recordId}-${spend.txid}-${spend.vout}`}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: `${vItem.size}px`,
+                          transform: `translateY(${vItem.start}px)`,
+                        }}
+                        className={`flex flex-col justify-center gap-0.5 pl-12 pr-4 border-b last:border-b-0 ${
+                          harmful ? "bg-red-500/5" : "bg-muted/30"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className="truncate font-mono text-xs text-muted-foreground"
+                            data-testid={`text-spend-outpoint-${row.recordId}-${spend.txid}-${spend.vout}`}
+                            title={`${spend.txid}:${spend.vout}`}
+                          >
+                            {spend.txid}:{spend.vout}
+                          </span>
+                          <span
+                            className="flex-none text-xs tabular-nums text-muted-foreground"
+                            data-testid={`text-spend-sats-${row.recordId}-${spend.txid}-${spend.vout}`}
+                          >
+                            {spend.amountSats.toLocaleString()} sats
+                          </span>
+                          {harmful && (
+                            <Badge
+                              variant="destructive"
+                              className="no-default-hover-elevate no-default-active-elevate flex-none"
+                              data-testid={`badge-links-owned-${row.recordId}-${spend.txid}-${spend.vout}`}
+                            >
+                              Links your addresses
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 min-w-0 overflow-hidden text-xs text-muted-foreground">
+                          <span className="flex-none">Spent in</span>
+                          {spend.spendingTxid ? (
+                            <TxidLink txid={spend.spendingTxid} showCopy={false} />
+                          ) : (
+                            <span
+                              className="italic"
+                              data-testid={`text-spend-unknown-tx-${row.recordId}-${spend.txid}-${spend.vout}`}
+                            >
+                              an unsynced transaction
+                            </span>
+                          )}
+                          {ownedCoInputs.length > 0 && (
+                            <>
+                              <span className="flex-none">· combined with</span>
+                              {ownedCoInputs.map((c) => (
+                                <AddressLink
+                                  key={c.address}
+                                  address={c.address}
+                                  recordId={c.recordId}
+                                  truncate
+                                  showCopy={false}
+                                />
+                              ))}
+                            </>
+                          )}
+                          {spend.external.length > 0 && (
+                            <span
+                              className="flex-none"
+                              title={spend.external.join(", ")}
+                              data-testid={`text-spend-external-${row.recordId}-${spend.txid}-${spend.vout}`}
+                            >
+                              · {spend.external.length} external address
+                              {spend.external.length !== 1 ? "es" : ""} (
+                              <span className="font-mono">
+                                {spend.external[0].slice(0, 8)}…
+                                {spend.external.length > 1 ? ", …" : ""}
+                              </span>
+                              )
+                            </span>
+                          )}
+                          {!harmful && spend.external.length === 0 && spend.spendingTxid && (
+                            <span className="flex-none italic">
+                              · no other known inputs — dust spent alone
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
                   const row = flatRow.row;
                   const isExpanded = expandedIds.has(row.recordId);
                   return (
@@ -926,7 +1293,7 @@ export default function DustedPage() {
                       className="flex items-center px-4 border-b last:border-b-0"
                     >
                       <div className="flex-1 min-w-0 flex items-center gap-1">
-                        {row.unspentOutputs.length > 0 ? (
+                        {row.unspentOutputs.length > 0 || row.spentOutputs.length > 0 ? (
                           <Button
                             size="icon"
                             variant="ghost"
