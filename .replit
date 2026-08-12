@@ -287,6 +287,10 @@ args = "address-checker-reset-history-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "address-checker-electrum-reset-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "op-return-fallback-node-check"
 
 [[workflows.workflow.tasks]]
@@ -604,6 +608,10 @@ args = "address-checker-cancel-history-all-browser-check"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "address-checker-reset-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-electrum-reset-history-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -2540,6 +2548,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-address-checker-reset-history-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-electrum-reset-history-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-electrum-reset-history-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
