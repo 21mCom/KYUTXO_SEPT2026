@@ -583,6 +583,10 @@ args = "custody-segment-export-pdf-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "continuity-proof-export-all-pdf-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "lineage-build-segments-refresh-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2998,6 +3002,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-custody-segment-export-pdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "continuity-proof-export-all-pdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-continuity-proof-export-all-pdf-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
