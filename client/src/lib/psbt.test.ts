@@ -515,6 +515,44 @@ describe('OP_RETURN data output', () => {
     expect(bytesToHex(script.slice(2))).toBe(PAYLOAD_HEX);
   });
 
+  // Exact-script-bytes regression net: a bitcoinjs-lib upgrade or refactor
+  // that changes push encoding (direct push vs OP_PUSHDATA1, non-minimal
+  // pushes) would produce a notarization that is worthless on-chain. Assert
+  // the exact compiled hex at the boundary payload sizes.
+  it('compiles the exact script hex for a 32-byte digest (direct push)', () => {
+    const script = buildOpReturnScript(hexToBytes(PAYLOAD_HEX));
+    // 6a = OP_RETURN, 20 = direct push of 32 bytes, then the digest verbatim.
+    expect(bytesToHex(script)).toBe(`6a20${PAYLOAD_HEX}`);
+  });
+
+  it('compiles the exact script hex for a 75-byte payload (largest direct push)', () => {
+    const payloadHex = 'cd'.repeat(75);
+    const script = buildOpReturnScript(hexToBytes(payloadHex));
+    // 4b = direct push of 75 bytes — the last size before OP_PUSHDATA1.
+    expect(bytesToHex(script)).toBe(`6a4b${payloadHex}`);
+    expect(script.length).toBe(1 + 1 + 75);
+    // dataOutputVbytes agrees with the real script size: 8 + 1 + scriptLen.
+    expect(dataOutputVbytes(75)).toBe(8 + 1 + script.length);
+  });
+
+  it('compiles the exact script hex for an 80-byte payload (OP_PUSHDATA1)', () => {
+    const payloadHex = 'ef'.repeat(80);
+    const script = buildOpReturnScript(hexToBytes(payloadHex));
+    // 4c = OP_PUSHDATA1, 50 = length byte (80).
+    expect(bytesToHex(script)).toBe(`6a4c50${payloadHex}`);
+    expect(script.length).toBe(1 + 2 + 80);
+    expect(dataOutputVbytes(80)).toBe(8 + 1 + script.length);
+  });
+
+  it('buildOpReturnScript rejects empty and oversize payloads directly', () => {
+    expect(() => buildOpReturnScript(new Uint8Array(0))).toThrow(/must not be empty/i);
+    expect(() => buildOpReturnScript(new Uint8Array(OP_RETURN_MAX_PAYLOAD_BYTES + 1))).toThrow(
+      /standardness limit/,
+    );
+    // The maximum standard payload itself is accepted.
+    expect(() => buildOpReturnScript(new Uint8Array(OP_RETURN_MAX_PAYLOAD_BYTES))).not.toThrow();
+  });
+
   it('builds a PSBT with a zero-value OP_RETURN output and accounts for it in the fee', () => {
     const dataVbytes = dataOutputVbytes(32);
     const vbytes = estimateTxVbytes([wpkhInput()], ['P2WPKH'], 32);
