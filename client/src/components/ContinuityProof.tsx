@@ -62,6 +62,8 @@ import { countTransactions } from "@/lib/data/transaction-crud";
 import {
   buildSegmentProofPayload,
   downloadSegmentProofPdf,
+  downloadAllSegmentProofsPdf,
+  PdfExportCancelledError,
 } from "@/lib/custody-proof-export";
 import { computeOverallProgress, decideCancelAction } from "@/lib/buildProgress";
 import { useSettings } from "@/hooks/use-settings";
@@ -161,6 +163,11 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const [originFromInput, setOriginFromInput] = useState(""); // yyyy-mm-dd
   const [originToInput, setOriginToInput] = useState("");
   const [filteredSegmentCount, setFilteredSegmentCount] = useState<number | null>(null);
+  // Combined "Export all as PDF" state. A dedicated AbortController (separate
+  // from the lineage build's) cancels the export between segments.
+  const [isExportingAll, setIsExportingAll] = useState(false);
+  const [exportAllProgress, setExportAllProgress] = useState({ current: 0, total: 0 });
+  const exportAllAbortRef = useRef<AbortController | null>(null);
   const [lineage, setLineage] = useState<UtxoLineage[]>([]);
   const [lineageTruncated, setLineageTruncated] = useState(false);
   const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
@@ -639,6 +646,64 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     }
   };
   
+  // Export every custody segment matching the active filters into one
+  // combined PDF. Pages through the DB with the same keyset fetcher + filter
+  // as the list, so what's exported is exactly what the list would show.
+  const handleExportAllSegmentsPdf = async () => {
+    if (isExportingAll) return;
+    const controller = new AbortController();
+    exportAllAbortRef.current = controller;
+    setIsExportingAll(true);
+    setExportAllProgress({ current: 0, total: 0 });
+    try {
+      const total = segmentsTotalRef.current ?? await countCustodySegmentsFiltered(segmentFilters);
+      if (total === 0) {
+        toast({
+          title: "Nothing to Export",
+          description: segmentFiltersActive
+            ? "No custody segments match the current filters."
+            : "No custody segments have been built yet.",
+        });
+        return;
+      }
+      setExportAllProgress({ current: 0, total });
+      const exported = await downloadAllSegmentProofsPdf({
+        fetchPage: (beforeId, limit) =>
+          getCustodySegmentsBeforeIdFiltered(beforeId, limit, segmentFilters),
+        totalCount: total,
+        signal: controller.signal,
+        onProgress: (current, totalCount) =>
+          setExportAllProgress({ current, total: totalCount }),
+      });
+      toast({
+        title: "Exported",
+        description: `${exported} custody segment${exported === 1 ? "" : "s"} exported to a combined PDF.`,
+      });
+    } catch (err) {
+      if (err instanceof PdfExportCancelledError) {
+        toast({
+          title: "Export Cancelled",
+          description: "The combined PDF export was cancelled. No file was saved.",
+        });
+      } else {
+        console.error("[ContinuityProof] Combined PDF export failed:", err);
+        toast({
+          variant: "destructive",
+          title: "PDF Export Failed",
+          description: err instanceof Error ? err.message : "An unexpected error occurred during PDF generation.",
+        });
+      }
+    } finally {
+      exportAllAbortRef.current = null;
+      setIsExportingAll(false);
+      setExportAllProgress({ current: 0, total: 0 });
+    }
+  };
+
+  const handleCancelExportAll = () => {
+    exportAllAbortRef.current?.abort();
+  };
+
   const renderSegmentCard = (segment: CustodySegment) => {
     const isExpanded = expandedSegments.has(segment.segmentId);
     const duration = getCustodyDuration([segment]);
@@ -971,13 +1036,48 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         
         {/* Segments for selected address or all segments */}
         <div className="space-y-3">
-          <h3 className="text-sm font-medium">
-            {selectedAddress ? (
-              <>Custody History for Selected Address</>
-            ) : (
-              <>All Custody Segments</>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-medium">
+              {selectedAddress ? (
+                <>Custody History for Selected Address</>
+              ) : (
+                <>All Custody Segments</>
+              )}
+            </h3>
+            {!selectedAddress && (
+              isExportingAll ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="export-all-progress">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span className="tabular-nums" data-testid="text-export-all-counter">
+                    {exportAllProgress.total > 0
+                      ? `Exporting ${exportAllProgress.current.toLocaleString()} of ${exportAllProgress.total.toLocaleString()}…`
+                      : "Preparing export…"}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={handleCancelExportAll}
+                    data-testid="button-cancel-export-all"
+                  >
+                    <XCircle className="h-3 w-3 mr-1" />
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleExportAllSegmentsPdf()}
+                  disabled={isBuilding || (filteredSegmentCount ?? stats.segmentCount) === 0}
+                  data-testid="button-export-all-segments-pdf"
+                >
+                  <FileText className="h-3 w-3 mr-1" />
+                  Export All as PDF{segmentFiltersActive ? " (filtered)" : ""}
+                </Button>
+              )
             )}
-          </h3>
+          </div>
 
           {/* Server-side filters for the paged all-segments list. The
               per-address view takes precedence: filters are hidden while an

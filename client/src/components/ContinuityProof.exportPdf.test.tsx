@@ -33,6 +33,7 @@ vi.mock("jspdf", () => {
     getNumberOfPages() {
       return 1;
     }
+    setPage() {}
     splitTextToSize(text: unknown) {
       return [text];
     }
@@ -273,5 +274,122 @@ describe("ContinuityProof segment PDF export", () => {
     expect(pdfText).toContain("seg-export-sparse");
     expect(pdfText).toContain("No evidence transactions recorded.");
     expect(pdfText).not.toContain("undefined");
+  });
+});
+
+describe("ContinuityProof export-all combined PDF", () => {
+  const SECOND: CustodySegment = {
+    ...SEGMENT,
+    segmentId: "seg-export-0002",
+    originTxid: "d".repeat(64),
+    originAddress: "bc1qsecondorigin",
+    status: "spent",
+    narrative: "Second segment — spent “later”",
+  } as CustodySegment;
+
+  it("exports every segment into one combined PDF with sanitized text", async () => {
+    await bulkAddCustodySegments([SEGMENT, SECOND]);
+    renderWithProviders(<ContinuityProof />);
+
+    const button = await screen.findByTestId("button-export-all-segments-pdf");
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(pdfSaveCalls).toHaveLength(1);
+    });
+    expect(pdfSaveCalls[0]).toMatch(/^custody-proofs-\d{4}-\d{2}-\d{2}\.pdf$/);
+
+    const pdfText = pdfTextCalls.join("\n");
+    // Both segments' payload content is present.
+    for (const seg of [SEGMENT, SECOND]) {
+      expect(pdfText).toContain(seg.segmentId);
+      expect(pdfText).toContain(seg.originTxid);
+      expect(pdfText).toContain(seg.originAddress);
+      expect(pdfText).toContain(sanitizePdfText(seg.narrative!));
+    }
+    expect(pdfText).toContain("Segments included: 2");
+    // Non-WinAnsi punctuation never passes through raw.
+    expect(pdfText).not.toContain("—");
+    expect(pdfText).not.toContain("“");
+
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Exported",
+          description: "2 custody segments exported to a combined PDF.",
+        }),
+      );
+    });
+  });
+
+  it("respects the active status filter", async () => {
+    await bulkAddCustodySegments([SEGMENT, SECOND]);
+    renderWithProviders(<ContinuityProof />);
+    await screen.findByTestId("button-export-all-segments-pdf");
+
+    // Solo the "Spent" chip so only SECOND matches.
+    fireEvent.click(screen.getByTestId("filter-status-spent"));
+    await waitFor(() =>
+      expect(screen.getByTestId("text-segments-showing").textContent).toContain("1"),
+    );
+
+    fireEvent.click(screen.getByTestId("button-export-all-segments-pdf"));
+    await waitFor(() => expect(pdfSaveCalls).toHaveLength(1));
+
+    const pdfText = pdfTextCalls.join("\n");
+    expect(pdfText).toContain(SECOND.segmentId);
+    expect(pdfText).not.toContain(SEGMENT.segmentId);
+    expect(pdfText).toContain("Segments included: 1");
+  });
+
+  it("surfaces a destructive toast and saves nothing when generation fails", async () => {
+    await bulkAddCustodySegments([SEGMENT]);
+    renderWithProviders(<ContinuityProof />);
+    const button = await screen.findByTestId("button-export-all-segments-pdf");
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+
+    pdfState.failNextSave = true;
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: "destructive",
+          title: "PDF Export Failed",
+          description: "simulated save failure",
+        }),
+      );
+    });
+    expect(pdfSaveCalls).toHaveLength(0);
+  });
+
+  it("cancel aborts the export without saving a file", async () => {
+    // Enough segments that the per-segment yield leaves time to cancel.
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      ...SEGMENT,
+      segmentId: `seg-cancel-${String(i).padStart(4, "0")}`,
+      originTxid: String(i % 10).repeat(64),
+    })) as CustodySegment[];
+    await bulkAddCustodySegments(many);
+    renderWithProviders(<ContinuityProof />);
+    const button = await screen.findByTestId("button-export-all-segments-pdf");
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(button);
+    const cancel = await screen.findByTestId("button-cancel-export-all");
+    fireEvent.click(cancel);
+
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Export Cancelled",
+          description: "The combined PDF export was cancelled. No file was saved.",
+        }),
+      );
+    });
+    expect(pdfSaveCalls).toHaveLength(0);
+    // The control returns to its idle state for a later retry.
+    expect(await screen.findByTestId("button-export-all-segments-pdf")).toBeDefined();
   });
 });
