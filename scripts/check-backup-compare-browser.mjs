@@ -429,6 +429,48 @@ async function main() {
       errText.includes('Newer backup: Invalid password or corrupted backup'),
       errText.slice(0, 160),
     );
+    // The wrong-password failure must also return the dialog to a usable
+    // pick stage: no progress UI, no partial results, Run clickable again.
+    step(
+      'wrong password: progress UI cleared and no partial results table',
+      !(await page.getByTestId('compare-progress').isVisible().catch(() => false)) &&
+        !(await page.getByTestId('compare-results').isVisible().catch(() => false)),
+    );
+    step(
+      'wrong password: Run button is usable again',
+      await page.getByTestId('button-run-compare').isEnabled().catch(() => false),
+    );
+
+    // ── Phase E: corrupt/truncated zip cannot leave the dialog stuck ──────
+    // Truncate the encrypted zip B to a third of its bytes: the stream reader
+    // must fail with a clear per-file error, and the dialog must return to a
+    // fully usable pick stage — never stay "running" or show a half-built diff.
+    const zipBBytes = Buffer.from(zipB, 'base64');
+    const zipTruncated = zipBBytes.subarray(0, Math.floor(zipBBytes.length / 3)).toString('base64');
+    await runComparison(page, { zipOlder: zipA, zipNewer: zipTruncated, newerPassword: EXPORT_PASSWORD });
+    const errAlertE = page.getByTestId('compare-error');
+    await errAlertE.waitFor({ state: 'visible', timeout: 120_000 });
+    const errTextE = await errAlertE.innerText();
+    step(
+      'truncated newer backup surfaces a per-file error alert',
+      errTextE.startsWith('Newer backup:'),
+      errTextE.slice(0, 160),
+    );
+    step(
+      'truncated backup: progress UI cleared and no partial results table',
+      !(await page.getByTestId('compare-progress').isVisible().catch(() => false)) &&
+        !(await page.getByTestId('compare-results').isVisible().catch(() => false)),
+    );
+    step(
+      'truncated backup: Run button is usable again',
+      await page.getByTestId('button-run-compare').isEnabled().catch(() => false),
+    );
+
+    // And the dialog is genuinely recovered: re-running with the GOOD zip B
+    // right after the failure completes successfully.
+    await runComparison(page, { zipOlder: zipA, zipNewer: zipB, newerPassword: EXPORT_PASSWORD });
+    await page.getByTestId('compare-results').waitFor({ state: 'visible', timeout: 180_000 });
+    step('after the corrupt-zip failure, a good re-run still reaches results', true);
   } finally {
     await browser.close().catch(() => {});
     if (devProc) {
