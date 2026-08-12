@@ -32,6 +32,7 @@
 // Requires: a `chromium` binary on PATH (Nix) and `playwright-core`.
 
 import { chromium } from 'playwright-core';
+import * as bitcoin from 'bitcoinjs-lib';
 import { execSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
@@ -372,6 +373,7 @@ async function main() {
       const dataOut = row?.outputs?.find((o) => o.dataOutput)?.dataOutput;
       return {
         savedCount: rows.length,
+        psbtBase64: typeof row?.psbtBase64 === 'string' ? row.psbtBase64 : null,
         psbtBase64Present: typeof row?.psbtBase64 === 'string' && row.psbtBase64.length > 0,
         dataOutput: dataOut
           ? {
@@ -394,6 +396,39 @@ async function main() {
         saved.psbtBase64Present,
       `savedCount=${saved.savedCount} dataOutput=${JSON.stringify(saved.dataOutput)}`,
     );
+
+    // ── Phase 5: the RAW transaction bytes really embed the digest ──────────
+    // Decode the saved psbtBase64 with bitcoinjs-lib (independent of the app's
+    // metadata) and assert the unsigned transaction carries a zero-value
+    // output whose scriptPubKey is exactly OP_RETURN <0x20 push> <32-byte
+    // SHA-256 digest>. If the builder ever wrote correct metadata but a
+    // mangled script (wrong push opcode, truncated payload), this catches it.
+    {
+      let rawStep = { passed: false, detail: 'psbtBase64 missing' };
+      if (saved.psbtBase64) {
+        try {
+          const psbt = bitcoin.Psbt.fromBase64(saved.psbtBase64, { network: bitcoin.networks.bitcoin });
+          const toHex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
+          const opReturnOutputs = psbt.txOutputs.filter((o) => o.script.length > 0 && o.script[0] === 0x6a);
+          const expectedScriptHex = `6a20${EXPECTED_DIGEST}`; // OP_RETURN, direct push of 32 bytes
+          const scriptHexes = opReturnOutputs.map((o) => toHex(o.script));
+          const match = opReturnOutputs.find(
+            (o) => toHex(o.script) === expectedScriptHex && Number(o.value) === 0,
+          );
+          rawStep = {
+            passed: opReturnOutputs.length === 1 && !!match,
+            detail: `opReturnOutputs=${opReturnOutputs.length} scripts=${JSON.stringify(scriptHexes)} values=${JSON.stringify(opReturnOutputs.map((o) => Number(o.value)))} expected=${expectedScriptHex}`,
+          };
+        } catch (err) {
+          rawStep = { passed: false, detail: `decode failed: ${err.message}` };
+        }
+      }
+      step(
+        "decoded psbtBase64: raw OP_RETURN script is exactly OP_RETURN <32-byte file digest> at value 0",
+        rawStep.passed,
+        rawStep.detail,
+      );
+    }
 
     await context.close();
   } finally {
