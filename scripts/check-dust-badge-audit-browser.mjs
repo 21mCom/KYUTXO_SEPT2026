@@ -17,8 +17,11 @@
 //   2. seeds one owned address record + one confirmed transaction with a single
 //      unspent 800-sat output (dust: <= 1000 sats, above the 546 strict line)
 //      via the live Vite module singletons (record-crud / transaction-crud)
-//   3. reloads the Dusted page so the scan picks the seed up on mount, clicks
-//      the real "Mark as dust" button, and waits for it to flip to "Unmark"
+//   3. reloads the Dusted page so the scan picks the seed up on mount, proves
+//      the bulk toolbar round-trip (Mark all flags everything and Unmark all
+//      clears every flag, with the toolbar buttons swapping via the live flag
+//      subscription), then clicks the real per-row "Mark as dust" button and
+//      waits for it to flip to "Unmark"
 //   4. opens the UTXOs page and asserts the group-level "1 dust" badge AND the
 //      per-UTXO "Dust" badge (after expanding the address group)
 //   5. opens Reports → Privacy tab, generates the audit, and asserts exactly
@@ -235,6 +238,68 @@ async function main() {
       name: 'Dusted page scan surfaced the seeded address with a Mark as dust action',
       passed: true,
       detail: `button-mark-dust-${recordId} visible`,
+    });
+
+    // ── Bulk toolbar: Mark all → Unmark all round-trip ─────────────────────
+    // The toolbar offers "Mark all" while any unspent scan output is unflagged
+    // and "Unmark all" while any is flagged. Prove the full bulk cycle in the
+    // real toolbar: Mark all flags everything (Unmark all appears, per-row
+    // button flips to Unmark), then Unmark all clears every flag (flag count
+    // reaches zero in Dexie, Mark all + per-row Mark reappear via the live
+    // flag subscription).
+    const markAllBtn = page.getByTestId('button-mark-all-dust');
+    await markAllBtn.waitFor({ state: 'visible', timeout: 30_000 });
+    await markAllBtn.click();
+
+    const unmarkAllBtn = page.getByTestId('button-unmark-all-dust');
+    await unmarkAllBtn.waitFor({ state: 'visible', timeout: 30_000 });
+    // Mark all flagged every unspent output, so nothing markable remains and
+    // the Mark-all button must have left the toolbar.
+    const markAllGoneAfterBulk = await markAllBtn
+      .waitFor({ state: 'detached', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const perRowFlippedToUnmark = await page
+      .getByTestId(`button-unmark-dust-${recordId}`)
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const flagsAfterMarkAll = await page.evaluate(async () => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      return (await dustCrud.getAllDustFlags()).length;
+    });
+    steps.push({
+      name: 'Mark all flagged every unspent output (Unmark all appeared, Mark all left)',
+      passed: markAllGoneAfterBulk && perRowFlippedToUnmark && flagsAfterMarkAll === 1,
+      detail: `markAllGone=${markAllGoneAfterBulk} perRowUnmarkVisible=${perRowFlippedToUnmark} dustFlags=${flagsAfterMarkAll} (expected 1)`,
+    });
+
+    await unmarkAllBtn.click();
+    // Unmark all must clear every flag: the Unmark-all button leaves the
+    // toolbar, Mark all reappears, and the per-row button flips back to Mark —
+    // all driven by the live flag subscription refreshing after the bulk
+    // delete.
+    const unmarkAllGone = await unmarkAllBtn
+      .waitFor({ state: 'detached', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const markAllBack = await page
+      .getByTestId('button-mark-all-dust')
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const perRowBackToMark = await markBtn
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const flagsAfterUnmarkAll = await page.evaluate(async () => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      return (await dustCrud.getAllDustFlags()).length;
+    });
+    steps.push({
+      name: 'Unmark all cleared every flag (flags=0, Mark all + per-row Mark reappeared)',
+      passed: unmarkAllGone && markAllBack && perRowBackToMark && flagsAfterUnmarkAll === 0,
+      detail: `unmarkAllGone=${unmarkAllGone} markAllBack=${markAllBack} perRowMarkVisible=${perRowBackToMark} dustFlags=${flagsAfterUnmarkAll} (expected 0)`,
     });
 
     await markBtn.click();
