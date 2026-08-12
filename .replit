@@ -479,6 +479,10 @@ args = "vocab-combobox-duplicate-select-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "wallet-import-value-updater-add-new-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "mobile-import-kept-metadata-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -3096,6 +3100,17 @@ isValidation = true
     [[workflows.workflow.tasks]]
     task = "shell.exec"
     args = "node scripts/check-vocab-combobox-duplicate-select-browser.mjs"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+
+    [[workflows.workflow]]
+    name = "wallet-import-value-updater-add-new-browser-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "node scripts/check-wallet-import-value-updater-add-new-browser.mjs"
 
     [workflows.workflow.metadata]
     isValidation = true
