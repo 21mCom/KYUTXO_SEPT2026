@@ -9,7 +9,6 @@ import {
   AlertCircle, 
   ArrowRight, 
   ArrowLeft,
-  Plus,
   RefreshCw,
   FileJson,
   FileSpreadsheet,
@@ -41,11 +40,8 @@ import { useSeedNames, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
 import { useOwners } from '@/hooks/use-owners';
 import { useWalletNames } from '@/hooks/use-wallet-names';
 import { useWalletSoftware } from '@/hooks/use-wallet-software';
-import { ensureSelectableVocabularyEntry } from '@/lib/data/vocabulary-crud';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
-import { Check, ChevronsUpDown, Wallet } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { VocabularyCombobox } from '@/components/VocabularyCombobox';
+import { Wallet } from 'lucide-react';
 import {
   detectWalletType,
   parseFile,
@@ -118,8 +114,6 @@ export default function WalletImport() {
   
   // Seed name state
   const [seedNameInput, setSeedNameInput] = useState<string>('');
-  const [seedNameOpen, setSeedNameOpen] = useState(false);
-  const [newSeedName, setNewSeedName] = useState<string>('');
   const { seedNames } = useSeedNames();
   const allSeedNames = Array.from(new Set([
     ...seedNames.map(s => s.name).filter(n => n),
@@ -127,8 +121,6 @@ export default function WalletImport() {
   ].filter(Boolean)));
   
   // Owner state
-  const [ownerOpen, setOwnerOpen] = useState(false);
-  const [newOwnerName, setNewOwnerName] = useState<string>('');
   const { owners } = useOwners();
   const allOwners = Array.from(new Set([
     ...owners.map(o => o.name).filter(n => n),
@@ -136,8 +128,6 @@ export default function WalletImport() {
   ].filter(Boolean)));
   
   // Wallet name state
-  const [walletNameOpen, setWalletNameOpen] = useState(false);
-  const [newWalletNameValue, setNewWalletNameValue] = useState<string>('');
   const { walletNames } = useWalletNames();
   const allWalletNames = Array.from(new Set([
     ...walletNames.map(wn => wn.name).filter(n => n),
@@ -146,81 +136,7 @@ export default function WalletImport() {
   
   // Wallet software state (with override capability)
   const [walletSoftwareInput, setWalletSoftwareInput] = useState<string>('');
-  const [walletSoftwareOpen, setWalletSoftwareOpen] = useState(false);
-  const [newWalletSoftwareName, setNewWalletSoftwareName] = useState<string>('');
   const { walletSoftware: existingWalletSoftware } = useWalletSoftware();
-  
-  const addNewSeedName = async () => {
-    if (!newSeedName.trim()) return;
-    if (newSeedName.trim().length > SEED_NAME_MAX_LENGTH) {
-      toast({
-        title: 'Seed name too long',
-        description: `Seed names are limited to ${SEED_NAME_MAX_LENGTH} characters to prevent accidental seed phrase entry`,
-        variant: 'destructive',
-      });
-      return;
-    }
-    try {
-      const selectedName = await ensureSelectableVocabularyEntry('seedName', newSeedName);
-      setSeedNameInput(selectedName);
-      setNewSeedName('');
-      setSeedNameOpen(false);
-    } catch (e) {
-      toast({
-        title: 'Error',
-        description: e instanceof Error ? e.message : 'Failed to add seed name',
-        variant: 'destructive',
-      });
-    }
-  };
-  
-  const addNewOwner = async () => {
-    if (!newOwnerName.trim()) return;
-    try {
-      const selectedName = await ensureSelectableVocabularyEntry('owner', newOwnerName);
-      setOwnerInput(selectedName);
-      setNewOwnerName('');
-      setOwnerOpen(false);
-    } catch (e) {
-      toast({
-        title: 'Error',
-        description: e instanceof Error ? e.message : 'Failed to add owner',
-        variant: 'destructive',
-      });
-    }
-  };
-  
-  const addNewWalletName = async () => {
-    if (!newWalletNameValue.trim()) return;
-    try {
-      const selectedName = await ensureSelectableVocabularyEntry('walletName', newWalletNameValue);
-      setWalletNameInput(selectedName);
-      setNewWalletNameValue('');
-      setWalletNameOpen(false);
-    } catch (e) {
-      toast({
-        title: 'Error',
-        description: e instanceof Error ? e.message : 'Failed to add wallet name',
-        variant: 'destructive',
-      });
-    }
-  };
-  
-  const addNewWalletSoftware = async () => {
-    if (!newWalletSoftwareName.trim()) return;
-    try {
-      const selectedName = await ensureSelectableVocabularyEntry('walletSoftware', newWalletSoftwareName);
-      setWalletSoftwareInput(selectedName);
-      setNewWalletSoftwareName('');
-      setWalletSoftwareOpen(false);
-    } catch (e) {
-      toast({
-        title: 'Error',
-        description: e instanceof Error ? e.message : 'Failed to add wallet software',
-        variant: 'destructive',
-      });
-    }
-  };
   
   // Build wallet software options: detected + existing + current input
   const detectedWalletSoftware = getWalletName(selectedWalletType);
@@ -652,72 +568,17 @@ export default function WalletImport() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Owner</Label>
-                <Popover open={ownerOpen} onOpenChange={setOwnerOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={ownerOpen}
-                      className="w-full justify-between font-normal"
-                      data-testid="select-owner"
-                    >
-                      {ownerInput || "Select or add..."}
-                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-full p-0" align="start">
-                    <Command>
-                      <CommandInput 
-                        placeholder="Search or add new..." 
-                        value={newOwnerName}
-                        onValueChange={setNewOwnerName}
-                      />
-                      <CommandList>
-                        <CommandEmpty>
-                          {newOwnerName && (
-                            <Button
-                              variant="ghost"
-                              className="w-full justify-start"
-                              onClick={addNewOwner}
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Add "{newOwnerName}"
-                            </Button>
-                          )}
-                        </CommandEmpty>
-                        <CommandGroup>
-                          {allOwners.map((name) => (
-                            <CommandItem
-                              key={name}
-                              value={name}
-                              onSelect={() => {
-                                setOwnerInput(name);
-                                setOwnerOpen(false);
-                              }}
-                            >
-                              <Check
-                                className={cn(
-                                  "mr-2 h-4 w-4",
-                                  ownerInput === name ? "opacity-100" : "opacity-0"
-                                )}
-                              />
-                              {name}
-                            </CommandItem>
-                          ))}
-                          {newOwnerName && !allOwners.some(n => n.toLowerCase() === newOwnerName.toLowerCase()) && (
-                            <CommandItem
-                              value={`create-${newOwnerName}`}
-                              onSelect={addNewOwner}
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Add "{newOwnerName}"
-                            </CommandItem>
-                          )}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
+                <VocabularyCombobox
+                  fieldKey="import-owner"
+                  value={ownerInput}
+                  onChange={setOwnerInput}
+                  options={allOwners.map(name => ({ value: name, label: name }))}
+                  placeholder="Select or add..."
+                  vocabularyKey="owners"
+                  triggerTestId="select-owner"
+                  triggerClassName="w-full justify-between font-normal"
+                  searchPlaceholder="Search or add new..."
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="mark-verified" className="flex items-center gap-2">
@@ -750,146 +611,34 @@ export default function WalletImport() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Seed Name</Label>
-                <Popover open={seedNameOpen} onOpenChange={setSeedNameOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={seedNameOpen}
-                      className="w-full justify-between font-normal"
-                      data-testid="select-seed-name"
-                    >
-                      {seedNameInput || "Select or add..."}
-                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-full p-0" align="start">
-                    <Command>
-                      <CommandInput 
-                        placeholder="Search or add new..." 
-                        value={newSeedName}
-                        onValueChange={(val) => setNewSeedName(val.slice(0, SEED_NAME_MAX_LENGTH))}
-                        maxLength={SEED_NAME_MAX_LENGTH}
-                      />
-                      <CommandList>
-                        <CommandEmpty>
-                          {newSeedName && (
-                            <Button
-                              variant="ghost"
-                              className="w-full justify-start"
-                              onClick={addNewSeedName}
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Add "{newSeedName}"
-                            </Button>
-                          )}
-                        </CommandEmpty>
-                        <CommandGroup>
-                          {allSeedNames.map((name) => (
-                            <CommandItem
-                              key={name}
-                              value={name}
-                              onSelect={() => {
-                                setSeedNameInput(name);
-                                setSeedNameOpen(false);
-                              }}
-                            >
-                              <Check
-                                className={cn(
-                                  "mr-2 h-4 w-4",
-                                  seedNameInput === name ? "opacity-100" : "opacity-0"
-                                )}
-                              />
-                              {name}
-                            </CommandItem>
-                          ))}
-                          {newSeedName && !allSeedNames.some(n => n.toLowerCase() === newSeedName.toLowerCase()) && (
-                            <CommandItem
-                              value={`create-${newSeedName}`}
-                              onSelect={addNewSeedName}
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Add "{newSeedName}"
-                            </CommandItem>
-                          )}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
+                <VocabularyCombobox
+                  fieldKey="import-seed-name"
+                  value={seedNameInput}
+                  onChange={setSeedNameInput}
+                  options={allSeedNames.map(name => ({ value: name, label: name }))}
+                  placeholder="Select or add..."
+                  vocabularyKey="seedNames"
+                  triggerTestId="select-seed-name"
+                  triggerClassName="w-full justify-between font-normal"
+                  searchPlaceholder="Search or add new..."
+                  inputMaxLength={SEED_NAME_MAX_LENGTH}
+                />
               </div>
 
               <div className="space-y-2">
                 <Label>Wallet Software</Label>
-                <Popover open={walletSoftwareOpen} onOpenChange={setWalletSoftwareOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={walletSoftwareOpen}
-                      className="w-full justify-between font-normal"
-                      data-testid="select-wallet-software"
-                    >
-                      {walletSoftwareInput || detectedWalletSoftware || "Select or add..."}
-                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-full p-0" align="start">
-                    <Command>
-                      <CommandInput 
-                        placeholder="Search or add new..." 
-                        value={newWalletSoftwareName}
-                        onValueChange={setNewWalletSoftwareName}
-                      />
-                      <CommandList>
-                        <CommandEmpty>
-                          {newWalletSoftwareName && (
-                            <Button
-                              variant="ghost"
-                              className="w-full justify-start"
-                              onClick={addNewWalletSoftware}
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Add "{newWalletSoftwareName}"
-                            </Button>
-                          )}
-                        </CommandEmpty>
-                        <CommandGroup>
-                          {allWalletSoftwareOptions.map((name) => (
-                            <CommandItem
-                              key={name}
-                              value={name}
-                              onSelect={() => {
-                                setWalletSoftwareInput(name);
-                                setWalletSoftwareOpen(false);
-                              }}
-                            >
-                              <Check
-                                className={cn(
-                                  "mr-2 h-4 w-4",
-                                  (walletSoftwareInput || detectedWalletSoftware) === name ? "opacity-100" : "opacity-0"
-                                )}
-                              />
-                              {name}
-                              {name === detectedWalletSoftware && !walletSoftwareInput && (
-                                <span className="ml-2 text-xs text-muted-foreground">(detected)</span>
-                              )}
-                            </CommandItem>
-                          ))}
-                          {newWalletSoftwareName && !allWalletSoftwareOptions.some(n => n.toLowerCase() === newWalletSoftwareName.toLowerCase()) && (
-                            <CommandItem
-                              value={`create-${newWalletSoftwareName}`}
-                              onSelect={addNewWalletSoftware}
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Add "{newWalletSoftwareName}"
-                            </CommandItem>
-                          )}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
+                <VocabularyCombobox
+                  fieldKey="import-wallet-software"
+                  value={walletSoftwareInput}
+                  onChange={setWalletSoftwareInput}
+                  options={allWalletSoftwareOptions.map(name => ({ value: name, label: name }))}
+                  placeholder={detectedWalletSoftware || "Select or add..."}
+                  vocabularyKey="walletSoftware"
+                  triggerTestId="select-wallet-software"
+                  triggerClassName="w-full justify-between font-normal"
+                  searchPlaceholder="Search or add new..."
+                  optionAnnotations={detectedWalletSoftware && !walletSoftwareInput ? { [detectedWalletSoftware]: "(detected)" } : undefined}
+                />
                 {!walletSoftwareInput && detectedWalletSoftware && (
                   <p className="text-xs text-muted-foreground">Auto-detected from file. Select to override.</p>
                 )}
@@ -897,72 +646,17 @@ export default function WalletImport() {
 
               <div className="space-y-2">
                 <Label>Wallet Name</Label>
-                <Popover open={walletNameOpen} onOpenChange={setWalletNameOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={walletNameOpen}
-                      className="w-full justify-between font-normal"
-                      data-testid="select-wallet-name"
-                    >
-                      {walletNameInput || "Select or add..."}
-                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-full p-0" align="start">
-                    <Command>
-                      <CommandInput 
-                        placeholder="Search or add new..." 
-                        value={newWalletNameValue}
-                        onValueChange={setNewWalletNameValue}
-                      />
-                      <CommandList>
-                        <CommandEmpty>
-                          {newWalletNameValue && (
-                            <Button
-                              variant="ghost"
-                              className="w-full justify-start"
-                              onClick={addNewWalletName}
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Add "{newWalletNameValue}"
-                            </Button>
-                          )}
-                        </CommandEmpty>
-                        <CommandGroup>
-                          {allWalletNames.map((name) => (
-                            <CommandItem
-                              key={name}
-                              value={name}
-                              onSelect={() => {
-                                setWalletNameInput(name);
-                                setWalletNameOpen(false);
-                              }}
-                            >
-                              <Check
-                                className={cn(
-                                  "mr-2 h-4 w-4",
-                                  walletNameInput === name ? "opacity-100" : "opacity-0"
-                                )}
-                              />
-                              {name}
-                            </CommandItem>
-                          ))}
-                          {newWalletNameValue && !allWalletNames.some(n => n.toLowerCase() === newWalletNameValue.toLowerCase()) && (
-                            <CommandItem
-                              value={`create-${newWalletNameValue}`}
-                              onSelect={addNewWalletName}
-                            >
-                              <Plus className="mr-2 h-4 w-4" />
-                              Add "{newWalletNameValue}"
-                            </CommandItem>
-                          )}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
+                <VocabularyCombobox
+                  fieldKey="import-wallet-name"
+                  value={walletNameInput}
+                  onChange={setWalletNameInput}
+                  options={allWalletNames.map(name => ({ value: name, label: name }))}
+                  placeholder="Select or add..."
+                  vocabularyKey="walletNames"
+                  triggerTestId="select-wallet-name"
+                  triggerClassName="w-full justify-between font-normal"
+                  searchPlaceholder="Search or add new..."
+                />
               </div>
 
               <div className="space-y-2">

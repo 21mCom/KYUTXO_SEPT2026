@@ -23,6 +23,16 @@ interface VocabularyComboboxProps {
   options: { value: string; label: string }[];
   placeholder: string;
   vocabularyKey?: 'owners' | 'walletNames' | 'seedNames' | 'walletSoftware' | 'tags' | 'categories';
+  /** Override the trigger button's data-testid (defaults to `combobox-value-${fieldKey}`). */
+  triggerTestId?: string;
+  /** Override the trigger button's className (e.g. full-width layouts). */
+  triggerClassName?: string;
+  /** Override the search input placeholder. */
+  searchPlaceholder?: string;
+  /** Hard cap on the search input length (e.g. seed names). */
+  inputMaxLength?: number;
+  /** Optional per-option annotation rendered after the label (e.g. "(detected)"). */
+  optionAnnotations?: Record<string, string>;
 }
 
 export function VocabularyCombobox({
@@ -31,7 +41,12 @@ export function VocabularyCombobox({
   onChange,
   options,
   placeholder,
-  vocabularyKey
+  vocabularyKey,
+  triggerTestId,
+  triggerClassName,
+  searchPlaceholder,
+  inputMaxLength,
+  optionAnnotations
 }: VocabularyComboboxProps) {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -88,8 +103,8 @@ export function VocabularyCombobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className="w-[180px] justify-between font-normal"
-          data-testid={`combobox-value-${fieldKey}`}
+          className={triggerClassName ?? "w-[180px] justify-between font-normal"}
+          data-testid={triggerTestId ?? `combobox-value-${fieldKey}`}
         >
           <span className="truncate">
             {value || placeholder}
@@ -100,9 +115,10 @@ export function VocabularyCombobox({
       <PopoverContent className="w-[220px] p-0" align="start">
         <Command shouldFilter={false}>
           <CommandInput
-            placeholder={`Type or search...`}
+            placeholder={searchPlaceholder ?? `Type or search...`}
             value={inputValue}
-            onValueChange={setInputValue}
+            onValueChange={(val) => setInputValue(inputMaxLength ? val.slice(0, inputMaxLength) : val)}
+            maxLength={inputMaxLength}
             data-testid={`input-combobox-${fieldKey}`}
           />
           <CommandList>
@@ -139,6 +155,9 @@ export function VocabularyCombobox({
                       className={`mr-2 h-4 w-4 ${value === opt.value ? 'opacity-100' : 'opacity-0'}`}
                     />
                     {opt.label}
+                    {optionAnnotations?.[opt.value] && (
+                      <span className="ml-2 text-xs text-muted-foreground">{optionAnnotations[opt.value]}</span>
+                    )}
                   </CommandItem>
                 ))}
               </CommandGroup>

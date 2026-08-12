@@ -7,8 +7,9 @@
 //
 // NOTE for reviewers: the components under test are
 //   - client/src/pages/WalletImport.tsx (route /wallet-import): the setup
-//     step's Owner popover ("select-owner") with its own inline Add "<name>"
-//     CommandItem calling addNewOwner -> ensureSelectableVocabularyEntry.
+//     step's Owner picker ("select-owner"), now rendered via the shared
+//     VocabularyCombobox whose Create item calls
+//     ensureSelectableVocabularyEntry.
 //   - client/src/pages/ValueUpdaterPage.tsx (route /value-updater): the
 //     per-field "Add New" header button (button-add-walletName /
 //     input-new-walletName / button-save-new-walletName) calling
@@ -17,7 +18,7 @@
 // client/src/lib/data/vocabulary-crud.ts.
 //
 // Wallet Import needs the held-Dexie-transaction trick (like
-// check-vocab-combobox-duplicate-select-browser.mjs): its inline Add item is
+// check-vocab-combobox-duplicate-select-browser.mjs): its Create item is
 // hidden whenever the useOwners() options list already contains a
 // case-insensitive match, so the duplicate-create path only fires when the
 // DB row exists while the options list is stale. The Value Updater's "Add
@@ -222,8 +223,8 @@ async function main() {
     // Arm the duplicate deterministically: insert the canonical owner row in
     // a HELD (uncommitted) rw transaction. The page's useOwners() liveQuery
     // cannot observe it (Dexie mutation events fire on commit), so the
-    // popover's options list stays empty and its inline Add item remains
-    // visible for the duplicate input; addNewOwner's createOwner read queues
+    // popover's options list stays empty and its Create item remains
+    // visible for the duplicate input; the shared combobox's create read queues
     // behind the open transaction and, once released, sees the committed
     // canonical row => the exact case-insensitive duplicate under test.
     const armed = await page.evaluate(async ({ canonical }) => {
@@ -254,10 +255,10 @@ async function main() {
     const ownerSearch = page.getByPlaceholder('Search or add new...').first();
     await ownerSearch.waitFor({ state: 'visible', timeout: 10_000 });
     await ownerSearch.fill(DUP_OWNER_INPUT);
-    const addItem = page.getByText(`Add "${DUP_OWNER_INPUT}"`).first();
+    const addItem = page.getByTestId('option-create-new-import-owner');
     await addItem.waitFor({ state: 'visible', timeout: 10_000 });
     await addItem.click();
-    steps.push({ name: `clicked Add "${DUP_OWNER_INPUT}" while the canonical row was pending commit`, passed: true, detail: 'addNewOwner queued behind the held tx' });
+    steps.push({ name: `clicked Create "${DUP_OWNER_INPUT}" while the canonical row was pending commit`, passed: true, detail: 'shared combobox create queued behind the held tx' });
 
     // Release: the canonical row commits ahead of the queued createOwner.
     const released = await page.evaluate(async () => {
@@ -277,7 +278,7 @@ async function main() {
       .then(() => true)
       .catch(() => false);
     const triggerText = (await ownerTrigger.innerText()).trim();
-    const errorToastVisible = await page.getByText('Failed to add owner').first().isVisible().catch(() => false);
+    const errorToastVisible = await page.getByText('Creation failed').first().isVisible().catch(() => false);
     steps.push({
       name: 'Wallet Import: popover closed, Owner shows the existing canonical value, no destructive toast',
       passed: popoverClosed && triggerText === CANONICAL_OWNER && !errorToastVisible,
