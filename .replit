@@ -893,6 +893,7 @@ args = "lineage-build-segments-refresh-browser-check"
 task = "workflow.run"
 args = "network-analysis-edge-refusal-browser-check"
 
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1508,7 +1509,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/bip329.test.ts client/src/lib/bip329-export.test.ts client/src/pages/ExportPage.bip329Filter.test.tsx client/src/lib/csv-export.test.ts client/src/pages/ExportPage.csvFilter.test.tsx"
+args = "npx vitest run client/src/lib/bip329.test.ts client/src/lib/bip329-export.test.ts client/src/pages/ExportPage.bip329Filter.test.tsx client/src/lib/csv-export.test.ts client/src/lib/csv-export.scale.test.ts client/src/pages/ExportPage.csvFilter.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
