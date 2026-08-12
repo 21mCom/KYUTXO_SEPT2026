@@ -115,4 +115,5 @@
 - [Unix timestamp unit contracts](unix-timestamp-units.md) — blockchain fields are seconds, app fields are ms; render via lib/unix-seconds helpers, never ad-hoc *1000.
 - [Edge-cap refusal seed geometry](network-analysis-edge-cap-seed.md) — affine-plane lines over Z_53² give exact disjoint pair counts: >1M edges from only 2,810 addresses, so the edge guard fires before the node guard.
 - [Playwright waitForFunction options position](playwright-waitforfunction-options.md) — options is the 3rd arg; `waitForFunction(fn, { timeout })` silently runs with the 30s default.
+- [Fast-path assertion via index counter](fastpath-assertion-index-counter.md) — timing-ratio baselines can't prove a fast path; count reads on the slow-path-only IDB index with a positive-control probe.
 - [markTaskComplete RUN_LOST flake](marktaskcomplete-run-lost.md) — completion validation runs can be unreadable while checks pass; run checks via startValidationRun manually, then skip_validation_reason citing the run id.

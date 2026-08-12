@@ -893,6 +893,9 @@ args = "lineage-build-segments-refresh-browser-check"
 task = "workflow.run"
 args = "network-analysis-edge-refusal-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "balance-backfill-scale-browser-check"
 
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
@@ -3127,6 +3130,17 @@ isValidation = true
     [[workflows.workflow.tasks]]
     task = "shell.exec"
     args = "node scripts/check-wallet-import-value-updater-add-new-browser.mjs"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+
+    [[workflows.workflow]]
+    name = "balance-backfill-scale-browser-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "node scripts/check-balance-backfill-scale-browser.mjs"
 
     [workflows.workflow.metadata]
     isValidation = true
