@@ -59,6 +59,10 @@ import {
   type CustodySegmentListFilter,
 } from "@/lib/data/lineage-crud";
 import { countTransactions } from "@/lib/data/transaction-crud";
+import {
+  buildSegmentProofPayload,
+  downloadSegmentProofPdf,
+} from "@/lib/custody-proof-export";
 import { computeOverallProgress, decideCancelAction } from "@/lib/buildProgress";
 import { useSettings } from "@/hooks/use-settings";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -602,38 +606,8 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   };
   
   const handleExportSegment = (segment: CustodySegment) => {
-    const exportData = {
-      segmentId: segment.segmentId,
-      origin: {
-        txid: segment.originTxid,
-        vout: segment.originVout,
-        address: segment.originAddress,
-        date: originDateMs(segment.originDate)?.toISOString() ?? null,
-        amount: formatBtc(segment.originAmount) + ' BTC',
-      },
-      current: segment.currentAddress ? {
-        address: segment.currentAddress,
-        amount: formatBtc(segment.currentAmount) + ' BTC',
-      } : null,
-      custody: {
-        status: segment.status,
-        hopCount: segment.hopCount,
-        narrative: segment.narrative,
-      },
-      evidence: {
-        // Sparse rows restored from older backups may lack array fields.
-        txids: Array.isArray(segment.evidenceTxids) ? segment.evidenceTxids : [],
-      },
-      metadata: {
-        owner: segment.owner,
-        walletName: segment.walletName,
-        seedName: segment.seedName,
-        acquisitionMethod: segment.acquisitionMethod,
-        costBasisUsd: segment.costBasisUsd,
-      },
-      generatedAt: new Date().toISOString(),
-    };
-    
+    const exportData = buildSegmentProofPayload(segment);
+
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -641,11 +615,28 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     a.download = `custody-proof-${segment.segmentId}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    
+
     toast({
       title: "Exported",
       description: "Custody proof exported to JSON file.",
     });
+  };
+
+  const handleExportSegmentPdf = async (segment: CustodySegment) => {
+    try {
+      await downloadSegmentProofPdf(buildSegmentProofPayload(segment));
+      toast({
+        title: "Exported",
+        description: "Custody proof exported to PDF file.",
+      });
+    } catch (err) {
+      console.error("[ContinuityProof] PDF export failed:", err);
+      toast({
+        variant: "destructive",
+        title: "PDF Export Failed",
+        description: err instanceof Error ? err.message : "An unexpected error occurred during PDF generation.",
+      });
+    }
   };
   
   const renderSegmentCard = (segment: CustodySegment) => {
@@ -813,7 +804,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
               )}
             </CardContent>
             
-            <CardFooter className="pt-0">
+            <CardFooter className="pt-0 gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -822,6 +813,15 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
               >
                 <Download className="h-3 w-3 mr-1" />
                 Export Proof
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleExportSegmentPdf(segment)}
+                data-testid={`button-export-segment-pdf-${segment.segmentId}`}
+              >
+                <FileText className="h-3 w-3 mr-1" />
+                Export PDF
               </Button>
             </CardFooter>
           </CollapsibleContent>
