@@ -2,7 +2,10 @@
 // Real-browser verification that the Continuity Proof custody-segment
 // "Export PDF" button (client/src/components/ContinuityProof.tsx,
 // handleExportSegmentPdf → client/src/lib/custody-proof-export.ts) actually
-// produces a downloadable, readable PDF in a real Chromium.
+// produces a downloadable, readable PDF in a real Chromium — and that the
+// sibling "Export Proof" JSON button (handleExportSegment, payload from
+// buildSegmentProofPayload) fires a real Blob/objectURL anchor-click download
+// whose parsed JSON matches the seeded segment field-by-field.
 //
 // The jsdom unit tests (ContinuityProof.exportPdf.test.tsx) mock jsPDF, so
 // they cannot catch real-browser-only failures: the dynamic `import("jspdf")`
@@ -53,6 +56,8 @@ const SEGMENT_ID = 'pdf-export-browser-seg-0001';
 const NARRATIVE = 'Bought from a friend — held through “the fork”… untouched';
 const OWNER = 'Alice “Ada” Example';
 const WALLET_NAME = 'Vault — cold storage';
+// Pinned so the JSON export's origin.date ISO string is exactly predictable.
+const ORIGIN_DATE_UNIX = 1700000000; // 2023-11-14T22:13:20.000Z
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -167,7 +172,7 @@ async function runSession(browser, step) {
 
     // Seed one punctuation-rich custody segment via the real CRUD helper.
     const seeded = await page.evaluate(
-      async ({ segmentId, narrative, owner, walletName }) => {
+      async ({ segmentId, narrative, owner, walletName, originDateUnix }) => {
         const { bulkAddCustodySegments } = await import(
           '/src/lib/data/lineage-crud.ts'
         );
@@ -179,7 +184,7 @@ async function runSession(browser, step) {
               originTxid: 'ab'.repeat(32),
               originVout: 1,
               originAddress: 'bc1qsegmentpdforigin00000000000000000000',
-              originDate: Math.floor(Date.now() / 1000) - 86_400 * 400,
+              originDate: originDateUnix,
               originAmount: 150_000_000,
               currentAddress: 'bc1qsegmentpdfcurrent0000000000000000000',
               currentAmount: 149_000_000,
@@ -205,6 +210,7 @@ async function runSession(browser, step) {
         narrative: NARRATIVE,
         owner: OWNER,
         walletName: WALLET_NAME,
+        originDateUnix: ORIGIN_DATE_UNIX,
       },
     );
     step('seeded 1 custody segment', seeded === 1, `table count=${seeded}`);
@@ -228,6 +234,92 @@ async function runSession(browser, step) {
     await narrativeText.waitFor({ state: 'visible', timeout: 60_000 });
     await narrativeText.click();
 
+    // ── JSON "Export Proof" download (handleExportSegment) ────────────────
+    const jsonBtn = page.getByTestId(`button-export-segment-${SEGMENT_ID}`);
+    await jsonBtn.waitFor({ state: 'visible', timeout: 30_000 });
+    await jsonBtn.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    const [jsonDownload] = await Promise.all([
+      page.waitForEvent('download', { timeout: 60_000 }),
+      jsonBtn.click(),
+    ]);
+    const jsonSuggested = jsonDownload.suggestedFilename();
+    step(
+      'JSON download fired with the expected filename',
+      jsonSuggested === `custody-proof-${SEGMENT_ID}.json`,
+      `suggested="${jsonSuggested}"`,
+    );
+    const jsonBytes = await readDownloadBytes(jsonDownload);
+    let payload = null;
+    try {
+      payload = JSON.parse(Buffer.from(jsonBytes).toString('utf8'));
+    } catch (e) {
+      step('downloaded JSON parses', false, e.message);
+    }
+    if (payload) {
+      step('downloaded JSON parses', true, `${jsonBytes.byteLength} bytes`);
+      const expected = {
+        segmentId: SEGMENT_ID,
+        origin: {
+          txid: 'ab'.repeat(32),
+          vout: 1,
+          address: 'bc1qsegmentpdforigin00000000000000000000',
+          date: new Date(ORIGIN_DATE_UNIX * 1000).toISOString(),
+          amount: '1.50000000 BTC',
+        },
+        current: {
+          address: 'bc1qsegmentpdfcurrent0000000000000000000',
+          amount: '1.49000000 BTC',
+        },
+        custody: { status: 'active', hopCount: 2, narrative: NARRATIVE },
+        evidence: { txids: ['cd'.repeat(32), 'ef'.repeat(32)] },
+        metadata: {
+          owner: OWNER,
+          walletName: WALLET_NAME,
+          seedName: 'Seed “alpha”',
+          acquisitionMethod: 'purchase',
+          costBasisUsd: 41999.5,
+        },
+      };
+      // Field-by-field comparison of everything except generatedAt.
+      const { generatedAt, ...rest } = payload;
+      const mismatches = [];
+      const compare = (path, exp, got) => {
+        if (exp !== null && typeof exp === 'object') {
+          if (got === null || typeof got !== 'object') {
+            mismatches.push(`${path}: expected object, got ${JSON.stringify(got)}`);
+            return;
+          }
+          const keys = new Set([...Object.keys(exp), ...Object.keys(got)]);
+          for (const k of keys) compare(`${path}.${k}`, exp[k], got[k]);
+        } else if (!Object.is(exp, got)) {
+          mismatches.push(
+            `${path}: expected ${JSON.stringify(exp)}, got ${JSON.stringify(got)}`,
+          );
+        }
+      };
+      compare('payload', expected, rest);
+      step(
+        'JSON payload matches the seeded segment field-by-field',
+        mismatches.length === 0,
+        mismatches.slice(0, 5).join('; '),
+      );
+      const genMs = Date.parse(generatedAt);
+      step(
+        'generatedAt is a fresh ISO timestamp',
+        typeof generatedAt === 'string' &&
+          new Date(genMs).toISOString() === generatedAt &&
+          Math.abs(Date.now() - genMs) < 10 * 60_000,
+        `generatedAt="${generatedAt}"`,
+      );
+    }
+    const jsonToast = await page
+      .getByText('Custody proof exported to JSON file.')
+      .first()
+      .isVisible()
+      .catch(() => false);
+    step('success toast shown after JSON export', jsonToast, '');
+
+    // ── PDF export (handleExportSegmentPdf) ────────────────────────────────
     const exportBtn = page.getByTestId(`button-export-segment-pdf-${SEGMENT_ID}`);
     await exportBtn.waitFor({ state: 'visible', timeout: 30_000 });
     await exportBtn.scrollIntoViewIfNeeded({ timeout: 10_000 });
