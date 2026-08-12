@@ -283,6 +283,10 @@ args = "address-checker-cancel-history-all-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "address-checker-cancel-batch-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "address-checker-reset-history-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -612,6 +616,10 @@ args = "address-checker-cancel-history-browser-check"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "address-checker-cancel-history-all-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-cancel-batch-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -3062,6 +3070,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/pages/UTXOs.notarizationBanner.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-cancel-batch-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-cancel-batch-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
