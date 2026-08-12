@@ -83,6 +83,15 @@ describe("electron isAllowedUrl (main-process allowlist)", () => {
     expect(trusted.isLocal).toBe(true);
     expect(isAllowedUrl("http://192.168.1.51/api").allowed).toBe(false);
   });
+
+  it("rejects IPv4-mapped IPv6 addresses that resolve to private ranges", () => {
+    // Node's WHATWG URL parser normalises [::ffff:127.0.0.1] → [::ffff:7f00:1]
+    expect(isAllowedUrl("https://[::ffff:7f00:1]/api").allowed).toBe(false);   // 127.0.0.1
+    expect(isAllowedUrl("https://[::ffff:a00:1]/api").allowed).toBe(false);    // 10.0.0.1
+    expect(isAllowedUrl("https://[::ffff:ac10:1]/api").allowed).toBe(false);   // 172.16.0.1
+    expect(isAllowedUrl("https://[::ffff:c0a8:101]/api").allowed).toBe(false); // 192.168.1.1
+    expect(isAllowedUrl("https://[::ffff:a9fe:101]/api").allowed).toBe(false); // 169.254.1.1
+  });
 });
 
 describe("electron handleTorRequest bounds", () => {

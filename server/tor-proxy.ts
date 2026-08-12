@@ -177,6 +177,17 @@ function getConfiguredCustomProviderHost(): string | undefined {
 
 // Check if a hostname matches private/local IP patterns
 function isPrivateAddress(hostname: string): boolean {
+  // IPv4-mapped IPv6 addresses such as [::ffff:7f00:1] (Node's WHATWG URL
+  // parser normalises [::ffff:127.0.0.1] and similar to this hex form).
+  // Extract the embedded IPv4 dotted-decimal and re-test it against all
+  // private-range patterns so every RFC-1918/loopback range is covered.
+  const ipv4Mapped = hostname.match(/^\[::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})\]$/i);
+  if (ipv4Mapped) {
+    const hi = parseInt(ipv4Mapped[1], 16);
+    const lo = parseInt(ipv4Mapped[2], 16);
+    const embedded = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    return isPrivateAddress(embedded);
+  }
   const privatePatterns = [
     /^localhost$/i,
     /^127\./,
