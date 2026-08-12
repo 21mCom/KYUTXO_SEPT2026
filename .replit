@@ -335,6 +335,10 @@ args = "notarization-merge-restore-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "utxos-notarization-banner-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dust-badge-audit-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -3047,6 +3051,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-bulk-editor-undo-skip-preview-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "utxos-notarization-banner-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/UTXOs.notarizationBanner.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
