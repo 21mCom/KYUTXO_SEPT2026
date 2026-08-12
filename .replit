@@ -523,6 +523,10 @@ args = "bulk-editor-counterparty-set-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "bulk-editor-undo-skip-preview-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "rebuild-toast-details-node-check"
 
 [[workflows.workflow.tasks]]
@@ -3032,6 +3036,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-continuity-proof-export-all-pdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bulk-editor-undo-skip-preview-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bulk-editor-undo-skip-preview-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
