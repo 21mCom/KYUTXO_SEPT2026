@@ -11,3 +11,7 @@ When a streaming/chunked operation is too fast in headless Chromium to observe i
 - Hand large in-page Blobs to file inputs via DataTransfer + change event so multi-MB buffers never cross the CDP wire.
 
 **Why:** backup-compare scale check: 12k records/15k tx/30k participants compared in ~1s unthrottled — zero progress samples and un-cancellable.
+
+## In-page cancel arming (backup-compare lesson)
+- When even 20x CPU throttle + Node-side dispatchEvent clicks lose the cancel race on warm re-runs (CDP round trip > run duration), arm the cancel **in-page**: a `page.evaluate`-installed MutationObserver that clicks the cancel button (or dispatches an Escape keydown on document for Radix dialog close) synchronously the instant the running-stage control commits. Verify the abort ref is set before the running stage renders so first-commit firing is safe.
+- Toasts auto-dismiss: asserting toast visibility *after* a settle window misses toasts that fired and expired. Record them via an in-page MutationObserver scanning body text for the expected phrases during the window, then read the flags.

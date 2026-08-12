@@ -28,7 +28,10 @@
 //      of rows is mounted; scrolling the drill-down to the bottom swaps the
 //      window and reaches the last entry.
 //   5. Cancel responsiveness: re-run the same huge comparison and cancel
-//      mid-run — the dialog must return to the pick stage promptly.
+//      mid-run — the dialog must return to the pick stage promptly with the
+//      "Comparison Cancelled" toast, no error alert and no lingering progress.
+//   6. Closing the dialog mid-run aborts the comparison (Cancelled toast,
+//      never Complete); reopening shows a clean pick stage with no results.
 //
 // Usage: node scripts/check-backup-compare-scale-browser.mjs
 // Requires: a `chromium` binary on PATH (Nix) and `playwright-core`.
@@ -556,18 +559,42 @@ async function main() {
     // A warmed-up (JIT + cache) re-run can finish very quickly, so cancel is
     // clicked the instant the running stage renders, with escalating CPU
     // throttle retries if the run still outraces the click.
+    // A CDP round-trip (Node observes the running stage, then sends the
+    // click) loses the race against a warmed-up run even at 20x throttle, so
+    // the cancel is armed IN-PAGE: a MutationObserver clicks the Cancel
+    // button (or dispatches Escape for the close phase) in the same task the
+    // running stage commits — exactly as fast as a poised user's click can be.
+    const armInPageCancel = (mode) =>
+      page.evaluate((m) => {
+        window.__cancelFired = false;
+        const fire = () => {
+          const btn = document.querySelector('[data-testid="button-cancel-compare"]');
+          if (!btn || window.__cancelFired) return false;
+          window.__cancelFired = true;
+          if (m === 'escape') {
+            document.dispatchEvent(
+              new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+            );
+          } else {
+            btn.click();
+          }
+          window.__cancelObs?.disconnect();
+          return true;
+        };
+        window.__cancelObs?.disconnect();
+        window.__cancelObs = new MutationObserver(fire);
+        window.__cancelObs.observe(document.body, { subtree: true, childList: true });
+        fire();
+      }, mode);
+
     let cancelResult = null;
     for (const rate of [8, 14, 20]) {
       await page.getByTestId('button-compare-again').click();
       await attachFilesInPage(page);
       await cdp.send('Emulation.setCPUThrottlingRate', { rate });
-      await page.getByTestId('button-run-compare').click();
-      const cancelBtn = page.getByTestId('button-cancel-compare');
-      await cancelBtn.waitFor({ state: 'visible', timeout: 15_000 });
+      await armInPageCancel('click');
       const cancelStart = Date.now();
-      // dispatchEvent lands even while the main thread is chewing between
-      // yields (no actionability retries that could straddle completion).
-      await cancelBtn.dispatchEvent('click').catch(() => {});
+      await page.getByTestId('button-run-compare').click();
       const outcome = await Promise.race([
         page
           .getByTestId('button-run-compare')
@@ -585,6 +612,109 @@ async function main() {
       'cancelling mid-run returns to the pick stage promptly',
       cancelResult?.outcome === 'pick' && cancelResult.cancelMs < 8_000,
       `outcome=${cancelResult?.outcome} cancelLatency=${cancelResult?.cancelMs}ms rate=${cancelResult?.rate}x`,
+    );
+    // The cancel must surface as the "Comparison Cancelled" toast — never as
+    // an error alert — and leave no lingering progress UI behind.
+    // (Toast text duplicates into an aria-live region: use .first().)
+    const cancelToastVisible = await page
+      .getByText('Comparison Cancelled')
+      .first()
+      .waitFor({ state: 'visible', timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    const [errVisible, progressVisible] = await Promise.all([
+      page.getByTestId('compare-error').isVisible().catch(() => false),
+      page.getByTestId('compare-progress').isVisible().catch(() => false),
+    ]);
+    step(
+      'cancel surfaces the "Comparison Cancelled" toast with no error alert and no lingering progress',
+      cancelToastVisible && !errVisible && !progressVisible,
+      `toast=${cancelToastVisible} error=${errVisible} progress=${progressVisible}`,
+    );
+
+    // ── Phase G: closing the dialog mid-run aborts the comparison ──────────
+    // A close that does NOT abort would keep streaming in the background and
+    // eventually fire the "Comparison Complete" toast + build a result the
+    // dialog would still be holding. Assert the opposite: after close +
+    // settle, no Complete toast ever fires and reopening lands on a clean
+    // pick stage with no results.
+    let closeResult = null;
+    for (const rate of [8, 14, 20]) {
+      // Dismiss any lingering toasts so the later toast asserts are clean.
+      await page.evaluate(() => {
+        document.querySelectorAll('[toast-close]').forEach((b) => b.click());
+      }).catch(() => {});
+      await page
+        .getByText('Comparison Cancelled')
+        .first()
+        .waitFor({ state: 'hidden', timeout: 10_000 })
+        .catch(() => {});
+      await attachFilesInPage(page);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate });
+      // Toasts auto-dismiss, so a visibility check after the settle window
+      // can miss one that fired: record them via an in-page observer instead.
+      await page.evaluate(() => {
+        window.__sawCancelledToast = false;
+        window.__sawCompleteToast = false;
+        window.__toastObs?.disconnect();
+        window.__toastObs = new MutationObserver(() => {
+          const t = document.body.innerText;
+          if (t.includes('Comparison Cancelled')) window.__sawCancelledToast = true;
+          if (t.includes('Comparison Complete')) window.__sawCompleteToast = true;
+        });
+        window.__toastObs.observe(document.body, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+        });
+      });
+      // Close the dialog mid-run (Radix close on Escape) the instant the
+      // running stage renders — armed in-page so it cannot lose the race.
+      await armInPageCancel('escape');
+      await page.getByTestId('button-run-compare').click();
+      const closed = await page
+        .getByTestId('compare-dialog')
+        .waitFor({ state: 'hidden', timeout: 20_000 })
+        .then(() => true)
+        .catch(() => false);
+      // Give any (buggy) background comparison ample time to finish, then
+      // check which toast fired: an aborted run shows "Comparison Cancelled";
+      // a run that kept going would show "Comparison Complete".
+      await page.waitForTimeout(8_000);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+      const { completeToast, cancelledToast } = await page.evaluate(() => {
+        window.__toastObs?.disconnect();
+        return {
+          completeToast: window.__sawCompleteToast === true,
+          cancelledToast: window.__sawCancelledToast === true,
+        };
+      });
+      closeResult = { closed, completeToast, cancelledToast, rate };
+      if (closed && !completeToast) break;
+      console.log(
+        `[compare-scale] close-mid-run raced completion at rate=${rate} (complete=${completeToast}); retrying slower`,
+      );
+    }
+    step(
+      'closing the dialog mid-run aborts (Cancelled toast, never Complete)',
+      closeResult?.closed === true && closeResult.completeToast === false && closeResult.cancelledToast === true,
+      `closed=${closeResult?.closed} completeToast=${closeResult?.completeToast} cancelledToast=${closeResult?.cancelledToast} rate=${closeResult?.rate}x`,
+    );
+
+    // Reopen: no results from the aborted run may render — clean pick stage.
+    const reopenBtn = page.getByTestId('button-open-compare');
+    await reopenBtn.scrollIntoViewIfNeeded();
+    await reopenBtn.click();
+    await page.getByTestId('compare-dialog').waitFor({ state: 'visible', timeout: 15_000 });
+    const [pickVisible, reopenResults, reopenProgress] = await Promise.all([
+      page.getByTestId('button-run-compare').isVisible().catch(() => false),
+      page.getByTestId('compare-results').isVisible().catch(() => false),
+      page.getByTestId('compare-progress').isVisible().catch(() => false),
+    ]);
+    step(
+      'reopening after a mid-run close shows the pick stage with no results and no progress',
+      pickVisible && !reopenResults && !reopenProgress,
+      `pick=${pickVisible} results=${reopenResults} progress=${reopenProgress}`,
     );
   } finally {
     await browser.close().catch(() => {});

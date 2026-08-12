@@ -28,7 +28,7 @@ import { db } from "@/lib/database";
 import { exportBackup, type AttachmentFileIO } from "./export";
 import { computeCompactPlan } from "./compact";
 import { compareBackups } from "./compare";
-import { MemorySink } from "./sink";
+import { MemorySink, BackupCancelledError } from "./sink";
 import { blobChunks } from "./zip-stream";
 
 import {
@@ -259,6 +259,51 @@ describe("compareBackups — mutated vault, encrypted newer backup", () => {
       }),
     ).rejects.toThrow(/Newer backup: Invalid password or corrupted backup/);
   }, 180_000);
+
+  it("cancel between the two file reads rejects with BackupCancelledError and never yields a half-built diff", async () => {
+    const backupB = await exportToBlob();
+    // Abort the instant the orchestrator moves on to the second file: the
+    // older snapshot is fully read at that point, so a buggy cancel path
+    // could still hand back a diff built from one real + one empty side.
+    const controller = new AbortController();
+    let sawNewerPhase = false;
+    let rejected: unknown = null;
+    let resolvedDiff: unknown = null;
+    try {
+      resolvedDiff = await compareBackups({
+        older: { source: blobChunks(backupA) },
+        newer: { source: blobChunks(backupB) },
+        signal: controller.signal,
+        onProgress: (p) => {
+          if (p.phase === "Reading newer backup...") {
+            sawNewerPhase = true;
+            controller.abort();
+          }
+        },
+      });
+    } catch (e) {
+      rejected = e;
+    }
+    expect(sawNewerPhase).toBe(true);
+    // No half-built diff: the run must reject, and with the SHARED cancel
+    // sentinel (not a "Newer backup: ..." error the dialog would render as a
+    // confusing failure alert instead of the Cancelled toast).
+    expect(resolvedDiff).toBeNull();
+    expect(rejected).toBeInstanceOf(BackupCancelledError);
+    expect((rejected as Error).message).not.toMatch(/Newer backup:/);
+  }, 180_000);
+
+  it("a signal aborted before the run starts rejects immediately as cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      compareBackups({
+        older: { source: blobChunks(backupA) },
+        newer: { source: blobChunks(backupA) },
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(BackupCancelledError);
+  }, 60_000);
 
   it("rejects an encrypted backup when no password is supplied", async () => {
     const backupB = await exportToBlob({ encrypted: true, password: PASSWORD });
