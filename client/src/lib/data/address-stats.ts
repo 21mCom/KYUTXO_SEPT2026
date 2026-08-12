@@ -532,7 +532,7 @@ export async function computeStatsForAddresses(
  * largest vaults seen in practice (30k addresses / 60k participants), while a
  * vault past this point still completes correctly via the batched path.
  */
-const FULL_SCAN_ROW_LIMIT = 2_000_000;
+export const FULL_SCAN_ROW_LIMIT = 2_000_000;
 
 /** Page size for the full-table streaming scans. */
 const FULL_SCAN_BATCH = 5_000;

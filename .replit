@@ -575,6 +575,10 @@ args = "filtered-scan-gate-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "balance-backfill-overlimit-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "utxo-resync-affected-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1777,6 +1781,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/data/address-stats.filteredScanGate.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "balance-backfill-overlimit-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/address-stats.overLimitFallback.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
