@@ -579,6 +579,10 @@ args = "continuity-proof-all-segments-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "custody-segment-export-pdf-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "lineage-build-segments-refresh-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2983,6 +2987,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/components/ContinuityProof.exportPdf.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "custody-segment-export-pdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-custody-segment-export-pdf-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
