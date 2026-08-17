@@ -8,6 +8,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
 
+// When --production-only is passed (e.g. from `npm run build`), test files are
+// excluded from the scan.  The crud-guards workflow and the pre-commit hook run
+// without this flag so they continue to cover everything.
+const PRODUCTION_ONLY = process.argv.includes('--production-only');
+
+/** Returns true for any file that only exists in the test suite. */
+function isTestFile(filePath) {
+  const rel = filePath.replace(/\\/g, '/');
+  return (
+    rel.includes('.test.ts') ||
+    rel.includes('/__tests__/')
+  );
+}
+
 const WRITE_METHODS = [
   'add', 'put', 'update', 'delete',
   'bulkAdd', 'bulkPut', 'bulkDelete',
@@ -206,8 +220,14 @@ const EXTENSIONS = new Set(['.ts', '.tsx']);
 // Self-check: if any hardcoded file (a CRUD layer or an allow-listed file) no
 // longer exists (renamed/moved/deleted), fail loudly instead of silently
 // guarding nothing / allow-listing stale paths.
+// In --production-only mode we skip the existence check for test-only entries
+// in ALWAYS_ALLOWED_FILES because those files are excluded from the scan and
+// their absence cannot hide a real production violation.
 const CRUD_FILES = new Set(GUARDED_TABLES.map(g => g.crudFile));
-const missingRefs = [...ALLOWED_FILES_SET].filter(f => !fs.existsSync(f));
+const missingRefs = [...ALLOWED_FILES_SET].filter(f => {
+  if (PRODUCTION_ONLY && !CRUD_FILES.has(f) && isTestFile(f)) return false;
+  return !fs.existsSync(f);
+});
 if (!fs.existsSync(SCAN_DIR)) missingRefs.push(SCAN_DIR);
 if (missingRefs.length > 0) {
   console.error(
@@ -248,6 +268,9 @@ const readViolations = [];
 
 for (const file of files) {
   const resolved = path.resolve(file);
+  // In --production-only mode, skip test files entirely — they never ship in
+  // the production bundle, so violations there must not block the build.
+  if (PRODUCTION_ONLY && isTestFile(resolved)) continue;
   if (ALLOWED_FILES_SET.has(resolved)) continue;
 
   const lines = fs.readFileSync(file, 'utf-8').split('\n');
