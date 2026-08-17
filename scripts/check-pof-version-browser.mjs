@@ -7,6 +7,16 @@
 // "undefined" version string. No other check exercises the live Vite-bundled
 // PDF path in a real browser.
 //
+// ── Release pipeline gate ─────────────────────────────────────────────────────
+// This check is a REQUIRED step in the version-bump release pipeline.  Run it
+// immediately after `node scripts/bump-version.js` (and after
+// check-version-literal) to confirm that the new version number is correctly
+// embedded in both real and sample Proof-of-Funds PDFs before the release
+// commit is merged.  See scripts/bump-version.js for the full release checklist.
+//
+// Wired as the `pof-version-browser-check` workflow in .replit.
+// ─────────────────────────────────────────────────────────────────────────────
+//
 // What this script does:
 //   1. Creates a vault, seeds ONE funded address via the CRUD modules, and
 //      runs the OFFLINE balance check.
