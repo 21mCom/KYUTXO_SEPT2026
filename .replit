@@ -1,4 +1,4 @@
-modules = ["nodejs-20", "web", "postgresql-16", "python-3.11"]
+modules = ["web", "postgresql-16", "python-3.11", "nodejs-22"]
 run = "npm run dev"
 hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
@@ -905,6 +905,14 @@ args = "network-analysis-edge-refusal-browser-check"
 task = "workflow.run"
 args = "balance-backfill-scale-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "audit"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "audit-tests"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -1017,12 +1025,12 @@ isValidation = true
 name = "typecheck"
 author = "agent"
 
+[workflows.workflow.metadata]
+isValidation = true
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm run check"
-
-[workflows.workflow.metadata]
-isValidation = true
 
 [[workflows.workflow]]
 name = "note-rendering"
@@ -3163,3 +3171,25 @@ isValidation = true
 
     [workflows.workflow.metadata]
     isValidation = true
+
+[[workflows.workflow]]
+name = "audit"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-audit.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "audit-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-audit.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
