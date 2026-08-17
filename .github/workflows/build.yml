@@ -16,6 +16,16 @@ jobs:
     # Pinned to windows-2022: the newer windows-latest (windows-2025) image is not
     # detected by the @electron/node-gyp fork's Visual Studio finder, breaking the
     # native better-sqlite3 compile during both `npm ci` and the Electron rebuild.
+    #
+    # Last reviewed: 2026-08-17. A test PR branch (windows-latest probe) was
+    # prepared but could not be pushed to GitHub — the available PAT lacks write
+    # access to this repository. The original node-gyp VS-finder issue is
+    # therefore NOT yet verified as resolved on windows-2025. Keep this pin until
+    # a token with push access is available to run the PR-branch CI probe, then:
+    #   1. Change runs-on to windows-latest on a PR branch.
+    #   2. If npm ci + electron-builder + check-packaged-native-engine.mjs all
+    #      pass with no ABI mismatch or node-gyp errors → commit the change.
+    #   3. If the VS finder still fails → restore this pin and update the date.
     runs-on: windows-2022
 
     steps:
