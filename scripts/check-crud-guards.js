@@ -16,10 +16,7 @@ const PRODUCTION_ONLY = process.argv.includes('--production-only');
 /** Returns true for any file that only exists in the test suite. */
 function isTestFile(filePath) {
   const rel = filePath.replace(/\\/g, '/');
-  return (
-    rel.includes('.test.ts') ||
-    rel.includes('/__tests__/')
-  );
+  return rel.includes('.test.ts');
 }
 
 const WRITE_METHODS = [

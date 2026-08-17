@@ -342,3 +342,48 @@ test('scanner in --production-only mode flags a raw-Dexie write inside a non-tes
     'scanner output does not mention the violating non-test source file'
   );
 });
+
+test('scanner in --production-only mode flags a raw-Dexie write inside a non-test file in __tests__/', () => {
+  // Guards against a regression where the /__tests__/ branch of isTestFile is
+  // widened to exempt ALL files in that directory rather than only files whose
+  // name includes ".test.ts".  A helper file (violation_helper.ts — no ".test"
+  // in its name) placed inside client/src/__tests__/ with a direct
+  // db.records.add() call must still cause the scanner to exit non-zero even
+  // when --production-only is active.
+  const ROOT = path.resolve(path.dirname(__filename), '..');
+  const fixtureDir = path.join(ROOT, 'client', 'src', '__tests__');
+  const fixtureFile = path.join(fixtureDir, 'violation_helper.ts');
+
+  // __tests__ may already exist; create the fixture file only.
+  const dirExisted = fs.existsSync(fixtureDir);
+  if (!dirExisted) {
+    fs.mkdirSync(fixtureDir, { recursive: true });
+  }
+  fs.writeFileSync(
+    fixtureFile,
+    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
+  );
+
+  let result;
+  try {
+    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8' });
+  } finally {
+    fs.rmSync(fixtureFile, { force: true });
+    // Only remove the directory if we created it.
+    if (!dirExisted) {
+      try { fs.rmdirSync(fixtureDir); } catch { /* ignore if non-empty */ }
+    }
+  }
+
+  assert.equal(
+    result.status,
+    1,
+    'scanner with --production-only should exit 1 when a non-test file inside __tests__/ ' +
+      'contains a guarded-table write, but it exited ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+  );
+  assert.ok(
+    result.stderr.includes('violation_helper.ts') || result.stdout.includes('violation_helper.ts'),
+    'scanner output does not mention the violating non-test helper file'
+  );
+});
