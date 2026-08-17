@@ -2,6 +2,15 @@
 // Real-browser regression guard for the Electron version row in the About card
 // (client/src/pages/settings/info-cards-section.tsx, AboutCard).
 //
+// ── Release pipeline ──────────────────────────────────────────────────────────
+// This script is step 3 of the post-bump release checklist in
+// scripts/bump-version.js (alongside check-version-literal.js and
+// check-pof-version-browser.mjs).  It must pass before a version bump commit
+// is merged, because it is the only check that confirms the About card's
+// app-version row reads the live package.json value (not a stale hardcoded
+// string) in a real Vite-bundled Chromium session.
+// ─────────────────────────────────────────────────────────────────────────────
+//
 // The preload bridge exposes `electronVersion: process.versions.electron` and
 // the component renders it conditionally when `isElectron && electronVersion`.
 // A node-side unit test cannot verify the IPC plumbing end-to-end; this script

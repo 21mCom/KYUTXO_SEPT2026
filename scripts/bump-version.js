@@ -19,9 +19,15 @@
 //          "KYUTXO v<new-version> (Proof of Funds Declaration)".  This is the
 //          only check that exercises the live Vite-bundled PDF code path.
 //
-// Both checks are wired as named workflows in .replit and can be triggered from
-// the Replit workflow panel.  They must both be green before the version bump
-// commit is merged.
+//   3. about-electron-version-browser-check  (node scripts/check-about-electron-version-browser.mjs)
+//        → opens a real Chromium browser, navigates to the Settings page with a
+//          mocked Electron preload bridge, and asserts that the About card's
+//          app-version row does NOT show the stale hardcoded "1.0.0" string
+//          (i.e. the version is live-derived from package.json at bundle time).
+//
+// All three checks are wired as named workflows in .replit and can be triggered
+// from the Replit workflow panel.  They must all be green before the version
+// bump commit is merged.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { readFileSync, writeFileSync } from 'fs';
@@ -42,3 +48,4 @@ console.log('');
 console.log('Next steps before publishing:');
 console.log('  1. node scripts/check-version-literal.js');
 console.log('  2. node scripts/check-pof-version-browser.mjs  (pof-version-browser-check workflow)');
+console.log('  3. node scripts/check-about-electron-version-browser.mjs  (about-electron-version-browser-check workflow)');
