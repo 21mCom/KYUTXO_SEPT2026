@@ -189,3 +189,89 @@ test('duplicate identical tagged lines are collapsed to one', () => {
     assertExactlyOneLinePerKey(hookLines(repo));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Build-mode split: hook must run check-crud-guards in full-scan mode
+// (without --production-only) so test-file violations are caught pre-commit.
+// ---------------------------------------------------------------------------
+
+const SCANNER = path.resolve(path.dirname(__filename), 'check-crud-guards.js');
+const scannerSource = fs.readFileSync(SCANNER, 'utf8');
+
+test('install-hooks.sh wires crud-guards without --production-only', () => {
+  // The CRUD_CMD variable must be the plain invocation, not the build-time
+  // variant.  If --production-only crept in, test-file violations would
+  // silently pass through every developer pre-commit check.
+  const match = installerSource.match(/^CRUD_CMD="([^"]+)"/m);
+  assert.ok(match, 'CRUD_CMD not found in install-hooks.sh');
+  assert.ok(
+    !match[1].includes('--production-only'),
+    `CRUD_CMD includes --production-only; hook would miss test-file violations: "${match[1]}"`
+  );
+});
+
+test('installed hook crud-guards line omits --production-only', () => {
+  withRepo((repo) => {
+    runInstaller(repo);
+    const lines = hookLines(repo);
+    const crudLine = lines.find((l) => l.includes('# managed-check: crud-guards'));
+    assert.ok(crudLine, 'crud-guards managed-check line not found in hook after install');
+    assert.ok(
+      !crudLine.includes('--production-only'),
+      `hook crud-guards line includes --production-only; hook would miss test-file violations:\n  ${crudLine}`
+    );
+  });
+});
+
+test('check-crud-guards.js gates test-file skipping on PRODUCTION_ONLY flag', () => {
+  // The scanner must only bypass test files when the --production-only argv
+  // flag is active.  Without it (the hook invocation), every test file is
+  // included in the scan.
+  assert.ok(
+    /const PRODUCTION_ONLY\s*=\s*process\.argv\.includes\(['"]--production-only['"]\)/.test(
+      scannerSource
+    ),
+    'check-crud-guards.js does not derive PRODUCTION_ONLY from --production-only argv'
+  );
+  assert.ok(
+    /PRODUCTION_ONLY\s*&&\s*isTestFile/.test(scannerSource),
+    'check-crud-guards.js does not gate test-file skipping on PRODUCTION_ONLY; ' +
+      'removing the flag would break hook coverage of test files'
+  );
+});
+
+test('scanner in full-scan mode flags a raw-Dexie write inside a .test.ts file', () => {
+  // Create a temporary fixture file inside the real scan directory that
+  // contains a direct db.records.add() call (a guarded-table write outside
+  // any CRUD layer).  Running the scanner without --production-only must
+  // detect it and exit non-zero.  The fixture is cleaned up in a finally
+  // block regardless of the outcome.
+  const ROOT = path.resolve(path.dirname(__filename), '..');
+  const fixtureDir = path.join(ROOT, 'client', 'src', '__crud_guard_violation_fixture__');
+  const fixtureFile = path.join(fixtureDir, 'violation.test.ts');
+
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  fs.writeFileSync(
+    fixtureFile,
+    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
+  );
+
+  let result;
+  try {
+    result = spawnSync('node', [SCANNER], { cwd: ROOT, encoding: 'utf8' });
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+
+  assert.equal(
+    result.status,
+    1,
+    'scanner should exit 1 when a test file contains a guarded-table write, ' +
+      'but it exited ' + result.status + '\nstdout: ' + result.stdout +
+      '\nstderr: ' + result.stderr
+  );
+  assert.ok(
+    result.stderr.includes('violation.test.ts') || result.stdout.includes('violation.test.ts'),
+    'scanner output does not mention the violating test file'
+  );
+});
