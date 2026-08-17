@@ -39,6 +39,9 @@ export default defineConfig({
     cors: false,
     fs: {
       strict: true,
+      // Allow importing from the workspace root (e.g. package.json for the
+      // app version string). The client/ Vite root alone would not include it.
+      allow: [path.resolve(import.meta.dirname)],
       deny: ["**/.*"],
     },
   },

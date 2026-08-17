@@ -173,14 +173,12 @@ async function unlockIfNeeded(page, password) {
     .catch(() => false);
   if (!appeared) return; // already unlocked
   await pwInput.fill(password);
-  const confirmInput = page.getByTestId('input-password-confirm');
+  const confirmInput = page.getByTestId('input-confirm-password');
   const isSetup = await confirmInput.isVisible().catch(() => false);
   if (isSetup) {
     await confirmInput.fill(password);
-    await page.getByTestId('button-create-vault').click();
-  } else {
-    await page.getByTestId('button-unlock').click();
   }
+  await page.getByTestId('button-submit').click();
   await page.getByTestId('input-password').waitFor({ state: 'hidden', timeout: 30_000 });
 }
 
@@ -214,84 +212,181 @@ async function main() {
 
   const browser = await launchWithRetry(exe);
   try {
-    const context = await browser.newContext();
-    // Install the electronAPI shim before every page load.
-    await context.addInitScript(SHIM);
-    const page = await context.newPage();
+    // ── Context 1: Electron shim (isElectron=true, electronVersion="43.4.0") ──
+    console.log('\n[about-electron-version] === Context 1: Electron shim ===');
+    {
+      const context = await browser.newContext();
+      // Install the electronAPI shim before every page load.
+      await context.addInitScript(SHIM);
+      const page = await context.newPage();
 
-    // Load the settings page with retries.
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
-        break;
-      } catch (e) {
-        if (attempt === 3) throw e;
-        console.log(
-          `[about-electron-version] goto failed (attempt ${attempt}): ${e.message}; retrying...`,
-        );
-        await new Promise((r) => setTimeout(r, 3_000 * attempt));
+      // Load the settings page with retries.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
+          break;
+        } catch (e) {
+          if (attempt === 3) throw e;
+          console.log(
+            `[about-electron-version] goto failed (attempt ${attempt}): ${e.message}; retrying...`,
+          );
+          await new Promise((r) => setTimeout(r, 3_000 * attempt));
+        }
       }
-    }
 
-    // Create/unlock the vault so the app renders its pages.
-    await unlockIfNeeded(page, SETUP_PASSWORD);
-    await dismissMigrationOverlayIfPresent(page);
-
-    // Navigate explicitly to /settings in case the unlock redirected elsewhere.
-    const alreadyOnSettings = page.url().includes('/settings');
-    if (!alreadyOnSettings) {
-      await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
+      // Create/unlock the vault so the app renders its pages.
+      await unlockIfNeeded(page, SETUP_PASSWORD);
       await dismissMigrationOverlayIfPresent(page);
+
+      // Navigate explicitly to /settings in case the unlock redirected elsewhere.
+      const alreadyOnSettings = page.url().includes('/settings');
+      if (!alreadyOnSettings) {
+        await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
+        await dismissMigrationOverlayIfPresent(page);
+      }
+
+      // Wait for the About card to be visible.
+      const electronVersionEl = page.getByTestId('text-electron-version');
+      const appeared = await electronVersionEl
+        .waitFor({ state: 'visible', timeout: 30_000 })
+        .then(() => true)
+        .catch(() => false);
+
+      step(
+        '[electron] text-electron-version element is visible on the Settings page',
+        appeared,
+        appeared ? 'element present' : 'element NOT found (row may be hidden or testid missing)',
+      );
+
+      if (appeared) {
+        const electronText = await electronVersionEl.textContent();
+        step(
+          '[electron] text-electron-version contains "43." (mocked value "43.4.0")',
+          (electronText ?? '').includes('43.'),
+          `text="${electronText}"`,
+        );
+      } else {
+        steps.push({
+          name: '[electron] text-electron-version contains "43."',
+          passed: false,
+          detail: 'skipped — element not found',
+        });
+      }
+
+      // Assert the app version is NOT the stale hardcoded "1.0.0".
+      const appVersionEl = page.getByTestId('text-app-version');
+      const appVersionVisible = await appVersionEl
+        .waitFor({ state: 'visible', timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false);
+
+      if (appVersionVisible) {
+        const appVersionText = await appVersionEl.textContent();
+        step(
+          '[electron] text-app-version does NOT contain the stale hardcoded "1.0.0"',
+          !(appVersionText ?? '').includes('1.0.0'),
+          `text="${appVersionText}"`,
+        );
+      } else {
+        steps.push({
+          name: '[electron] text-app-version does NOT contain stale "1.0.0"',
+          passed: false,
+          detail: 'text-app-version element not found',
+        });
+      }
+
+      await context.close();
     }
 
-    // Wait for the About card to be visible.
-    const electronVersionEl = page.getByTestId('text-electron-version');
-    const appeared = await electronVersionEl
-      .waitFor({ state: 'visible', timeout: 30_000 })
-      .then(() => true)
-      .catch(() => false);
+    // ── Context 2: PWA (no electronAPI shim) ──
+    // The vault was already created by Context 1, so we only need to unlock here.
+    console.log('\n[about-electron-version] === Context 2: PWA (no electronAPI shim) ===');
+    {
+      const context = await browser.newContext();
+      // No addInitScript — window.electronAPI must be undefined.
+      const page = await context.newPage();
 
-    step(
-      'text-electron-version element is visible on the Settings page',
-      appeared,
-      appeared ? 'element present' : 'element NOT found (row may be hidden or testid missing)',
-    );
+      // Load settings with retries.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
+          break;
+        } catch (e) {
+          if (attempt === 3) throw e;
+          console.log(
+            `[about-electron-version] PWA goto failed (attempt ${attempt}): ${e.message}; retrying...`,
+          );
+          await new Promise((r) => setTimeout(r, 3_000 * attempt));
+        }
+      }
 
-    if (appeared) {
-      const electronText = await electronVersionEl.textContent();
+      // Unlock the existing vault (password was set in Context 1).
+      await unlockIfNeeded(page, SETUP_PASSWORD);
+      await dismissMigrationOverlayIfPresent(page);
+
+      // Navigate explicitly to /settings in case the unlock redirected elsewhere.
+      const alreadyOnSettings = page.url().includes('/settings');
+      if (!alreadyOnSettings) {
+        await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
+        await dismissMigrationOverlayIfPresent(page);
+      }
+
+      // Wait for the About card heading to confirm the card rendered.
+      const appVersionEl = page.getByTestId('text-app-version');
+      const appVersionVisible = await appVersionEl
+        .waitFor({ state: 'visible', timeout: 30_000 })
+        .then(() => true)
+        .catch(() => false);
+
       step(
-        'text-electron-version contains "43." (mocked value "43.4.0")',
-        (electronText ?? '').includes('43.'),
-        `text="${electronText}"`,
+        '[pwa] text-app-version element is visible on the Settings page',
+        appVersionVisible,
+        appVersionVisible ? 'element present' : 'element NOT found',
       );
-    } else {
-      steps.push({
-        name: 'text-electron-version contains "43."',
-        passed: false,
-        detail: 'skipped — element not found',
-      });
-    }
 
-    // Assert the app version is NOT the stale hardcoded "1.0.0".
-    const appVersionEl = page.getByTestId('text-app-version');
-    const appVersionVisible = await appVersionEl
-      .waitFor({ state: 'visible', timeout: 10_000 })
-      .then(() => true)
-      .catch(() => false);
+      // The Electron version row must NOT be present in the DOM.
+      const electronVersionEl = page.getByTestId('text-electron-version');
+      const electronRowPresent = await electronVersionEl
+        .waitFor({ state: 'visible', timeout: 3_000 })
+        .then(() => true)
+        .catch(() => false);
 
-    if (appVersionVisible) {
-      const appVersionText = await appVersionEl.textContent();
       step(
-        'text-app-version does NOT contain the stale hardcoded "1.0.0"',
-        !(appVersionText ?? '').includes('1.0.0'),
-        `text="${appVersionText}"`,
+        '[pwa] text-electron-version row is absent (PWA path hides it)',
+        !electronRowPresent,
+        electronRowPresent
+          ? 'FAIL — row is visible but should be hidden without electronAPI'
+          : 'correctly absent',
       );
-    } else {
-      steps.push({
-        name: 'text-app-version does NOT contain stale "1.0.0"',
-        passed: false,
-        detail: 'text-app-version element not found',
-      });
+
+      // The Type badge must show "Progressive Web App", not "Desktop App".
+      // Find the badge that follows the "Type" label in the About card.
+      // We match by text content rather than testid (no testid on the badge).
+      const pwaBadge = page.getByText('Progressive Web App', { exact: true });
+      const pwaBadgeVisible = await pwaBadge
+        .waitFor({ state: 'visible', timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+
+      step(
+        '[pwa] Type badge shows "Progressive Web App"',
+        pwaBadgeVisible,
+        pwaBadgeVisible ? 'correct' : 'badge text not found or shows wrong value',
+      );
+
+      const desktopBadge = page.getByText('Desktop App', { exact: true });
+      const desktopBadgeVisible = await desktopBadge
+        .waitFor({ state: 'visible', timeout: 2_000 })
+        .then(() => true)
+        .catch(() => false);
+
+      step(
+        '[pwa] Type badge does NOT show "Desktop App"',
+        !desktopBadgeVisible,
+        desktopBadgeVisible ? 'FAIL — "Desktop App" badge is visible' : 'correctly absent',
+      );
+
+      await context.close();
     }
   } finally {
     await browser.close();
@@ -324,8 +419,10 @@ async function main() {
   }
 
   console.log(
-    '\n[about-electron-version] PASSED: the Electron version row appears with the correct value ' +
-      `("${MOCK_ELECTRON_VERSION}" → "43.") and the app version is not the stale "1.0.0" ` +
+    '\n[about-electron-version] PASSED:\n' +
+      `  • Electron context: version row visible with "${MOCK_ELECTRON_VERSION}" → "43.", ` +
+      'app version is not the stale "1.0.0".\n' +
+      '  • PWA context: version row is absent, Type badge shows "Progressive Web App" ' +
       '— end-to-end verified in a real browser.',
   );
 }
