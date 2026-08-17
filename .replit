@@ -921,6 +921,10 @@ args = "audit"
 task = "workflow.run"
 args = "audit-tests"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-version-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3231,6 +3235,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/check-audit.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-version-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-version-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
