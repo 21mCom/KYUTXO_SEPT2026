@@ -2,6 +2,10 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const { version: pkgVersion } = require("./package.json") as { version: string };
 
 export default defineConfig({
   plugins: [
@@ -19,6 +23,10 @@ export default defineConfig({
         ]
       : []),
   ],
+  define: {
+    // Injected at build time so client code never needs @fs access to package.json.
+    __APP_VERSION__: JSON.stringify(pkgVersion),
+  },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
@@ -39,10 +47,20 @@ export default defineConfig({
     cors: false,
     fs: {
       strict: true,
-      // Allow importing from the workspace root (e.g. package.json for the
-      // app version string). The client/ Vite root alone would not include it.
-      allow: [path.resolve(import.meta.dirname)],
-      deny: ["**/.*"],
+      // Restrict serving to only the directories the browser client actually
+      // needs. server/, package.json, and dotfiles all live outside these
+      // directories and will be blocked.  The version string is already
+      // injected via `define`, so package.json itself is no longer imported.
+      allow: [
+        path.resolve(import.meta.dirname, "client"),
+        path.resolve(import.meta.dirname, "shared"),
+        path.resolve(import.meta.dirname, "attached_assets"),
+        // node_modules is needed for fonts and other assets that CSS imports
+        // directly (e.g. @fontsource-variable/*). Pre-bundled dep cache paths
+        // are inside node_modules so they also need to be reachable.
+        path.resolve(import.meta.dirname, "node_modules"),
+      ],
+      deny: ["**/.*", "**/.env*"],
     },
   },
 });

@@ -3,7 +3,9 @@ import { Database, Stethoscope, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { version as APP_VERSION } from "../../../../package.json";
+// __APP_VERSION__ is injected at build time by vite.config.ts `define`.
+// eslint-disable-next-line no-undef
+const APP_VERSION = __APP_VERSION__;
 import { isElectron, getElectronAPISafe } from "@/lib/electron";
 
 export function StorageCard() {

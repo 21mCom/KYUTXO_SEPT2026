@@ -28,8 +28,13 @@ export async function setupVite(app: Express, server: Server) {
     // Vite's default (cors: true) reflects the request Origin, which would
     // let a malicious page in another tab read the token <meta> tag.
     // NOTE: this inline `server` object replaces the `server` key from
-    // vite.config.ts, so CORS must be disabled here, not only there.
+    // vite.config.ts, so every security-relevant field must be forwarded
+    // explicitly here rather than relying on vite.config.ts alone.
     cors: false,
+    // Forward the fs restrictions (strict, allow, deny) from vite.config.ts.
+    // Without this, the `server:` key above replaces the entire server block
+    // and silently discards the fs allow/deny list defined there.
+    fs: viteConfig.server?.fs,
   };
 
   const vite = await createViteServer({
@@ -39,7 +44,12 @@ export async function setupVite(app: Express, server: Server) {
       ...viteLogger,
       error: (msg, options) => {
         viteLogger.error(msg, options);
-        process.exit(1);
+        // File-serving access denials are expected runtime events (a path
+        // outside the allow list was requested).  Only hard-crash on
+        // configuration/build errors that would leave the server broken.
+        if (!msg.includes("outside of Vite serving allow list")) {
+          process.exit(1);
+        }
       },
     },
     server: serverOptions,
