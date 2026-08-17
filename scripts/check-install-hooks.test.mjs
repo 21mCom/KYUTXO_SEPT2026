@@ -343,6 +343,48 @@ test('scanner in --production-only mode flags a raw-Dexie write inside a non-tes
   );
 });
 
+test('scanner in --production-only mode flags a raw-Dexie write in a file whose path contains .test.ts as a substring but whose basename does not end in .test.ts/.test.tsx', () => {
+  // Guards against a regression in the isTestFile predicate.
+  //
+  // "violation.test.tsx.utils.ts" has extension ".ts" so the scanner reads
+  // it, and its path contains ".test.ts" as a substring (from ".test.tsx").
+  // However its basename does NOT end in ".test.ts" or ".test.tsx", so it
+  // must NOT be treated as a test file.  With the old substring predicate
+  // (`rel.includes('.test.ts')`), isTestFile returned true and --production-only
+  // silently skipped the file.  With the correct endsWith predicate it is
+  // scanned and the write is flagged.
+  const ROOT = path.resolve(path.dirname(__filename), '..');
+  const fixtureDir = path.join(ROOT, 'client', 'src', '__crud_guard_violation_fixture__');
+  const fixtureFile = path.join(fixtureDir, 'violation.test.tsx.utils.ts');
+
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  fs.writeFileSync(
+    fixtureFile,
+    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
+  );
+
+  let result;
+  try {
+    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8' });
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+
+  assert.equal(
+    result.status,
+    1,
+    'scanner with --production-only should exit 1 when a file whose basename ' +
+      'contains ".test.ts" as a substring (but does not end in .test.ts/.test.tsx) ' +
+      'contains a guarded-table write, but it exited ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+  );
+  assert.ok(
+    result.stderr.includes('violation.test.tsx.utils.ts') ||
+      result.stdout.includes('violation.test.tsx.utils.ts'),
+    'scanner output does not mention the violating file'
+  );
+});
+
 test('scanner in --production-only mode flags a raw-Dexie write inside a non-test file in __tests__/', () => {
   // Guards against a regression where the /__tests__/ branch of isTestFile is
   // widened to exempt ALL files in that directory rather than only files whose

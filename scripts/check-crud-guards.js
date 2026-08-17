@@ -13,10 +13,17 @@ const ROOT = path.resolve(__dirname, '..');
 // without this flag so they continue to cover everything.
 const PRODUCTION_ONLY = process.argv.includes('--production-only');
 
-/** Returns true for any file that only exists in the test suite. */
+/** Returns true for any file that only exists in the test suite.
+ *
+ * A file is considered a test file only when its basename ends with
+ * ".test.ts" or ".test.tsx".  A substring match (e.g. ".test.ts.bak") is
+ * intentionally NOT treated as a test file so that backup/auxiliary files
+ * that happen to contain the substring are still checked in production scans.
+ */
 function isTestFile(filePath) {
   const rel = filePath.replace(/\\/g, '/');
-  return rel.includes('.test.ts');
+  const base = rel.split('/').pop() || '';
+  return base.endsWith('.test.ts') || base.endsWith('.test.tsx');
 }
 
 const WRITE_METHODS = [
