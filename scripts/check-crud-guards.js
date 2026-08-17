@@ -162,6 +162,9 @@ const ALWAYS_ALLOWED_FILES = new Set([
   // confirm-before-mass-clear test has something above the threshold.
   path.resolve(ROOT, 'client/src/pages/DatabaseDoctor.typeFieldConfirm.test.tsx'),
   path.resolve(ROOT, 'client/src/lib/bip329-export.test.ts'),
+  // Mirrors the BIP-329 scale test above: seeds 100k rows verbatim against
+  // the raw Dexie surface to benchmark the CSV export walk.
+  path.resolve(ROOT, 'client/src/lib/csv-export.scale.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-proximity.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-entity-contacts.test.ts'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.e2e-entity-citations.test.ts'),
