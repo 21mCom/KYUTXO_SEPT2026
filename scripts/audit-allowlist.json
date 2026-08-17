@@ -1,10 +1,4 @@
 {
   "$comment": "Advisories that cannot be fixed today, each with a documented reason. Entries match on npm package name + GHSA id (from the advisory URL). Keep this list empty whenever possible.",
-  "allowlist": [
-    {
-      "name": "extract-zip",
-      "advisory": "GHSA-jmr9-qjv8-65gv",
-      "reason": "No fixed extract-zip release exists (latest is 2.0.1, the affected version). Only npm-suggested fix is a semver-major Electron 43 upgrade, which risks the native better-sqlite3 ABI pipeline. Dev-time-only exposure: extract-zip is used solely by Electron's install script to unpack trusted electron release zips downloaded from GitHub. Remove this entry once a patched extract-zip ships or Electron is upgraded past the affected range."
-    }
-  ]
+  "allowlist": []
 }
