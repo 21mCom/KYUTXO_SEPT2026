@@ -147,6 +147,10 @@ args = "crud-guards"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "crud-guards-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "boolean-where-guard"
 
 [[workflows.workflow.tasks]]
@@ -977,6 +981,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-crud-guards.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "crud-guards-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-crud-guards.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
