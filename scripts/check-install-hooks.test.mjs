@@ -305,3 +305,40 @@ test('scanner in --production-only mode ignores a raw-Dexie write inside a .test
       '\nstderr: ' + result.stderr
   );
 });
+
+test('scanner in --production-only mode flags a raw-Dexie write inside a non-test source file', () => {
+  // This test guards against a regression where the isTestFile predicate is
+  // widened so broadly that --production-only accidentally skips ALL files and
+  // stops catching real production violations.  A non-test source file
+  // (violation.ts, not violation.test.ts) containing a direct db.records.add()
+  // call must still cause the scanner to exit non-zero even when
+  // --production-only is active.
+  const ROOT = path.resolve(path.dirname(__filename), '..');
+  const fixtureDir = path.join(ROOT, 'client', 'src', '__crud_guard_violation_fixture__');
+  const fixtureFile = path.join(fixtureDir, 'violation.ts');
+
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  fs.writeFileSync(
+    fixtureFile,
+    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
+  );
+
+  let result;
+  try {
+    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8' });
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+
+  assert.equal(
+    result.status,
+    1,
+    'scanner with --production-only should exit 1 when a non-test source file contains a guarded-table write, ' +
+      'but it exited ' + result.status + '\nstdout: ' + result.stdout +
+      '\nstderr: ' + result.stderr
+  );
+  assert.ok(
+    result.stderr.includes('violation.ts') || result.stdout.includes('violation.ts'),
+    'scanner output does not mention the violating non-test source file'
+  );
+});
