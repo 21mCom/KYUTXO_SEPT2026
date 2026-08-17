@@ -175,6 +175,10 @@ args = "no-external-resources"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "version-literal"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "entity-list"
 
 [[workflows.workflow.tasks]]
@@ -995,6 +999,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-no-external-resources.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "version-literal"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-version-literal.js"
 
 [workflows.workflow.metadata]
 isValidation = true

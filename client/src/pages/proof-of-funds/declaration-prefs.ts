@@ -1,5 +1,7 @@
+import { version as _pkgVersion } from "../../../../package.json";
+
 /** PDF document format version embedded in every generated document. */
-export const KYUTXO_APP_VERSION = "1.1.28";
+export const KYUTXO_APP_VERSION: string = _pkgVersion;
 
 // ────────────────────────────────────────────────────────────────────────────
 // Persisted declaration preferences

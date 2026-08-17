@@ -3,7 +3,7 @@ import { Database, Stethoscope, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { version as APP_VERSION } from "../../../package.json";
+import { version as APP_VERSION } from "../../../../package.json";
 import { isElectron, getElectronAPISafe } from "@/lib/electron";
 
 export function StorageCard() {
