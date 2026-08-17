@@ -275,3 +275,33 @@ test('scanner in full-scan mode flags a raw-Dexie write inside a .test.ts file',
     'scanner output does not mention the violating test file'
   );
 });
+
+test('scanner in --production-only mode ignores a raw-Dexie write inside a .test.ts file', () => {
+  // Create the same fixture as the full-scan test above, but run the scanner
+  // with --production-only.  Build mode must skip test files entirely so that
+  // seeding helpers used only in tests never block CI builds.
+  const ROOT = path.resolve(path.dirname(__filename), '..');
+  const fixtureDir = path.join(ROOT, 'client', 'src', '__crud_guard_violation_fixture__');
+  const fixtureFile = path.join(fixtureDir, 'violation.test.ts');
+
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  fs.writeFileSync(
+    fixtureFile,
+    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
+  );
+
+  let result;
+  try {
+    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8' });
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+
+  assert.equal(
+    result.status,
+    0,
+    'scanner with --production-only should exit 0 when the only violation is inside a .test.ts file, ' +
+      'but it exited ' + result.status + '\nstdout: ' + result.stdout +
+      '\nstderr: ' + result.stderr
+  );
+});
