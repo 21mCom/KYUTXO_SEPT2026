@@ -19,19 +19,31 @@
 //   1. When window.electronAPI is mocked with isElectron=true and
 //      electronVersion="43.4.0", the Settings page shows
 //      [data-testid="text-electron-version"] whose text starts with "43.".
-//   2. [data-testid="text-app-version"] does NOT show the stale hardcoded
-//      "1.0.0" string (i.e. the real package.json version is used).
+//   2. [data-testid="text-app-version"] contains the EXACT version string read
+//      from package.json at runtime (e.g. "1.2.3"), so a hard-coded wrong value
+//      or a bundling quirk that produces a blank/undefined version is caught.
+//      The old negative assertion ("must not be 1.0.0") is kept as a secondary
+//      guard.
 //
 // Usage: node scripts/check-about-electron-version-browser.mjs
 // Requires: a `chromium` binary on PATH (Nix) and `playwright-core`.
 
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other. Hold the lock for the whole script lifetime.
 await acquireBrowserCheckLock();
+
+// Read the expected version from package.json at script start time so the
+// assertion is always in sync with the source of truth.
+const __dir = dirname(fileURLToPath(import.meta.url));
+const PKG = JSON.parse(readFileSync(join(__dir, '..', 'package.json'), 'utf8'));
+const EXPECTED_VERSION = PKG.version;
 
 const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
 const BASE_URL = `http://localhost:${PORT}/`;
@@ -291,12 +303,24 @@ async function main() {
 
       if (appVersionVisible) {
         const appVersionText = await appVersionEl.textContent();
+        // Primary assertion: element must contain the exact current version.
+        step(
+          `[electron] text-app-version contains exact version "${EXPECTED_VERSION}"`,
+          (appVersionText ?? '').includes(EXPECTED_VERSION),
+          `text="${appVersionText}" expected="${EXPECTED_VERSION}"`,
+        );
+        // Secondary guard: must not show the old hardcoded placeholder.
         step(
           '[electron] text-app-version does NOT contain the stale hardcoded "1.0.0"',
           !(appVersionText ?? '').includes('1.0.0'),
           `text="${appVersionText}"`,
         );
       } else {
+        steps.push({
+          name: `[electron] text-app-version contains exact version "${EXPECTED_VERSION}"`,
+          passed: false,
+          detail: 'text-app-version element not found',
+        });
         steps.push({
           name: '[electron] text-app-version does NOT contain stale "1.0.0"',
           passed: false,
@@ -352,6 +376,33 @@ async function main() {
         appVersionVisible,
         appVersionVisible ? 'element present' : 'element NOT found',
       );
+
+      if (appVersionVisible) {
+        const appVersionText = await appVersionEl.textContent();
+        // Primary assertion: element must contain the exact current version.
+        step(
+          `[pwa] text-app-version contains exact version "${EXPECTED_VERSION}"`,
+          (appVersionText ?? '').includes(EXPECTED_VERSION),
+          `text="${appVersionText}" expected="${EXPECTED_VERSION}"`,
+        );
+        // Secondary guard: must not show the old hardcoded placeholder.
+        step(
+          '[pwa] text-app-version does NOT contain the stale hardcoded "1.0.0"',
+          !(appVersionText ?? '').includes('1.0.0'),
+          `text="${appVersionText}"`,
+        );
+      } else {
+        steps.push({
+          name: `[pwa] text-app-version contains exact version "${EXPECTED_VERSION}"`,
+          passed: false,
+          detail: 'text-app-version element not found',
+        });
+        steps.push({
+          name: '[pwa] text-app-version does NOT contain stale "1.0.0"',
+          passed: false,
+          detail: 'text-app-version element not found',
+        });
+      }
 
       // The Electron version row must NOT be present in the DOM.
       const electronVersionEl = page.getByTestId('text-electron-version');
@@ -430,8 +481,9 @@ async function main() {
   console.log(
     '\n[about-electron-version] PASSED:\n' +
       `  • Electron context: version row visible with "${MOCK_ELECTRON_VERSION}" → "43.", ` +
-      'app version is not the stale "1.0.0".\n' +
-      '  • PWA context: version row is absent, Type badge shows "Progressive Web App" ' +
+      `app version shows exact version "${EXPECTED_VERSION}" and is not the stale "1.0.0".\n` +
+      `  • PWA context: app version shows exact version "${EXPECTED_VERSION}", ` +
+      'electron version row is absent, Type badge shows "Progressive Web App" ' +
       '— end-to-end verified in a real browser.',
   );
 }
