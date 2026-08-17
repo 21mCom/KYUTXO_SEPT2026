@@ -71,7 +71,7 @@
 - [Address Checker 5k scaling](address-checker-5k-scaling.md) — huge tables need memoized rows + page-scroll virtualization; per-row Radix Tooltips freeze the mount; live-Electrum bench runs in PHASE/SLICE chunks.
 - [Demo vault builder](demo-vault-builder.md) — v3 backup zips from Node (fflate); Esplora rotate+cache; deep custody chains need chain adoption + addTx-size-aware spend walk; unlock per page load.
 - [Pooled-run cancel tokens](pooled-run-cancel-tokens.md) — a shared cancel flag isn't enough for concurrent runs; bump a run token on cancel/reset/new-run so stale workers can never mutate newer state.
-- [CRUD guard lint covers tests](crud-guard-lint-tests.md) — check-crud-guards scans .test files too; seed/clear via CRUD helpers (clearAllRecords, clearParticipants, createRecord, table's own clear) or validation fails.
+- [CRUD guard lint covers tests](crud-guard-lint-tests.md) — guard scans .test files AND gates the publish build; seed via CRUD helpers, or allowlist raw-Dexie scale tests in ALWAYS_ALLOWED_FILES.
 - [page.evaluate Vite imports](browser-eval-vite-imports.md) — dynamic import in page.evaluate resolves only '/src/...ts' app modules, never bare package specifiers; export a lib helper for library primitives.
 - [vi.mock vs circular imports](vi-mock-circular-import.md) — importOriginal partial mocks silently bind importers to the REAL exports when the module is in an import cycle; use a full factory mock with passthrough providers.
 - [Trusted Types enforcement](trusted-types-enforcement.md) — CSP enforces TT in packaged app; policies must install eagerly at startup (Radix sinks fire on first commit); default policy = exact-string allowlist, fails closed.
