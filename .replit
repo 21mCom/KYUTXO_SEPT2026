@@ -3173,6 +3173,17 @@ isValidation = true
     isValidation = true
 
 [[workflows.workflow]]
+name = "about-electron-version-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-about-electron-version-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
 name = "audit"
 author = "agent"
 
