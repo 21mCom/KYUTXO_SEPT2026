@@ -365,6 +365,9 @@ interface ElectronAPI {
   electrumRevokeCertificate: (params: ElectrumRevokeCertificateParams) => Promise<ElectrumRevokeCertificateResult>;
   platform: string;
   isElectron: boolean;
+  // Electron runtime version string (e.g. "43.4.0"), present only in the
+  // desktop build. Absent in older preloads — callers must guard for undefined.
+  electronVersion?: string;
   // Native read-engine bridge (present only in the desktop build).
   engine: EngineBridge;
 }

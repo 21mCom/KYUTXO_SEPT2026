@@ -120,4 +120,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform information
   platform: process.platform,
   isElectron: true,
+  // Electron runtime version — surfaced in the About screen.
+  electronVersion: process.versions.electron,
 });

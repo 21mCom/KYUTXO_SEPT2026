@@ -3,6 +3,8 @@ import { Database, Stethoscope, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { version as APP_VERSION } from "../../../package.json";
+import { isElectron, getElectronAPISafe } from "@/lib/electron";
 
 export function StorageCard() {
   return (
@@ -60,6 +62,9 @@ export function DatabaseDoctorCard() {
 }
 
 export function AboutCard() {
+  const inElectron = isElectron();
+  const electronVersion = getElectronAPISafe()?.electronVersion;
+
   return (
     <Card>
       <CardHeader>
@@ -68,12 +73,22 @@ export function AboutCard() {
       <CardContent className="space-y-3">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Version</span>
-          <span className="font-medium">1.0.0</span>
+          <span className="font-medium" data-testid="text-app-version">{APP_VERSION}</span>
         </div>
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Type</span>
-          <Badge variant="outline">Progressive Web App</Badge>
+          <Badge variant="outline">
+            {inElectron ? "Desktop App" : "Progressive Web App"}
+          </Badge>
         </div>
+        {inElectron && electronVersion && (
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Electron</span>
+            <span className="font-medium font-mono" data-testid="text-electron-version">
+              {electronVersion}
+            </span>
+          </div>
+        )}
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Privacy</span>
           <span className="font-medium">All data stored locally</span>
