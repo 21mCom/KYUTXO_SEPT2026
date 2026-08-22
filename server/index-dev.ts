@@ -4,7 +4,7 @@ import { type Server } from "node:http";
 
 import { nanoid } from "nanoid";
 import { type Express } from "express";
-import { createServer as createViteServer, createLogger, mergeConfig } from "vite";
+import { createServer as createViteServer, createLogger, mergeConfig, type LogErrorOptions } from "vite";
 
 import viteConfig from "../vite.config";
 import runApp from "./app";
@@ -47,7 +47,7 @@ export async function setupVite(app: Express, server: Server) {
         configFile: false,
         customLogger: {
           ...viteLogger,
-          error: (msg, options) => {
+          error: (msg: string, options?: LogErrorOptions) => {
             viteLogger.error(msg, options);
             // File-serving access denials are expected runtime events (a path
             // outside the allow list was requested).  Only hard-crash on

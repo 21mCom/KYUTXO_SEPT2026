@@ -36,6 +36,7 @@ import NodeSettings from "@/pages/NodeSettings";
 import Reports from "@/pages/Reports";
 import LightningSpeculator from "@/pages/LightningSpeculator";
 import UTXOs from "@/pages/UTXOs";
+import UtxoProvenance from "@/pages/UtxoProvenance";
 import Nudgie from "@/pages/Nudgie";
 import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
 import BulkEditor from "@/pages/BulkEditor";
@@ -88,6 +89,7 @@ function AppRoutes() {
       <Route path="/transaction-sync" component={TransactionSync} />
       <Route path="/transactions" component={Transactions} />
       <Route path="/utxos" component={UTXOs} />
+      <Route path="/utxo-provenance" component={UtxoProvenance} />
       <Route path="/nudgie" component={Nudgie} />
       <Route path="/lightning-speculator" component={LightningSpeculator} />
       <Route path="/provenance" component={Provenance} />
