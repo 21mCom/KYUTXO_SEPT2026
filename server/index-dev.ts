@@ -4,7 +4,7 @@ import { type Server } from "node:http";
 
 import { nanoid } from "nanoid";
 import { type Express } from "express";
-import { createServer as createViteServer, createLogger } from "vite";
+import { createServer as createViteServer, createLogger, mergeConfig } from "vite";
 
 import viteConfig from "../vite.config";
 import runApp from "./app";
@@ -19,42 +19,49 @@ export async function setupVite(app: Express, server: Server) {
   if (process.env.REPL_ID) {
     allowedHosts.push(".replit.dev");
   }
-  const serverOptions = {
+  // Fields that MUST override vite.config.ts (security / dev-server plumbing):
+  //   middlewareMode – required so Vite doesn't start its own HTTP server
+  //   hmr            – must point at our already-running server instance
+  //   allowedHosts   – scoped to loopback (+ .replit.dev when inside Replit)
+  //   cors           – must stay false; Vite's default (true) would reflect the
+  //                    request Origin and expose the launch-token <meta> tag to
+  //                    cross-origin pages
+  //
+  // Fields that come from vite.config.ts automatically via mergeConfig:
+  //   fs (strict, allow, deny), headers, origin, and any future additions
+  //
+  // mergeConfig performs a deep merge where the second argument wins for
+  // scalar fields, so the explicit overrides below take precedence while
+  // every other server field defined in vite.config.ts is preserved.
+  const devServerOverrides = {
     middlewareMode: true,
     hmr: { server },
     allowedHosts,
-    // No cross-origin grants: the launch-token model relies on the browser
-    // refusing other origins access to the token-bearing HTML and /api.
-    // Vite's default (cors: true) reflects the request Origin, which would
-    // let a malicious page in another tab read the token <meta> tag.
-    // NOTE: this inline `server` object replaces the `server` key from
-    // vite.config.ts, so every security-relevant field must be forwarded
-    // explicitly here rather than relying on vite.config.ts alone.
     cors: false,
-    // Forward the fs restrictions (strict, allow, deny) from vite.config.ts.
-    // Without this, the `server:` key above replaces the entire server block
-    // and silently discards the fs allow/deny list defined there.
-    fs: viteConfig.server?.fs,
   };
 
-  const vite = await createViteServer({
-    ...viteConfig,
-    configFile: false,
-    customLogger: {
-      ...viteLogger,
-      error: (msg, options) => {
-        viteLogger.error(msg, options);
-        // File-serving access denials are expected runtime events (a path
-        // outside the allow list was requested).  Only hard-crash on
-        // configuration/build errors that would leave the server broken.
-        if (!msg.includes("outside of Vite serving allow list")) {
-          process.exit(1);
-        }
+  const vite = await createViteServer(
+    mergeConfig(
+      {
+        ...viteConfig,
+        configFile: false,
+        customLogger: {
+          ...viteLogger,
+          error: (msg, options) => {
+            viteLogger.error(msg, options);
+            // File-serving access denials are expected runtime events (a path
+            // outside the allow list was requested).  Only hard-crash on
+            // configuration/build errors that would leave the server broken.
+            if (!msg.includes("outside of Vite serving allow list")) {
+              process.exit(1);
+            }
+          },
+        },
+        appType: "custom",
       },
-    },
-    server: serverOptions,
-    appType: "custom",
-  });
+      { server: devServerOverrides },
+    ),
+  );
 
   app.use(vite.middlewares);
   app.use("*", async (req, res, next) => {
