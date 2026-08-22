@@ -18,7 +18,8 @@
 //
 //   1. When window.electronAPI is mocked with isElectron=true and
 //      electronVersion="43.4.0", the Settings page shows
-//      [data-testid="text-electron-version"] whose text starts with "43.".
+//      [data-testid="text-electron-version"] whose text contains the full mock
+//      value "43.4.0" (exact match, not just the "43." major prefix).
 //   2. [data-testid="text-app-version"] contains the EXACT version string read
 //      from package.json at runtime (e.g. "1.2.3"), so a hard-coded wrong value
 //      or a bundling quirk that produces a blank/undefined version is caught.
@@ -281,14 +282,26 @@ async function main() {
 
       if (appeared) {
         const electronText = await electronVersionEl.textContent();
+        // Primary assertion: must contain the full mock version string, not just a prefix.
         step(
-          '[electron] text-electron-version contains "43." (mocked value "43.4.0")',
+          `[electron] text-electron-version contains exact mock value "${MOCK_ELECTRON_VERSION}"`,
+          (electronText ?? '').includes(MOCK_ELECTRON_VERSION),
+          `text="${electronText}"`,
+        );
+        // Secondary guard: verify the major prefix is also present (belt-and-suspenders).
+        step(
+          '[electron] text-electron-version starts with "43." (major-prefix guard)',
           (electronText ?? '').includes('43.'),
           `text="${electronText}"`,
         );
       } else {
         steps.push({
-          name: '[electron] text-electron-version contains "43."',
+          name: `[electron] text-electron-version contains exact mock value "${MOCK_ELECTRON_VERSION}"`,
+          passed: false,
+          detail: 'skipped — element not found',
+        });
+        steps.push({
+          name: '[electron] text-electron-version starts with "43." (major-prefix guard)',
           passed: false,
           detail: 'skipped — element not found',
         });
@@ -480,7 +493,8 @@ async function main() {
 
   console.log(
     '\n[about-electron-version] PASSED:\n' +
-      `  • Electron context: version row visible with "${MOCK_ELECTRON_VERSION}" → "43.", ` +
+      `  • Electron context: version row visible with exact mock value "${MOCK_ELECTRON_VERSION}" ` +
+      `(and major-prefix "43." guard), ` +
       `app version shows exact version "${EXPECTED_VERSION}" and is not the stale "1.0.0".\n` +
       `  • PWA context: app version shows exact version "${EXPECTED_VERSION}", ` +
       'electron version row is absent, Type badge shows "Progressive Web App" ' +
