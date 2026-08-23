@@ -279,6 +279,13 @@ async function main() {
     const restoredDustCount = await page.getByTestId('prov-count').textContent();
     record('live-dust-unflag', restoredDustCount?.startsWith('4 ') ?? false, `unflagging dust live restores ${restoredDustCount}`);
     await page.getByTestId('switch-ignore-prov-dust').click();
+    if (process.env.UTXO_PROVENANCE_SCREENSHOT) {
+      await page.screenshot({
+        path: 'client/public/downloads/utxo-provenance-wallet-dust.png',
+        fullPage: true,
+      });
+      console.log('[utxo-provenance-browser] screenshot saved: client/public/downloads/utxo-provenance-wallet-dust.png');
+    }
 
     const hopsBackTx2 = await page.getByTestId(`hops-back-${TX2.slice(0, 8)}-0`).textContent();
     const hopsBackTx3 = await page.getByTestId(`hops-back-${TX3.slice(0, 8)}-0`).textContent();

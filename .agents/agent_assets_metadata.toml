@@ -14,3 +14,10 @@ uri = "file://screenshots/utxo-provenance-hop-dialog.png"
 type = "image"
 title = "UTXO Provenance — hop detail popup"
 description = "Clicking a hop chip opens the transaction detail dialog: date, block, fee, net through wallet, and full input/output sides with owned badges."
+
+[[outputs]]
+id = "0aoq5cG2ANnYpzA2SqcId"
+uri = "file://client/public/downloads/utxo-provenance-wallet-dust.png"
+type = "image"
+title = "UTXO Provenance — wallet and dust controls"
+description = "Fresh populated screenshot showing the wallet selector, Ignore flagged dust toggle, and scoped UTXO results."
