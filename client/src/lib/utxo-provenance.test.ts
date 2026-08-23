@@ -3,6 +3,7 @@ import type { BlockchainTransaction, TransactionParticipant } from './db-types';
 import {
   computeUnspentUtxos,
   classifyHop,
+  filterProvenanceResultsByDust,
   traceUtxoProvenance,
   MAX_HOP_DEPTH,
   type ProvenanceWalkContext,
@@ -109,6 +110,48 @@ describe('computeUnspentUtxos', () => {
     const txMap = new Map([[tx.txid, tx]]);
     const utxos = computeUnspentUtxos(parts, txMap, isWalletAddress);
     expect(utxos.map((u) => u.id)).toEqual(['txA:1']);
+  });
+
+  it('keeps every unspent output across the wallet addresses', () => {
+    const tx = makeTx({ txid: 'multiAddress' });
+    const parts = [
+      out(tx.txid, 'addrA', 20_000, 0),
+      out(tx.txid, 'addrB', 30_000, 1),
+      out(tx.txid, 'addrC', 40_000, 2),
+    ];
+    const utxos = computeUnspentUtxos(parts, new Map([[tx.txid, tx]]), isWalletAddress);
+    expect(utxos.map((u) => `${u.address}:${u.vout}`)).toEqual([
+      'addrA:0',
+      'addrB:1',
+      'addrC:2',
+    ]);
+  });
+});
+
+describe('filterProvenanceResultsByDust', () => {
+  const result = (id: string): UtxoProvenanceResult => ({
+    utxo: {
+      id,
+      txid: id.split(':')[0],
+      vout: Number(id.split(':')[1]),
+      address: 'addrA',
+      amountSats: 1_000,
+      blockTime: 1_600_000_000,
+      blockHeight: 100,
+    },
+    hops: [],
+    hopsBack: 0,
+    truncated: false,
+    classifications: [],
+    oldestHopTime: 0,
+    newestHopTime: 0,
+  });
+
+  it('removes only flagged outpoints when dust is ignored', () => {
+    const rows = [result('txDust:0'), result('txKeep:1')];
+    expect(filterProvenanceResultsByDust(rows, new Set(['txDust:0']), true).map((r) => r.utxo.id))
+      .toEqual(['txKeep:1']);
+    expect(filterProvenanceResultsByDust(rows, new Set(['txDust:0']), false)).toBe(rows);
   });
 });
 

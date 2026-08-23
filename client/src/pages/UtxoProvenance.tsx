@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
 import {
   ChevronDown,
   ChevronRight,
@@ -12,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -20,6 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useAddressRecords } from "@/hooks/use-address-records";
+import { getDustFlaggedOutpointSet } from "@/lib/data/dust-flags-crud";
 import {
   getParticipantsByAddresses,
   getSpendInputsByOutpoints,
@@ -29,6 +32,7 @@ import {
 import type { BlockchainTransaction, TransactionParticipant } from "@/lib/database";
 import {
   computeUnspentUtxos,
+  filterProvenanceResultsByDust,
   traceUtxoProvenance,
   type HopClassification,
   type ProvenanceHop,
@@ -39,6 +43,7 @@ import {
 import { formatUnixSeconds } from "@/lib/unix-seconds";
 
 const PAGE_SIZE = 100;
+const ALL_WALLETS = "__all_wallets__";
 /** Max ancestor transactions pulled from the DB while widening the walk. */
 const MAX_ANCESTOR_FETCH = 50_000;
 
@@ -308,24 +313,52 @@ export default function UtxoProvenancePage() {
   const { records, isLoading: recordsLoading } = useAddressRecords({ includeBlockchainDiscovered: false });
   const txDbSignal = useDbChangeSignal(['blockchainTransactions', 'transactionParticipants']);
 
+  const walletOptions = useMemo(
+    () => Array.from(new Set(records.map((record) => record.walletName).filter((name): name is string => Boolean(name))))
+      .sort((a, b) => a.localeCompare(b)),
+    [records],
+  );
+  const [selectedWallet, setSelectedWallet] = useState(ALL_WALLETS);
+  const effectiveWallet = selectedWallet === ALL_WALLETS || walletOptions.includes(selectedWallet)
+    ? selectedWallet
+    : ALL_WALLETS;
+  const scopedRecords = useMemo(
+    () => effectiveWallet === ALL_WALLETS
+      ? records
+      : records.filter((record) => record.walletName === effectiveWallet),
+    [records, effectiveWallet],
+  );
+
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState<string>("any");
   const [minHops, setMinHops] = useState<string>("0");
+  const [ignoreDust, setIgnoreDust] = useState(false);
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [openHop, setOpenHop] = useState<ProvenanceHop | null>(null);
 
+  const dustFlaggedOutpoints = useLiveQuery(
+    () => getDustFlaggedOutpointSet(),
+    [],
+  );
+
   const { value: data, isComputing } = useAsyncMemo(
-    async (signal) => loadProvenanceData(records, signal),
-    [records, txDbSignal],
+    async (signal) => loadProvenanceData(scopedRecords, signal),
+    [scopedRecords, txDbSignal],
     undefined as LoadedData | undefined,
   );
+
+  const visibleResults = useMemo(() => {
+    return filterProvenanceResultsByDust(data?.results ?? [], dustFlaggedOutpoints, ignoreDust);
+  }, [data, ignoreDust, dustFlaggedOutpoints]);
+
+  const hiddenDustCount = data ? data.results.length - visibleResults.length : 0;
 
   const filtered = useMemo(() => {
     if (!data) return [];
     const q = search.trim().toLowerCase();
     const minH = parseInt(minHops, 10) || 0;
-    return data.results.filter((r) => {
+    return visibleResults.filter((r) => {
       if (r.hopsBack < minH) return false;
       if (classFilter !== 'any' && !r.classifications.includes(classFilter as HopClassification)) return false;
       if (q) {
@@ -335,18 +368,18 @@ export default function UtxoProvenancePage() {
       }
       return true;
     });
-  }, [data, search, classFilter, minHops]);
+  }, [data, visibleResults, search, classFilter, minHops]);
 
   const stats = useMemo(() => {
     if (!data) return { total: 0, withHistory: 0, partialSpend: 0, reorg: 0 };
     let withHistory = 0, partialSpend = 0, reorg = 0;
-    for (const r of data.results) {
+    for (const r of visibleResults) {
       if (r.hopsBack > 1) withHistory++;
       if (r.classifications.includes('partial-spend')) partialSpend++;
       if (r.classifications.includes('wallet-reorg')) reorg++;
     }
-    return { total: data.results.length, withHistory, partialSpend, reorg };
-  }, [data]);
+    return { total: visibleResults.length, withHistory, partialSpend, reorg };
+  }, [data, visibleResults]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const clampedPage = Math.min(page, pageCount - 1);
@@ -362,6 +395,12 @@ export default function UtxoProvenancePage() {
   };
 
   const loading = recordsLoading || isComputing;
+
+  useEffect(() => {
+    setPage(0);
+    setExpanded(new Set());
+    setOpenHop(null);
+  }, [effectiveWallet, ignoreDust]);
 
   return (
     <TooltipProvider>
@@ -386,6 +425,26 @@ export default function UtxoProvenancePage() {
         <Card>
           <CardHeader className="p-4 pb-2">
             <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <Label htmlFor="prov-wallet-filter">Wallet</Label>
+                <Select
+                  value={effectiveWallet}
+                  onValueChange={(value) => {
+                    setSelectedWallet(value);
+                    setPage(0);
+                    setExpanded(new Set());
+                    setOpenHop(null);
+                  }}
+                >
+                  <SelectTrigger id="prov-wallet-filter" aria-label="Wallet" className="w-44" data-testid="prov-wallet-filter"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_WALLETS}>All wallets</SelectItem>
+                    {walletOptions.map((wallet) => (
+                      <SelectItem key={wallet} value={wallet}>{wallet}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="min-w-52 flex-1">
                 <Label htmlFor="prov-search">Search</Label>
                 <Input
@@ -420,7 +479,30 @@ export default function UtxoProvenancePage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="flex min-h-9 items-center gap-2">
+                <Switch
+                  id="switch-ignore-prov-dust"
+                  checked={ignoreDust}
+                  onCheckedChange={(checked) => {
+                    setIgnoreDust(checked);
+                    setPage(0);
+                    setExpanded(new Set());
+                    setOpenHop(null);
+                  }}
+                  data-testid="switch-ignore-prov-dust"
+                />
+                <Label htmlFor="switch-ignore-prov-dust" className="cursor-pointer whitespace-nowrap text-sm">
+                  Ignore flagged dust
+                </Label>
+              </div>
             </div>
+            {ignoreDust && hiddenDustCount > 0 && (
+              <div className="pt-2">
+                <Badge variant="secondary" data-testid="prov-dust-status">
+                  Ignoring {hiddenDustCount.toLocaleString()} flagged dust UTXO{hiddenDustCount === 1 ? "" : "s"}
+                </Badge>
+              </div>
+            )}
           </CardHeader>
           <CardContent className="p-0">
             {loading ? (
@@ -430,7 +512,15 @@ export default function UtxoProvenancePage() {
             ) : !data || data.results.length === 0 ? (
               <div className="flex flex-col items-center gap-2 p-10 text-center text-muted-foreground" data-testid="prov-empty">
                 <Coins className="h-8 w-8" />
-                <p>No unspent UTXOs found. Sync your wallet addresses first.</p>
+                <p>{effectiveWallet === ALL_WALLETS
+                  ? "No unspent UTXOs found. Sync your wallet addresses first."
+                  : `No unspent UTXOs found in ${effectiveWallet}.`}</p>
+              </div>
+            ) : visibleResults.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 p-10 text-center text-muted-foreground" data-testid="prov-empty">
+                <Coins className="h-8 w-8" />
+                <p>All unspent UTXOs in this view are flagged as dust.</p>
+                <p className="text-xs">Turn off “Ignore flagged dust” to show them.</p>
               </div>
             ) : (
               <>

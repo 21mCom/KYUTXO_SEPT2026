@@ -215,6 +215,21 @@ export interface UtxoProvenanceResult {
   newestHopTime: number;
 }
 
+/**
+ * Apply the optional user-flagged dust exclusion without mutating the loaded
+ * provenance results. Keeping this separate from tracing lets the page derive
+ * summaries and pagination from the same visible set while retaining the full
+ * transaction data for hop dialogs.
+ */
+export function filterProvenanceResultsByDust(
+  results: UtxoProvenanceResult[],
+  dustFlaggedOutpoints: Set<string> | undefined,
+  ignoreDust: boolean,
+): UtxoProvenanceResult[] {
+  if (!ignoreDust || !dustFlaggedOutpoints || dustFlaggedOutpoints.size === 0) return results;
+  return results.filter((result) => !dustFlaggedOutpoints.has(result.utxo.id));
+}
+
 export const MAX_HOP_DEPTH = 25;
 export const MAX_ANCESTORS = 200;
 

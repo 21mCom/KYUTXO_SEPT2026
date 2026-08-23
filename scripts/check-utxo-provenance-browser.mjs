@@ -8,7 +8,7 @@
 // → expand a row → hover a hop chip (tooltip) → click it (details dialog).
 //
 // Seed design (deterministic):
-//   OWN_A/OWN_B/OWN_C owned records (manual tier).
+//   OWN_A/OWN_B/OWN_C owned records (manual tier), split between two wallets.
 //   tx0 (origin):        ext input (no prevout) -> OWN_A 100k + ext change
 //   tx1 (partial spend): spends tx0:0 -> merchant 60k + OWN_B 39k (change)
 //   tx2 (wallet reorg):  spends tx1:1 -> OWN_C 38k + OWN_A 500 (all owned)
@@ -171,9 +171,9 @@ async function main() {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
         const txCrud = await import('/src/lib/data/transaction-crud.ts');
 
-        await recordCrud.createRecord({ type: 'address', inputString: ownA, label: 'Savings', addressImportance: 'manual' });
-        await recordCrud.createRecord({ type: 'address', inputString: ownB, addressImportance: 'manual' });
-        await recordCrud.createRecord({ type: 'address', inputString: ownC, addressImportance: 'manual' });
+        await recordCrud.createRecord({ type: 'address', inputString: ownA, label: 'Savings', walletName: 'Savings wallet', addressImportance: 'manual' });
+        await recordCrud.createRecord({ type: 'address', inputString: ownB, walletName: 'Savings wallet', addressImportance: 'manual' });
+        await recordCrud.createRecord({ type: 'address', inputString: ownC, walletName: 'Spending wallet', addressImportance: 'manual' });
 
         await txCrud.bulkAddTransactions([
           { txid: tx0, blockHeight: 700_000, blockTime: now - 300 * day, fee: 1_000, feeRate: 2, syncedAt: Date.now() },
@@ -225,6 +225,60 @@ async function main() {
     await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).waitFor({ state: 'visible', timeout: 15_000 });
     const countText = await page.getByTestId('prov-count').textContent();
     record('unspent-set', countText?.startsWith('4 '), `row count text="${countText}" (tx2:0, tx2:1, tx3:0, tx6:1)`);
+
+    // ── Wallet scope ───────────────────────────────────────────────────────
+    const walletSelector = page.getByLabel('Wallet');
+    record(
+      'wallet-label',
+      await walletSelector.getAttribute('data-testid') === 'prov-wallet-filter',
+      'visible Wallet label names the wallet selector',
+    );
+    await page.getByTestId('prov-wallet-filter').click();
+    await page.getByRole('option', { name: 'Savings wallet' }).click();
+    const savingsCount = await page.getByTestId('prov-count').textContent();
+    const secondSavingsRowVisible = await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).isVisible().catch(() => false);
+    const spendingRowVisibleInSavings = await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-0`).isVisible().catch(() => false);
+    record(
+      'wallet-scope',
+      savingsCount?.startsWith('2 ') && secondSavingsRowVisible && !spendingRowVisibleInSavings,
+      `Savings wallet shows ${savingsCount}; both Savings-address UTXOs visible=${secondSavingsRowVisible}; Spending wallet row hidden=${!spendingRowVisibleInSavings}`,
+    );
+    await page.getByTestId('prov-wallet-filter').click();
+    await page.getByRole('option', { name: 'All wallets' }).click();
+    const allWalletsCount = await page.getByTestId('prov-count').textContent();
+    record('all-wallets-scope', allWalletsCount?.startsWith('4 ') ?? false, `All wallets restores ${allWalletsCount}`);
+
+    // ── Flagged dust toggle + live flag updates ─────────────────────────────
+    await page.getByTestId('switch-ignore-prov-dust').click();
+    await page.evaluate(
+      async ({ txid, address }) => {
+        const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+        await dustCrud.markOutpointsAsDust([{ txid, vout: 0, address, amountSats: 50_000 }]);
+      },
+      { txid: TX3, address: OWN_A },
+    );
+    await page.getByTestId('prov-dust-status').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).waitFor({ state: 'hidden', timeout: 10_000 });
+    const countIgnoringDust = await page.getByTestId('prov-count').textContent();
+    const dustRowVisible = await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).isVisible().catch(() => false);
+    const dustStatus = await page.getByTestId('prov-dust-status').textContent();
+    record(
+      'ignore-flagged-dust',
+      countIgnoringDust?.startsWith('3 ') && !dustRowVisible && dustStatus?.includes('Ignoring 1 flagged dust UTXO') === true,
+      `ignoring dust shows ${countIgnoringDust}, dust row hidden=${!dustRowVisible}, status="${dustStatus}"`,
+    );
+    await page.evaluate(
+      async (outpoint) => {
+        const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+        await dustCrud.unmarkDustOutpoints([outpoint]);
+      },
+      `${TX3}:0`,
+    );
+    await page.getByTestId('prov-dust-status').waitFor({ state: 'hidden', timeout: 10_000 });
+    await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).waitFor({ state: 'visible', timeout: 10_000 });
+    const restoredDustCount = await page.getByTestId('prov-count').textContent();
+    record('live-dust-unflag', restoredDustCount?.startsWith('4 ') ?? false, `unflagging dust live restores ${restoredDustCount}`);
+    await page.getByTestId('switch-ignore-prov-dust').click();
 
     const hopsBackTx2 = await page.getByTestId(`hops-back-${TX2.slice(0, 8)}-0`).textContent();
     const hopsBackTx3 = await page.getByTestId(`hops-back-${TX3.slice(0, 8)}-0`).textContent();
