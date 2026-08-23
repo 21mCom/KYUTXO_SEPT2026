@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "gbOTxQFnQAww4U_Y6EH-6"
+uri = "file://screenshots/utxo-provenance-overview.png"
+type = "image"
+title = "UTXO Provenance — overview with expanded hop trail"
+description = "Demo vault with 11 unspent UTXOs: stats cards, filters, hop-depth column, pattern badges, and the deep wallet-reorg row expanded showing 5 dated hops with the hover tooltip."
+
+[[outputs]]
+id = "pKUvQ0sa5I53B062mci8S"
+uri = "file://screenshots/utxo-provenance-hop-dialog.png"
+type = "image"
+title = "UTXO Provenance — hop detail popup"
+description = "Clicking a hop chip opens the transaction detail dialog: date, block, fee, net through wallet, and full input/output sides with owned badges."
