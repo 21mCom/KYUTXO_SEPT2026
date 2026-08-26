@@ -222,8 +222,39 @@ export async function getAllUtxoLineage(): Promise<UtxoLineage[]> {
   return db.utxoLineage.toArray();
 }
 
+export async function getUtxoLineageByOutpoints(
+  outpoints: Array<{ txid: string; vout: number }>,
+): Promise<UtxoLineage[]> {
+  if (outpoints.length === 0) return [];
+  const keys = outpoints.map(({ txid, vout }) => [txid, vout] as [string, number]);
+  const rows = await db.utxoLineage
+    .where("[spentTxid+spentVout]")
+    .anyOf(keys)
+    .toArray();
+  const created = await db.utxoLineage
+    .where("[createdTxid+createdVout]")
+    .anyOf(keys)
+    .toArray();
+  const seen = new Set<number>();
+  return [...rows, ...created].filter((row) => {
+    if (row.id === undefined || seen.has(row.id)) return false;
+    seen.add(row.id);
+    return true;
+  });
+}
+
 export async function getAllCustodySegments(): Promise<CustodySegment[]> {
   return db.custodySegments.toArray();
+}
+
+export async function getCustodySegmentsBySegmentIds(segmentIds: string[]): Promise<CustodySegment[]> {
+  if (segmentIds.length === 0) return [];
+  return db.custodySegments.where("segmentId").anyOf(segmentIds).toArray();
+}
+
+export async function getLineageSnapshotsBySnapshotIds(snapshotIds: string[]): Promise<LineageSnapshot[]> {
+  if (snapshotIds.length === 0) return [];
+  return db.lineageSnapshots.where("snapshotId").anyOf(snapshotIds).toArray();
 }
 
 // Bounded id-keyset page. Used by the streaming backup export so the whole

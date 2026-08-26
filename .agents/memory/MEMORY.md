@@ -76,6 +76,7 @@
 - [vi.mock vs circular imports](vi-mock-circular-import.md) — importOriginal partial mocks silently bind importers to the REAL exports when the module is in an import cycle; use a full factory mock with passthrough providers.
 - [Trusted Types enforcement](trusted-types-enforcement.md) — CSP enforces TT in packaged app; policies must install eagerly at startup (Radix sinks fire on first commit); default policy = exact-string allowlist, fails closed.
 - [CSV formula injection](csv-formula-injection.md) — user-facing CSV exports must apostrophe-prefix formula sigils (= + - @, even after whitespace) before RFC 4180 quoting; reuse csvField helpers.
+- [Redacted export data](redacted-export-data.md) — redaction must recursively transform every serialized/report source, including derived identifiers and nested address arrays; never redact only presentation fields.
 - [fake-indexeddb scale-test lag](fake-indexeddb-scale-test-lag.md) — event-loop-lag assertions are harness noise (sync structured-clone); guard responsiveness via yield-spy counts + bounded output chunks instead.
 - [Tx entity-filter parity](tx-entity-filter-parity.md) — filters are AND-of-independent-EXISTS (Dexie must intersect per-dimension txid sets); curatedOnly excludes NULL importance; vocab dropdowns need explicit vocab rows.
 - [Full-vault stats recompute](full-vault-stats-recompute.md) — whole-vault recompute = single streaming table scans, not per-batch anyOf; attribute prevout spends post-scan; never benchmark right after bulk seeding.

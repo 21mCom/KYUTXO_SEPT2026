@@ -57,6 +57,7 @@ import {
   downloadBlob,
   type BackupSink,
 } from "@/lib/backup/sink";
+import { EvidencePackageBuilder } from "@/components/EvidencePackageBuilder";
 
 // Above these counts a pure in-memory (download) export is refused to avoid an
 // out-of-memory crash. The streaming-to-disk paths (desktop, File System Access
@@ -715,6 +716,7 @@ export default function ExportPage() {
 
   return (
     <div className="flex-1 overflow-auto p-6">
+      <EvidencePackageBuilder />
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
           <h1 className="text-3xl font-bold mb-2">Backup</h1>
