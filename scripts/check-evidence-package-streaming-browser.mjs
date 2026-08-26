@@ -30,8 +30,13 @@
 //     5. Cancellation: start a streamed export, click Cancel mid-flight —
 //        the fake writable is aborted (never closed) and no success toast
 //        appears.
+//     6. Mid-stream disk write failure: make the fake writable's write()
+//        reject partway through (simulating a full disk or a permission
+//        revoked after the picker was confirmed) — the sink is aborted
+//        (never closed), no success toast appears, and a destructive
+//        failure toast is shown.
 //   Context B (Electron backup-bridge path):
-//     6. Shim window.electronAPI (isElectron + backupOpen/Write/Close/Abort
+//     7. Shim window.electronAPI (isElectron + backupOpen/Write/Close/Abort
 //        + saveAttachment/readAttachment backed by an in-memory map) AND a
 //        File System Access shim, to prove Electron is preferred when both
 //        are available. Seed the same oversized 80 MiB selection through the
@@ -72,6 +77,12 @@ const FS_ACCESS_SHIM = `
   window.__fsSuggestedName = null;
   window.__evidenceStreamDelayMs = 0;
   window.__createObjectURLCalls = 0;
+  // Fails write() once the writable has already accepted this many chunks,
+  // simulating a real mid-stream disk failure (disk full, permission
+  // revoked) rather than an immediate rejection on the first byte. null
+  // disables the failure injection.
+  window.__evidenceStreamFailAfterWrites = null;
+  window.__evidenceStreamWriteErrorMessage = 'Simulated disk write failure';
   const realCreateObjectURL = URL.createObjectURL.bind(URL);
   URL.createObjectURL = (...args) => {
     window.__createObjectURLCalls++;
@@ -84,6 +95,12 @@ const FS_ACCESS_SHIM = `
         write: async (chunk) => {
           if (window.__evidenceStreamDelayMs > 0) {
             await new Promise((r) => setTimeout(r, window.__evidenceStreamDelayMs));
+          }
+          if (
+            window.__evidenceStreamFailAfterWrites != null &&
+            window.__fsWrites.length >= window.__evidenceStreamFailAfterWrites
+          ) {
+            throw new Error(window.__evidenceStreamWriteErrorMessage);
           }
           const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
           window.__fsWrites.push(bytes.length);
@@ -471,6 +488,61 @@ async function main() {
       const noNewSuccessToast = (await page.getByText(/Evidence package exported/i).count()) <= 1; // only the earlier A1 toast, if still mounted
       step('[A3] no additional success toast appears after cancelling', noNewSuccessToast);
 
+      // ── A4: a genuine mid-stream WRITE failure (not a user cancel) also
+      // aborts cleanly. The writable accepts a few chunks successfully (so
+      // this is a real mid-stream failure, not an immediate rejection) and
+      // then rejects every subsequent write(), the way a disk-full or
+      // permission-revoked error would surface from the real File System
+      // Access API partway through a large export. ──
+      await page.evaluate(() => {
+        window.__fsWrites = [];
+        window.__fsClosed = false;
+        window.__fsAborted = false;
+        window.__evidenceStreamDelayMs = 0;
+        window.__evidenceStreamFailAfterWrites = 2;
+      });
+      await page.getByTestId('button-export-evidence-package').click(); // streamToggle is still ON from A3
+      const writeFailureToast = page.getByText(/Evidence package failed/i).first();
+      const sawWriteFailure = await writeFailureToast.waitFor({ state: 'visible', timeout: 30_000 }).then(() => true).catch(() => false);
+      step('[A4] a mid-stream disk write failure surfaces as a failed export (not silently swallowed)', sawWriteFailure);
+
+      if (sawWriteFailure) {
+        const writeFailureMessage = page.getByText(/Simulated disk write failure/i).first();
+        step('[A4] failure toast surfaces the underlying write error', await writeFailureMessage.isVisible().catch(() => false));
+        const isDestructive = await page.evaluate(() => {
+          const nodes = [...document.querySelectorAll('[class*="destructive"]')];
+          return nodes.some((node) => /Evidence package failed/i.test(node.textContent || ''));
+        });
+        step('[A4] failure toast is rendered as a destructive (not default/success) toast', isDestructive);
+      }
+
+      const writeFailureButtonReenabled = await page
+        .waitForFunction(() => {
+          const btn = document.querySelector('[data-testid="button-export-evidence-package"]');
+          return btn && !btn.disabled;
+        }, { timeout: 30_000 })
+        .then(() => true)
+        .catch(() => false);
+      step('[A4] export button re-enables after the write failure', writeFailureButtonReenabled);
+
+      const writeFailureState = await page.evaluate(() => ({
+        closed: window.__fsClosed,
+        aborted: window.__fsAborted,
+        writesAccepted: window.__fsWrites.length,
+      }));
+      step(
+        '[A4] some chunks were accepted before the injected failure (a genuine mid-stream failure)',
+        writeFailureState.writesAccepted > 0 && writeFailureState.writesAccepted <= 2,
+        `writesAccepted=${writeFailureState.writesAccepted}`,
+      );
+      step(
+        '[A4] a mid-stream write failure aborts the sink and never closes it',
+        writeFailureState.aborted === true && writeFailureState.closed !== true,
+        `aborted=${writeFailureState.aborted} closed=${writeFailureState.closed}`,
+      );
+      const noSuccessToastAfterWriteFailure = (await page.getByText(/Evidence package exported/i).count()) === 0;
+      step('[A4] no success toast appears after a mid-stream write failure', noSuccessToastAfterWriteFailure);
+
       await context.close();
     }
 
@@ -555,7 +627,8 @@ async function main() {
     `\n[evidence-stream] PASSED: a ${(TOTAL_SIZE / (1024 * 1024)).toFixed(0)} MiB selected evidence package ` +
       'streamed to disk (never buffered whole) via both the File System Access API and the Electron backup ' +
       'bridge, the in-memory fallback correctly refuses the same oversized selection with a streaming hint, ' +
-      'and mid-stream cancellation aborts the partial file without ever reporting success.',
+      'and both a user cancellation AND a genuine mid-stream disk write failure abort the partial file cleanly ' +
+      'without ever reporting success.',
   );
 }
 
