@@ -46,7 +46,8 @@ import {
   Droplets,
   KeyRound,
   Biohazard,
-  Hourglass
+  Hourglass,
+  HeartPulse
 } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -89,6 +90,7 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "Records", url: "/", icon: Database },
       { title: "Nudgie", url: "/nudgie", icon: Sparkles },
+      { title: "Vault Health", url: "/vault-health", icon: HeartPulse },
     ]
   },
   {
