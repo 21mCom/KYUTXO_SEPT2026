@@ -937,6 +937,10 @@ args = "vite-fs-deny-browser-check"
 task = "workflow.run"
 args = "browser-check-unlock-guard"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "vault-health-scale-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3291,6 +3295,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-browser-check-unlock-guard.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "vault-health-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-vault-health-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

@@ -121,3 +121,4 @@
 - [Hop classification needs full participants](hop-classification-full-participants.md) — owned-side participant loads silently flip spend/reorg/origin classifications; blank Electrum inputs get ownership from their prevout.
 - [Browser-check shared unlock helper](browser-check-shared-unlock-helper.md) — LoginScreen/overlay testids centralized in browser-check-utils.mjs; guard lints input-password et al but not button-submit (reused elsewhere).
 - [Browser-check reload state loss](browser-check-reload-state-loss.md) — a deliberate page.goto/reload drops both the unlocked vault key and any addInitScript shim's in-memory Map; re-unlock every time, back shim storage with IndexedDB.
+- [Dexie bulk-write throughput ceiling](dexie-indexed-bulk-write-throughput.md) — heavily-indexed tables (e.g. records, ~14 indexes) cap headless-Chromium bulk writes at ~700/s; literal million-row seeds are impractical, size a documented representative N instead.
