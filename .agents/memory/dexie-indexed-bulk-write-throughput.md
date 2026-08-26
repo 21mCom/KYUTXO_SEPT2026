@@ -29,3 +29,17 @@ larger ad hoc manual run stays possible.
 See also `cdp-throttle-fast-ops.md`: once seeded, the scan itself is often
 too *fast* to reliably click cancel mid-run — throttle CPU via CDP and arm
 the cancel click in-page rather than inflating the seed further to slow it down.
+
+**Measuring the effect of removing an index — isolate it from a raw Dexie
+table, don't trust the full app path.** Comparing `bulkCreateRecords`
+end-to-end before/after dropping indexes showed almost no difference
+(~970 rows/sec either way) even though the indexes were genuinely removed.
+The reason: end-to-end time is dominated by other per-record app-level work
+(record-shape building, vocabulary/notification hooks, vault crypto), which
+swamps the index-count signal. Isolating just the schema in a bare throwaway
+`new Dexie(name).version(1).stores({...})` table in the same page and timing
+`bulkAdd` directly showed the real effect clearly (~500-650 rows/sec
+full-vs-reduced index count, consistent across repeated runs/orderings).
+When validating an index-removal optimization, benchmark the bare
+table/schema in isolation as the primary evidence; an unchanged end-to-end
+number does not mean the index change did nothing.

@@ -17,7 +17,7 @@ import { reportDbUpgradeProgress } from './db-upgrade-progress';
  * KEEP IN SYNC when adding a new `this.version(N)` declaration — the
  * legacy-migration test asserts this matches the opened database.
  */
-export const CURRENT_SCHEMA_VERSION = 39;
+export const CURRENT_SCHEMA_VERSION = 40;
 
 // Import types needed for the class definition
 import type {
@@ -97,6 +97,28 @@ export class KYUTXODatabase extends Dexie {
 
   constructor() {
     super('KYUTXODatabase');
+
+    // v40: drop four `records` indexes that no read path ever queries by —
+    // `syncDepth`, `flowType`, and the compound `[owner+id]`/`[walletName+id]`.
+    // Audited every `.where()`/`.orderBy()` call site (including the dynamic
+    // column-filter planner in records-query.ts, vocabulary rename/count
+    // helpers, and the discovery-tree cleanup path): none of the four is ever
+    // used for a lookup, range scan, or keyset page — `syncDepth`/`flowType`
+    // are read only in-memory off already-loaded rows, and the
+    // `[owner+id]`/`[walletName+id]` compounds have no literal
+    // `.where('[owner+id]' | '[walletName+id]')` caller anywhere (owner/
+    // walletName narrowing uses the plain single-field index instead).
+    // Every `records` insert (including bulkCreateRecords used by wallet
+    // imports and backup restores) pays one IndexedDB B-tree write per
+    // declared index, so four fewer indexes is a direct, permanent reduction
+    // in bulk-insert cost with no lookup regression since nothing queried
+    // them. IndexedDB index removal only drops the index B-tree — it does
+    // not rewrite row data — so this upgrade transaction is fast even on a
+    // vault that already has hundreds of thousands of records.
+    // Delta declaration — all other tables inherit unchanged from v39.
+    this.version(40).stores({
+      records: '++id, type, inputString, inputStringLower, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, addressImportance, [type+addressImportance], [addressImportance+id], [type+id], discoveredFromRecordId',
+    });
 
     // v39: add the adversaryScenarios table — named counterparty-knowledge
     // scenarios ("what if they knew?") for the Privacy Audit's adversary view.
