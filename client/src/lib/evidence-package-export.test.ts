@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import {
   buildEvidencePackage,
+  buildEvidencePackageToSink,
   EVIDENCE_PACKAGE_MAX_ATTACHMENT_BYTES,
   EvidencePackageError,
   stableJson,
   type EvidencePackageSelection,
 } from "./evidence-package-export";
+import { MemorySink } from "./backup/sink";
+import type { BackupSink } from "./backup/sink";
 
 const selection: EvidencePackageSelection = {
   evidence: [
@@ -201,5 +204,118 @@ describe("evidence package export", () => {
     expect(snapshotData).not.toContain("bc1qhiddenone");
     expect(snapshotData).not.toContain("bc1qproofaddress");
     expect(result.reportHtml).not.toContain("bc1qhiddentwo");
+  });
+});
+
+describe("evidence package streaming export (buildEvidencePackageToSink)", () => {
+  it("streams a package to a sink whose ZIP bytes and manifest exactly match the in-memory package", async () => {
+    const memoryResult = await buildEvidencePackage(selection, {
+      read: async () => new Uint8Array([1, 2, 3]),
+    }, { generatedAt: 1_700_000_000_000 });
+
+    const sink = new MemorySink();
+    const streamResult = await buildEvidencePackageToSink(selection, {
+      read: async () => new Uint8Array([1, 2, 3]),
+    }, sink, { generatedAt: 1_700_000_000_000 });
+
+    // Same manifest (selection/redaction/hash contract identical) ...
+    expect(stableJson(streamResult.manifest)).toBe(stableJson(memoryResult.manifest));
+    expect(streamResult.reportHtml).toBe(memoryResult.reportHtml);
+
+    // ... and the streamed ZIP itself contains the same files with the same
+    // bytes, not just an equivalent manifest.
+    const streamedZip = await JSZip.loadAsync(sink.getBytes());
+    const memoryZip = await JSZip.loadAsync(await memoryResult.blob.arrayBuffer());
+    const streamedNames = Object.values(streamedZip.files).filter((f) => !f.dir).map((f) => f.name).sort();
+    const memoryNames = Object.values(memoryZip.files).filter((f) => !f.dir).map((f) => f.name).sort();
+    expect(streamedNames).toEqual(memoryNames);
+    for (const name of streamedNames) {
+      const streamedBytes = await streamedZip.file(name)!.async("uint8array");
+      const memoryBytes = await memoryZip.file(name)!.async("uint8array");
+      expect(Array.from(streamedBytes)).toEqual(Array.from(memoryBytes));
+    }
+  });
+
+  it("bypasses the aggregate size cap that blocks the in-memory path, while keeping the per-file cap", async () => {
+    // Four attachments each under the PER-FILE cap (25 MiB), whose sum (80
+    // MiB) exceeds the AGGREGATE cap (75 MiB). Only the aggregate cap should
+    // block the in-memory path; the streaming path must allow it.
+    const perFileSize = 20 * 1024 * 1024;
+    const oversizedSelection: EvidencePackageSelection = {
+      ...selection,
+      evidenceAttachments: [1, 2, 3, 4].map((n) => ({
+        ...selection.evidenceAttachments[0],
+        id: 7 + n,
+        filename: `big-${n}.bin`,
+        size: perFileSize,
+      })),
+    };
+    const bytes = new Uint8Array(perFileSize);
+
+    await expect(buildEvidencePackage(oversizedSelection, { read: async () => bytes })).rejects.toThrow(
+      /maximum for a package built in memory/,
+    );
+
+    const sink = new MemorySink();
+    const streamResult = await buildEvidencePackageToSink(oversizedSelection, { read: async () => bytes }, sink);
+    expect(streamResult.manifest.counts.attachments).toBe(4);
+    expect(streamResult.manifest.sourceIdentifiers).toBeDefined();
+    expect(sink.blob).not.toBeNull();
+
+    // The per-file cap still applies on the streaming path.
+    const tooLargeSelection: EvidencePackageSelection = {
+      ...selection,
+      evidenceAttachments: [{ ...selection.evidenceAttachments[0], size: EVIDENCE_PACKAGE_MAX_ATTACHMENT_BYTES + 1 }],
+    };
+    await expect(
+      buildEvidencePackageToSink(tooLargeSelection, { read: async () => new Uint8Array() }, new MemorySink()),
+    ).rejects.toThrow(/too large/);
+  });
+
+  it("aborts the sink and never closes it when cancelled mid-stream", async () => {
+    let checks = 0;
+    let aborted = false;
+    let closed = false;
+    const sink: BackupSink = {
+      write: () => {},
+      drain: async () => {},
+      close: async () => {
+        closed = true;
+      },
+      abort: async () => {
+        aborted = true;
+      },
+    };
+
+    await expect(
+      buildEvidencePackageToSink(selection, { read: async () => new Uint8Array([1, 2, 3]) }, sink, {
+        shouldCancel: () => ++checks > 3,
+      }),
+    ).rejects.toThrow("Export cancelled.");
+
+    expect(aborted).toBe(true);
+    expect(closed).toBe(false);
+  });
+
+  it("aborts the sink (never closes it) when an attachment read fails mid-stream", async () => {
+    let aborted = false;
+    let closed = false;
+    const sink: BackupSink = {
+      write: () => {},
+      drain: async () => {},
+      close: async () => {
+        closed = true;
+      },
+      abort: async () => {
+        aborted = true;
+      },
+    };
+
+    await expect(
+      buildEvidencePackageToSink(selection, { read: async () => new Uint8Array([1, 2]) }, sink),
+    ).rejects.toThrow(/missing or changed/);
+
+    expect(aborted).toBe(true);
+    expect(closed).toBe(false);
   });
 });

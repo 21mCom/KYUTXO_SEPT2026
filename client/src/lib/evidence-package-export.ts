@@ -9,6 +9,8 @@ import type {
   TransactionParticipant,
   UtxoLineage,
 } from "@/lib/db-types";
+import type { BackupSink } from "@/lib/backup/sink";
+import { ZipStreamWriter } from "@/lib/backup/zip-stream";
 
 export const EVIDENCE_PACKAGE_VERSION = 1;
 export const EVIDENCE_PACKAGE_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -92,6 +94,17 @@ export interface EvidencePackageBuildOptions {
   generatedAt?: number;
   shouldCancel?: () => boolean;
   onProgress?: (phase: string, current: number, total: number) => void;
+}
+
+// Result of buildEvidencePackageToSink: the archive was streamed straight to
+// the sink, so there is no in-memory Blob to hand back — only the metadata a
+// caller needs to report success (manifest for the toast/summary, reportHtml
+// only for parity with the memory path's return shape; callers of the sink
+// path don't currently render it, but keeping it avoids two divergent result
+// shapes for what is otherwise the same package).
+export interface EvidencePackageStreamResult {
+  manifest: EvidencePackageManifest;
+  reportHtml: string;
 }
 
 export class EvidencePackageError extends Error {
@@ -261,11 +274,20 @@ ${body}
 </body></html>`;
 }
 
-export async function buildEvidencePackage(
+// Shared assembly: validation, redaction, ordering, and the manifest's static
+// fields. Both output paths (in-memory JSZip and the streaming-to-sink
+// writer) build on exactly this so the manifest/hash/selection contract can
+// never drift between them. `enforceTotalCap` is false only for the
+// streaming path — it never buffers the whole archive, so the aggregate
+// attachment-bytes cap (which exists solely to bound memory) does not apply.
+// The PER-FILE cap always applies: each attachment is still read fully into
+// memory once (to hash and write it), so a single file must stay small enough
+// to do that safely regardless of the output path.
+function prepareEvidencePackage(
   selection: EvidencePackageSelection,
-  reader: EvidencePackageAttachmentReader,
-  options: EvidencePackageBuildOptions = {},
-): Promise<EvidencePackageResult> {
+  options: EvidencePackageBuildOptions,
+  enforceTotalCap: boolean,
+) {
   const checkCancelled = () => {
     if (options.shouldCancel?.()) throw new EvidencePackageError("Export cancelled.");
   };
@@ -302,9 +324,9 @@ export async function buildEvidencePackage(
     }
   }
   const totalMetadataBytes = attachments.reduce((total, item) => total + item.size, 0);
-  if (totalMetadataBytes > EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES) {
+  if (enforceTotalCap && totalMetadataBytes > EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES) {
     throw new EvidencePackageError(
-      `Selected attachments total ${totalMetadataBytes} bytes; the maximum is ${EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES} bytes.`,
+      `Selected attachments total ${totalMetadataBytes} bytes; the maximum for a package built in memory is ${EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES} bytes. Turn on streaming export to save larger selections directly to disk.`,
     );
   }
 
@@ -329,15 +351,6 @@ export async function buildEvidencePackage(
     ["data/custody-segments.json", orderedData.custodySegments],
     ["data/lineage-snapshots.json", orderedData.lineageSnapshots],
   ] as const;
-  const zip = new JSZip();
-  const files: EvidencePackageManifest["files"] = [];
-  for (const [index, [path, value]] of dataEntries.entries()) {
-    checkCancelled();
-    options.onProgress?.("Writing selected data", index + 1, dataEntries.length + attachments.length + 2);
-    const bytes = utf8(stableJson(value));
-    files.push({ path, kind: "data", size: bytes.length, sha256: await sha256(bytes) });
-    zip.file(path, bytes, { date: new Date(0) });
-  }
 
   const manifestBase = {
     packageVersion: EVIDENCE_PACKAGE_VERSION,
@@ -357,6 +370,27 @@ export async function buildEvidencePackage(
       attachments: attachments.length,
     },
   };
+
+  return { checkCancelled, attachments, orderedData, dataEntries, manifestBase };
+}
+
+export async function buildEvidencePackage(
+  selection: EvidencePackageSelection,
+  reader: EvidencePackageAttachmentReader,
+  options: EvidencePackageBuildOptions = {},
+): Promise<EvidencePackageResult> {
+  const { checkCancelled, attachments, orderedData, dataEntries, manifestBase } =
+    prepareEvidencePackage(selection, options, /* enforceTotalCap */ true);
+
+  const zip = new JSZip();
+  const files: EvidencePackageManifest["files"] = [];
+  for (const [index, [path, value]] of dataEntries.entries()) {
+    checkCancelled();
+    options.onProgress?.("Writing selected data", index + 1, dataEntries.length + attachments.length + 2);
+    const bytes = utf8(stableJson(value));
+    files.push({ path, kind: "data", size: bytes.length, sha256: await sha256(bytes) });
+    zip.file(path, bytes, { date: new Date(0) });
+  }
 
   const manifestAttachments: EvidencePackageManifestAttachment[] = [];
   for (const [index, attachment] of attachments.entries()) {
@@ -423,4 +457,97 @@ export async function buildEvidencePackage(
     throw new EvidencePackageError("Export cancelled.");
   }
   return { blob, manifest, reportHtml };
+}
+
+// Streaming twin of buildEvidencePackage: writes the exact same manifest,
+// redaction, hashes, and explicit-selection contract, but every file goes
+// straight to `sink` (via the same ZipStreamWriter the backup export uses)
+// instead of accumulating in a JSZip instance and one final in-memory Blob.
+// This is what lets Electron and File System Access API users export
+// selections above EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES: memory usage
+// stays bounded to one attachment at a time (still capped per-file), never
+// the archive's total size. On ANY failure — including cancellation — the
+// sink is aborted so a partial file is never left looking complete; success
+// is only reported after `writer.finalize()` (drain + sink.close()) resolves.
+export async function buildEvidencePackageToSink(
+  selection: EvidencePackageSelection,
+  reader: EvidencePackageAttachmentReader,
+  sink: BackupSink,
+  options: EvidencePackageBuildOptions = {},
+): Promise<EvidencePackageStreamResult> {
+  const { checkCancelled, attachments, orderedData, dataEntries, manifestBase } =
+    prepareEvidencePackage(selection, options, /* enforceTotalCap */ false);
+
+  const writer = new ZipStreamWriter(sink);
+  const files: EvidencePackageManifest["files"] = [];
+  try {
+    for (const [index, [path, value]] of dataEntries.entries()) {
+      checkCancelled();
+      options.onProgress?.("Writing selected data", index + 1, dataEntries.length + attachments.length + 2);
+      const bytes = utf8(stableJson(value));
+      files.push({ path, kind: "data", size: bytes.length, sha256: await sha256(bytes) });
+      // Stored, not deflated — matches the in-memory path's ZIP-level
+      // encoding (generateAsync uses compression: "STORE") so the two output
+      // paths produce archives that differ only in HOW they were written,
+      // never in what a reader sees inside them.
+      await writer.addBytes(path, bytes, { compress: false });
+    }
+
+    const manifestAttachments: EvidencePackageManifestAttachment[] = [];
+    for (const [index, attachment] of attachments.entries()) {
+      checkCancelled();
+      options.onProgress?.("Hashing selected attachments", dataEntries.length + index + 1, dataEntries.length + attachments.length + 2);
+      const raw = await reader.read(attachment);
+      checkCancelled();
+      const bytes = raw instanceof Blob
+        ? new Uint8Array(await raw.arrayBuffer())
+        : raw instanceof ArrayBuffer
+          ? new Uint8Array(raw)
+          : raw;
+      if (bytes.byteLength !== attachment.size) {
+        throw new EvidencePackageError(
+          `Attachment "${attachment.filename}" is missing or changed (metadata says ${attachment.size} bytes, read ${bytes.byteLength}).`,
+        );
+      }
+      if (bytes.byteLength > EVIDENCE_PACKAGE_MAX_ATTACHMENT_BYTES) {
+        throw new EvidencePackageError(`Attachment "${attachment.filename}" exceeds the package size limit.`);
+      }
+      const path = attachmentPath(attachment);
+      const digest = await sha256(bytes);
+      manifestAttachments.push({
+        id: attachment.id,
+        evidenceId: attachment.evidenceId,
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+        sourceStoragePath: attachment.objectStoragePath,
+        packagePath: path,
+        sha256: digest,
+      });
+      files.push({ path, kind: "attachment", size: bytes.byteLength, sha256: digest });
+      await writer.addBytes(path, bytes, { compress: false });
+    }
+
+    const reportHtml = buildReportHtml({ ...manifestBase, attachments: manifestAttachments }, orderedData);
+    checkCancelled();
+    options.onProgress?.("Writing report and manifest", dataEntries.length + attachments.length + 1, dataEntries.length + attachments.length + 2);
+    const reportBytes = utf8(reportHtml);
+    files.push({ path: "report.html", kind: "report", size: reportBytes.length, sha256: await sha256(reportBytes) });
+    await writer.addBytes("report.html", reportBytes, { compress: false });
+
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    const manifestWithoutHash = { ...manifestBase, attachments: manifestAttachments, files };
+    const manifestSha256 = await sha256(utf8(stableJson(manifestWithoutHash)));
+    const manifest: EvidencePackageManifest = { ...manifestWithoutHash, manifestSha256 };
+    checkCancelled();
+    options.onProgress?.("Finalizing package", dataEntries.length + attachments.length + 2, dataEntries.length + attachments.length + 2);
+    await writer.addBytes("manifest.json", utf8(stableJson(manifest)), { compress: false });
+
+    checkCancelled();
+    await writer.finalize();
+    return { manifest, reportHtml };
+  } catch (err) {
+    await sink.abort();
+    throw err;
+  }
 }

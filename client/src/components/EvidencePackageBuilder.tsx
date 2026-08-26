@@ -19,11 +19,21 @@ import {
 } from "@/lib/data/lineage-crud";
 import {
   buildEvidencePackage,
+  buildEvidencePackageToSink,
+  EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES,
   EvidencePackageError,
   NO_EVIDENCE_PACKAGE_REDACTION,
   type EvidencePackageRedaction,
 } from "@/lib/evidence-package-export";
-import { downloadBlob } from "@/lib/backup/sink";
+import {
+  BackupCancelledError,
+  downloadBlob,
+  openElectronFileSink,
+  openFileSystemSink,
+  supportsElectronBackup,
+  supportsFileSystemAccess,
+} from "@/lib/backup/sink";
+import { isElectron } from "@/lib/electron";
 import type { Evidence } from "@/lib/db-types";
 
 function splitTokens(value: string): string[] {
@@ -77,9 +87,19 @@ export function EvidencePackageBuilder() {
   const [segmentIdsText, setSegmentIdsText] = useState("");
   const [snapshotIdsText, setSnapshotIdsText] = useState("");
   const [redaction, setRedaction] = useState<EvidencePackageRedaction>(NO_EVIDENCE_PACKAGE_REDACTION);
+  const [streamToDisk, setStreamToDisk] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [progress, setProgress] = useState("");
   const cancelRequested = useRef(false);
+
+  // Explicit opt-in streaming path (Electron backup bridge or the browser File
+  // System Access API): writes the ZIP straight to disk one entry at a time
+  // instead of buffering it in memory, so a selection can exceed
+  // EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES. Only offered when a
+  // streaming-to-disk destination actually exists.
+  const canStreamElectron = isElectron() && supportsElectronBackup();
+  const canStreamFilesystem = supportsFileSystemAccess();
+  const canStreamToDisk = canStreamElectron || canStreamFilesystem;
 
   const selectedEvidence = useMemo(
     () => (evidence ?? []).filter((item): item is Evidence & { id: number } =>
@@ -180,8 +200,7 @@ export function EvidencePackageBuilder() {
         selectedEvidence.map((item) => getEvidenceAttachmentsByEvidenceId(item.id)),
       )).flat();
 
-      setProgress("Hashing files and building the offline package…");
-      const result = await buildEvidencePackage({
+      const selectionPayload = {
         evidence: selectedEvidence,
         records,
         transactions,
@@ -191,22 +210,59 @@ export function EvidencePackageBuilder() {
         lineageSnapshots,
         evidenceAttachments,
         redaction,
-      }, {
-        read: (attachment) => getFileBlob(attachment.objectStoragePath, attachment.mimeType),
-      }, {
-        shouldCancel: () => cancelRequested.current,
-        onProgress: (phase, current, total) => setProgress(`${phase} (${current}/${total})…`),
-      });
-      if (cancelRequested.current) throw new EvidencePackageError("Export cancelled.");
+      };
+      const reader = { read: (attachment: { objectStoragePath: string; mimeType: string }) => getFileBlob(attachment.objectStoragePath, attachment.mimeType) };
 
-      const date = new Date(result.manifest.generatedAt).toISOString().slice(0, 10);
-      downloadBlob(result.blob, `kyutxo-evidence-package-${date}.zip`);
-      setProgress("Export complete.");
-      toast({
-        title: "Evidence package exported",
-        description: `${result.manifest.files.length} verified files, ${result.manifest.counts.attachments} attachment(s), and a redacted HTML report were downloaded.`,
-      });
+      if (streamToDisk && canStreamToDisk) {
+        // The suggested filename embeds the date, and the save dialog must be
+        // opened (and the user's choice known) before the build starts — so
+        // generatedAt is fixed here rather than left to the library default.
+        const generatedAt = Date.now();
+        const fileName = `kyutxo-evidence-package-${new Date(generatedAt).toISOString().slice(0, 10)}.zip`;
+        let sink;
+        try {
+          sink = canStreamElectron ? await openElectronFileSink(fileName) : await openFileSystemSink(fileName);
+        } catch (error) {
+          if (error instanceof BackupCancelledError) {
+            setProgress("");
+            return; // user dismissed the save dialog — not an error
+          }
+          throw error;
+        }
+        if (!sink) throw new EvidencePackageError("No streaming-to-disk destination is available.");
+
+        setProgress("Hashing files and streaming the offline package to disk…");
+        const result = await buildEvidencePackageToSink(selectionPayload, reader, sink, {
+          generatedAt,
+          shouldCancel: () => cancelRequested.current,
+          onProgress: (phase, current, total) => setProgress(`${phase} (${current}/${total})…`),
+        });
+        setProgress("Export complete.");
+        toast({
+          title: "Evidence package exported",
+          description: `${result.manifest.files.length} verified files, ${result.manifest.counts.attachments} attachment(s), and a redacted HTML report were saved to "${fileName}".`,
+        });
+      } else {
+        setProgress("Hashing files and building the offline package…");
+        const result = await buildEvidencePackage(selectionPayload, reader, {
+          shouldCancel: () => cancelRequested.current,
+          onProgress: (phase, current, total) => setProgress(`${phase} (${current}/${total})…`),
+        });
+        if (cancelRequested.current) throw new EvidencePackageError("Export cancelled.");
+
+        const date = new Date(result.manifest.generatedAt).toISOString().slice(0, 10);
+        downloadBlob(result.blob, `kyutxo-evidence-package-${date}.zip`);
+        setProgress("Export complete.");
+        toast({
+          title: "Evidence package exported",
+          description: `${result.manifest.files.length} verified files, ${result.manifest.counts.attachments} attachment(s), and a redacted HTML report were downloaded.`,
+        });
+      }
     } catch (error) {
+      if (error instanceof BackupCancelledError) {
+        setProgress("");
+        return;
+      }
       const message = error instanceof Error ? error.message : "Could not build the evidence package.";
       toast({
         title: message === "Export cancelled." ? "Export cancelled" : "Evidence package failed",
@@ -326,6 +382,23 @@ export function EvidencePackageBuilder() {
               </ul>
             </div>
           )}
+        </div>
+
+        <div className="space-y-2 rounded-md border p-3">
+          <label className="flex items-center gap-2 text-sm">
+            <Switch
+              checked={streamToDisk && canStreamToDisk}
+              onCheckedChange={setStreamToDisk}
+              disabled={!canStreamToDisk}
+              data-testid="switch-package-stream-to-disk"
+            />
+            Stream to disk for large selections
+          </label>
+          <p className="text-xs text-muted-foreground" data-testid="text-package-stream-description">
+            {canStreamToDisk
+              ? `When on, the package is written straight to a file you choose instead of held in memory first, so a selection can exceed the normal in-memory limit (currently ${(EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES / (1024 * 1024)).toFixed(0)} MiB total). The manifest, hashes, and redaction are identical either way.`
+              : "Unavailable in this browser: streaming to disk needs the desktop app or a Chromium-based browser with the File System Access API. Selections stay capped at the in-memory limit."}
+          </p>
         </div>
 
         {invalidInputCount > 0 && <p className="text-sm text-destructive">Invalid record ID or UTXO outpoint values must be corrected before export.</p>}
