@@ -346,5 +346,66 @@ describe(
         }).toEqual(fast);
       }
     });
+
+    it("cancel mid-fallback: aborting during the batched path stops cleanly with no stale progress", async () => {
+      await seedVault();
+      // Trip the gate so the run takes the per-batch fallback (same mock the
+      // "over the limit" test above uses).
+      const restore = mockGateCounts(FULL_SCAN_ROW_LIMIT - 5, 6);
+      try {
+        const controller = new AbortController();
+        const progress: Array<{ processed: number; total: number }> = [];
+        // Abort right after the FIRST batch (200 of 1500 records) — that
+        // batch is entirely within the WITH_DATA range (id 1..200 <= 400),
+        // so the still-unprocessed batch 2 (ids 201..400) also owns real
+        // participant data. If the recompute kept running past the abort,
+        // those addresses would come out with non-zero balances instead of
+        // staying untouched.
+        const abortAtProcessed = BATCH_SIZE;
+
+        const result = await recomputeAddressStats({
+          skipNotification: true,
+          batchSize: BATCH_SIZE,
+          signal: controller.signal,
+          onProgress: (p) => {
+            progress.push({ ...p });
+            if (p.processed >= abortAtProcessed && !controller.signal.aborted) {
+              controller.abort();
+            }
+          },
+        });
+
+        // Fallback path was taken (not the streaming scan), and only the one
+        // batch before the abort point issued an address-index load.
+        expect(scanPages()).toBe(0);
+        expect(addressLoads()).toBe(1);
+
+        expect(result).toEqual({ updated: abortAtProcessed, cancelled: true });
+
+        // Progress stopped exactly at the abort point — no ticks past it.
+        expect(progress).toEqual([
+          { processed: 0, total: TOTAL },
+          { processed: abortAtProcessed, total: TOTAL },
+        ]);
+
+        // The completed batch was written correctly...
+        const completed = await testDb.records.get(1);
+        expect(completed?.cachedBalanceSats).toBe(1001);
+        expect(completed?.statsComputedAt).not.toBeNull();
+
+        // ...but records in the next (never-started) batch keep their
+        // pre-run "not synced" state, even though they own real participant
+        // data that a completed run would have picked up.
+        const untouchedWithData = await testDb.records.get(WITH_DATA - 20);
+        expect(untouchedWithData?.id).toBeGreaterThan(abortAtProcessed);
+        expect(untouchedWithData?.statsComputedAt ?? null).toBeNull();
+        expect(untouchedWithData?.cachedBalanceSats).toBeUndefined();
+
+        const untouchedBare = await testDb.records.get(TOTAL);
+        expect(untouchedBare?.statsComputedAt ?? null).toBeNull();
+      } finally {
+        restore();
+      }
+    });
   },
 );
