@@ -42,6 +42,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { waitForLoginScreenVisible } from './browser-check-utils.mjs';
 import {
   assertPackagedBundleFresh,
   assertPackagedAsarFresh,
@@ -246,14 +247,14 @@ async function main() {
     let rendered = false;
     let renderDetail = '';
     try {
-      await page.getByTestId('input-password').waitFor({ state: 'visible', timeout: 60_000 });
+      await waitForLoginScreenVisible(page, { timeoutMs: 60_000 });
       rendered = true;
-      renderDetail = 'vault-setup password input visible';
+        renderDetail = 'vault-setup password field visible';
     } catch (err) {
       const bodyText = await page
         .evaluate(() => (document.body ? document.body.innerText.slice(0, 300) : '<no body>'))
         .catch(() => '<evaluate failed>');
-      renderDetail = `input-password never appeared; body text: ${JSON.stringify(bodyText)}`;
+      renderDetail = `vault-setup password field never appeared; body text: ${JSON.stringify(bodyText)}`;
     }
     steps.push({
       name: 'packaged renderer renders (no blank window; /assets remap works)',

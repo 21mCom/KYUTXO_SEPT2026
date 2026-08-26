@@ -42,6 +42,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other. Hold the lock for the whole script lifetime.
@@ -122,46 +123,7 @@ async function launchWithRetry(exe, attempts = 3) {
   throw lastErr;
 }
 
-async function dismissMigrationOverlayIfPresent(page) {
-  // Best-effort: after unlock the legacy-migration overlay can swallow clicks.
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
 
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return false;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  if (await confirmInput.isVisible().catch(() => false)) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-  return true;
-}
 
 /** Visible Records-table row labels (trimmed). */
 async function rowLabels(page) {
@@ -232,7 +194,7 @@ async function main() {
     await page.goto(WALLET_OVERVIEW_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // ── Create the vault (setup flow) ──────────────────────────────────────
-    const created = await unlockIfNeeded(page);
+    const created = await unlockIfNeeded(page, SETUP_PASSWORD);
     steps.push({
       name: 'setup: fresh vault created and unlocked',
       passed: created === true,
@@ -288,7 +250,7 @@ async function main() {
 
     // ── Reload once so the Wallet Overview aggregation sees the seed ──────
     await page.goto(WALLET_OVERVIEW_URL, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     const drillRow = page.getByTestId(`row-wallet-${DRILL_WALLET}`);
     await drillRow.waitFor({ state: 'visible', timeout: 45_000 });

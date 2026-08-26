@@ -35,6 +35,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { dismissMigrationOverlayIfPresent, unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other. Hold the lock for the whole script lifetime.
@@ -167,43 +168,6 @@ async function launchWithRetry(exe, attempts = 3) {
   throw lastErr;
 }
 
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  console.log('[about-electron-version] legacy-migration overlay detected; dismissing ...');
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
-
-async function unlockIfNeeded(page, password) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return; // already unlocked
-  await pwInput.fill(password);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  const isSetup = await confirmInput.isVisible().catch(() => false);
-  if (isSetup) {
-    await confirmInput.fill(password);
-  }
-  await page.getByTestId('button-submit').click();
-  await page.getByTestId('input-password').waitFor({ state: 'hidden', timeout: 30_000 });
-}
-
 async function main() {
   const exe = resolveChromium();
   console.log(`[about-electron-version] chromium: ${exe}`);
@@ -257,7 +221,7 @@ async function main() {
       }
 
       // Create/unlock the vault so the app renders its pages.
-      await unlockIfNeeded(page, SETUP_PASSWORD);
+      await unlockIfNeeded(page, SETUP_PASSWORD, { dismissMigration: false });
       await dismissMigrationOverlayIfPresent(page);
 
       // Navigate explicitly to /settings in case the unlock redirected elsewhere.
@@ -367,7 +331,7 @@ async function main() {
       }
 
       // Unlock the existing vault (password was set in Context 1).
-      await unlockIfNeeded(page, SETUP_PASSWORD);
+      await unlockIfNeeded(page, SETUP_PASSWORD, { dismissMigration: false });
       await dismissMigrationOverlayIfPresent(page);
 
       // Navigate explicitly to /settings in case the unlock redirected elsewhere.

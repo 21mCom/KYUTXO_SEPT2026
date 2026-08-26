@@ -30,6 +30,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM and
 // crash each other. Hold the lock for the whole script, incl. server spawn.
@@ -90,46 +91,6 @@ async function launchWithRetry(exe, attempts = 3) {
   throw lastErr;
 }
 
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
-
-// Fill the setup/unlock form if it appears (unlock is per page load).
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  if (await confirmInput.isVisible().catch(() => false)) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-}
-
 async function main() {
   const exe = resolveChromium();
   let devProc = null;
@@ -170,7 +131,7 @@ async function main() {
       }
     }
     if (!loaded) throw new Error('app never loaded');
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     // ── Phase A: seed the backup-source vault and export a REAL v3 zip ──────
     const zipB64 = await page.evaluate(

@@ -40,6 +40,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -78,48 +79,6 @@ async function waitForServer(url, timeoutMs) {
     await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
-}
-
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 30_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return false;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  const hasConfirm = await confirmInput.isVisible().catch(() => false);
-  if (hasConfirm) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-  return true;
-}
-
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  console.log('[dbdoctor-select-all-loaded] legacy-migration overlay detected; waiting it out ...');
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
 }
 
 async function gotoWithRetry(page, url) {
@@ -200,7 +159,10 @@ async function main() {
 
     // ── Create the vault ────────────────────────────────────────────────────
     await gotoWithRetry(page, BASE_URL);
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, {
+      appearTimeoutMs: 30_000,
+      label: 'dbdoctor-select-all-loaded',
+    });
     steps.push({ name: 'vault created and app unlocked', passed: true, detail: 'setup form submitted' });
 
     // ── Seed 150 stale synced addresses ─────────────────────────────────────
@@ -266,7 +228,10 @@ async function main() {
 
     // ── Database Doctor: run the balance check ──────────────────────────────
     await gotoWithRetry(page, `${BASE_URL}database-doctor`);
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, {
+      appearTimeoutMs: 30_000,
+      label: 'dbdoctor-select-all-loaded',
+    });
 
     await page.getByTestId('button-run-balance-check').click();
     const verdict = page.getByTestId('text-balance-verdict');

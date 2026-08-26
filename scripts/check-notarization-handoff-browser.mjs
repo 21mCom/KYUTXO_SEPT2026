@@ -36,6 +36,7 @@ import * as bitcoin from 'bitcoinjs-lib';
 import { execSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -104,50 +105,11 @@ async function launchWithRetry(exe, attempts = 3) {
   throw lastErr;
 }
 
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
-
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 8_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  if (await confirmInput.isVisible().catch(() => false)) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-}
-
 // Open the Evidence edit dialog for the fixture and click Notarize; the app
 // hashes the stored bytes and navigates itself to /utxos.
 async function notarizeViaEvidencePage(page, evidenceId, attachmentId) {
   await page.goto(`${BASE_URL}evidence`, { waitUntil: 'load', timeout: 60_000 });
-  await unlockIfNeeded(page);
+  await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
   const card = page.getByTestId(`card-evidence-${evidenceId}`);
   await card.waitFor({ state: 'visible', timeout: 30_000 });
   await card.click();
@@ -211,7 +173,7 @@ async function main() {
       }
     }
     if (!loaded) throw new Error('app never loaded');
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
 
     // ── Phase 1: seed UTXOs + the evidence fixture with a REAL uploaded file ─
     const seed = await page.evaluate(
@@ -320,7 +282,7 @@ async function main() {
     step('Cancel notarization removed the banner and cleared the stored intent', intentAfterDismiss === null);
 
     await page.reload({ waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
     // Wait for the page to actually render, then confirm no banner exists.
     await page.getByTestId(`row-address-${ADDR_W0.slice(0, 8)}`).waitFor({ state: 'visible', timeout: 30_000 });
     const bannerAfterDismissReload = await page.getByTestId('bar-notarization-intent').count();
@@ -360,7 +322,7 @@ async function main() {
     step('saving the PSBT removed the banner and cleared the stored intent', bannerGoneAfterSave && intentAfterSave === null);
 
     await page.reload({ waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
     await page.getByTestId(`row-address-${ADDR_W0.slice(0, 8)}`).waitFor({ state: 'visible', timeout: 30_000 });
     const bannerAfterSaveReload = await page.getByTestId('bar-notarization-intent').count();
     step('after save, a full reload shows no banner', bannerAfterSaveReload === 0);

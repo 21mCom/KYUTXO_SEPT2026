@@ -50,6 +50,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 import { buildEngineBridgeInitScript } from './engine-bridge-mock.mjs';
 
 await acquireBrowserCheckLock();
@@ -285,45 +286,7 @@ async function waitForServer(url, timeoutMs) {
   return false;
 }
 
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
 
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 8_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return false;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  if (await confirmInput.isVisible().catch(() => false)) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-  return true;
-}
 
 /** Wait until text-total-transactions settles on `expected` (string match). */
 async function waitForTotal(page, expected, timeoutMs = 30_000) {
@@ -540,7 +503,7 @@ async function main() {
 
     // ── 1. Create the vault (engine bridge still inert) ─────────────────────
     await page.goto(`${BASE_URL}transactions`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
     steps.push({ name: 'vault created and app unlocked', passed: true, detail: 'setup form submitted' });
 
     // ── 2. Seed — identical dataset to the Dexie-fallback check ─────────────
@@ -622,7 +585,7 @@ async function main() {
 
     // ── 3. PHASE A — Dexie fallback baseline (bridge inert) ─────────────────
     await page.goto(`${BASE_URL}transactions`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
 
     const noEngine = await page.evaluate(async () => {
       const { isEngineAvailable } = await import('/src/lib/engine/engine-client.ts');
@@ -650,7 +613,7 @@ async function main() {
       localStorage.setItem('__engineMockEnabled', '1');
     });
     await page.goto(`${BASE_URL}transactions`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
 
     const gate = await page.evaluate(async () => {
       const { isEngineAvailable } = await import('/src/lib/engine/engine-client.ts');

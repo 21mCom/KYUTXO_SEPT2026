@@ -929,6 +929,10 @@ args = "pof-version-browser-check"
 task = "workflow.run"
 args = "vite-fs-deny-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "browser-check-unlock-guard"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3261,6 +3265,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-pof-version-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "browser-check-unlock-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-browser-check-unlock-guard.js"
 
 [workflows.workflow.metadata]
 isValidation = true

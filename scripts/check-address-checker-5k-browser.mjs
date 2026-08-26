@@ -20,6 +20,7 @@ import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 import * as secp from '@bitcoinerlab/secp256k1';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -162,11 +163,10 @@ async function main() {
 
     // Retry the initial load + first selector: single-shot waits flake under
     // parallel validation.
-    const pwInput = page.getByTestId('input-password');
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
-        await pwInput.waitFor({ state: 'visible', timeout: 45_000 });
+        await waitForLoginScreenVisible(page, { timeoutMs: 45_000 });
         break;
       } catch (e) {
         if (attempt === 3) throw e;
@@ -177,10 +177,7 @@ async function main() {
 
     console.log('[addr-checker-5k] app loaded, creating vault');
     // Create the vault.
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 5_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     // Seed Electrum node settings via the Vite-singleton CRUD module.
     await page.waitForTimeout(1500);
@@ -228,14 +225,8 @@ async function main() {
     // The app may use path routing instead of hash routing; navigate in-app if needed.
     if (!(await page.getByTestId('textarea-address-input').isVisible().catch(() => false))) {
       await page.goto(`http://localhost:${PORT}/address-checker`, { waitUntil: 'load', timeout: 60_000 });
-      await page.getByTestId('button-dismiss-migration').click({ timeout: 3_000 }).catch(() => {});
       // May need to unlock after reload.
-      const unlockPw = page.getByTestId('input-password');
-      if (await unlockPw.isVisible().catch(() => false)) {
-        await unlockPw.fill(SETUP_PASSWORD);
-        await page.getByTestId('button-submit').click();
-        await page.getByTestId('button-dismiss-migration').click({ timeout: 5_000 }).catch(() => {});
-      }
+      await unlockIfNeeded(page, SETUP_PASSWORD);
     }
 
     const textarea = page.getByTestId('textarea-address-input');

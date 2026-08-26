@@ -47,6 +47,7 @@ import { createHash } from 'node:crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import * as bitcoin from 'bitcoinjs-lib';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts). Hold the lock for the whole
@@ -285,13 +286,7 @@ async function main() {
     await page.goto(PROOF_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // ── Create the vault ───────────────────────────────────────────────────
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    const confirmInput = page.getByTestId('input-confirm-password');
-    await confirmInput.waitFor({ state: 'visible', timeout: 10_000 });
-    await confirmInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
 
     const textarea = page.getByTestId('textarea-address-input');
     await textarea.waitFor({ state: 'visible', timeout: 30_000 });

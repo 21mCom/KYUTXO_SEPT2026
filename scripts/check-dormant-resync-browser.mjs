@@ -38,6 +38,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other. Hold the lock for the whole script lifetime.
@@ -235,11 +236,7 @@ async function main() {
     await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // ── Create the vault ──────────────────────────────────────────────────
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
     await page.getByTestId('button-run-scan').waitFor({ state: 'visible', timeout: 30_000 });
 
     // ── Seed records + transactions (live CRUD singletons) ────────────────

@@ -24,6 +24,7 @@ import { execSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -87,12 +88,7 @@ async function runSession(browser, zipB64, step) {
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // Fresh vault via setup form (fresh context = fresh IndexedDB).
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 3_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     // Restore the demo backup through the REAL v3 restore orchestrator.
     const restore = await page.evaluate(async (b64) => {
@@ -161,11 +157,7 @@ async function runSession(browser, zipB64, step) {
     // Full reload on the Provenance page (restored vault persists in this
     // context), unlock there (unlock is per page load).
     await page.goto(`${BASE_URL}provenance`, { waitUntil: 'load', timeout: 60_000 });
-    const unlockInput = page.getByTestId('input-password');
-    await unlockInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await unlockInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 3_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     // The Custody stats card reflects the restored segments without a rebuild.
     const segCountEl = page.getByTestId('text-segment-count');

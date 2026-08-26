@@ -32,6 +32,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -94,12 +95,7 @@ async function runSession(browser, step) {
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // Fresh vault via setup form (fresh context = fresh IndexedDB).
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 5_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     // Seed + build + assert in one combined snippet against the live app DB.
     const result = await page.evaluate(async () => {
@@ -307,11 +303,7 @@ async function runSession(browser, step) {
 
     // UI surface: /provenance Custody stats card reflects the built segments.
     await page.goto(`${BASE_URL}provenance`, { waitUntil: 'load', timeout: 60_000 });
-    const unlockInput = page.getByTestId('input-password');
-    await unlockInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await unlockInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 5_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     const segCountEl = page.getByTestId('text-segment-count');
     await segCountEl.waitFor({ state: 'visible', timeout: 60_000 });

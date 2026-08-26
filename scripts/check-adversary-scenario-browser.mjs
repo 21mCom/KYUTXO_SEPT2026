@@ -40,6 +40,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts). Hold the lock for the whole
@@ -149,13 +150,7 @@ async function main() {
     await page.goto(AUDIT_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // ── Create the vault (setup flow) ──────────────────────────────────────
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    const confirmInput = page.getByTestId('input-confirm-password');
-    await confirmInput.waitFor({ state: 'visible', timeout: 10_000 });
-    await confirmInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000, dismissMigration: false });
 
     // ── Wait for the Privacy Audit page to render ──────────────────────────
     await page.getByTestId('button-run-audit').waitFor({ state: 'visible', timeout: 30_000 });
@@ -439,10 +434,7 @@ async function main() {
 
     // ── Reload: the scenario persists (it rides the local database) ────────
     await page.reload({ waitUntil: 'load' });
-    const unlockInput = page.getByTestId('input-password');
-    await unlockInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await unlockInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000, dismissMigration: false });
     await page.getByTestId('button-run-audit').waitFor({ state: 'visible', timeout: 30_000 });
 
     const cardAfterReload = page.getByTestId(`card-scenario-${scenarioId}`);

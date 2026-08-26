@@ -23,6 +23,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM.
 await acquireBrowserCheckLock();
@@ -139,7 +140,7 @@ async function main() {
         await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
         // The setup/unlock form proves main.tsx ran (wrapper installed before
         // React renders anything).
-        await page.getByTestId('input-password').waitFor({ state: 'visible', timeout: 45_000 });
+        await waitForLoginScreenVisible(page, { timeoutMs: 45_000 });
         loaded = true;
       } catch (err) {
         console.log(`[launch-token-browser] initial load attempt ${i + 1} failed: ${err.message}`);

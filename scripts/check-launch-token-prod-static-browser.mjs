@@ -36,6 +36,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { waitForLoginScreenVisible } from './browser-check-utils.mjs';
 import {
   resolveChromium,
   isServerUp,
@@ -304,7 +305,7 @@ async function main() {
           await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
           // The setup/unlock form proves the built main bundle ran (fetch
           // wrapper installs before React renders anything).
-          await page.getByTestId('input-password').waitFor({ state: 'visible', timeout: 45_000 });
+          await waitForLoginScreenVisible(page, { timeoutMs: 45_000 });
           loaded = true;
         } catch (err) {
           console.log(`[${LABEL}] page load attempt ${i + 1} failed: ${err.message}`);

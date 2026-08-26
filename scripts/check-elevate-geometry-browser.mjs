@@ -33,6 +33,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts). Hold the lock for the whole
@@ -75,53 +76,6 @@ async function waitForServer(url, timeoutMs) {
     await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
-}
-
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 8_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return false;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  const hasConfirm = await confirmInput.isVisible().catch(() => false);
-  if (hasConfirm) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-  return true;
-}
-
-/**
- * The legacy-migration overlay (z-index 9999) can appear right after unlock
- * and intercepts all pointer events while visible. Wait it out / dismiss it so
- * subsequent interactions are not swallowed. No-op when it never shows.
- */
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  console.log('[elevate-geometry-browser] legacy-migration overlay detected; waiting it out ...');
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
 }
 
 const fmt = (b) =>
@@ -174,7 +128,7 @@ async function main() {
 
     // ── Create the vault ────────────────────────────────────────────────────
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
     steps.push({ name: 'vault created and app unlocked', passed: true, detail: 'setup form submitted' });
 
     // ── Seed: one blockchain-discovered address record via the LIVE Vite

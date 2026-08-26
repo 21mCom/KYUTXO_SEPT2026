@@ -37,6 +37,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other. Hold the lock for the whole script lifetime.
@@ -89,57 +90,6 @@ async function waitForServer(url, timeoutMs) {
     await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
-}
-
-/**
- * Handle the auth screen if it is showing: fills the password (and the
- * confirm field when this is the first-run setup form) and submits. No-op
- * when the app is already unlocked.
- */
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const showing = await pwInput
-    .waitFor({ state: 'visible', timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!showing) {
-    await dismissMigrationOverlayIfPresent(page);
-    return false;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  const hasConfirm = await confirmInput.isVisible().catch(() => false);
-  if (hasConfirm) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-  return true;
-}
-
-/**
- * The legacy-migration overlay (z-index 9999) can appear right after unlock
- * and intercepts all pointer events while visible. Wait it out / dismiss it.
- */
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  console.log('[address-reuse-copy-guard-browser] legacy-migration overlay detected; waiting it out ...');
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
 }
 
 /** chromium.launch can EAGAIN under parallel validation load — retry. */
@@ -220,7 +170,7 @@ async function main() {
       if (!landed) await page.waitForTimeout(3000);
     }
     if (!landed) throw new Error(`Could not load ${PAGE_URL}`);
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { label: 'address-reuse-copy-guard-browser' });
     steps.push({ name: 'vault created and app unlocked', passed: true, detail: 'setup form submitted' });
 
     // ── Seed via the LIVE Vite singletons ───────────────────────────────────
@@ -283,7 +233,7 @@ async function main() {
 
     // ── Reload once so the page recomputes reuse from a clean mount ─────────
     await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { label: 'address-reuse-copy-guard-browser' });
 
     // Expand the tagged address row so the copy button renders.
     const expandPoisoned = page.getByTestId(`button-expand-address-${POISONED_ID}`);

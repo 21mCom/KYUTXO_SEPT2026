@@ -28,6 +28,7 @@ import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 import * as secp from '@bitcoinerlab/secp256k1';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts).
@@ -84,46 +85,6 @@ async function waitForServer(url, timeoutMs) {
     await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
-}
-
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
-
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 8_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return false;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  if (await confirmInput.isVisible().catch(() => false)) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-  return true;
 }
 
 async function launchWithRetry(exe, attempts = 3) {
@@ -206,7 +167,7 @@ async function main() {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
-        await page.getByTestId('input-password').waitFor({ state: 'visible', timeout: 45_000 });
+        await waitForLoginScreenVisible(page, { timeoutMs: 45_000 });
         break;
       } catch (e) {
         if (attempt === 3) throw e;
@@ -214,7 +175,7 @@ async function main() {
         await new Promise((r) => setTimeout(r, 5000));
       }
     }
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
     step('vault created and app unlocked', true);
 
     // ── Seed: TWO saved records for the same address (unlabeled duplicate
@@ -274,7 +235,7 @@ async function main() {
 
     // ── Navigate to the Address Checker (reload; unlock again if needed) ──
     await page.goto(CHECKER_URL, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
     const textarea = page.getByTestId('textarea-address-input');
     await textarea.waitFor({ state: 'visible', timeout: 30_000 });
 

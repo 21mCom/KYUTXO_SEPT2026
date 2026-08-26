@@ -40,6 +40,7 @@ import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 import * as secp from '@bitcoinerlab/secp256k1';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -204,11 +205,10 @@ async function main() {
 
     // Retry the initial load + first selector: single-shot waits flake under
     // parallel validation.
-    const pwInput = page.getByTestId('input-password');
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
-        await pwInput.waitFor({ state: 'visible', timeout: 45_000 });
+        await waitForLoginScreenVisible(page, { timeoutMs: 45_000 });
         break;
       } catch (e) {
         if (attempt === 3) throw e;
@@ -218,10 +218,7 @@ async function main() {
     }
 
     console.log('[cancel-batch] app loaded, creating vault');
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 5_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     // Seed Electrum node settings so the checker takes the batch IPC path
     // this check shims — no HTTP provider involved.
@@ -244,13 +241,7 @@ async function main() {
     });
 
     await page.goto(`http://localhost:${PORT}/address-checker`, { waitUntil: 'load', timeout: 60_000 });
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 3_000 }).catch(() => {});
-    const unlockPw = page.getByTestId('input-password');
-    if (await unlockPw.isVisible().catch(() => false)) {
-      await unlockPw.fill(SETUP_PASSWORD);
-      await page.getByTestId('button-submit').click();
-      await page.getByTestId('button-dismiss-migration').click({ timeout: 5_000 }).catch(() => {});
-    }
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     const textarea = page.getByTestId('textarea-address-input');
     await textarea.waitFor({ state: 'visible', timeout: 30_000 });

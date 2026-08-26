@@ -28,6 +28,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts).
@@ -171,14 +172,7 @@ async function seedSegments(page, { matchCount, otherCount, extraCount, needle }
 
 async function unlockAt(page, path) {
   await page.goto(`${BASE_URL}${path}`, { waitUntil: 'load', timeout: 60_000 });
-  const pwInput = page.getByTestId('input-password');
-  await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
-  await pwInput.fill(SETUP_PASSWORD);
-  await page.getByTestId('button-submit').click();
-  await page
-    .getByTestId('button-dismiss-migration')
-    .click({ timeout: 5_000 })
-    .catch(() => {});
+  await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 }
 
 async function runSession(browser, step) {
@@ -205,15 +199,7 @@ async function runSession(browser, step) {
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // Fresh vault via setup form (fresh context = fresh IndexedDB).
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page
-      .getByTestId('button-dismiss-migration')
-      .click({ timeout: 5_000 })
-      .catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     const seeded = await seedSegments(page, {
       matchCount: MATCH_COUNT,

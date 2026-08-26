@@ -32,6 +32,7 @@ await acquireBrowserCheckLock();
 
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
+import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
 const BASE_URL = `http://localhost:${PORT}/`;
@@ -285,18 +286,7 @@ async function runSession(exe, steps) {
 
     // ── Create the vault (or unlock, if a prior attempt already created it
     // in this profile — not expected with a fresh profile, but harmless) ──
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    const confirmInput = page.getByTestId('input-confirm-password');
-    if (await confirmInput.isVisible().catch(() => false)) {
-      await confirmInput.fill(SETUP_PASSWORD);
-    }
-    await page.getByTestId('button-submit').click();
-    await page
-      .getByTestId('button-dismiss-migration')
-      .click({ timeout: 5_000 })
-      .catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
     // Wait until the app shell is up (vault created & unlocked).
     await page.getByTestId('button-logout').waitFor({ state: 'visible', timeout: 60_000 });
 
@@ -307,13 +297,11 @@ async function runSession(exe, steps) {
     const deadline = Date.now() + 90_000;
     for (;;) {
       if (await page.getByTestId('textarea-descriptor').isVisible().catch(() => false)) break;
-      if (await page.getByTestId('input-password').isVisible().catch(() => false)) {
-        await page.getByTestId('input-password').fill(SETUP_PASSWORD);
-        await page.getByTestId('button-submit').click();
-        await page
-          .getByTestId('button-dismiss-migration')
-          .click({ timeout: 5_000 })
-          .catch(() => {});
+      const loginVisible = await waitForLoginScreenVisible(page, { timeoutMs: 1 })
+        .then(() => true)
+        .catch(() => false);
+      if (loginVisible) {
+        await unlockIfNeeded(page, SETUP_PASSWORD);
         await page.getByTestId('button-logout').waitFor({ state: 'visible', timeout: 60_000 });
       }
       if (Date.now() > deadline) throw new Error('descriptor-import page never became ready');

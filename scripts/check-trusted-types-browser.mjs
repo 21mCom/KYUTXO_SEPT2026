@@ -22,6 +22,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM.
 await acquireBrowserCheckLock();
@@ -164,7 +165,7 @@ async function main() {
     for (let i = 0; i < 2 && !loaded; i++) {
       try {
         await page.goto(UI_ASSETS_URL, { waitUntil: 'load', timeout: 60_000 });
-        await page.getByTestId('input-password').waitFor({ state: 'visible', timeout: 45_000 });
+        await waitForLoginScreenVisible(page, { timeoutMs: 45_000 });
         loaded = true;
       } catch (err) {
         console.log(`[trusted-types-browser] initial load attempt ${i + 1} failed: ${err.message}`);
@@ -173,18 +174,7 @@ async function main() {
     if (!loaded) throw new Error('Could not load the app setup page.');
 
     // ── Create the vault (setup flow) ──────────────────────────────────────
-    await page.getByTestId('input-password').fill(SETUP_PASSWORD);
-    const confirmInput = page.getByTestId('input-confirm-password');
-    await confirmInput.waitFor({ state: 'visible', timeout: 10_000 });
-    await confirmInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-
-    // Best-effort: dismiss the legacy-migration overlay if it appears after
-    // unlock, otherwise it swallows subsequent clicks.
-    await page
-      .getByTestId('button-dismiss-migration')
-      .click({ timeout: 5_000 })
-      .catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     // ── Step 1: enforcement is really on ───────────────────────────────────
     const enforcement = await page.evaluate(() => {

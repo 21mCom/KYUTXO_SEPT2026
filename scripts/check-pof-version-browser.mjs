@@ -45,6 +45,7 @@ import { join, dirname } from 'node:path';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import * as bitcoin from 'bitcoinjs-lib';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other. Hold the lock for the whole script lifetime.
@@ -140,14 +141,6 @@ async function extractFullText(bytes) {
 /** Whitespace-insensitive normalization: pdf.js splits columns arbitrarily. */
 const norm = (s) => s.replace(/\s+/g, '');
 
-/** Dismiss the legacy-migration overlay if it appears after unlock. */
-async function dismissMigrationOverlay(page) {
-  await page
-    .getByTestId('button-dismiss-migration')
-    .click({ timeout: 3_000 })
-    .catch(() => {});
-}
-
 async function main() {
   const exe = resolveChromium();
   console.log(`[pof-version] chromium: ${exe}`);
@@ -203,14 +196,7 @@ async function main() {
     await page.goto(PROOF_URL, { waitUntil: 'load', timeout: 90_000 });
 
     // ── Create the vault ─────────────────────────────────────────────────
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    const confirmInput = page.getByTestId('input-confirm-password');
-    await confirmInput.waitFor({ state: 'visible', timeout: 10_000 });
-    await confirmInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await dismissMigrationOverlay(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     // ── Seed the funded address (offline balance source reads these rows) ─
     await page

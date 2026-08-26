@@ -28,6 +28,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts). Hold the lock for the whole
@@ -128,20 +129,7 @@ async function main() {
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // ── Create the vault (setup flow) ──────────────────────────────────────
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    const confirmInput = page.getByTestId('input-confirm-password');
-    await confirmInput.waitFor({ state: 'visible', timeout: 10_000 });
-    await confirmInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-
-    // Best-effort: dismiss the legacy-migration overlay if it appears after
-    // unlock, otherwise it swallows clicks / covers the page.
-    await page
-      .getByTestId('button-dismiss-migration')
-      .click({ timeout: 5_000 })
-      .catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
 
     // ── Address Importer ────────────────────────────────────────────────────
     // Full page navigation drops the in-memory session key and re-locks the
@@ -150,19 +138,7 @@ async function main() {
       waitUntil: 'load',
       timeout: 60_000,
     });
-    const relockPw = page.getByTestId('input-password');
-    const relocked = await relockPw
-      .waitFor({ state: 'visible', timeout: 15_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (relocked) {
-      await relockPw.fill(SETUP_PASSWORD);
-      await page.getByTestId('button-submit').click();
-    }
-    await page
-      .getByTestId('button-dismiss-migration')
-      .click({ timeout: 5_000 })
-      .catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     const xpubInput = page.getByTestId('input-xpub');
     await xpubInput.waitFor({ state: 'visible', timeout: 30_000 });

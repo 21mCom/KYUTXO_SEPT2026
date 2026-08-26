@@ -36,6 +36,7 @@ import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM and
 // crash each other. Hold the lock for the whole script, incl. server spawn.
@@ -97,46 +98,6 @@ async function launchWithRetry(exe, attempts = 3) {
     }
   }
   throw lastErr;
-}
-
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
-
-// Fill the setup/unlock form if it appears (unlock is per page load).
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  if (await confirmInput.isVisible().catch(() => false)) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
 }
 
 // Seeds the check vault and exports zip A (full) + zip C (compact) in-page.
@@ -333,7 +294,7 @@ async function main() {
       }
     }
     if (!loaded) throw new Error('app never loaded');
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     // ── Phase A: seed and export full zip A + compact zip C ───────────────
     const { zipA, zipC } = await seedAndExportBase(page);
@@ -341,7 +302,7 @@ async function main() {
 
     // ── Phase B: full vs compact comparison — pruned rows are NOT removals ──
     await page.goto(`${BASE_URL}export`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
     await openCompareDialog(page);
     await runComparison(page, { zipOlder: zipA, zipNewer: zipC });
     await page.getByTestId('compare-results').waitFor({ state: 'visible', timeout: 120_000 });

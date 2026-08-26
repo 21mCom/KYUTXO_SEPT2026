@@ -37,6 +37,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts).
@@ -177,12 +178,10 @@ async function main() {
 
     // Retry the initial goto + setup-form wait: single-shot waits flake under
     // parallel validation load.
-    let pwInput;
     for (let attempt = 1; ; attempt++) {
       try {
         await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
-        pwInput = page.getByTestId('input-password');
-        await pwInput.waitFor({ state: 'visible', timeout: 45_000 });
+        await waitForLoginScreenVisible(page, { timeoutMs: 45_000 });
         break;
       } catch (err) {
         if (attempt >= 3) throw err;
@@ -192,18 +191,7 @@ async function main() {
     }
 
     // ── Create the vault (setup flow) ──────────────────────────────────────
-    await pwInput.fill(SETUP_PASSWORD);
-    const confirmInput = page.getByTestId('input-confirm-password');
-    await confirmInput.waitFor({ state: 'visible', timeout: 10_000 });
-    await confirmInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-
-    // Dismiss the legacy-migration overlay if it appears after unlock,
-    // otherwise it swallows subsequent clicks.
-    await page
-      .getByTestId('button-dismiss-migration')
-      .click({ timeout: 5_000 })
-      .catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     const addConditionBtn = page.getByTestId('button-add-condition');
     await addConditionBtn.waitFor({ state: 'visible', timeout: 30_000 });
@@ -372,14 +360,7 @@ async function main() {
     // ── Reload + unlock: the Set must survive a full page reload ───────────
     {
       await page.reload({ waitUntil: 'load', timeout: 60_000 });
-      const loginPw = page.getByTestId('input-password');
-      await loginPw.waitFor({ state: 'visible', timeout: 45_000 });
-      await loginPw.fill(SETUP_PASSWORD);
-      await page.getByTestId('button-submit').click();
-      await page
-        .getByTestId('button-dismiss-migration')
-        .click({ timeout: 5_000 })
-        .catch(() => {});
+      await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 45_000 });
       await page.getByTestId('button-add-condition').waitFor({ state: 'visible', timeout: 30_000 });
 
       const stored = await readStoredNames(page, ADDRS);

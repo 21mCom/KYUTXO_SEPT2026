@@ -35,6 +35,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts).
@@ -155,36 +156,20 @@ async function main() {
     await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // ── Create the vault ──────────────────────────────────────────────────
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-
-    // Dismiss the legacy-migration overlay if it appears, or it swallows clicks.
-    await page
-      .getByTestId('button-dismiss-migration')
-      .click({ timeout: 3_000 })
-      .catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
 
     // Dusted page header renders once unlocked.
     await page.getByTestId('text-page-title').waitFor({ state: 'visible', timeout: 30_000 });
 
     // Re-unlock helper: every reload returns to the lock screen (session key).
-    const unlockIfNeeded = async () => {
-      const pw = page.getByTestId('input-password');
+    const reUnlockIfNeeded = async () => {
       const title = page.getByTestId('text-page-title');
       const first = await Promise.race([
-        pw.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'locked'),
+        waitForLoginScreenVisible(page, { timeoutMs: 30_000 }).then(() => 'locked'),
         title.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'unlocked'),
       ]).catch(() => 'timeout');
       if (first === 'locked') {
-        await pw.fill(SETUP_PASSWORD);
-        await page.getByTestId('button-submit').click();
-        await page
-          .getByTestId('button-dismiss-migration')
-          .click({ timeout: 3_000 })
-          .catch(() => {});
+        await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
       }
       await title.waitFor({ state: 'visible', timeout: 30_000 });
     };
@@ -278,7 +263,7 @@ async function main() {
 
     // Reload once so the page's auto-scan runs against the fully seeded vault.
     await page.reload({ waitUntil: 'load' });
-    await unlockIfNeeded();
+    await reUnlockIfNeeded();
 
     // ── Cancellability: cancel a mid-flight scan, expect a clean idle ──────
     // The scan auto-starts on mount. Throttle the CPU so it spans enough

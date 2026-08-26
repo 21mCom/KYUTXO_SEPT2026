@@ -35,6 +35,7 @@ import { execSync, spawn } from 'node:child_process';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import * as bitcoin from 'bitcoinjs-lib';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other. Hold the lock for the whole script lifetime.
@@ -134,14 +135,6 @@ async function launchWithRetry(exe, attempts = 3) {
   throw lastErr;
 }
 
-/** Dismiss the legacy-migration overlay if it appears after unlock. */
-async function dismissMigrationOverlay(page) {
-  await page
-    .getByTestId('button-dismiss-migration')
-    .click({ timeout: 3_000 })
-    .catch(() => {});
-}
-
 /** Run the offline balance check and wait for the first result row. */
 async function runOfflineBalanceCheck(page) {
   const textarea = page.getByTestId('textarea-address-input');
@@ -216,14 +209,7 @@ async function main() {
     await gotoWithRetry(page, PROOF_URL);
 
     // ── Create the vault ─────────────────────────────────────────────────
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    const confirmInput = page.getByTestId('input-confirm-password');
-    await confirmInput.waitFor({ state: 'visible', timeout: 10_000 });
-    await confirmInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await dismissMigrationOverlay(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     // ── Seed the funded address (offline balance source reads these rows) ─
     await page
@@ -335,11 +321,7 @@ async function main() {
 
     // ── RELOAD: real navigation, then unlock again ────────────────────────
     await gotoWithRetry(page, PROOF_URL);
-    const pw2 = page.getByTestId('input-password');
-    await pw2.waitFor({ state: 'visible', timeout: 60_000 });
-    await pw2.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await dismissMigrationOverlay(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     // Re-run the offline check (records persisted in the vault) so the
     // QR-explorer selector — only rendered once results exist — is visible.

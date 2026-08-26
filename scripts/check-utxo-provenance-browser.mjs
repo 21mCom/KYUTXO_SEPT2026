@@ -32,6 +32,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts). Hold the lock for the whole
@@ -144,24 +145,13 @@ async function main() {
     await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // ── Create the vault ──────────────────────────────────────────────────
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
     await page.getByTestId('utxo-provenance-page').waitFor({ state: 'visible', timeout: 30_000 });
 
-    const unlockIfNeeded = async () => {
-      const pw = page.getByTestId('input-password');
+    const unlockPageIfNeeded = async () => {
       const pageRoot = page.getByTestId('utxo-provenance-page');
-      const first = await Promise.race([
-        pw.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'locked'),
-        pageRoot.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'unlocked'),
-      ]).catch(() => 'timeout');
-      if (first === 'locked') {
-        await pw.fill(SETUP_PASSWORD);
-        await page.getByTestId('button-submit').click();
-      }
+      if (await pageRoot.isVisible().catch(() => false)) return;
+      await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
       await pageRoot.waitFor({ state: 'visible', timeout: 30_000 });
     };
 
@@ -216,7 +206,7 @@ async function main() {
     // Seeding happens through dynamic imports outside the page's live-query
     // wiring — reload once so the page re-reads, then re-unlock.
     await page.reload({ waitUntil: 'load' });
-    await unlockIfNeeded();
+    await unlockPageIfNeeded();
 
     // ── Unspent set + hop counts ──────────────────────────────────────────
     // Unspent: tx2:0, tx2:1 (both reorg outputs), tx3:0 (fresh inflow) and

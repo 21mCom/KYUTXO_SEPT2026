@@ -41,6 +41,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -141,11 +142,11 @@ function summarizeLongTasks(tasks) {
 
 /** Fill the login form (vault already exists → no confirm field). */
 async function login(page, timeoutMs = 60_000) {
-  const pwInput = page.getByTestId('input-password');
-  await pwInput.waitFor({ state: 'visible', timeout: timeoutMs });
-  await pwInput.fill(PASSWORD);
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 60_000 });
+  await unlockIfNeeded(page, PASSWORD, {
+    appearTimeoutMs: timeoutMs,
+    submitTimeoutMs: 60_000,
+    dismissMigration: false,
+  });
 }
 
 async function main() {
@@ -292,8 +293,7 @@ async function main() {
           const t = table.textContent.trim();
           if (window.__migSamples[window.__migSamples.length - 1] !== t) window.__migSamples.push(t);
         }
-        const overlay = document.querySelector('[data-testid="legacy-migration-overlay"]');
-        if (overlay && /Verifying Migrated Data/i.test(overlay.textContent)) {
+        if (/Verifying Migrated Data/i.test(document.body.textContent)) {
           window.__sawVerifyHeading = true;
         }
       };
@@ -303,19 +303,19 @@ async function main() {
     });
     await login(page, 120_000);
 
-    const migOverlay = page.getByTestId('legacy-migration-overlay');
-    const migAppeared = await migOverlay
+    const migrationHeading = page.getByText(/Migrating Encrypted Data|Verifying Migrated Data|Data Migration Complete/);
+    const migAppeared = await migrationHeading
       .waitFor({ state: 'visible', timeout: 60_000 })
       .then(() => true)
       .catch(() => false);
     steps.push({
       name: 'decrypt migration overlay appeared after login',
       passed: migAppeared,
-      detail: migAppeared ? `visible at ${elapsed()}` : 'legacy-migration-overlay never appeared',
+      detail: migAppeared ? `visible at ${elapsed()}` : 'migration overlay never appeared',
     });
 
     // Wait for the RESULT screen (dismiss button) — decrypt + verify done.
-    const dismissBtn = page.getByTestId('button-dismiss-migration');
+    const dismissBtn = page.getByRole('button', { name: 'Continue' });
     const migDone = await dismissBtn
       .waitFor({ state: 'visible', timeout: DECRYPT_TIMEOUT_MS })
       .then(() => true)
@@ -344,7 +344,7 @@ async function main() {
     if (!migDone) throw new Error('decrypt migration did not finish in time');
 
     // Result screen must report everything decrypted, nothing still locked.
-    const overlayText = await migOverlay.textContent();
+    const overlayText = await page.locator('body').textContent();
     const failedMatch = /([\d,]+)\s+failed/i.exec(overlayText || '');
     const failedCount = failedMatch ? Number(failedMatch[1].replace(/,/g, '')) : 0;
     const stillLocked = /still locked|verification failed/i.test(overlayText || '');
@@ -354,7 +354,7 @@ async function main() {
       detail: `failed=${failedCount}, stillLockedBanner=${stillLocked}`,
     });
     await dismissBtn.click();
-    await migOverlay.waitFor({ state: 'detached', timeout: 30_000 }).catch(() => {});
+    await dismissBtn.waitFor({ state: 'detached', timeout: 30_000 }).catch(() => {});
 
     // Startup repairs (attachment paths / search index) may still be running
     // behind the "Preparing your vault..." screen — wait for the app shell.

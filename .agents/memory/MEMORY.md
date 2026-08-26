@@ -119,3 +119,4 @@
 - [Fast-path assertion via index counter](fastpath-assertion-index-counter.md) — timing-ratio baselines can't prove a fast path; count reads on the slow-path-only IDB index with a positive-control probe.
 - [markTaskComplete RUN_LOST flake](marktaskcomplete-run-lost.md) — completion validation runs can be unreadable while checks pass; run checks via startValidationRun manually, then skip_validation_reason citing the run id.
 - [Hop classification needs full participants](hop-classification-full-participants.md) — owned-side participant loads silently flip spend/reorg/origin classifications; blank Electrum inputs get ownership from their prevout.
+- [Browser-check shared unlock helper](browser-check-shared-unlock-helper.md) — LoginScreen/overlay testids centralized in browser-check-utils.mjs; guard lints input-password et al but not button-submit (reused elsewhere).

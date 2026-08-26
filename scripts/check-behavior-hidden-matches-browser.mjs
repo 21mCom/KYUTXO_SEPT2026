@@ -25,6 +25,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM and
 // crash each other. Hold the lock for the whole script lifetime.
@@ -69,47 +70,6 @@ async function waitForServer(url, timeoutMs) {
     await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
-}
-
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  console.log('[behavior-hidden-browser] legacy-migration overlay detected; waiting it out ...');
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
-
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 30_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return false;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  if (await confirmInput.isVisible().catch(() => false)) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-  return true;
 }
 
 async function main() {
@@ -169,7 +129,7 @@ async function main() {
 
     // ── 1. Create the vault ─────────────────────────────────────────────────
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000, label: 'behavior-hidden-browser' });
     steps.push({ name: 'vault created and app unlocked', passed: true, detail: 'setup form submitted' });
 
     // ── 2. Seed the four rows via the live Vite CRUD singletons ────────────
@@ -260,7 +220,7 @@ async function main() {
 
     // ── 3. Records page: default view shows only the visible control row ───
     await page.goto(`${BASE_URL}records`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000, label: 'behavior-hidden-browser' });
     const visibleRow = page.getByTestId(`row-record-${seed.idVisible}`);
     await visibleRow.waitFor({ state: 'visible', timeout: 45_000 });
     const d1Before = await page.getByTestId(`row-record-${seed.idD1}`).isVisible().catch(() => false);

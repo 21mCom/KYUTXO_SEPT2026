@@ -8,6 +8,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -34,18 +35,6 @@ const check = (name, ok, detail) => {
 function chromiumBin() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
   return execSync('which chromium', { encoding: 'utf8' }).trim();
-}
-
-async function unlockIfNeeded(page) {
-  const pw = page.getByTestId('input-password');
-  const visible = await pw.waitFor({ state: 'visible', timeout: 8_000 }).then(() => true).catch(() => false);
-  if (visible) {
-    await pw.fill(PASSWORD);
-    const confirm = page.getByTestId('input-confirm-password');
-    if (await confirm.isVisible().catch(() => false)) await confirm.fill(PASSWORD);
-    await page.getByTestId('button-submit').click();
-  }
-  await page.getByTestId('button-dismiss-migration').click({ timeout: 4_000 }).catch(() => {});
 }
 
 async function launchBrowserWithRetry(attempts = 4) {
@@ -129,7 +118,7 @@ async function main() {
     }
   }
   if (!loaded) throw lastErr;
-  await unlockIfNeeded(page);
+  await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 8_000 });
 
   // Step 1: paste the single-sig descriptor.
   const ta = page.getByTestId('textarea-descriptor');

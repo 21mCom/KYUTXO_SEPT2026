@@ -24,6 +24,7 @@ import { execSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -99,12 +100,7 @@ async function main() {
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // Fresh vault via setup form.
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 3_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
 
     // Restore the demo backup through the REAL v3 restore orchestrator.
     const restore = await page.evaluate(async (b64) => {
@@ -236,11 +232,7 @@ async function main() {
     // End-to-end: full reload on the audit page (restored vault persists),
     // unlock there (unlock is per page load), run a real Privacy Audit.
     await page.goto(`${BASE_URL}privacy-audit`, { waitUntil: 'load', timeout: 60_000 });
-    const unlockInput = page.getByTestId('input-password');
-    await unlockInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await unlockInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 3_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
     const runBtn = page.getByTestId('button-run-audit');
     try {
       await runBtn.waitFor({ state: 'visible', timeout: 60_000 });

@@ -32,6 +32,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -79,27 +80,6 @@ async function waitForServer(url, timeoutMs) {
   return false;
 }
 
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 30_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return false;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  const hasConfirm = await confirmInput.isVisible().catch(() => false);
-  if (hasConfirm) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-  return true;
-}
 
 // Drive the app's real logout flow: click the header "Lock Vault" button and
 // verify the password screen actually appears. This is a genuine session end
@@ -108,28 +88,9 @@ async function logoutViaUi(page) {
   const btn = page.getByTestId('button-logout');
   await btn.waitFor({ state: 'visible', timeout: 30_000 });
   await btn.click();
-  await page.getByTestId('input-password').waitFor({ state: 'visible', timeout: 30_000 });
+  await waitForLoginScreenVisible(page, { timeoutMs: 30_000 });
 }
 
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  console.log('[search-vis-repair-browser] legacy-migration overlay detected; waiting it out ...');
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
 
 async function main() {
   const exe = resolveChromium();
@@ -196,7 +157,7 @@ async function main() {
 
     // ── 1. Create the vault (fresh vault => all repair flags start true) ────
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000, label: 'search-vis-repair-browser' });
     steps.push({ name: 'vault created and app unlocked', passed: true, detail: 'setup form submitted' });
 
     // ── 2. Seed + corrupt like an old restored backup, then re-arm ─────────
@@ -270,7 +231,7 @@ async function main() {
     // ── 3. Explicit logout (Lock Vault), log back in — the pass must run ───
     repairLogs.length = 0;
     await logoutViaUi(page);
-    const loggedIn = await unlockIfNeeded(page);
+    const loggedIn = await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000, label: 'search-vis-repair-browser' });
     steps.push({
       name: 'second session required a login',
       passed: loggedIn,
@@ -327,7 +288,7 @@ async function main() {
     // A full navigation drops the in-memory session, so unlock again if the
     // lock screen appears (the flag is already set, so no pass re-runs here).
     await page.goto(`${BASE_URL}records`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000, label: 'search-vis-repair-browser' });
     const searchInput = page.getByTestId('input-search');
     await searchInput.waitFor({ state: 'visible', timeout: 30_000 });
     await searchInput.fill(ADDR_TIER);
@@ -352,7 +313,7 @@ async function main() {
 
     repairLogs.length = 0;
     await logoutViaUi(page);
-    const secondLogin = await unlockIfNeeded(page);
+    const secondLogin = await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000, label: 'search-vis-repair-browser' });
     await page.waitForTimeout(NO_RUN_WATCH_MS);
 
     const second = await page.evaluate(async ({ idKey }) => {

@@ -24,6 +24,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -67,45 +68,7 @@ async function waitForServer(url, timeoutMs) {
   return false;
 }
 
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
 
-async function unlockIfNeeded(page) {
-  const pwInput = page.getByTestId('input-password');
-  const appeared = await pwInput
-    .waitFor({ state: 'visible', timeout: 8_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await dismissMigrationOverlayIfPresent(page);
-    return false;
-  }
-  await pwInput.fill(SETUP_PASSWORD);
-  const confirmInput = page.getByTestId('input-confirm-password');
-  if (await confirmInput.isVisible().catch(() => false)) {
-    await confirmInput.fill(SETUP_PASSWORD);
-  }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
-  await dismissMigrationOverlayIfPresent(page);
-  return true;
-}
 
 /** Wait until row-wallet-<name> contains `needle` (or the row vanishes when needle is null). */
 async function waitForWalletRow(page, walletName, needle, timeoutMs = 45_000) {
@@ -178,7 +141,7 @@ async function main() {
     });
 
     await page.goto(`${BASE_URL}wallet-import`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
     steps.push({ name: 'vault created and app unlocked', passed: true, detail: 'setup form submitted' });
 
     // ── Seed pre-existing rows the wallet file will re-attribute ──────────
@@ -238,7 +201,7 @@ async function main() {
 
     // Reload so the page mounts cleanly with the seeded rows.
     await page.goto(`${BASE_URL}wallet-import`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
 
     // ── Step 1: Upload — a real Sparrow JSON wallet export file ───────────
     const sparrowJson = JSON.stringify({
@@ -346,7 +309,7 @@ async function main() {
 
     // ── Step 5: Wallet Overview — the addresses moved after Refresh ───────
     await page.goto(`${BASE_URL}wallet-overview`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
     await page.getByTestId('button-refresh').click();
 
     // Delta: 6 discovered (used, seen in a tx) + 1 used Gamma row = 7 used of 8.

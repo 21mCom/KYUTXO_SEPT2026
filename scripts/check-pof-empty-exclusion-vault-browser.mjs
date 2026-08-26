@@ -60,6 +60,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts). Hold the lock for the whole
@@ -200,12 +201,11 @@ async function main() {
     // Under completion validation several sibling browser checks hammer the
     // same Vite dev server at once, so the first load can be very slow. Retry
     // the initial navigation until the login form actually renders.
-    const pwInput = page.getByTestId('input-password');
     let loaded = false;
     for (let attempt = 1; attempt <= 3 && !loaded; attempt++) {
       try {
         await page.goto(PROOF_URL, { waitUntil: 'load', timeout: 90_000 });
-        await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
+        await waitForLoginScreenVisible(page, { timeoutMs: 60_000 });
         loaded = true;
       } catch (err) {
         if (attempt === 3) throw err;
@@ -214,11 +214,7 @@ async function main() {
         );
       }
     }
-    await pwInput.fill(SETUP_PASSWORD);
-    const confirmInput = page.getByTestId('input-confirm-password');
-    await confirmInput.waitFor({ state: 'visible', timeout: 10_000 });
-    await confirmInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     // ── Wait for the Proof-of-Funds page to render ─────────────────────────
     const pasteTab = page.getByTestId('tab-paste-addresses');

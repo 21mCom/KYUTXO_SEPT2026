@@ -40,6 +40,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -104,12 +105,7 @@ async function runSession(browser, step) {
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
 
     // Fresh vault via setup form (fresh context = fresh IndexedDB).
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 5_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     // Seed 120 segments via the real CRUD helper against live IndexedDB.
     const seeded = await page.evaluate(
@@ -158,11 +154,7 @@ async function runSession(browser, step) {
 
     // Open the Provenance page (fresh load requires unlock again).
     await page.goto(`${BASE_URL}provenance`, { waitUntil: 'load', timeout: 60_000 });
-    const unlockInput = page.getByTestId('input-password');
-    await unlockInput.waitFor({ state: 'visible', timeout: 60_000 });
-    await unlockInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await page.getByTestId('button-dismiss-migration').click({ timeout: 5_000 }).catch(() => {});
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000 });
 
     const showing = page.getByTestId('text-segments-showing');
     await showing.waitFor({ state: 'visible', timeout: 60_000 });

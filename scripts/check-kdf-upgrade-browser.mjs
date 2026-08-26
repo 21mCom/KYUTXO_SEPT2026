@@ -45,6 +45,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM and
 // crash each other. Hold the lock for the whole script, incl. server spawn.
@@ -100,35 +101,9 @@ async function launchWithRetry(exe, attempts = 3) {
   throw lastErr;
 }
 
-// The legacy-migration overlay appears after unlocking a legacy-shaped vault
-// (even an empty one) — dismiss it or subsequent clicks get swallowed.
-async function dismissMigrationOverlayIfPresent(page) {
-  const overlay = page.getByTestId('legacy-migration-overlay');
-  const appeared = await overlay
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return;
-    const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-  }
-  throw new Error('legacy-migration overlay did not clear within 60s');
-}
-
 /** Fill the login form (vault already exists → no confirm field). */
 async function login(page, timeoutMs = 60_000) {
-  const pwInput = page.getByTestId('input-password');
-  await pwInput.waitFor({ state: 'visible', timeout: timeoutMs });
-  await pwInput.fill(PASSWORD);
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: 60_000 });
-  await dismissMigrationOverlayIfPresent(page);
+  await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: timeoutMs, submitTimeoutMs: 60_000 });
   // Startup repairs may run behind the "Preparing your vault..." gate — on
   // this near-empty fixture they finish quickly.
   await page

@@ -4,6 +4,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other (SIGTRAP, goto timeouts). Hold the lock for the whole
@@ -28,21 +29,9 @@ function chromiumBin() {
   return execSync('which chromium', { encoding: 'utf8' }).trim();
 }
 
-async function unlockIfNeeded(page) {
-  const pw = page.getByTestId('input-password');
-  const visible = await pw.waitFor({ state: 'visible', timeout: 8_000 }).then(() => true).catch(() => false);
-  if (visible) {
-    await pw.fill(PASSWORD);
-    const confirm = page.getByTestId('input-confirm-password');
-    if (await confirm.isVisible().catch(() => false)) await confirm.fill(PASSWORD);
-    await page.getByTestId('button-submit').click();
-  }
-  await page.getByTestId('button-dismiss-migration').click({ timeout: 4_000 }).catch(() => {});
-}
-
 async function runImport(page, descriptor, label) {
   await page.goto(`${BASE_URL}descriptor-import`, { waitUntil: 'load', timeout: 60_000 });
-  await unlockIfNeeded(page);
+  await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 8_000 });
   const ta = page.getByTestId('textarea-descriptor');
   await ta.waitFor({ state: 'visible', timeout: 30_000 });
   await ta.fill(descriptor);
@@ -146,7 +135,7 @@ async function main() {
     }
   }
   if (!loaded) throw lastErr;
-  await unlockIfNeeded(page);
+  await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 8_000 });
 
   const s1 = await runImport(page, TR_DESC, 'taproot');
   check('taproot: 200 verified', /200 address\(es\) imported and verified.*200 created, 0 updated/.test(s1), s1);
@@ -169,7 +158,7 @@ async function main() {
 
   // Records page shows them without manual refresh.
   await page.goto(`${BASE_URL}records`, { waitUntil: 'load', timeout: 60_000 });
-  await unlockIfNeeded(page);
+  await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 8_000 });
   await page.waitForTimeout(8000);
   const body = await page.locator('body').innerText();
   const totalOk = /of 400/.test(body);
