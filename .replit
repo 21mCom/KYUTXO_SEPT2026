@@ -941,6 +941,14 @@ args = "browser-check-unlock-guard"
 task = "workflow.run"
 args = "vault-health-scale-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "records-index-usage-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "records-index-usage-guard-tests"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3306,6 +3314,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-vault-health-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "records-index-usage-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-records-index-usage.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "records-index-usage-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-records-index-usage.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
