@@ -703,6 +703,22 @@ export default function Cleanup() {
     candidates.find(c => c.record.id === id && c.record.type === 'transaction')
   ).length;
 
+  const isPageFullySelected = pagedCandidates.length > 0 &&
+    pagedCandidates.every(c => c.record.id !== undefined && selectedIds.has(c.record.id));
+
+  const toggleSelectAllOnPage = () => {
+    const pageIds = pagedCandidates.map(c => c.record.id).filter((id): id is number => id !== undefined);
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (isPageFullySelected) {
+        pageIds.forEach(id => next.delete(id));
+      } else {
+        pageIds.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  };
+
   const SortButton = ({ field, label }: { field: SortField; label: string }) => (
     <Button
       variant="ghost"
@@ -965,8 +981,14 @@ export default function Cleanup() {
                           </span>
                         )}
                         {selectedIds.size > 0 && (
-                          <span className="ml-2 text-foreground">
-                            — {selectedAddresses} addresses, {selectedTxs} transactions selected
+                          <span className="ml-2 inline-flex items-center gap-1.5 align-middle">
+                            <Badge variant="secondary" className="text-xs" data-testid="badge-selected-addresses">
+                              {selectedAddresses.toLocaleString()} addresses
+                            </Badge>
+                            <Badge variant="outline" className="text-xs" data-testid="badge-selected-transactions">
+                              {selectedTxs.toLocaleString()} transactions
+                            </Badge>
+                            <span className="text-foreground">selected</span>
                           </span>
                         )}
                       </>
@@ -1026,7 +1048,14 @@ export default function Cleanup() {
               <CardContent className="space-y-3">
                 <div className="border rounded-lg overflow-hidden">
                   <div className="flex items-center gap-3 px-3 py-2 bg-muted/50 border-b text-xs">
-                    <div className="w-6" />
+                    <div className="w-6 flex items-center justify-center">
+                      <Checkbox
+                        checked={isPageFullySelected}
+                        onCheckedChange={toggleSelectAllOnPage}
+                        data-testid="checkbox-select-all-page"
+                        aria-label="Select all rows on this page"
+                      />
+                    </div>
                     <SortButton field="type" label="Type" />
                     <div className="flex-1">
                       <SortButton field="address" label="Address / TXID" />

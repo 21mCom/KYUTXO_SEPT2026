@@ -695,22 +695,20 @@ export default function DescriptorImport() {
   const activeReceiveAddresses = taprootResult?.receive || multisigResult?.receive || [];
   const activeChangeAddresses = taprootResult?.change || multisigResult?.change || [];
 
-  const selectAllReceive = () => {
-    const all = new Set(activeReceiveAddresses.map(a => a.index));
-    setSelectedReceiveAddresses(all);
+  const toggleAllReceiveAddresses = () => {
+    if (activeReceiveAddresses.length > 0 && selectedReceiveAddresses.size === activeReceiveAddresses.length) {
+      setSelectedReceiveAddresses(new Set());
+    } else {
+      setSelectedReceiveAddresses(new Set(activeReceiveAddresses.map(a => a.index)));
+    }
   };
 
-  const deselectAllReceive = () => {
-    setSelectedReceiveAddresses(new Set());
-  };
-
-  const selectAllChange = () => {
-    const all = new Set(activeChangeAddresses.map(a => a.index));
-    setSelectedChangeAddresses(all);
-  };
-
-  const deselectAllChange = () => {
-    setSelectedChangeAddresses(new Set());
+  const toggleAllChangeAddresses = () => {
+    if (activeChangeAddresses.length > 0 && selectedChangeAddresses.size === activeChangeAddresses.length) {
+      setSelectedChangeAddresses(new Set());
+    } else {
+      setSelectedChangeAddresses(new Set(activeChangeAddresses.map(a => a.index)));
+    }
   };
 
   const copyAddress = (address: string) => {
@@ -1301,17 +1299,21 @@ export default function DescriptorImport() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 <span>Receive Addresses ({activeReceiveAddresses.length})</span>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={selectAllReceive} data-testid="button-select-all-receive">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={activeReceiveAddresses.length > 0 && selectedReceiveAddresses.size === activeReceiveAddresses.length}
+                    onCheckedChange={toggleAllReceiveAddresses}
+                    data-testid="checkbox-select-all-receive"
+                  />
+                  <Label className="cursor-pointer font-normal text-sm" onClick={toggleAllReceiveAddresses}>
                     Select All
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={deselectAllReceive} data-testid="button-deselect-all-receive">
-                    Deselect All
-                  </Button>
+                  </Label>
                 </div>
               </CardTitle>
               <CardDescription>
-                {selectedReceiveAddresses.size} of {activeReceiveAddresses.length} selected
+                <Badge variant="secondary" className="text-xs">
+                  {selectedReceiveAddresses.size}/{activeReceiveAddresses.length} selected
+                </Badge>
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -1368,18 +1370,22 @@ export default function DescriptorImport() {
                   </Button>
                 </div>
                 {showChangeAddresses && (
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={selectAllChange} data-testid="button-select-all-change">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      checked={activeChangeAddresses.length > 0 && selectedChangeAddresses.size === activeChangeAddresses.length}
+                      onCheckedChange={toggleAllChangeAddresses}
+                      data-testid="checkbox-select-all-change"
+                    />
+                    <Label className="cursor-pointer font-normal text-sm" onClick={toggleAllChangeAddresses}>
                       Select All
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={deselectAllChange} data-testid="button-deselect-all-change">
-                      Deselect All
-                    </Button>
+                    </Label>
                   </div>
                 )}
               </CardTitle>
               <CardDescription>
-                {selectedChangeAddresses.size} of {activeChangeAddresses.length} selected
+                <Badge variant="outline" className="text-xs">
+                  {selectedChangeAddresses.size}/{activeChangeAddresses.length} selected
+                </Badge>
               </CardDescription>
             </CardHeader>
             {showChangeAddresses && (
