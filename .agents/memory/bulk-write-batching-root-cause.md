@@ -30,3 +30,14 @@ fallback to the original serial path on failure (preserves per-record error
 attribution without sinking the whole import on one bad row). Only profile
 deeper into the batch helper itself once you've confirmed the call site is
 actually using it.
+
+Applying the same fix to other call sites (Task #2129: a vault-notes
+`updateRecord` loop and a per-transaction `createRecord` loop) reproduced the
+same win but at very different magnitudes on the same container: ~2.9-3.3x
+for a straightforward same-shape update loop, but only ~1.2-2.5x for a
+create+origin loop chunked into several `bulkCreateRecords`+
+`bulkAddRecordOrigins` calls versus one unchunked call. Per-chunk transaction
+setup overhead is real and shrinks the win as chunk count grows relative to
+total N — measure with the actual chunked code path, not a single unchunked
+bulk call, and expect run-to-run noise (shared container) rather than a fixed
+multiplier.

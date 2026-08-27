@@ -31,7 +31,15 @@ import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
-import { syncTagsToMaster, syncCategoriesToMaster, getRecord, captureMergeOrigin } from "@/lib/dataFacade";
+import {
+  syncTagsToMaster,
+  syncCategoriesToMaster,
+  getRecord,
+  captureMergeOrigin,
+  bulkCreateRecords,
+  bulkAddRecordOrigins,
+  type CreateRecordData,
+} from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { useCustomFields, useSettings, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -568,6 +576,14 @@ export default function Dashboard() {
     return recordLookupMap.get(inputString.trim().toLowerCase());
   };
 
+  // Chunk size for the batched write phase below. Large enough to collapse
+  // per-address IndexedDB round-trips into a handful of transactions (a
+  // consolidation transaction can easily have hundreds or thousands of
+  // inputs), small enough that a single bad chunk falling back to the slow
+  // per-record path stays bounded. Mirrors IMPORT_WRITE_CHUNK_SIZE in
+  // import-manager.ts / BulkImport.tsx (Task #2122).
+  const TX_ADDRESS_WRITE_CHUNK_SIZE = 1000;
+
   const createAddressRecordsFromTx = async (
     transactionAddresses: TransactionAddresses,
     logPrefix: string
@@ -585,35 +601,88 @@ export default function Dashboard() {
       ...transactionAddresses.outputs.map(o => ({ address: o.address, role: 'Output' })),
     ];
 
+    // Phase 1: compute every new address record's data in memory (no DB
+    // access), the same fix pattern used for wallet imports (Task #2122) —
+    // interleaving one createRecord() IndexedDB round-trip per address here
+    // was the bottleneck for transactions with many inputs/outputs.
+    interface PendingTxAddrCreate { address: string; role: string; data: CreateRecordData }
+    const pendingCreates: PendingTxAddrCreate[] = [];
+
+    for (let i = 0; i < allAddrs.length; i++) {
+      const { address, role } = allAddrs[i];
+      const key = address.trim().toLowerCase();
+
+      if (localLookup.has(key)) {
+        addressesSkipped++;
+      } else {
+        pendingCreates.push({
+          address,
+          role,
+          data: {
+            type: 'address',
+            inputString: address,
+            label: `TX ${role} ${txDate}`,
+            notes: `${role} address from transaction ${txidShort}...`,
+            tags: [],
+            categories: [],
+            owner: 'Pending Review',
+            walletName: '',
+            source: `tx-import:${transactionAddresses.txid}`,
+            addressImportance: 'pending-review',
+            // Matches the defaults the use-records createRecord() wrapper
+            // applies, since the batched path below calls the lower-level
+            // bulkCreateRecords() directly.
+            syncDepth: 0,
+            maxSyncedDepth: -1,
+          },
+        });
+        localLookup.set(key, { inputString: address } as Record);
+        addressesCreated++;
+      }
+      if (i % 500 === 499) await new Promise(r => setTimeout(r, 0));
+    }
+
+    // Every record created here always carries this exact source string,
+    // which always classifies as 'bulk-import' under the same origin-type
+    // inference the use-records createRecord() wrapper uses (source includes
+    // "import").
+    const originInputFor = (data: CreateRecordData) => ({
+      originType: 'bulk-import' as const,
+      source: data.source,
+      label: data.label,
+      notes: data.notes,
+      owner: data.owner,
+      walletName: data.walletName,
+      tags: data.tags,
+      categories: data.categories,
+    });
+
     beginBulkOperation();
     try {
-      for (let i = 0; i < allAddrs.length; i++) {
-        const { address, role } = allAddrs[i];
-        const key = address.trim().toLowerCase();
-
-        if (localLookup.has(key)) {
-          addressesSkipped++;
-        } else {
+      for (let start = 0; start < pendingCreates.length; start += TX_ADDRESS_WRITE_CHUNK_SIZE) {
+        const chunk = pendingCreates.slice(start, start + TX_ADDRESS_WRITE_CHUNK_SIZE);
+        try {
+          const ids = await bulkCreateRecords(chunk.map(c => c.data));
           try {
-            await createRecord({
-              type: 'address',
-              inputString: address,
-              label: `TX ${role} ${txDate}`,
-              notes: `${role} address from transaction ${txidShort}...`,
-              tags: [],
-              categories: [],
-              owner: 'Pending Review',
-              walletName: '',
-              source: `tx-import:${transactionAddresses.txid}`,
-              addressImportance: 'pending-review',
-            });
-            localLookup.set(key, { inputString: address } as Record);
-            addressesCreated++;
-          } catch (createError) {
-            console.error(`Failed to create ${role.toLowerCase()} address record for ${address}:`, createError);
+            const originRows = ids.map((recordId, j) => ({ recordId, ...originInputFor(chunk[j].data) }));
+            await bulkAddRecordOrigins(originRows, { skipNotification: true });
+          } catch (originError) {
+            console.error(`${logPrefix} Failed to bulk-create record origins:`, originError);
+          }
+        } catch (error) {
+          // The whole chunk failed to write — fall back to the original
+          // per-record path for just this chunk so a single bad row can't
+          // sink the rest of the transaction's addresses.
+          console.error(`${logPrefix} Bulk create chunk failed, falling back to per-record inserts:`, error);
+          for (const c of chunk) {
+            try {
+              await createRecord(c.data);
+            } catch (createError) {
+              addressesCreated--;
+              console.error(`Failed to create ${c.role.toLowerCase()} address record for ${c.address}:`, createError);
+            }
           }
         }
-        if (i % 10 === 9) await new Promise(r => setTimeout(r, 0));
       }
     } finally {
       endBulkOperation();

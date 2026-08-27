@@ -11,8 +11,8 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { updateRecord } from "@/lib/dataFacade";
-import type { VaultMetadata, AddressImportance } from "@/lib/database";
+import { updateRecord, bulkUpdateRecords } from "@/lib/dataFacade";
+import type { VaultMetadata, AddressImportance, Record as DBRecord } from "@/lib/database";
 import { getAddressRecordsByImportanceTiersFiltered } from "@/lib/data/record-crud";
 import { engineGetVaultSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
@@ -249,6 +249,12 @@ export default function VaultManagement() {
 
       const trimmedNotes = editNotesText.trim();
 
+      // Phase 1: compute every record's new vault metadata in memory (no DB
+      // access), then write in chunked batches instead of one updateRecord()
+      // IndexedDB round-trip per address — a vault can hold every address in
+      // a large wallet. Same fix pattern as the wallet-import bottleneck
+      // (Task #2122).
+      const pendingUpdates: Array<{ id: number; changes: Partial<DBRecord> }> = [];
       for (const record of vaultRecords) {
         if (!record.id) continue;
         const existingParsed = parseVaultNotes(record.vault?.vaultNotes);
@@ -258,12 +264,35 @@ export default function VaultManagement() {
           userNotes: trimmedNotes || undefined,
         };
         const newVaultNotes = JSON.stringify(newVaultNotesObj);
-        await updateRecord(record.id, {
-          vault: {
-            ...record.vault!,
-            vaultNotes: newVaultNotes,
+        pendingUpdates.push({
+          id: record.id,
+          changes: {
+            vault: {
+              ...record.vault!,
+              vaultNotes: newVaultNotes,
+            },
           },
         });
+      }
+
+      const VAULT_NOTES_WRITE_CHUNK_SIZE = 1000;
+      for (let start = 0; start < pendingUpdates.length; start += VAULT_NOTES_WRITE_CHUNK_SIZE) {
+        const chunk = pendingUpdates.slice(start, start + VAULT_NOTES_WRITE_CHUNK_SIZE);
+        try {
+          await bulkUpdateRecords(chunk);
+        } catch (error) {
+          // The whole chunk failed to write — fall back to the original
+          // per-record path for just this chunk so a single bad row can't
+          // sink the rest of the vault's address records.
+          console.error("Bulk vault-notes update chunk failed, falling back to per-record updates:", error);
+          for (const u of chunk) {
+            try {
+              await updateRecord(u.id, u.changes);
+            } catch (updateError) {
+              console.error(`Failed to update vault notes for record ${u.id}:`, updateError);
+            }
+          }
+        }
       }
 
       setVaults(prev => prev.map(v => {
