@@ -9,9 +9,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Progress } from "@/components/ui/progress";
 import { AddressLink } from "@/components/AddressLink";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
+import { FilterChips } from "@/components/FilterChips";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useOwners } from "@/hooks/use-owners";
+import { useSeedNames } from "@/hooks/use-seed-names";
 import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
 import { createTag } from "@/lib/data/vocabulary-crud";
 import { getRecordsByInputStrings } from "@/lib/data/record-crud";
 import { applyPoisoningTags } from "@/lib/data/poisoning-tagging";
@@ -21,7 +24,16 @@ import {
   DEFAULT_MATCH_LENGTH,
   type PoisoningSuspect,
   type PoisoningHeuristic,
+  type PoisoningScopeType,
 } from "@/lib/address-poisoning";
+import { type GroupBy } from "@/lib/balance-grouping";
+import {
+  formatSatsWithUnit,
+  satsToUnitInput,
+  unitInputToSats,
+  unitLabel,
+  type AmountUnit,
+} from "@/lib/amount-units";
 import type { Record as DbRecord } from "@/lib/database";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
@@ -37,8 +49,6 @@ const CONFIDENCE_VARIANT: Record<string, "destructive" | "secondary" | "outline"
   medium: "secondary",
   low: "outline",
 };
-
-type ScopeKind = "all" | "wallet" | "owner";
 
 /** Renders an address with the shared leading/trailing runs highlighted. */
 function HighlightedAddress({
@@ -63,10 +73,12 @@ function HighlightedAddress({
 }
 
 export default function AddressPoisoning() {
-  const [scopeKind, setScopeKind] = useState<ScopeKind>("all");
-  const [scopeValue, setScopeValue] = useState<string>("");
-  const [thresholdInput, setThresholdInput] = useState<string>(String(DEFAULT_DUST_THRESHOLD_SATS));
+  const [scopeKind, setScopeKind] = useState<PoisoningScopeType>("all");
+  const [scopeValues, setScopeValues] = useState<string[]>([]);
+  const [threshold, setThreshold] = useState<number>(DEFAULT_DUST_THRESHOLD_SATS);
   const [matchInput, setMatchInput] = useState<string>(String(DEFAULT_MATCH_LENGTH));
+  const [unit, setUnit] = useState<AmountUnit>("sats");
+  const [sortBy, setSortBy] = useState<"suspects" | "confidence" | "address-asc" | "address-desc">("suspects");
 
   const [phase, setPhase] = useState<"idle" | "computing" | "done">("idle");
   const [results, setResults] = useState<PoisoningSuspect[] | null>(null);
@@ -85,14 +97,17 @@ export default function AddressPoisoning() {
 
   const { walletNames } = useWalletNames();
   const { owners } = useOwners();
+  const { seedNames } = useSeedNames();
   const { tags } = useTags();
+  const { categories } = useCategories();
 
-  const scopeValueOptions =
-    scopeKind === "wallet"
-      ? walletNames.map((w) => w.name)
-      : scopeKind === "owner"
-        ? owners.map((o) => o.name)
-        : [];
+  const scopeOptions: Record<GroupBy, { label: string; values: string[] }> = {
+    wallet: { label: "Wallet", values: walletNames.map((w) => w.name) },
+    seed: { label: "Seed", values: seedNames.map((s) => s.name) },
+    owner: { label: "Owner", values: owners.map((o) => o.name) },
+    tag: { label: "Tag", values: tags.map((t) => t.name) },
+    category: { label: "Category", values: categories.map((c) => c.name) },
+  };
 
   // Live lookup of existing records for every suspect/target address so rows
   // show current tags and already-tagged state refreshes after tagging.
@@ -132,9 +147,8 @@ export default function AddressPoisoning() {
   );
 
   const handleRun = useCallback(async () => {
-    const threshold = parseInt(thresholdInput, 10);
     const matchLength = parseInt(matchInput, 10);
-    if (isNaN(threshold) || threshold <= 0) {
+    if (threshold <= 0) {
       toast({ title: "Invalid threshold", description: "Dust threshold must be a positive number of sats.", variant: "destructive" });
       return;
     }
@@ -154,7 +168,7 @@ export default function AddressPoisoning() {
 
     const outcome = await scanAddressPoisoning(
       scopeKind,
-      scopeValue,
+      scopeValues,
       { dustThresholdSats: threshold, matchLength },
       ctrl.signal,
       (count, scanPhase) => {
@@ -189,7 +203,7 @@ export default function AddressPoisoning() {
     } else {
       setPhase("idle");
     }
-  }, [scopeKind, scopeValue, thresholdInput, matchInput, toast]);
+  }, [scopeKind, scopeValues, threshold, matchInput, toast]);
 
   const handleCancel = () => {
     setCancelling(true);
@@ -328,18 +342,35 @@ export default function AddressPoisoning() {
     }));
   }, [results]);
 
+  const sortedGroups = useMemo(() => {
+    const confidenceRank = { high: 0, medium: 1, low: 2 };
+    return [...groups].sort((a, b) => {
+      if (sortBy === "confidence") {
+        return (
+          Math.min(...a.suspects.map((s) => confidenceRank[s.confidence])) -
+            Math.min(...b.suspects.map((s) => confidenceRank[s.confidence])) ||
+          b.suspects.length - a.suspects.length ||
+          a.targetAddress.localeCompare(b.targetAddress)
+        );
+      }
+      if (sortBy === "address-asc") return a.targetAddress.localeCompare(b.targetAddress);
+      if (sortBy === "address-desc") return b.targetAddress.localeCompare(a.targetAddress);
+      return b.suspects.length - a.suspects.length || a.targetAddress.localeCompare(b.targetAddress);
+    });
+  }, [groups, sortBy]);
+
   type FlatRow =
     | { type: "group"; targetAddress: string; count: number }
     | { type: "suspect"; suspect: PoisoningSuspect };
 
   const flatRows = useMemo<FlatRow[]>(() => {
     const rows: FlatRow[] = [];
-    for (const g of groups) {
+    for (const g of sortedGroups) {
       rows.push({ type: "group", targetAddress: g.targetAddress, count: g.suspects.length });
       for (const s of g.suspects) rows.push({ type: "suspect", suspect: s });
     }
     return rows;
-  }, [groups]);
+  }, [sortedGroups]);
 
   const virtualizer = useVirtualizer({
     count: flatRows.length,
@@ -348,7 +379,34 @@ export default function AddressPoisoning() {
     overscan: 10,
   });
 
-  const isRunDisabled = phase === "computing" || (scopeKind !== "all" && !scopeValue);
+  const isRunDisabled = phase === "computing" || (scopeKind !== "all" && scopeValues.length === 0);
+
+  const filterChips = [
+    ...(scopeKind !== "all" && scopeValues.length > 0
+      ? [{
+          key: "scope",
+          label: `${scopeOptions[scopeKind].label}: ${scopeValues.join(", ")}`,
+          onRemove: () => {
+            setScopeKind("all");
+            setScopeValues([]);
+          },
+        }]
+      : []),
+    ...(threshold !== DEFAULT_DUST_THRESHOLD_SATS
+      ? [{
+          key: "dust-threshold",
+          label: `Dust threshold: ${formatSatsWithUnit(threshold, unit)}`,
+          onRemove: () => setThreshold(DEFAULT_DUST_THRESHOLD_SATS),
+        }]
+      : []),
+    ...(matchInput !== String(DEFAULT_MATCH_LENGTH)
+      ? [{
+          key: "match-length",
+          label: `Match length: ${matchInput}`,
+          onRemove: () => setMatchInput(String(DEFAULT_MATCH_LENGTH)),
+        }]
+      : []),
+  ];
 
   const summary = useMemo(() => {
     if (!results) return null;
@@ -372,48 +430,50 @@ export default function AddressPoisoning() {
             <Select
               value={scopeKind}
               onValueChange={(v) => {
-                setScopeKind(v as ScopeKind);
-                setScopeValue("");
+                setScopeKind(v as PoisoningScopeType);
+                setScopeValues([]);
               }}
             >
               <SelectTrigger className="w-[150px]" data-testid="select-scope-type">
                 <SelectValue placeholder="Scope" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Addresses</SelectItem>
-                <SelectItem value="wallet">By Wallet</SelectItem>
-                <SelectItem value="owner">By Owner</SelectItem>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="wallet">Wallet</SelectItem>
+                <SelectItem value="seed">Seed</SelectItem>
+                <SelectItem value="owner">Owner</SelectItem>
+                <SelectItem value="tag">Tag</SelectItem>
+                <SelectItem value="category">Category</SelectItem>
               </SelectContent>
             </Select>
 
             {scopeKind !== "all" && (
-              <Select value={scopeValue} onValueChange={setScopeValue}>
-                <SelectTrigger className="w-[180px]" data-testid="select-scope-value">
-                  <SelectValue placeholder={`Select ${scopeKind === "wallet" ? "Wallet" : "Owner"}`} />
-                </SelectTrigger>
-                <SelectContent>
-                  {scopeValueOptions.length === 0 ? (
-                    <SelectItem value="__none__" disabled>No values found</SelectItem>
-                  ) : (
-                    scopeValueOptions.map((v) => (
-                      <SelectItem key={v} value={v}>{v}</SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+              <MultiSelectCombobox
+                values={scopeValues}
+                onChange={setScopeValues}
+                options={scopeOptions[scopeKind].values}
+                placeholder={`Select ${scopeOptions[scopeKind].label}`}
+                testId="select-scope-value"
+                className="w-[180px]"
+              />
             )}
 
             <div className="flex items-center gap-1">
-              <span className="text-sm text-muted-foreground whitespace-nowrap">Dust ≤</span>
+              <span className="text-sm text-muted-foreground whitespace-nowrap">Dust threshold</span>
               <Input
                 data-testid="input-dust-threshold"
                 className="w-[90px]"
-                value={thresholdInput}
-                onChange={(e) => setThresholdInput(e.target.value)}
+                value={satsToUnitInput(threshold, unit)}
+                onChange={(e) => {
+                  const next = unitInputToSats(e.target.value, unit);
+                  if (next !== null) setThreshold(next);
+                }}
                 type="number"
                 min={1}
               />
-              <span className="text-sm text-muted-foreground">sats</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => setUnit((u) => u === "sats" ? "btc" : "sats")} data-testid="button-toggle-unit">
+                {unitLabel(unit)}
+              </Button>
             </div>
 
             <div className="flex items-center gap-1">
@@ -457,6 +517,17 @@ export default function AddressPoisoning() {
             )}
           </div>
         </div>
+        <FilterChips
+          chips={filterChips}
+          onClearAll={() => {
+            setScopeKind("all");
+            setScopeValues([]);
+            setThreshold(DEFAULT_DUST_THRESHOLD_SATS);
+            setMatchInput(String(DEFAULT_MATCH_LENGTH));
+          }}
+          testIdPrefix="poisoning"
+          className="mt-2"
+        />
 
         {phase === "computing" && (
           <div className="mt-3">
@@ -532,6 +603,17 @@ export default function AddressPoisoning() {
               </span>
 
               <div className="flex items-center gap-2 flex-wrap">
+                <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+                  <SelectTrigger className="w-[180px]" data-testid="select-sort-results">
+                    <SelectValue placeholder="Sort by" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="suspects">Most suspects</SelectItem>
+                    <SelectItem value="confidence">Highest confidence</SelectItem>
+                    <SelectItem value="address-asc">Target address A–Z</SelectItem>
+                    <SelectItem value="address-desc">Target address Z–A</SelectItem>
+                  </SelectContent>
+                </Select>
                 <MultiSelectCombobox
                   options={tags.map((t) => t.name)}
                   values={selectedTags}

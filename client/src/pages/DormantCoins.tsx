@@ -13,12 +13,20 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { FilterChips } from "@/components/FilterChips";
 import { useToast } from "@/hooks/use-toast";
 import { downloadBlob } from "@/lib/backup/sink";
+import {
+  formatSatsWithUnit,
+  satsToUnitInput,
+  unitInputToSats,
+  unitLabel,
+  type AmountUnit,
+} from "@/lib/amount-units";
 import {
   runDormantScan,
   DEFAULT_MIN_AGE_YEARS,
@@ -59,11 +67,6 @@ function formatSats(sats: number): string {
   return sats.toLocaleString() + " sats";
 }
 
-function parsePositiveInt(raw: string, fallback: number): number {
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-
 function parsePositiveFloat(raw: string, fallback: number): number {
   const n = Number.parseFloat(raw);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -74,9 +77,10 @@ export default function DormantCoins() {
 
   // ── Threshold controls ──────────────────────────────────────────────────
   const [yearsInput, setYearsInput] = useState(String(DEFAULT_MIN_AGE_YEARS));
-  const [minAmountInput, setMinAmountInput] = useState(String(DEFAULT_MIN_AMOUNT_SATS));
-  const [dustInput, setDustInput] = useState(String(DEFAULT_DUST_THRESHOLD_SATS));
-  const [ignoreDust, setIgnoreDust] = useState(false);
+  const [minAmountSats, setMinAmountSats] = useState(DEFAULT_MIN_AMOUNT_SATS);
+  const [dustThresholdSats, setDustThresholdSats] = useState(DEFAULT_DUST_THRESHOLD_SATS);
+  const [hideDust, setHideDust] = useState(true);
+  const [unit, setUnit] = useState<AmountUnit>("sats");
 
   // ── Run state ───────────────────────────────────────────────────────────
   const [runState, setRunState] = useState<RunState>({ status: "idle" });
@@ -131,9 +135,9 @@ export default function DormantCoins() {
 
     const params: DormantScanParams = {
       minAgeYears: parsePositiveFloat(yearsInput, DEFAULT_MIN_AGE_YEARS),
-      minAmountSats: parsePositiveInt(minAmountInput, DEFAULT_MIN_AMOUNT_SATS),
-      dustThresholdSats: parsePositiveInt(dustInput, DEFAULT_DUST_THRESHOLD_SATS),
-      ignoreDust,
+      minAmountSats,
+      dustThresholdSats,
+      ignoreDust: !hideDust,
     };
 
     await clearDormantReport();
@@ -190,7 +194,7 @@ export default function DormantCoins() {
         description: message,
       });
     }
-  }, [yearsInput, minAmountInput, dustInput, ignoreDust, toast]);
+  }, [yearsInput, minAmountSats, dustThresholdSats, hideDust, toast]);
 
   const cancelScan = useCallback(() => {
     // Bump the token FIRST so any late batch/progress callback from the
@@ -240,6 +244,44 @@ export default function DormantCoins() {
       : null;
 
   const hasResults = rowsCount > 0;
+  const minAgeYears = parsePositiveFloat(yearsInput, DEFAULT_MIN_AGE_YEARS);
+  const activeFilterChips = [
+    ...(minAgeYears !== DEFAULT_MIN_AGE_YEARS
+      ? [{
+          key: "min-age",
+          label: `Minimum dormancy: ${minAgeYears} years`,
+          onRemove: () => setYearsInput(String(DEFAULT_MIN_AGE_YEARS)),
+        }]
+      : []),
+    ...(minAmountSats !== DEFAULT_MIN_AMOUNT_SATS
+      ? [{
+          key: "min-amount",
+          label: `Minimum amount: ${formatSatsWithUnit(minAmountSats, unit)}`,
+          onRemove: () => setMinAmountSats(DEFAULT_MIN_AMOUNT_SATS),
+        }]
+      : []),
+    ...(hideDust && dustThresholdSats !== DEFAULT_DUST_THRESHOLD_SATS
+      ? [{
+          key: "dust-threshold",
+          label: `Dust threshold: ${formatSatsWithUnit(dustThresholdSats, unit)}`,
+          onRemove: () => setDustThresholdSats(DEFAULT_DUST_THRESHOLD_SATS),
+        }]
+      : []),
+    ...(!hideDust
+      ? [{
+          key: "hide-dust",
+          label: "Dust included",
+          onRemove: () => setHideDust(true),
+        }]
+      : []),
+  ];
+
+  const clearAllFilters = () => {
+    setYearsInput(String(DEFAULT_MIN_AGE_YEARS));
+    setMinAmountSats(DEFAULT_MIN_AMOUNT_SATS);
+    setDustThresholdSats(DEFAULT_DUST_THRESHOLD_SATS);
+    setHideDust(true);
+  };
 
   return (
     <div className="flex-1 overflow-auto p-6 space-y-6" data-testid="page-dormant-coins">
@@ -304,40 +346,66 @@ export default function DormantCoins() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="input-min-amount">Minimum amount (sats)</Label>
-              <Input
-                id="input-min-amount"
-                data-testid="input-min-amount"
-                type="number"
-                min={0}
-                value={minAmountInput}
-                onChange={(e) => setMinAmountInput(e.target.value)}
-                disabled={isRunning}
-              />
+              <Label htmlFor="input-min-amount">Minimum amount</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="input-min-amount"
+                  data-testid="input-min-amount"
+                  type="number"
+                  min={0}
+                  value={satsToUnitInput(minAmountSats, unit)}
+                  onChange={(e) => {
+                    const value = unitInputToSats(e.target.value, unit);
+                    if (value !== null) setMinAmountSats(value);
+                  }}
+                  disabled={isRunning}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setUnit((u) => (u === "sats" ? "btc" : "sats"))}
+                  data-testid="button-toggle-unit"
+                  disabled={isRunning}
+                >
+                  {unitLabel(unit)}
+                </Button>
+              </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="input-dust-threshold">Dust threshold (sats)</Label>
+              <Label htmlFor="input-dust-threshold">Dust threshold</Label>
               <Input
                 id="input-dust-threshold"
                 data-testid="input-dust-threshold"
                 type="number"
                 min={0}
-                value={dustInput}
-                onChange={(e) => setDustInput(e.target.value)}
-                disabled={isRunning || ignoreDust}
+                value={satsToUnitInput(dustThresholdSats, unit)}
+                onChange={(e) => {
+                  const value = unitInputToSats(e.target.value, unit);
+                  if (value !== null) setDustThresholdSats(value);
+                }}
+                disabled={isRunning || !hideDust}
               />
             </div>
           </div>
-          <label className="flex items-center gap-2 text-sm" htmlFor="checkbox-ignore-dust">
-            <Checkbox
-              id="checkbox-ignore-dust"
-              data-testid="checkbox-ignore-dust"
-              checked={ignoreDust}
-              onCheckedChange={(v) => setIgnoreDust(v === true)}
+          <div className="flex items-center gap-2">
+            <Switch
+              id="switch-hide-dust"
+              data-testid="switch-hide-dust"
+              checked={hideDust}
+              onCheckedChange={setHideDust}
               disabled={isRunning}
             />
-            Ignore dust entirely (treat every output as meaningful)
-          </label>
+            <Label htmlFor="switch-hide-dust" className="text-sm cursor-pointer">
+              Hide dust
+            </Label>
+          </div>
+
+          <FilterChips
+            chips={activeFilterChips}
+            onClearAll={clearAllFilters}
+            testIdPrefix="dormant"
+          />
 
           <div className="flex items-center gap-2 flex-wrap">
             <Button onClick={runScan} disabled={isRunning} data-testid="button-run-scan">
@@ -415,7 +483,7 @@ export default function DormantCoins() {
               {summary.params.minAgeYears} yrs · ≥ {summary.params.minAmountSats.toLocaleString()}{" "}
               sats
               {summary.params.ignoreDust
-                ? " · dust ignored"
+                ? " · dust included"
                 : ` · dust ≤ ${summary.params.dustThresholdSats.toLocaleString()} sats excluded`}
             </CardDescription>
           </CardHeader>

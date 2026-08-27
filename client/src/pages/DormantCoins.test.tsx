@@ -128,7 +128,7 @@ describe("DormantCoins page", () => {
     expect(screen.getByTestId("input-min-age-years")).toBeTruthy();
     expect(screen.getByTestId("input-min-amount")).toBeTruthy();
     expect(screen.getByTestId("input-dust-threshold")).toBeTruthy();
-    expect(screen.getByTestId("checkbox-ignore-dust")).toBeTruthy();
+    expect(screen.getByTestId("switch-hide-dust").getAttribute("data-state")).toBe("checked");
     expect(screen.getByTestId("alert-local-data-caveat").textContent).toContain("Local data only");
     expect(screen.getByTestId("button-run-scan")).toBeTruthy();
   });

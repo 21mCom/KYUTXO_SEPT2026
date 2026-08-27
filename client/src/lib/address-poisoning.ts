@@ -170,7 +170,7 @@ const CONFIDENCE_RANK: Record<PoisoningConfidence, number> = {
  */
 export async function scanAddressPoisoning(
   scopeType: PoisoningScopeType,
-  scopeValue: string,
+  scopeValues: string[],
   settings: PoisoningSettings,
   signal: AbortSignal,
   onProgress: (processed: number, phase: ScanPhase) => void,
@@ -201,7 +201,7 @@ export async function scanAddressPoisoning(
         scopedMap.set(addr, { recordId: rec.id });
       } else {
         const keys = getGroupKeys(rec as DbRecord, scopeType as GroupBy);
-        if (keys.includes(scopeValue)) {
+        if (keys.some((key) => scopeValues.includes(key))) {
           scopedMap.set(addr, { recordId: rec.id });
         }
       }

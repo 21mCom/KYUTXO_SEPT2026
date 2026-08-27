@@ -111,7 +111,7 @@ describe("Dusted scan scope dedup", () => {
 
     const outcome = await computeDustings(
       "tag",
-      "personal",
+      ["personal"],
       THRESHOLD,
       noSignal(),
       noop,
@@ -135,7 +135,7 @@ describe("Dusted scan scope dedup", () => {
 
     const outcome = await computeDustings(
       "tag",
-      "mining",
+      ["mining"],
       THRESHOLD,
       noSignal(),
       noop,
@@ -161,7 +161,7 @@ describe("Dusted scan scope dedup", () => {
 
     const outcome = await computeDustings(
       "category",
-      "trading",
+      ["trading"],
       THRESHOLD,
       noSignal(),
       noop,
@@ -188,7 +188,7 @@ describe("Dusted scan scope dedup", () => {
 
     const outcome = await computeDustings(
       "category",
-      "trading",
+      ["trading"],
       THRESHOLD,
       noSignal(),
       noop,
@@ -209,7 +209,7 @@ describe("Dusted scan scope dedup", () => {
 
     const outcome = await computeDustings(
       "tag",
-      "b",
+      ["b"],
       THRESHOLD,
       noSignal(),
       noop,

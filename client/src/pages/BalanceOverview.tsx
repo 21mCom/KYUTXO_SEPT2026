@@ -36,6 +36,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FilterChips } from "@/components/FilterChips";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -61,9 +62,6 @@ import {
   StopCircle,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-
-const HIDE_DUST_STORAGE_KEY = "kyutxo-balance-hide-dust";
-const INCLUDE_DISCOVERED_STORAGE_KEY = "kyutxo-balance-include-discovered";
 
 type SortBy = "balance-desc" | "balance-asc" | "name-asc" | "name-desc" | "addresses-desc";
 type DisplayUnit = "btc" | "sats";
@@ -566,42 +564,13 @@ export default function BalanceOverview() {
   useEffect(() => subscribeEngineReadiness(() => setEngineReadySignal((s) => s + 1)), []);
 
   // Hide user-flagged dust UTXOs from all balance totals when enabled
-  // (mirrors the UTXOs page toggle; off = identical to before). Persisted in
-  // localStorage like the UTXOs page settings so the choice sticks across
-  // navigations and app restarts; default stays off for fresh vaults.
-  const [hideDust, setHideDust] = useState(() => {
-    try {
-      return localStorage.getItem(HIDE_DUST_STORAGE_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(HIDE_DUST_STORAGE_KEY, hideDust ? "true" : "false");
-    } catch {
-      // Ignore storage errors (e.g. private mode); toggle still works in-session.
-    }
-  }, [hideDust]);
+  // (mirrors the UTXOs page toggle; off = identical to before).
+  const [hideDust, setHideDust] = useState(false);
   // Whether blockchain-discovered addresses are counted in the balances.
   // Default off: their local history is one-sided (only txs that touched the
   // user's own addresses are stored), so their "balance" is just sats seen
-  // received — not funds the user controls. Mirrors the UTXOs page toggle and
-  // persists the choice like Hide dust.
-  const [includeDiscovered, setIncludeDiscovered] = useState(() => {
-    try {
-      return localStorage.getItem(INCLUDE_DISCOVERED_STORAGE_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(INCLUDE_DISCOVERED_STORAGE_KEY, includeDiscovered ? "true" : "false");
-    } catch {
-      // Ignore storage errors (e.g. private mode); toggle still works in-session.
-    }
-  }, [includeDiscovered]);
+  // received — not funds the user controls. Mirrors the UTXOs page toggle.
+  const [includeDiscovered, setIncludeDiscovered] = useState(false);
   // Precomputed dust adjustments while "Hide dust" is on: per-address and
   // per-group sats/count to subtract, plus deduped grand totals. Only dust on
   // addresses actually counted in the totals (cachedUtxoCount > 0) is included.
@@ -1772,6 +1741,22 @@ export default function BalanceOverview() {
 
   const hiddenDustSats = hideDust && dustAdj ? dustAdj.totalSats : 0;
   const hiddenDustCount = hideDust && dustAdj ? dustAdj.totalCount : 0;
+  const filterChips = [
+    ...(hideDust
+      ? [{
+          key: "hide-dust",
+          label: "Excluding dust-flagged UTXOs from balances",
+          onRemove: () => setHideDust(false),
+        }]
+      : []),
+    ...(includeDiscovered
+      ? [{
+          key: "include-discovered",
+          label: "Including discovered addresses",
+          onRemove: () => setIncludeDiscovered(false),
+        }]
+      : []),
+  ];
   const totalBalance = Math.max(0, totals.sats - hiddenDustSats);
   const totalAddresses = totals.addresses;
   const isBusy = phase !== "ready";
@@ -1899,6 +1884,15 @@ export default function BalanceOverview() {
             </Button>
           </div>
         )}
+        <FilterChips
+          chips={filterChips}
+          onClearAll={() => {
+            setHideDust(false);
+            setIncludeDiscovered(false);
+          }}
+          testIdPrefix="balance"
+          className="mt-2"
+        />
       </div>
 
       {showSpendWarning && (

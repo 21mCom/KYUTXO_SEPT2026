@@ -151,7 +151,6 @@ async function renderReady() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  localStorage.clear();
   // Single page of address records; aggregateGroups stops after one batch
   // because the page is smaller than its batch size.
   getRecordsPageByTypeIdReverseKeyset.mockResolvedValue([CURATED_REC, DISCOVERED_REC]);
@@ -230,7 +229,7 @@ describe("BalanceOverview · blockchain-discovered exclusion", () => {
     );
   });
 
-  it("remembers the toggle across remounts via localStorage", async () => {
+  it("resets the toggle to its default on remount", async () => {
     await renderReady();
     fireEvent.click(screen.getByTestId("switch-include-discovered"));
     await waitFor(() =>
@@ -240,8 +239,8 @@ describe("BalanceOverview · blockchain-discovered exclusion", () => {
     cleanup();
     await renderReady();
     await waitFor(() =>
-      expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00150000"),
+      expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00100000"),
     );
-    expect(screen.getByTestId("badge-discovered-included")).toBeTruthy();
+    expect(screen.queryByTestId("badge-discovered-included")).toBeNull();
   });
 });

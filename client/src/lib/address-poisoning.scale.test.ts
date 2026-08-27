@@ -115,7 +115,7 @@ describe("scanAddressPoisoning at scale", () => {
       const started = Date.now();
       const outcome = await scanAddressPoisoning(
         "all",
-        "",
+        [],
         { dustThresholdSats: 1000, matchLength: 4 },
         new AbortController().signal,
         noopProgress,
@@ -152,7 +152,7 @@ describe("scanAddressPoisoning at scale", () => {
       const ctrl = new AbortController();
       const outcome = await scanAddressPoisoning(
         "all",
-        "",
+        [],
         { dustThresholdSats: 1000, matchLength: 4 },
         ctrl.signal,
         (_processed: number, phase: ScanPhase) => {

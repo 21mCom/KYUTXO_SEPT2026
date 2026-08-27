@@ -21,6 +21,15 @@ import { getParticipantsByPrevOutKeys, getParticipantsByTxids } from "@/lib/data
 import { db, type Record as DbRecord, type TransactionParticipant } from "@/lib/database";
 import { getGroupKeys, type GroupBy } from "@/lib/balance-grouping";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
+import { FilterChips } from "@/components/FilterChips";
+import {
+  formatSatsWithUnit,
+  satsToUnitInput,
+  type AmountUnit,
+  unitInputToSats,
+  unitLabel,
+} from "@/lib/amount-units";
 
 const DEFAULT_DUST_THRESHOLD = 1000;
 const AGG_BATCH = 500;
@@ -98,7 +107,7 @@ interface DustScanOutcome {
 
 export async function computeDustings(
   scopeType: ScopeType,
-  scopeValue: string,
+  scopeValues: string[],
   threshold: number,
   signal: AbortSignal,
   onProgress: (processed: number, phase: "addresses" | "participants" | "spends") => void,
@@ -125,7 +134,7 @@ export async function computeDustings(
         addressMap.set(addr, { recordId: rec.id });
       } else {
         const keys = getGroupKeys(rec as DbRecord, scopeType as GroupBy);
-        if (keys.includes(scopeValue)) {
+        if (keys.some((key) => scopeValues.includes(key))) {
           addressMap.set(addr, { recordId: rec.id });
         }
       }
@@ -393,9 +402,10 @@ export async function computeDustings(
 
 export default function DustedPage() {
   const [scopeType, setScopeType] = useState<ScopeType>("all");
-  const [scopeValue, setScopeValue] = useState<string>("");
-  const [thresholdInput, setThresholdInput] = useState<string>(String(DEFAULT_DUST_THRESHOLD));
+  const [scopeValues, setScopeValues] = useState<string[]>([]);
   const [threshold, setThreshold] = useState<number>(DEFAULT_DUST_THRESHOLD);
+  const [unit, setUnit] = useState<AmountUnit>("sats");
+  const [sortBy, setSortBy] = useState("most-dust");
 
   const [phase, setPhase] = useState<"idle" | "computing" | "done">("idle");
   const [scanOutcome, setScanOutcome] = useState<DustScanOutcome | null>(null);
@@ -693,32 +703,24 @@ export default function DustedPage() {
     category: { label: "Category", values: categories.map((c) => c.name) },
   };
 
-  const scopeValueOptions =
+  const scopeValuesOptions =
     scopeType !== "all" ? scopeOptions[scopeType as GroupBy].values : [];
 
   const handleScopeTypeChange = (val: string) => {
     setScopeType(val as ScopeType);
-    setScopeValue("");
+    setScopeValues([]);
   };
 
-  const commitThreshold = (raw: string) => {
-    const n = parseInt(raw, 10);
-    if (!isNaN(n) && n > 0) {
-      setThreshold(n);
-    } else {
-      setThresholdInput(String(threshold));
+  const handleThresholdChange = (raw: string) => {
+    const sats = unitInputToSats(raw, unit);
+    if (sats !== null && sats > 0) {
+      setThreshold(sats);
     }
-  };
-
-  const handleThresholdBlur = () => commitThreshold(thresholdInput);
-
-  const handleThresholdKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") commitThreshold(thresholdInput);
   };
 
   // ── Core computation runner ────────────────────────────────────────────────
   const runComputation = useCallback(
-    async (scopeTypeArg: ScopeType, scopeValueArg: string, thresholdArg: number) => {
+    async (scopeTypeArg: ScopeType, scopeValuesArg: string[], thresholdArg: number) => {
       if (abortRef.current) {
         abortRef.current.abort();
       }
@@ -731,7 +733,7 @@ export default function DustedPage() {
 
       const result = await computeDustings(
         scopeTypeArg,
-        scopeValueArg,
+        scopeValuesArg,
         thresholdArg,
         ctrl.signal,
         (count, phaseLabel) => {
@@ -765,10 +767,10 @@ export default function DustedPage() {
   // needing to press a button each time a filter changes.
   useEffect(() => {
     // Don't compute when a scoped filter has no value selected yet.
-    if (scopeType !== "all" && !scopeValue) return;
-    runComputation(scopeType, scopeValue, threshold);
+    if (scopeType !== "all" && scopeValues.length === 0) return;
+    runComputation(scopeType, scopeValues, threshold);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopeType, scopeValue, threshold, dbSignal]);
+  }, [scopeType, scopeValues.join(","), threshold, dbSignal]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -783,9 +785,27 @@ export default function DustedPage() {
   };
 
   const handleManualRescan = () => {
-    if (scopeType !== "all" && !scopeValue) return;
-    runComputation(scopeType, scopeValue, threshold);
+    if (scopeType !== "all" && scopeValues.length === 0) return;
+    runComputation(scopeType, scopeValues, threshold);
   };
+
+  const sortedResults = useMemo(() => {
+    if (!results) return null;
+    return [...results].sort((a, b) => {
+      switch (sortBy) {
+        case "fewest-dust":
+          return a.totalCount - b.totalCount || a.address.localeCompare(b.address);
+        case "most-unspent":
+          return b.unspentCount - a.unspentCount || a.address.localeCompare(b.address);
+        case "address-asc":
+          return a.address.localeCompare(b.address);
+        case "address-desc":
+          return b.address.localeCompare(a.address);
+        default:
+          return b.totalCount - a.totalCount || a.address.localeCompare(b.address);
+      }
+    });
+  }, [results, sortBy]);
 
   type FlatRow =
     | { type: "address"; row: DustingResult }
@@ -794,9 +814,9 @@ export default function DustedPage() {
     | { type: "spend"; row: DustingResult; spend: DustSpendEvent };
 
   const flatRows = useMemo<FlatRow[]>(() => {
-    if (!results) return [];
+    if (!sortedResults) return [];
     const rows: FlatRow[] = [];
-    for (const row of results) {
+    for (const row of sortedResults) {
       rows.push({ type: "address", row });
       if (expandedIds.has(row.recordId)) {
         for (const output of row.unspentOutputs) {
@@ -811,7 +831,7 @@ export default function DustedPage() {
       }
     }
     return rows;
-  }, [results, expandedIds]);
+  }, [sortedResults, expandedIds]);
 
   const virtualizer = useVirtualizer({
     count: flatRows.length,
@@ -826,7 +846,27 @@ export default function DustedPage() {
     overscan: 10,
   });
 
-  const isRunDisabled = phase === "computing" || (scopeType !== "all" && !scopeValue);
+  const isRunDisabled = phase === "computing" || (scopeType !== "all" && scopeValues.length === 0);
+
+  const filterChips = [
+    ...(scopeType !== "all" && scopeValues.length > 0
+      ? [{
+          key: "scope",
+          label: `${scopeOptions[scopeType].label}: ${scopeValues.join(", ")}`,
+          onRemove: () => {
+            setScopeType("all");
+            setScopeValues([]);
+          },
+        }]
+      : []),
+    ...(threshold !== DEFAULT_DUST_THRESHOLD
+      ? [{
+          key: "threshold",
+          label: `Dust threshold: ${formatSatsWithUnit(threshold, unit)}`,
+          onRemove: () => setThreshold(DEFAULT_DUST_THRESHOLD),
+        }]
+      : []),
+  ];
 
   return (
     <div className="flex flex-col h-full">
@@ -843,46 +883,63 @@ export default function DustedPage() {
                 <SelectValue placeholder="Scope" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Addresses</SelectItem>
-                <SelectItem value="wallet">By Wallet</SelectItem>
-                <SelectItem value="seed">By Seed</SelectItem>
-                <SelectItem value="owner">By Owner</SelectItem>
-                <SelectItem value="tag">By Tag</SelectItem>
-                <SelectItem value="category">By Category</SelectItem>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="wallet">Wallet</SelectItem>
+                <SelectItem value="seed">Seed</SelectItem>
+                <SelectItem value="owner">Owner</SelectItem>
+                <SelectItem value="tag">Tag</SelectItem>
+                <SelectItem value="category">Category</SelectItem>
               </SelectContent>
             </Select>
 
             {scopeType !== "all" && (
-              <Select value={scopeValue} onValueChange={setScopeValue}>
-                <SelectTrigger className="w-[180px]" data-testid="select-scope-value">
-                  <SelectValue placeholder={`Select ${scopeOptions[scopeType as GroupBy].label}`} />
-                </SelectTrigger>
-                <SelectContent>
-                  {scopeValueOptions.length === 0 ? (
-                    <SelectItem value="__none__" disabled>No values found</SelectItem>
-                  ) : (
-                    scopeValueOptions.map((v) => (
-                      <SelectItem key={v} value={v}>{v}</SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+              <MultiSelectCombobox
+                className="w-[180px]"
+                values={scopeValues}
+                onChange={setScopeValues}
+                options={scopeValuesOptions}
+                placeholder={`Select ${scopeOptions[scopeType as GroupBy].label}`}
+                testId="select-scope-value"
+              />
             )}
 
             <div className="flex items-center gap-1">
-              <span className="text-sm text-muted-foreground whitespace-nowrap">Dust threshold:</span>
+              <label htmlFor="input-dust-threshold" className="text-sm text-muted-foreground whitespace-nowrap">
+                Dust threshold
+              </label>
               <Input
+                id="input-dust-threshold"
                 data-testid="input-dust-threshold"
-                className="w-[90px]"
-                value={thresholdInput}
-                onChange={(e) => setThresholdInput(e.target.value)}
-                onBlur={handleThresholdBlur}
-                onKeyDown={handleThresholdKeyDown}
+                className="w-[120px]"
+                value={satsToUnitInput(threshold, unit)}
+                onChange={(e) => handleThresholdChange(e.target.value)}
                 type="number"
                 min={1}
+                step={unit === "btc" ? "0.00000001" : "1"}
               />
-              <span className="text-sm text-muted-foreground">sats</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setUnit((u) => u === "sats" ? "btc" : "sats")}
+                data-testid="button-toggle-unit"
+              >
+                {unitLabel(unit)}
+              </Button>
             </div>
+
+            <Select value={sortBy} onValueChange={setSortBy}>
+              <SelectTrigger className="w-[150px]" data-testid="select-sort-results">
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="most-dust">Most dust</SelectItem>
+                <SelectItem value="fewest-dust">Fewest dust</SelectItem>
+                <SelectItem value="most-unspent">Most unspent</SelectItem>
+                <SelectItem value="address-asc">Address A–Z</SelectItem>
+                <SelectItem value="address-desc">Address Z–A</SelectItem>
+              </SelectContent>
+            </Select>
 
             {phase === "computing" ? (
               <Button
@@ -912,6 +969,16 @@ export default function DustedPage() {
             )}
           </div>
         </div>
+          <FilterChips
+            chips={filterChips}
+            onClearAll={() => {
+              setScopeType("all");
+              setScopeValues([]);
+              setThreshold(DEFAULT_DUST_THRESHOLD);
+            }}
+            testIdPrefix="dusted"
+            className="mt-3"
+          />
 
         {phase === "computing" && (
           <div className="mt-3">

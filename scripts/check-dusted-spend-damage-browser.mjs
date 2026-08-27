@@ -20,7 +20,7 @@
 //   5. Expand the first row and assert the Spent section renders: outpoint,
 //      sats, harmful badge, spending TxidLink, owned AddressLink chips, and
 //      the external-address count.
-//   6. Scoped scan (pass 3c): switch scope to "By Wallet" → "Wallet A"
+//   6. Scoped scan (pass 3c): switch scope to "Wallet" → "Wallet A"
 //      (records alternate Wallet A / Wallet B), re-assert the banner counts
 //      for the scoped run, and prove the spend row still credits the other
 //      wallet's co-inputs as OWNED out-of-scope AddressLink chips (resolved
@@ -184,7 +184,7 @@ async function main() {
         const txCrud = await import('/src/lib/data/transaction-crud.ts');
         const vocabCrud = await import('/src/lib/data/vocabulary-crud.ts');
 
-        // Wallet vocabulary rows so the "By Wallet" scope dropdown has values
+        // Wallet vocabulary rows so the "Wallet" scope dropdown has values
         // (bulk create below skips vocabulary sync for speed).
         await vocabCrud.ensureWalletName('Wallet A');
         await vocabCrud.ensureWalletName('Wallet B');
@@ -369,15 +369,15 @@ async function main() {
       `txLink=${txLinkVisible} ownedChips=${ownedChipCount} (expected ${K - 1}) external="${externalText.trim()}"`,
     );
 
-    // ── Scoped scan (pass 3c): "By Wallet" → Wallet A ─────────────────────
+    // ── Scoped scan (pass 3c): "Wallet" → Wallet A ─────────────────────────
     // Even-indexed addresses (bc1qdust…) are Wallet A, odd (bc1qothr…) are
     // Wallet B. A Wallet-A-scoped scan must classify each spend row's Wallet B
     // co-inputs as OWNED out-of-scope chips, not external addresses.
     await page.getByTestId('select-scope-type').click();
-    await page.getByRole('option', { name: 'By Wallet' }).click();
+    await page.getByRole('option', { name: 'Wallet' }).click();
     await page.getByTestId('select-scope-value').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByTestId('select-scope-value').click();
-    await page.getByRole('option', { name: 'Wallet A' }).click();
+    await page.locator('[cmdk-item]').filter({ hasText: 'Wallet A' }).click();
 
     // Selecting a scope value auto-runs the scan; wait for the banner to show
     // the scoped counts (previous banner still shows the all-scope numbers).

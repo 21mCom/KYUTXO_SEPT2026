@@ -126,9 +126,6 @@ async function renderReady() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // The Hide dust toggle now persists to localStorage; clear it so each test
-  // starts from the default (off) state.
-  localStorage.clear();
   getAddressBalanceRowsForGroup.mockResolvedValue([
     { id: 1, address: ADDRESS, label: "", sats: 100_000, utxoCount: 3 },
   ]);
@@ -190,7 +187,7 @@ describe("BalanceOverview · Hide dust toggle", () => {
     expect(screen.queryByTestId("badge-dust-hidden")).toBeNull();
   });
 
-  it("remembers the toggle across remounts via localStorage", async () => {
+  it("resets the toggle to its default on remount", async () => {
     await renderReady();
     fireEvent.click(screen.getByTestId("switch-hide-dust"));
     await waitFor(() =>
@@ -199,11 +196,10 @@ describe("BalanceOverview · Hide dust toggle", () => {
 
     cleanup();
     await renderReady();
-    // Toggle starts on and the dust-adjusted total is shown immediately.
     await waitFor(() =>
-      expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00098500"),
+      expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00100000"),
     );
-    expect(screen.getByTestId("badge-dust-hidden")).toBeTruthy();
+    expect(screen.queryByTestId("badge-dust-hidden")).toBeNull();
   });
 
   it("does not subtract dust for addresses that are not counted in the totals", async () => {

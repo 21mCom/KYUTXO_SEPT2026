@@ -129,7 +129,7 @@ describe("computeDustings spend-damage resolution", () => {
     // out-of-scope record lookup path.
     const outcome = await computeDustings(
       "wallet",
-      "W1",
+      ["W1"],
       THRESHOLD,
       new AbortController().signal,
       NOOP_PROGRESS,
@@ -204,7 +204,7 @@ describe("computeDustings spend-damage resolution", () => {
 
     const outcome = await computeDustings(
       "all",
-      "",
+      [],
       THRESHOLD,
       new AbortController().signal,
       NOOP_PROGRESS,
@@ -257,7 +257,7 @@ describe("computeDustings spend-damage resolution", () => {
 
     const outcome = await computeDustings(
       "all",
-      "",
+      [],
       THRESHOLD,
       new AbortController().signal,
       NOOP_PROGRESS,
@@ -298,7 +298,7 @@ describe("computeDustings spend-damage resolution", () => {
 
     const outcome = await computeDustings(
       "all",
-      "",
+      [],
       THRESHOLD,
       new AbortController().signal,
       NOOP_PROGRESS,
@@ -316,7 +316,7 @@ describe("computeDustings spend-damage resolution", () => {
     const ctrl = new AbortController();
     const outcome = await computeDustings(
       "all",
-      "",
+      [],
       THRESHOLD,
       ctrl.signal,
       (_count, phase) => {

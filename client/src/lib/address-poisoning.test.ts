@@ -140,7 +140,7 @@ describe("scanAddressPoisoning", () => {
 
     const outcome = await scanAddressPoisoning(
       "all",
-      "",
+      [],
       { dustThresholdSats: DEFAULT_DUST_THRESHOLD_SATS, matchLength: DEFAULT_MATCH_LENGTH },
       neverAborted,
       noopProgress,
@@ -170,7 +170,7 @@ describe("scanAddressPoisoning", () => {
 
     const outcome = await scanAddressPoisoning(
       "all",
-      "",
+      [],
       { dustThresholdSats: 1000, matchLength: 4 },
       neverAborted,
       noopProgress,
@@ -187,7 +187,7 @@ describe("scanAddressPoisoning", () => {
 
     const outcome = await scanAddressPoisoning(
       "all",
-      "",
+      [],
       { dustThresholdSats: 1000, matchLength: 4 },
       neverAborted,
       noopProgress,
@@ -204,7 +204,7 @@ describe("scanAddressPoisoning", () => {
 
     const outcome = await scanAddressPoisoning(
       "all",
-      "",
+      [],
       { dustThresholdSats: 1000, matchLength: 4 },
       neverAborted,
       noopProgress,
@@ -228,7 +228,7 @@ describe("scanAddressPoisoning", () => {
 
     const outcome = await scanAddressPoisoning(
       "all",
-      "",
+      [],
       { dustThresholdSats: 1000, matchLength: 4 },
       neverAborted,
       noopProgress,
@@ -249,7 +249,7 @@ describe("scanAddressPoisoning", () => {
 
     const outcome = await scanAddressPoisoning(
       "all",
-      "",
+      [],
       { dustThresholdSats: 1000, matchLength: 4 },
       neverAborted,
       noopProgress,
@@ -278,7 +278,7 @@ describe("scanAddressPoisoning", () => {
 
     const outcome = await scanAddressPoisoning(
       "all",
-      "",
+      [],
       { dustThresholdSats: 1000, matchLength: 4 },
       neverAborted,
       noopProgress,
@@ -287,7 +287,7 @@ describe("scanAddressPoisoning", () => {
     expect(outcome!.results[0].confidence).toBe("low");
   });
 
-  it("restricts dust recipients to the selected wallet scope", async () => {
+  it("includes dust recipients from any selected wallet scope", async () => {
     await seedVault(); // VICTIM in WalletA
     await createRecord({
       type: "address",
@@ -306,15 +306,17 @@ describe("scanAddressPoisoning", () => {
 
     const outcome = await scanAddressPoisoning(
       "wallet",
-      "WalletA",
+      ["WalletA", "WalletB"],
       { dustThresholdSats: 1000, matchLength: 4 },
       neverAborted,
       noopProgress,
     );
-    expect(outcome!.results).toHaveLength(1);
-    expect(outcome!.results[0].dustRecipient).toBe(VICTIM);
+    expect(outcome!.results).toHaveLength(2);
+    expect(outcome!.results.map((r) => r.dustRecipient)).toEqual(
+      expect.arrayContaining([VICTIM, LEGACY_VICTIM]),
+    );
     expect(outcome!.scannedAddresses.has(VICTIM)).toBe(true);
-    expect(outcome!.scannedAddresses.has(LEGACY_VICTIM)).toBe(false);
+    expect(outcome!.scannedAddresses.has(LEGACY_VICTIM)).toBe(true);
   });
 
   it("returns null when cancelled", async () => {
@@ -323,7 +325,7 @@ describe("scanAddressPoisoning", () => {
     ctrl.abort();
     const outcome = await scanAddressPoisoning(
       "all",
-      "",
+      [],
       { dustThresholdSats: 1000, matchLength: 4 },
       ctrl.signal,
       noopProgress,
