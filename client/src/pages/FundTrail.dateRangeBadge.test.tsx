@@ -159,7 +159,7 @@ describe("Fund Trail date-range badge", () => {
     renderPage();
     await selectSeededGroup();
 
-    fireEvent.change(screen.getByTestId("fund-trail-start-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-from"), {
       target: { value: "2023-10-01" },
     });
 
@@ -173,7 +173,7 @@ describe("Fund Trail date-range badge", () => {
     renderPage();
     await selectSeededGroup();
 
-    fireEvent.change(screen.getByTestId("fund-trail-end-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-to"), {
       target: { value: "2023-12-31" },
     });
 
@@ -187,10 +187,10 @@ describe("Fund Trail date-range badge", () => {
     renderPage();
     await selectSeededGroup();
 
-    fireEvent.change(screen.getByTestId("fund-trail-start-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-from"), {
       target: { value: "2023-10-01" },
     });
-    fireEvent.change(screen.getByTestId("fund-trail-end-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-to"), {
       target: { value: "2023-12-31" },
     });
 
@@ -204,10 +204,10 @@ describe("Fund Trail date-range badge", () => {
     renderPage();
     await selectSeededGroup();
 
-    fireEvent.change(screen.getByTestId("fund-trail-start-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-from"), {
       target: { value: "2023-10-01" },
     });
-    fireEvent.change(screen.getByTestId("fund-trail-end-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-to"), {
       target: { value: "2023-12-31" },
     });
     await screen.findByTestId("fund-trail-active-range");

@@ -153,9 +153,11 @@ describe("Annual Activity Report — unresolved prevout spend recovered live", (
   it("counts the amount=0 spend via the Step 6 getParticipantsByTxids fallback", async () => {
     const { getByTestId, findByTestId } = renderWithProviders(<AnnualActivityReport />);
 
-    fireEvent.change(getByTestId("textarea-addresses"), {
+    const addressInput = getByTestId("input-annual-activity-addresses");
+    fireEvent.change(addressInput, {
       target: { value: OWNED },
     });
+    fireEvent.keyDown(addressInput, { key: "Enter" });
     fireEvent.click(getByTestId("button-generate"));
 
     // The combined table appears once generate() resolves against Dexie.
@@ -195,9 +197,11 @@ describe("Annual Activity Report — unresolved prevout spend recovered live", (
       <AnnualActivityReport />,
     );
 
-    fireEvent.change(getByTestId("textarea-addresses"), {
+    const addressInput = getByTestId("input-annual-activity-addresses");
+    fireEvent.change(addressInput, {
       target: { value: OWNED },
     });
+    fireEvent.keyDown(addressInput, { key: "Enter" });
     fireEvent.click(getByTestId("button-generate"));
 
     // With the funding output unfetchable, the only spend resolves to 0, so the

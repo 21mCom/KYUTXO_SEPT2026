@@ -16,6 +16,7 @@
 import { db } from '../database';
 import type { Record as DbRecord, TransactionParticipant, UtxoLineage } from '../database';
 import { canonicalizeRecordIdentifier } from '../bitcoin';
+import { isUserCuratedImportance } from '../db-types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -151,15 +152,29 @@ export function getGroupLabel(
   return val && val.trim() ? val.trim() : null;
 }
 
+export interface ListGroupValuesOptions {
+  /**
+   * When true, only records with a curated (non-discovered) importance tier
+   * contribute a group value to the list — i.e. a group that exists only
+   * because of discovered addresses won't be offered as a pickable trace
+   * source. This does NOT affect which addresses a trace follows once a
+   * group is selected (see getAddressesForGroup, which always returns every
+   * address in the group, curated or discovered).
+   */
+  curatedOnly?: boolean;
+}
+
 /**
  * Lists all known group values (sorted, deduplicated) for the given dimension.
  */
 export async function listGroupValues(
-  dimension: GroupingDimension
+  dimension: GroupingDimension,
+  options?: ListGroupValuesOptions
 ): Promise<string[]> {
   const records = await db.records.toArray();
   const seen = new Set<string>();
   for (const r of records) {
+    if (options?.curatedOnly && !isUserCuratedImportance(r.addressImportance)) continue;
     const val = r[dimension];
     if (val && val.trim()) seen.add(val.trim());
   }

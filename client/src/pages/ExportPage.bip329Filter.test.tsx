@@ -12,6 +12,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 
+Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+  configurable: true,
+  value: vi.fn(),
+});
+
 const { toastMock, downloadCapture } = vi.hoisted(() => ({
   toastMock: vi.fn(),
   downloadCapture: { blob: null as Blob | null, name: null as string | null },
@@ -168,5 +173,17 @@ describe("ExportPage BIP-329 export uses the visible (not debounced) filter stat
     const lines = await downloadedLines();
     expect(lines).toHaveLength(3);
     expect(lines.map((l) => l.type).sort()).toEqual(["addr", "output", "tx"]);
+  });
+
+  it("scopes UTXO labels through Transactions plus UTXO refs only", async () => {
+    render(<ExportPage />);
+    fireEvent.click(await screen.findByTestId("select-bip329-type"));
+    fireEvent.click(await screen.findByText("Transactions"));
+    fireEvent.click(await screen.findByTestId("checkbox-bip329-utxo-only"));
+    fireEvent.click(screen.getByTestId("button-export-bip329"));
+
+    const lines = await downloadedLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ type: "output", ref: OUTPOINT });
   });
 });

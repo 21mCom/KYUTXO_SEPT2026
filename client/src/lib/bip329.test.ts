@@ -7,6 +7,7 @@ import {
   recordToBip329Line,
   bip329LineKind,
   matchesBip329ExportFilter,
+  matchesRecordExportFilter,
   type Bip329ExportFilter,
   type Bip329FilterableRecord,
   type Bip329ExportableRecord,
@@ -219,6 +220,20 @@ describe('matchesBip329ExportFilter', () => {
     const jsonl = filteredExport(FIXTURE, { kind: 'utxo' });
     const parsed = parseJsonLines(jsonl);
     expect(parsed.map(p => p.type).sort()).toEqual(['input', 'output']);
+  });
+
+  it('filters raw CSV records by kind: other', () => {
+    expect(matchesRecordExportFilter(
+      { type: 'other', inputString: 'hardware-wallet-serial', label: 'Hardware wallet' },
+      { kind: 'other' },
+    )).toBe(true);
+    expect(matchesRecordExportFilter(FIXTURE[0], { kind: 'other' })).toBe(false);
+  });
+
+  it('scopes records to inclusive updated-at date bounds', () => {
+    const record = { ...FIXTURE[0], createdAt: 1_700_000_000_000, updatedAt: 1_700_086_400_000 };
+    expect(matchesRecordExportFilter(record, { dateRange: { start: 1_700_086_400, end: 1_700_086_400 } })).toBe(true);
+    expect(matchesRecordExportFilter(record, { dateRange: { end: 1_700_086_399 } })).toBe(false);
   });
 
   it('filters by tag', () => {

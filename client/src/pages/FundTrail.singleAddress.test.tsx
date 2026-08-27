@@ -174,14 +174,14 @@ describe("FundTrail single-address mode", () => {
       expect(screen.getByTestId("fund-trail-group-select")).toBeTruthy(),
     );
     // Address input not visible in group mode
-    expect(screen.queryByTestId("fund-trail-address-input")).toBeNull();
+    expect(screen.queryByTestId("input-fund-trail-address-input")).toBeNull();
   });
 
   it("switches to address mode and shows address input", () => {
     renderPage();
     fireEvent.click(screen.getByTestId("fund-trail-mode-address"));
     // Address input appears
-    expect(screen.getByTestId("fund-trail-address-input")).toBeTruthy();
+    expect(screen.getByTestId("input-fund-trail-address-input")).toBeTruthy();
     // Group controls hidden
     expect(screen.queryByTestId("fund-trail-group-select")).toBeNull();
   });
@@ -189,7 +189,7 @@ describe("FundTrail single-address mode", () => {
   it("shows inline error for an invalid address", () => {
     renderPage();
     fireEvent.click(screen.getByTestId("fund-trail-mode-address"));
-    fireEvent.change(screen.getByTestId("fund-trail-address-input"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-address-input"), {
       target: { value: INVALID_ADDRESS },
     });
     expect(screen.getByTestId("fund-trail-address-error")).toBeTruthy();
@@ -203,12 +203,12 @@ describe("FundTrail single-address mode", () => {
   it("clears the error when a valid address replaces an invalid one", () => {
     renderPage();
     fireEvent.click(screen.getByTestId("fund-trail-mode-address"));
-    fireEvent.change(screen.getByTestId("fund-trail-address-input"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-address-input"), {
       target: { value: INVALID_ADDRESS },
     });
     expect(screen.getByTestId("fund-trail-address-error")).toBeTruthy();
 
-    fireEvent.change(screen.getByTestId("fund-trail-address-input"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-address-input"), {
       target: { value: VALID_ADDRESS },
     });
     expect(screen.queryByTestId("fund-trail-address-error")).toBeNull();
@@ -217,7 +217,7 @@ describe("FundTrail single-address mode", () => {
   it("runs computeOneHop with the single address and null selfGroupLabel", async () => {
     renderPage();
     fireEvent.click(screen.getByTestId("fund-trail-mode-address"));
-    fireEvent.change(screen.getByTestId("fund-trail-address-input"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-address-input"), {
       target: { value: VALID_ADDRESS },
     });
 
@@ -237,7 +237,7 @@ describe("FundTrail single-address mode", () => {
   it("renders sources and the address center node after a valid address trail", async () => {
     renderPage();
     fireEvent.click(screen.getByTestId("fund-trail-mode-address"));
-    fireEvent.change(screen.getByTestId("fund-trail-address-input"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-address-input"), {
       target: { value: VALID_ADDRESS },
     });
 
@@ -265,7 +265,7 @@ describe("FundTrail single-address mode", () => {
   it("does not show record label when address has no matching record", async () => {
     renderPage();
     fireEvent.click(screen.getByTestId("fund-trail-mode-address"));
-    fireEvent.change(screen.getByTestId("fund-trail-address-input"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-address-input"), {
       target: { value: NO_RECORD_ADDRESS },
     });
 
@@ -280,7 +280,7 @@ describe("FundTrail single-address mode", () => {
 
     // Switch to address mode and enter valid address
     fireEvent.click(screen.getByTestId("fund-trail-mode-address"));
-    fireEvent.change(screen.getByTestId("fund-trail-address-input"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-address-input"), {
       target: { value: VALID_ADDRESS },
     });
     await screen.findByTestId("fund-trail-body");
@@ -292,7 +292,7 @@ describe("FundTrail single-address mode", () => {
     expect(screen.getByTestId("fund-trail-dimension-select")).toBeTruthy();
     expect(screen.getByTestId("fund-trail-group-select")).toBeTruthy();
     // Address input gone
-    expect(screen.queryByTestId("fund-trail-address-input")).toBeNull();
+    expect(screen.queryByTestId("input-fund-trail-address-input")).toBeNull();
     // Trail body gone (no group selected)
     expect(screen.queryByTestId("fund-trail-body")).toBeNull();
   });

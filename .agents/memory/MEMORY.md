@@ -1,5 +1,7 @@
 - [Scope-value single→multi conversion](scope-value-multiselect-conversion.md) — converting a scope Select to a multi-select changes a lib function's matching from `.includes` to `.some(...includes)`; find every direct-call test site and Playwright `select-scope-value` role=option click.
 - [Large-vault startup migrations](large-vault-startup-migrations.md) — batched once-only startup repairs run in background; fresh-vault skip only when empty; file-decrypt resume freezes-not-breaks.
+- [Shared report date/address filters](shared-report-filter-components.md) — DateRangeFilter (native from/to+exact, no Calendar) and SearchableEntityPicker (single/multi) are the reusable report-scoping controls; reuse, don't reinvent.
+- [Export-kind canonical enum alignment](export-kind-canonical-enum.md) — when a page's kind filter must match the app-wide address/transaction/other enum but still needs a narrower bucket (e.g. UTXO refs), add a sub-toggle rather than a 4th enum value.
 - [Records deferred counts](records-load-defer-counts.md) — never start count queries before the first page renders; superseded loads must spawn no counts; guard every count setter by load version.
 - [Dashboard 5k search window](dashboard-search-window.md) — client-side search covers only the 5k-row updatedAt window; vault-wide hints must pair with a vault-wide fetch sharing one predicate, or hint and reveal disagree.
 - [Backup streaming guards](backup-streaming-guards.md) — fflate onEntry is sync (manifest-order via a flag); memory-export OOM guard must aggregate all streamed-table counts.

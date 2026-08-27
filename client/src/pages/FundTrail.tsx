@@ -84,6 +84,15 @@ import {
   FUND_TRAIL_LAYOUT_OPTIONS,
   type FundTrailLayout,
 } from "@/components/fund-trail/view-data";
+import { Checkbox } from "@/components/ui/checkbox";
+import { getRecordsByType } from "@/lib/data/record-crud";
+import { SearchableEntityPicker, type EntityPickerOption } from "@/components/SearchableEntityPicker";
+import {
+  DateRangeFilter,
+  ANY_DATE_RANGE_FILTER,
+  dateRangeFilterToUnixRange,
+  type DateRangeFilterValue,
+} from "@/components/DateRangeFilter";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -984,20 +993,9 @@ function MultiHopCancelledNotice({
 // Main Page
 // ---------------------------------------------------------------------------
 
-/** Convert yyyy-mm-dd start/end strings into a DateRange in Unix seconds (local). */
-function toDateRange(startDate: string, endDate: string): DateRange | undefined {
-  let start: number | undefined;
-  let end: number | undefined;
-  if (startDate) {
-    const d = new Date(`${startDate}T00:00:00`);
-    if (!isNaN(d.getTime())) start = Math.floor(d.getTime() / 1000);
-  }
-  if (endDate) {
-    const d = new Date(`${endDate}T23:59:59`);
-    if (!isNaN(d.getTime())) end = Math.floor(d.getTime() / 1000);
-  }
-  if (start == null && end == null) return undefined;
-  return { start, end };
+/** Convert a DateRangeFilterValue into a fund-trail DateRange in Unix seconds. */
+function toDateRange(filter: DateRangeFilterValue): DateRange | undefined {
+  return dateRangeFilterToUnixRange(filter);
 }
 
 export default function FundTrail() {
@@ -1037,8 +1035,7 @@ export default function FundTrail() {
     validateAddress(trimmedAddress).isValid;
 
   const handleAddressChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const val = e.target.value;
+    (val: string) => {
       setAddressInput(val);
       const t = val.trim();
       if (t.length > 0 && !validateAddress(t).isValid) {
@@ -1049,6 +1046,21 @@ export default function FundTrail() {
     },
     [],
   );
+
+  // Known address records, used to power the searchable address picker in
+  // "address" source mode (label/owner shown alongside each address).
+  const { data: addressPickerRecords = [] } = useQuery({
+    queryKey: ["fund-trail-address-options"],
+    queryFn: () => getRecordsByType("address"),
+    enabled: sourceMode === "address",
+    staleTime: 30_000,
+  });
+  const addressPickerOptions: EntityPickerOption[] = addressPickerRecords.map(r => ({
+    value: r.inputString,
+    label: r.label || undefined,
+    sublabel: r.owner && r.owner !== "Pending Review" ? r.owner : undefined,
+    searchText: r.walletName,
+  }));
 
   const handleModeSwitch = useCallback((mode: "group" | "address") => {
     setSourceMode(mode);
@@ -1094,10 +1106,10 @@ export default function FundTrail() {
   // --- Group controls ---
   const [dimension, setDimension] = useState<GroupingDimension>("walletName");
   const [selectedGroup, setSelectedGroup] = useState<string>("");
-  const [startDate, setStartDate] = useState<string>("");
-  const [endDate, setEndDate] = useState<string>("");
+  const [curatedOnlyGroups, setCuratedOnlyGroups] = useState(false);
+  const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilterValue>(ANY_DATE_RANGE_FILTER);
 
-  const dateRange = toDateRange(startDate, endDate);
+  const dateRange = toDateRange(dateRangeFilter);
   const hasDateFilter = !!dateRange;
 
   const handleDimensionChange = useCallback((val: string) => {
@@ -1109,9 +1121,13 @@ export default function FundTrail() {
     setSelectedGroup(val);
   }, []);
 
+  const handleCuratedOnlyGroupsChange = useCallback((checked: boolean) => {
+    setCuratedOnlyGroups(checked);
+    setSelectedGroup("");
+  }, []);
+
   const handleClearDates = useCallback(() => {
-    setStartDate("");
-    setEndDate("");
+    setDateRangeFilter(ANY_DATE_RANGE_FILTER);
   }, []);
 
   // Whether we have enough to run a trail
@@ -1120,8 +1136,8 @@ export default function FundTrail() {
 
   // --- Group value list (only needed in group mode) ---
   const { data: groupValues = [], isLoading: isLoadingGroups } = useQuery({
-    queryKey: ["fund-trail-groups", dimension],
-    queryFn: () => listGroupValues(dimension),
+    queryKey: ["fund-trail-groups", dimension, curatedOnlyGroups],
+    queryFn: () => listGroupValues(dimension, { curatedOnly: curatedOnlyGroups }),
     enabled: sourceMode === "group",
   });
 
@@ -1418,24 +1434,37 @@ export default function FundTrail() {
                 </Select>
               )}
             </div>
+
+            <div className="flex flex-col gap-1 justify-end pb-1.5">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground font-medium cursor-pointer">
+                <Checkbox
+                  checked={curatedOnlyGroups}
+                  onCheckedChange={checked => handleCuratedOnlyGroupsChange(checked === true)}
+                  data-testid="fund-trail-curated-only-groups"
+                />
+                Curated addresses only
+              </label>
+            </div>
           </>
         )}
 
         {/* Address mode input */}
         {sourceMode === "address" && (
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1 min-w-[320px]">
             <label className="text-xs text-muted-foreground font-medium">
               Bitcoin address
             </label>
-            <input
-              type="text"
+            <SearchableEntityPicker
               value={addressInput}
               onChange={handleAddressChange}
+              options={addressPickerOptions}
+              allowFreeText
+              validateFreeText={value => validateAddress(value).isValid}
+              monospace
               placeholder="Enter or paste a Bitcoin address…"
-              spellCheck={false}
-              autoComplete="off"
-              data-testid="fund-trail-address-input"
-              className="flex h-9 w-80 rounded-md border border-input bg-transparent px-3 py-1 text-sm font-mono shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              searchPlaceholder="Search addresses, labels, owners..."
+              emptyText="No addresses found"
+              testId="fund-trail-address-input"
             />
             {addressError && (
               <p
@@ -1449,35 +1478,14 @@ export default function FundTrail() {
         )}
 
         {/* Date filters (shared between both modes) */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-muted-foreground font-medium">
-            From
-          </label>
-          <input
-            type="date"
-            value={startDate}
-            max={endDate || undefined}
-            onChange={e => setStartDate(e.target.value)}
-            data-testid="fund-trail-start-date"
-            className="flex h-9 w-40 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          />
-        </div>
+        <DateRangeFilter
+          value={dateRangeFilter}
+          onChange={setDateRangeFilter}
+          label="Date Range"
+          testId="fund-trail-date-range"
+        />
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-muted-foreground font-medium">
-            To
-          </label>
-          <input
-            type="date"
-            value={endDate}
-            min={startDate || undefined}
-            onChange={e => setEndDate(e.target.value)}
-            data-testid="fund-trail-end-date"
-            className="flex h-9 w-40 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          />
-        </div>
-
-        {hasDateFilter ? (
+        {hasDateFilter && (
           <Button
             size="default"
             variant="outline"
@@ -1487,13 +1495,6 @@ export default function FundTrail() {
             <X className="h-4 w-4 mr-1" />
             All time
           </Button>
-        ) : (
-          <span
-            className="text-xs text-muted-foreground italic pb-2.5"
-            data-testid="fund-trail-date-status"
-          >
-            Showing all time
-          </span>
         )}
 
         {/* Hop depth controls */}
@@ -1771,11 +1772,13 @@ export default function FundTrail() {
 
             {hasDateFilter ? (
               <span className="text-xs text-muted-foreground" data-testid="fund-trail-fullscreen-date-status">
-                {startDate && endDate
-                  ? `${startDate} – ${endDate}`
-                  : startDate
-                    ? `From ${startDate}`
-                    : `To ${endDate}`}
+                {dateRangeFilter.mode === "exact"
+                  ? dateRangeFilter.date
+                  : dateRangeFilter.from && dateRangeFilter.to
+                    ? `${dateRangeFilter.from} – ${dateRangeFilter.to}`
+                    : dateRangeFilter.from
+                      ? `From ${dateRangeFilter.from}`
+                      : `To ${dateRangeFilter.to}`}
               </span>
             ) : (
               <span className="text-xs text-muted-foreground italic" data-testid="fund-trail-fullscreen-date-status">

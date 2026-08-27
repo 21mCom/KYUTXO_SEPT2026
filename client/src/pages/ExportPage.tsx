@@ -39,7 +39,7 @@ import { exportBackup, estimateExportBytes } from "@/lib/backup/export";
 import { computeCompactPlan, type CompactPlan } from "@/lib/backup/compact";
 import { exportBip329LabelParts } from "@/lib/bip329-export";
 import { exportRecordsCsvParts } from "@/lib/csv-export";
-import { recordToBip329Line, matchesBip329ExportFilter, matchesRecordExportFilter, type Bip329ExportFilter, type Bip329ExportKind } from "@/lib/bip329";
+import { recordToBip329Line, matchesBip329ExportFilter, matchesRecordExportFilter, type Bip329ExportFilter } from "@/lib/bip329";
 import { useTags } from "@/hooks/use-tags";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -58,6 +58,13 @@ import {
   type BackupSink,
 } from "@/lib/backup/sink";
 import { EvidencePackageBuilder } from "@/components/EvidencePackageBuilder";
+import {
+  ANY_DATE_RANGE_FILTER,
+  DateRangeFilter,
+  dateRangeFilterToUnixRange,
+  isDateRangeFilterActive,
+  type DateRangeFilterValue,
+} from "@/components/DateRangeFilter";
 
 // Above these counts a pure in-memory (download) export is refused to avoid an
 // out-of-memory crash. The streaming-to-disk paths (desktop, File System Access
@@ -67,6 +74,7 @@ import { EvidencePackageBuilder } from "@/components/EvidencePackageBuilder";
 // holds them all at once.
 const MEMORY_EXPORT_ROW_LIMIT = 50000;
 const MEMORY_EXPORT_ATTACHMENT_LIMIT = 5000;
+type ExportKindOption = "all" | "address" | "transaction" | "other";
 
 // Helper to list all attachment files
 async function listAllAttachmentFiles(): Promise<string[]> {
@@ -148,7 +156,9 @@ export default function ExportPage() {
   // single-select type/tag/wallet dropdowns plus a free-text search.
   const [labelSearch, setLabelSearch] = useState("");
   const [debouncedLabelSearch] = useDebouncedValue(labelSearch, 300);
-  const [labelKindFilter, setLabelKindFilter] = useState<"all" | Bip329ExportKind>("all");
+  const [labelKindFilter, setLabelKindFilter] = useState<ExportKindOption>("all");
+  const [labelUtxoOnly, setLabelUtxoOnly] = useState(false);
+  const [labelDateRange, setLabelDateRange] = useState<DateRangeFilterValue>(ANY_DATE_RANGE_FILTER);
   const [labelTagFilter, setLabelTagFilter] = useState("all");
   const [labelWalletFilter, setLabelWalletFilter] = useState("all");
   const [labelMatchCount, setLabelMatchCount] = useState<number | null>(null);
@@ -163,15 +173,18 @@ export default function ExportPage() {
 
   const labelFilter = useMemo<Bip329ExportFilter>(() => ({
     search: debouncedLabelSearch,
-    kind: labelKindFilter,
+    kind: labelKindFilter === "transaction" && labelUtxoOnly ? "utxo" : labelKindFilter,
+    dateRange: dateRangeFilterToUnixRange(labelDateRange),
     tag: labelTagFilter === "all" ? undefined : labelTagFilter,
     walletName: labelWalletFilter === "all" ? undefined : labelWalletFilter,
-  }), [debouncedLabelSearch, labelKindFilter, labelTagFilter, labelWalletFilter]);
+  }), [debouncedLabelSearch, labelKindFilter, labelUtxoOnly, labelTagFilter, labelWalletFilter, labelDateRange]);
   const labelFiltersActive =
     debouncedLabelSearch.trim() !== "" ||
     labelKindFilter !== "all" ||
+    labelUtxoOnly ||
     labelTagFilter !== "all" ||
-    labelWalletFilter !== "all";
+    labelWalletFilter !== "all" ||
+    isDateRangeFilterActive(labelDateRange);
 
   // Live match count: stream the records table with the same cursor iteration
   // the export itself uses, counting lines that survive the current filter.
@@ -201,7 +214,9 @@ export default function ExportPage() {
   const [exportingCsv, setExportingCsv] = useState(false);
   const [csvSearch, setCsvSearch] = useState("");
   const [debouncedCsvSearch] = useDebouncedValue(csvSearch, 300);
-  const [csvKindFilter, setCsvKindFilter] = useState<"all" | Bip329ExportKind>("all");
+  const [csvKindFilter, setCsvKindFilter] = useState<ExportKindOption>("all");
+  const [csvUtxoOnly, setCsvUtxoOnly] = useState(false);
+  const [csvDateRange, setCsvDateRange] = useState<DateRangeFilterValue>(ANY_DATE_RANGE_FILTER);
   const [csvTagFilter, setCsvTagFilter] = useState("all");
   const [csvWalletFilter, setCsvWalletFilter] = useState("all");
   const [csvMatchCount, setCsvMatchCount] = useState<number | null>(null);
@@ -209,15 +224,18 @@ export default function ExportPage() {
 
   const csvFilter = useMemo<Bip329ExportFilter>(() => ({
     search: debouncedCsvSearch,
-    kind: csvKindFilter,
+    kind: csvKindFilter === "transaction" && csvUtxoOnly ? "utxo" : csvKindFilter,
+    dateRange: dateRangeFilterToUnixRange(csvDateRange),
     tag: csvTagFilter === "all" ? undefined : csvTagFilter,
     walletName: csvWalletFilter === "all" ? undefined : csvWalletFilter,
-  }), [debouncedCsvSearch, csvKindFilter, csvTagFilter, csvWalletFilter]);
+  }), [debouncedCsvSearch, csvKindFilter, csvUtxoOnly, csvTagFilter, csvWalletFilter, csvDateRange]);
   const csvFiltersActive =
     debouncedCsvSearch.trim() !== "" ||
     csvKindFilter !== "all" ||
+    csvUtxoOnly ||
     csvTagFilter !== "all" ||
-    csvWalletFilter !== "all";
+    csvWalletFilter !== "all" ||
+    isDateRangeFilterActive(csvDateRange);
 
   // Live match count for the CSV export: same cursor walk + run-token guard as
   // the BIP-329 count above, but every record is a candidate row (no
@@ -591,15 +609,18 @@ export default function ExportPage() {
       // would otherwise get a file filtered by the stale previous query.
       const exportFilter: Bip329ExportFilter = {
         search: labelSearch,
-        kind: labelKindFilter,
+        kind: labelKindFilter === "transaction" && labelUtxoOnly ? "utxo" : labelKindFilter,
+        dateRange: dateRangeFilterToUnixRange(labelDateRange),
         tag: labelTagFilter === "all" ? undefined : labelTagFilter,
         walletName: labelWalletFilter === "all" ? undefined : labelWalletFilter,
       };
       const exportFiltersActive =
         labelSearch.trim() !== "" ||
         labelKindFilter !== "all" ||
+        labelUtxoOnly ||
         labelTagFilter !== "all" ||
-        labelWalletFilter !== "all";
+        labelWalletFilter !== "all" ||
+        isDateRangeFilterActive(labelDateRange);
 
       const { parts, lineCount } = await exportBip329LabelParts({
         filter: exportFilter,
@@ -658,15 +679,18 @@ export default function ExportPage() {
       // would otherwise get a file filtered by the stale previous query.
       const exportFilter: Bip329ExportFilter = {
         search: csvSearch,
-        kind: csvKindFilter,
+        kind: csvKindFilter === "transaction" && csvUtxoOnly ? "utxo" : csvKindFilter,
+        dateRange: dateRangeFilterToUnixRange(csvDateRange),
         tag: csvTagFilter === "all" ? undefined : csvTagFilter,
         walletName: csvWalletFilter === "all" ? undefined : csvWalletFilter,
       };
       const exportFiltersActive =
         csvSearch.trim() !== "" ||
         csvKindFilter !== "all" ||
+        csvUtxoOnly ||
         csvTagFilter !== "all" ||
-        csvWalletFilter !== "all";
+        csvWalletFilter !== "all" ||
+        isDateRangeFilterActive(csvDateRange);
 
       const { parts, rowCount } = await exportRecordsCsvParts({ filter: exportFilter });
 
@@ -934,8 +958,10 @@ export default function ExportPage() {
                     onClick={() => {
                       setLabelSearch("");
                       setLabelKindFilter("all");
+                      setLabelUtxoOnly(false);
                       setLabelTagFilter("all");
                       setLabelWalletFilter("all");
+                      setLabelDateRange(ANY_DATE_RANGE_FILTER);
                     }}
                     data-testid="button-bip329-clear-filters"
                   >
@@ -958,19 +984,34 @@ export default function ExportPage() {
                   <Label>Type</Label>
                   <Select
                     value={labelKindFilter}
-                    onValueChange={(v) => setLabelKindFilter(v as "all" | Bip329ExportKind)}
+                    onValueChange={(v) => {
+                      const kind = v as ExportKindOption;
+                      setLabelKindFilter(kind);
+                      if (kind !== "transaction") setLabelUtxoOnly(false);
+                    }}
                   >
                     <SelectTrigger data-testid="select-bip329-type">
                       <SelectValue placeholder="All Types" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All Types</SelectItem>
+                      <SelectItem value="all">All</SelectItem>
                       <SelectItem value="address">Addresses</SelectItem>
                       <SelectItem value="transaction">Transactions</SelectItem>
-                      <SelectItem value="utxo">UTXOs (inputs / outputs)</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
+                {labelKindFilter === "transaction" && (
+                  <label className="flex items-center gap-2 self-end h-9 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={labelUtxoOnly}
+                      onChange={(e) => setLabelUtxoOnly(e.target.checked)}
+                      data-testid="checkbox-bip329-utxo-only"
+                    />
+                    UTXO refs only
+                  </label>
+                )}
                 <div className="space-y-1.5">
                   <Label>Tag</Label>
                   <Select value={labelTagFilter} onValueChange={setLabelTagFilter}>
@@ -999,6 +1040,12 @@ export default function ExportPage() {
                     </SelectContent>
                   </Select>
                 </div>
+                <DateRangeFilter
+                  value={labelDateRange}
+                  onChange={setLabelDateRange}
+                  label="Date Range"
+                  testId="bip329-date-range"
+                />
               </div>
               <p className="text-sm text-muted-foreground" data-testid="text-bip329-match-count">
                 {labelMatchCount === null
@@ -1057,8 +1104,10 @@ export default function ExportPage() {
                     onClick={() => {
                       setCsvSearch("");
                       setCsvKindFilter("all");
+                      setCsvUtxoOnly(false);
                       setCsvTagFilter("all");
                       setCsvWalletFilter("all");
+                      setCsvDateRange(ANY_DATE_RANGE_FILTER);
                     }}
                     data-testid="button-csv-clear-filters"
                   >
@@ -1081,19 +1130,34 @@ export default function ExportPage() {
                   <Label>Type</Label>
                   <Select
                     value={csvKindFilter}
-                    onValueChange={(v) => setCsvKindFilter(v as "all" | Bip329ExportKind)}
+                    onValueChange={(v) => {
+                      const kind = v as ExportKindOption;
+                      setCsvKindFilter(kind);
+                      if (kind !== "transaction") setCsvUtxoOnly(false);
+                    }}
                   >
                     <SelectTrigger data-testid="select-csv-type">
                       <SelectValue placeholder="All Types" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All Types</SelectItem>
+                      <SelectItem value="all">All</SelectItem>
                       <SelectItem value="address">Addresses</SelectItem>
                       <SelectItem value="transaction">Transactions</SelectItem>
-                      <SelectItem value="utxo">UTXOs (inputs / outputs)</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
+                {csvKindFilter === "transaction" && (
+                  <label className="flex items-center gap-2 self-end h-9 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={csvUtxoOnly}
+                      onChange={(e) => setCsvUtxoOnly(e.target.checked)}
+                      data-testid="checkbox-csv-utxo-only"
+                    />
+                    UTXO refs only
+                  </label>
+                )}
                 <div className="space-y-1.5">
                   <Label>Tag</Label>
                   <Select value={csvTagFilter} onValueChange={setCsvTagFilter}>
@@ -1122,6 +1186,12 @@ export default function ExportPage() {
                     </SelectContent>
                   </Select>
                 </div>
+                <DateRangeFilter
+                  value={csvDateRange}
+                  onChange={setCsvDateRange}
+                  label="Date Range"
+                  testId="csv-date-range"
+                />
               </div>
               <p className="text-sm text-muted-foreground" data-testid="text-csv-match-count">
                 {csvMatchCount === null

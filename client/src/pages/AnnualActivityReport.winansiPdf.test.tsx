@@ -118,9 +118,11 @@ describe("Annual Activity Report PDF — WinAnsi safety", () => {
       <AnnualActivityReport />,
     );
 
-    fireEvent.change(getByTestId("textarea-addresses"), {
+    const addressInput = getByTestId("input-annual-activity-addresses");
+    fireEvent.change(addressInput, {
       target: { value: OWNED },
     });
+    fireEvent.keyDown(addressInput, { key: "Enter" });
     fireEvent.click(getByTestId("button-generate"));
 
     // Wait for the report to build before the export button does anything.

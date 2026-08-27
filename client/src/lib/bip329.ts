@@ -194,6 +194,9 @@ export function buildBip329Jsonl(records: Bip329ExportableRecord[]): string {
 export interface Bip329FilterableRecord extends Bip329ExportableRecord {
   tags?: string[];
   walletName?: string;
+  /** Millisecond timestamps from the records table, used for date scoping. */
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 // User-facing grouping of the BIP-329 line types: 'utxo' covers the
@@ -205,7 +208,10 @@ export interface Bip329ExportFilter {
   // Case-insensitive substring matched against the label, ref, and notes.
   search?: string;
   // 'all' (or undefined) keeps every exportable line.
-  kind?: Bip329ExportKind | 'all';
+  kind?: Bip329ExportKind | 'other' | 'all';
+  // Inclusive Unix-second bounds. Records are scoped by their most recently
+  // updated timestamp, falling back to creation time when no update exists.
+  dateRange?: { start?: number; end?: number };
   // Single tag name; records match when they carry this tag.
   tag?: string;
   // Exact wallet name match.
@@ -242,6 +248,8 @@ export interface ExportFilterTarget {
   notes?: string;
   tags?: string[];
   walletName?: string;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 // Shared filter predicate for both the BIP-329 and CSV exports.
@@ -261,6 +269,20 @@ export function matchesExportFilter(
 
   if (filter.tag && !(target.tags ?? []).includes(filter.tag)) {
     return false;
+  }
+
+  if (filter.dateRange) {
+    const timestamp = target.updatedAt ?? target.createdAt;
+    // Records persist timestamps in milliseconds; DateRangeFilter supplies
+    // inclusive Unix-second bounds.
+    if (timestamp === undefined) return false;
+    const timestampSeconds = Math.floor(timestamp / 1000);
+    if (
+      (filter.dateRange.start !== undefined && timestampSeconds < filter.dateRange.start) ||
+      (filter.dateRange.end !== undefined && timestampSeconds > filter.dateRange.end)
+    ) {
+      return false;
+    }
   }
 
   const search = (filter.search ?? '').trim().toLowerCase();
@@ -290,6 +312,8 @@ export function matchesBip329ExportFilter(
       notes: record.notes,
       tags: record.tags,
       walletName: record.walletName,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
     },
     filter
   );
@@ -309,6 +333,8 @@ export function matchesRecordExportFilter(
       notes: record.notes,
       tags: record.tags,
       walletName: record.walletName,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
     },
     filter
   );

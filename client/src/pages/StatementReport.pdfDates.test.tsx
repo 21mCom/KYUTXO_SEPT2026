@@ -125,9 +125,10 @@ describe("StatementReport PDF date formatting", () => {
   it("renders the footer via toLocaleString() and the row Date via en-US toLocaleDateString()", async () => {
     const screen = render(<StatementReport />);
 
-    fireEvent.change(screen.getByTestId("textarea-paste-addresses"), {
+    fireEvent.change(screen.getByTestId("input-statement-report-addresses"), {
       target: { value: ADDR },
     });
+    fireEvent.keyDown(screen.getByTestId("input-statement-report-addresses"), { key: "Enter" });
     fireEvent.click(screen.getByTestId("button-generate-report"));
 
     // Wait for the single statement row to render (generate phase, real timers).

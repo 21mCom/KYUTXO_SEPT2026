@@ -121,9 +121,10 @@ describe("StatementReport non-PDF date formatting", () => {
   it("stamps the download filename as btc-statement-<yyyy-mm-dd>.pdf", async () => {
     const screen = render(<StatementReport />);
 
-    fireEvent.change(screen.getByTestId("textarea-paste-addresses"), {
+    fireEvent.change(screen.getByTestId("input-statement-report-addresses"), {
       target: { value: ADDR },
     });
+    fireEvent.keyDown(screen.getByTestId("input-statement-report-addresses"), { key: "Enter" });
     fireEvent.click(screen.getByTestId("button-generate-report"));
 
     await waitForCondition(() => !!screen.queryByTestId("cell-date-0"));
@@ -161,9 +162,10 @@ describe("StatementReport non-PDF date formatting", () => {
   it("renders the on-screen table Date cell via en-US toLocaleDateString()", async () => {
     const screen = render(<StatementReport />);
 
-    fireEvent.change(screen.getByTestId("textarea-paste-addresses"), {
+    fireEvent.change(screen.getByTestId("input-statement-report-addresses"), {
       target: { value: ADDR },
     });
+    fireEvent.keyDown(screen.getByTestId("input-statement-report-addresses"), { key: "Enter" });
     fireEvent.click(screen.getByTestId("button-generate-report"));
 
     await waitForCondition(() => !!screen.queryByTestId("cell-date-0"));

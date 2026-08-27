@@ -7,17 +7,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { SearchableEntityPicker, type EntityPickerOption } from "@/components/SearchableEntityPicker";
+import { DateRangeFilter, ANY_DATE_RANGE_FILTER, dateRangeFilterToUnixRange, type DateRangeFilterValue } from "@/components/DateRangeFilter";
 import { formatBTC } from "@/lib/bitcoin";
 import { sanitizePdfText } from "@/lib/pdfText";
 import { getParticipantsByAddresses, getParticipantsByTxids, getRecordsByIndexedFieldAnyOfFiltered } from "@/lib/dataFacade";
 import { getTransactionsByTxids, getParticipantsByPrevOutKeys } from "@/lib/data/transaction-crud";
+import { getRecordsByType } from "@/lib/data/record-crud";
 import { AddressLink } from "@/components/AddressLink";
 import { setPendingSyncAddresses, partitionTargetedAddresses } from "@/lib/sync/pendingSyncTargets";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
+import type { TransactionParticipant, BlockchainTransaction, Record as DbRecord } from "@/lib/database";
 
 interface YearRow {
   year: number;
@@ -136,12 +138,18 @@ export function buildAnnualActivityCsv(
   addresses: string[],
   generatedAt: Date,
   includeUnresolvedInputs = false,
+  dateRange?: DateRangeFilterValue,
 ): string {
   const lines: string[] = [];
 
   lines.push(csvRow(["KYUTXO Annual Activity Report"]));
   lines.push(csvRow(["Generated", generatedAt.toISOString()]));
   lines.push(csvRow(["Addresses analyzed", addresses.length]));
+  if (dateRange?.mode === "range" && (dateRange.from || dateRange.to)) {
+    lines.push(csvRow(["Date Range", `${dateRange.from || "start"} to ${dateRange.to || "present"}`]));
+  } else if (dateRange?.mode === "exact" && dateRange.date) {
+    lines.push(csvRow(["Date", dateRange.date]));
+  }
   lines.push(
     csvRow(["Addresses with data", data.perAddress.filter((p) => p.hasData).length]),
   );
@@ -734,7 +742,9 @@ function UnresolvedInputList({ inputs }: { inputs: UnresolvedInput[] }) {
 }
 
 export default function AnnualActivityReport() {
-  const [pastedText, setPastedText] = useState("");
+  const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
+  const [addressRecords, setAddressRecords] = useState<DbRecord[]>([]);
+  const [dateRange, setDateRange] = useState<DateRangeFilterValue>(ANY_DATE_RANGE_FILTER);
   const [isGenerating, setIsGenerating] = useState(false);
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [hasGenerated, setHasGenerated] = useState(false);
@@ -745,6 +755,17 @@ export default function AnnualActivityReport() {
   const [, navigate] = useLocation();
 
   const [usedAddresses, setUsedAddresses] = useState<string[]>([]);
+
+  useEffect(() => {
+    getRecordsByType("address").then(setAddressRecords).catch(() => setAddressRecords([]));
+  }, []);
+
+  const addressOptions = useMemo<EntityPickerOption[]>(() => addressRecords.map((r) => ({
+    value: r.inputString,
+    label: r.label || undefined,
+    sublabel: r.owner && r.owner !== "Pending Review" ? r.owner : undefined,
+    searchText: r.walletName,
+  })), [addressRecords]);
 
   /**
    * Owning addresses behind the unresolved inputs, de-duplicated. These are the
@@ -818,6 +839,7 @@ export default function AnnualActivityReport() {
         usedAddresses,
         generatedAt,
         showUnresolvedDetails,
+        dateRange,
       );
       const stamp = generatedAt.toISOString().slice(0, 10);
       const filename = `kyutxo-annual-activity-${stamp}.csv`;
@@ -831,7 +853,7 @@ export default function AnnualActivityReport() {
     } catch (err) {
       console.error("Failed to export annual activity report:", err);
     }
-  }, [reportData, usedAddresses, showUnresolvedDetails]);
+  }, [reportData, usedAddresses, showUnresolvedDetails, dateRange]);
 
   const exportPdf = useCallback(async () => {
     if (!reportData) return;
@@ -850,7 +872,14 @@ export default function AnnualActivityReport() {
 
       doc.setFontSize(10);
       const addressesWithData = reportData.perAddress.filter((p) => p.hasData).length;
-      const subtitle = `${usedAddresses.length} address${usedAddresses.length !== 1 ? "es" : ""} analyzed | ${addressesWithData} with data`;
+      let subtitle = "";
+      if (dateRange.mode === "range" && (dateRange.from || dateRange.to)) {
+        subtitle = `Date Range: ${dateRange.from || "start"} to ${dateRange.to || "present"}`;
+      } else if (dateRange.mode === "exact" && dateRange.date) {
+        subtitle = `Date: ${dateRange.date}`;
+      }
+      subtitle += subtitle ? " | " : "";
+      subtitle += `${usedAddresses.length} address${usedAddresses.length !== 1 ? "es" : ""} analyzed | ${addressesWithData} with data`;
       doc.text(subtitle, 14, 28);
 
       let headerOffset = 0;
@@ -1067,7 +1096,7 @@ export default function AnnualActivityReport() {
     } catch (err) {
       console.error("Failed to export annual activity report PDF:", err);
     }
-  }, [reportData, usedAddresses, showUnresolvedDetails]);
+  }, [reportData, usedAddresses, showUnresolvedDetails, dateRange]);
 
   const toggleAddress = useCallback((addr: string) => {
     setExpandedAddresses((prev) => {
@@ -1083,8 +1112,7 @@ export default function AnnualActivityReport() {
     const abort = new AbortController();
     abortRef.current = abort;
 
-    const addresses = pastedText
-      .split(/[\n,;]+/)
+    const addresses = selectedAddresses
       .map((a) => a.trim())
       .filter((a) => a.length > 0);
 
@@ -1169,17 +1197,29 @@ export default function AnnualActivityReport() {
           if (i + 500 < ourOutputs.length) await new Promise((r) => setTimeout(r, 0));
         }
       }
-      const txids = Array.from(txidSet);
+      const candidateTxids = Array.from(txidSet);
 
       // ── Step 4: fetch all transactions ───────────────────────────────────
       const txMap = new Map<string, BlockchainTransaction>();
-      for (let i = 0; i < txids.length; i += 500) {
+      for (let i = 0; i < candidateTxids.length; i += 500) {
         if (abort.signal.aborted) return;
-        const batch = txids.slice(i, i + 500);
+        const batch = candidateTxids.slice(i, i + 500);
         const txs = await getTransactionsByTxids(batch);
         for (const tx of txs) txMap.set(tx.txid, tx);
-        if (i + 500 < txids.length) await new Promise((r) => setTimeout(r, 0));
+        if (i + 500 < candidateTxids.length) await new Promise((r) => setTimeout(r, 0));
       }
+
+      const unixRange = dateRangeFilterToUnixRange(dateRange);
+      const txids = candidateTxids.filter((txid) => {
+        const blockTime = txMap.get(txid)?.blockTime;
+        return blockTime !== undefined &&
+          (unixRange?.start === undefined || blockTime >= unixRange.start) &&
+          (unixRange?.end === undefined || blockTime <= unixRange.end);
+      });
+      const scopedTxidSet = new Set(txids);
+      const scopedSpendingTxids = new Set(
+        Array.from(spendingTxids).filter((txid) => scopedTxidSet.has(txid)),
+      );
 
       // ── Step 5: fetch all participants for all txids ─────────────────────
       const allTxParticipants = new Map<string, TransactionParticipant[]>();
@@ -1267,7 +1307,7 @@ export default function AnnualActivityReport() {
         txids,
         txMap,
         allTxParticipants,
-        spendingTxids,
+        spendingTxids: scopedSpendingTxids,
         spentOutputAmounts,
         outputAmountLookup,
         unresolvedInputs,
@@ -1302,23 +1342,27 @@ export default function AnnualActivityReport() {
             <CardTitle className="text-base">Addresses</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="space-y-1">
-              <Label htmlFor="address-input">
-                Paste addresses (one per line, or comma / semicolon separated)
-              </Label>
-              <Textarea
-                id="address-input"
-                placeholder={"bc1q...\nbc1q...\n1A1z..."}
-                value={pastedText}
-                onChange={(e) => setPastedText(e.target.value)}
-                rows={5}
-                className="font-mono text-xs"
-                data-testid="textarea-addresses"
-              />
-            </div>
+            <SearchableEntityPicker
+              multiple
+              value={selectedAddresses}
+              onChange={setSelectedAddresses}
+              options={addressOptions}
+              allowFreeText
+              monospace
+              placeholder="Type or paste a Bitcoin address, then press Enter"
+              searchPlaceholder="Search addresses, labels, owners..."
+              emptyText="No addresses found"
+              testId="annual-activity-addresses"
+            />
+            <DateRangeFilter
+              value={dateRange}
+              onChange={setDateRange}
+              label="Date Range"
+              testId="annual-activity-date-range"
+            />
             <Button
               onClick={generate}
-              disabled={isGenerating || pastedText.trim().length === 0}
+              disabled={isGenerating || selectedAddresses.length === 0}
               data-testid="button-generate"
             >
               {isGenerating ? (

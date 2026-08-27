@@ -129,9 +129,11 @@ describe("Annual Activity Report — blank-address spend recovered live", () => 
       <AnnualActivityReport />,
     );
 
-    fireEvent.change(getByTestId("textarea-addresses"), {
+    const addressInput = getByTestId("input-annual-activity-addresses");
+    fireEvent.change(addressInput, {
       target: { value: OWNED },
     });
+    fireEvent.keyDown(addressInput, { key: "Enter" });
     fireEvent.click(getByTestId("button-generate"));
 
     // The combined table appears once generate() resolves against Dexie.
@@ -175,9 +177,11 @@ describe("Annual Activity Report — blank-address spend recovered live", () => 
       <AnnualActivityReport />,
     );
 
-    fireEvent.change(getByTestId("textarea-addresses"), {
+    const addressInput = getByTestId("input-annual-activity-addresses");
+    fireEvent.change(addressInput, {
       target: { value: OWNED },
     });
+    fireEvent.keyDown(addressInput, { key: "Enter" });
     fireEvent.click(getByTestId("button-generate"));
 
     const table = await findByTestId("table-combined");

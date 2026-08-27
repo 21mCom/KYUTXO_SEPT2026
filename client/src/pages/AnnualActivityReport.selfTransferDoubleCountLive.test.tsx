@@ -171,9 +171,11 @@ describe("Annual Activity Report — self-transfer consolidation not double-coun
   it("counts the consolidation spend and change exactly once through the real wiring", async () => {
     const { getByTestId, findByTestId } = renderWithProviders(<AnnualActivityReport />);
 
-    fireEvent.change(getByTestId("textarea-addresses"), {
+    const addressInput = getByTestId("input-annual-activity-addresses");
+    fireEvent.change(addressInput, {
       target: { value: OWNED },
     });
+    fireEvent.keyDown(addressInput, { key: "Enter" });
     fireEvent.click(getByTestId("button-generate"));
 
     const table = await findByTestId("table-combined");
@@ -226,9 +228,11 @@ describe("Annual Activity Report — self-transfer consolidation not double-coun
 
     const { getByTestId, findByTestId } = renderWithProviders(<AnnualActivityReport />);
 
-    fireEvent.change(getByTestId("textarea-addresses"), {
+    const addressInput = getByTestId("input-annual-activity-addresses");
+    fireEvent.change(addressInput, {
       target: { value: OWNED },
     });
+    fireEvent.keyDown(addressInput, { key: "Enter" });
     fireEvent.click(getByTestId("button-generate"));
 
     const table = await findByTestId("table-combined");

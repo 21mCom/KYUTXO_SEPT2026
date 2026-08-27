@@ -175,7 +175,7 @@ async function selectGroup() {
 }
 
 function activateDateRange() {
-  fireEvent.change(screen.getByTestId("fund-trail-start-date"), {
+  fireEvent.change(screen.getByTestId("input-fund-trail-date-range-from"), {
     target: { value: "2024-01-01" },
   });
 }

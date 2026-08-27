@@ -28,10 +28,18 @@ import {
   getAllTransactionParticipants,
   getParticipantsByRecordIds,
   getParticipantsByTxids,
+  getTransactionsByTxids,
 } from "@/lib/dataFacade";
 import type { Record as KRecord, TransactionParticipant } from "@/lib/db-types";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { createGraphNodeActivation } from "@/lib/graph-node-interaction";
+import { SearchableEntityPicker } from "@/components/SearchableEntityPicker";
+import {
+  DateRangeFilter,
+  ANY_DATE_RANGE_FILTER,
+  dateRangeFilterToUnixRange,
+  type DateRangeFilterValue,
+} from "@/components/DateRangeFilter";
 import {
   buildNetworkGraph,
   MAX_NODES,
@@ -82,6 +90,7 @@ export default function NetworkAnalysis() {
   const [filterValue, setFilterValue] = useState<string>("");
   const [owners, setOwners] = useState<string[]>([]);
   const [wallets, setWallets] = useState<string[]>([]);
+  const [dateRange, setDateRange] = useState<DateRangeFilterValue>(ANY_DATE_RANGE_FILTER);
   const abortRef = useRef<AbortController | null>(null);
 
   const [simNodes, setSimNodes] = useState<SimNode[]>([]);
@@ -199,6 +208,30 @@ export default function NetworkAnalysis() {
 
       if (controller.signal.aborted) return;
 
+      const unixRange = dateRangeFilterToUnixRange(dateRange);
+      if (unixRange) {
+        setProgress("Filtering transaction data by date...");
+        const txids = Array.from(new Set(participants.map(p => p.txid)));
+        const includedTxids = new Set<string>();
+        const batchSize = 500;
+
+        for (let i = 0; i < txids.length; i += batchSize) {
+          if (controller.signal.aborted) return;
+          const transactions = await getTransactionsByTxids(txids.slice(i, i + batchSize));
+          for (const transaction of transactions) {
+            if (
+              (unixRange.start === undefined || transaction.blockTime >= unixRange.start) &&
+              (unixRange.end === undefined || transaction.blockTime <= unixRange.end)
+            ) {
+              includedTxids.add(transaction.txid);
+            }
+          }
+        }
+        participants = participants.filter(p => includedTxids.has(p.txid));
+      }
+
+      if (controller.signal.aborted) return;
+
       const result = await buildNetworkGraph(
         filterMode === "all" ? rawRecords : filteredRecords,
         participants,
@@ -225,7 +258,7 @@ export default function NetworkAnalysis() {
       setIsAnalyzing(false);
       abortRef.current = null;
     }
-  }, [filterMode, filterValue]);
+  }, [filterMode, filterValue, dateRange]);
 
   const cancelAnalysis = useCallback(() => {
     abortRef.current?.abort();
@@ -428,37 +461,30 @@ export default function NetworkAnalysis() {
             </Select>
           </div>
 
-          {filterMode === "by-owner" && (
+          {(filterMode === "by-owner" || filterMode === "by-wallet") && (
             <div className="space-y-1">
-              <Label className="text-xs">Owner</Label>
-              <Select value={filterValue} onValueChange={setFilterValue}>
-                <SelectTrigger className="w-44" data-testid="select-filter-owner">
-                  <SelectValue placeholder="Select owner" />
-                </SelectTrigger>
-                <SelectContent>
-                  {owners.map(o => (
-                    <SelectItem key={o} value={o}>{o}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label className="text-xs">{filterMode === "by-owner" ? "Owner" : "Wallet"}</Label>
+              <SearchableEntityPicker
+                options={(filterMode === "by-owner" ? owners : wallets).map(value => ({
+                  value,
+                  label: value,
+                }))}
+                value={filterValue}
+                onChange={setFilterValue}
+                placeholder={`Select ${filterMode === "by-owner" ? "owner" : "wallet"}`}
+                searchPlaceholder={`Search ${filterMode === "by-owner" ? "owners" : "wallets"}...`}
+                testId="network-analysis-filter-value"
+                className="w-64"
+              />
             </div>
           )}
 
-          {filterMode === "by-wallet" && (
-            <div className="space-y-1">
-              <Label className="text-xs">Wallet</Label>
-              <Select value={filterValue} onValueChange={setFilterValue}>
-                <SelectTrigger className="w-44" data-testid="select-filter-wallet">
-                  <SelectValue placeholder="Select wallet" />
-                </SelectTrigger>
-                <SelectContent>
-                  {wallets.map(w => (
-                    <SelectItem key={w} value={w}>{w}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
+          <DateRangeFilter
+            value={dateRange}
+            onChange={setDateRange}
+            label="Date Range"
+            testId="network-analysis-date-range"
+          />
 
           {!isAnalyzing && !isSimulating ? (
             <Button

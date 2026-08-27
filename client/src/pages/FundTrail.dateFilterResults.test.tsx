@@ -214,12 +214,12 @@ async function selectSeededGroup() {
 
 function applyWindow(from: string, to: string) {
   if (from) {
-    fireEvent.change(screen.getByTestId("fund-trail-start-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-from"), {
       target: { value: from },
     });
   }
   if (to) {
-    fireEvent.change(screen.getByTestId("fund-trail-end-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-to"), {
       target: { value: to },
     });
   }

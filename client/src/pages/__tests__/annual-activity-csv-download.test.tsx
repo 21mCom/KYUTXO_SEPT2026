@@ -49,6 +49,10 @@ vi.mock("@/lib/data/transaction-crud", () => ({
   getParticipantsByPrevOutKeys: vi.fn(() => Promise.resolve([])),
 }));
 
+vi.mock("@/lib/data/record-crud", () => ({
+  getRecordsByType: vi.fn(() => Promise.resolve([])),
+}));
+
 // @tanstack/react-virtual (used by the counterparty lists) needs ResizeObserver,
 // which jsdom lacks. The lists render empty here, but the hook still runs.
 beforeAll(() => {
@@ -94,9 +98,11 @@ const DATED_CSV = /^kyutxo-annual-activity-\d{4}-\d{2}-\d{2}\.csv$/;
 // Export CSV button (only shown once reportData is populated).
 async function generateReport() {
   renderWithProviders(<AnnualActivityReport />);
-  fireEvent.change(screen.getByTestId("textarea-addresses"), {
+  const addressInput = screen.getByTestId("input-annual-activity-addresses");
+  fireEvent.change(addressInput, {
     target: { value: ADDR },
   });
+  fireEvent.keyDown(addressInput, { key: "Enter" });
   fireEvent.click(screen.getByTestId("button-generate"));
   await screen.findByTestId("button-export-csv");
 }

@@ -184,11 +184,13 @@ describe("Annual Activity Report — multi-address consolidation attributes spen
   it("splits each address's own spend + change in the per-address breakdown while the combined table sums once", async () => {
     const { getByTestId, findByTestId } = renderWithProviders(<AnnualActivityReport />);
 
-    // Paste BOTH owned addresses (one per line) so the Per-Address Breakdown
-    // card renders (gated on perAddress.length > 1).
-    fireEvent.change(getByTestId("textarea-addresses"), {
-      target: { value: `${OWNED_A}\n${OWNED_B}` },
-    });
+    // Add BOTH owned addresses so the Per-Address Breakdown card renders
+    // (gated on perAddress.length > 1).
+    const addressInput = getByTestId("input-annual-activity-addresses");
+    fireEvent.change(addressInput, { target: { value: OWNED_A } });
+    fireEvent.keyDown(addressInput, { key: "Enter" });
+    fireEvent.change(addressInput, { target: { value: OWNED_B } });
+    fireEvent.keyDown(addressInput, { key: "Enter" });
     fireEvent.click(getByTestId("button-generate"));
 
     // ── Combined table: the sum, each amount counted ONCE ──────────────────

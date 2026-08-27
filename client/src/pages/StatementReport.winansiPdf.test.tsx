@@ -102,9 +102,10 @@ describe("Statement Report PDF — WinAnsi safety", () => {
   it("emits no UTF-16BE runs for non-Latin addresses/txids in the exported PDF", async () => {
     const { getByTestId, findByTestId } = renderWithProviders(<StatementReport />);
 
-    fireEvent.change(getByTestId("textarea-paste-addresses"), {
+    fireEvent.change(getByTestId("input-statement-report-addresses"), {
       target: { value: OWNED },
     });
+    fireEvent.keyDown(getByTestId("input-statement-report-addresses"), { key: "Enter" });
     // Enable the TXID and Addresses columns so both record-derived columns are
     // exercised in the PDF body.
     fireEvent.click(getByTestId("checkbox-show-txids"));

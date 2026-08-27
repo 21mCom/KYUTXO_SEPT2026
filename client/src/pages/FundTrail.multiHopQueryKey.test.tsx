@@ -152,7 +152,7 @@ function multiHopKeys(queryClient: QueryClient): unknown[][] {
 
 async function enterAddressMode(address: string) {
   fireEvent.click(screen.getByTestId("fund-trail-mode-address"));
-  fireEvent.change(screen.getByTestId("fund-trail-address-input"), {
+  fireEvent.change(screen.getByTestId("input-fund-trail-address-input"), {
     target: { value: address },
   });
 }
@@ -223,7 +223,7 @@ describe("FundTrail multi-hop cache key", () => {
     // Switch the center address — this must spawn a new query key, not reuse
     // the entry computed for ADDRESS_A.
     computeMultiHopKnownSpy.mockClear();
-    fireEvent.change(screen.getByTestId("fund-trail-address-input"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-address-input"), {
       target: { value: ADDRESS_B },
     });
 

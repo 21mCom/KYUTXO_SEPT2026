@@ -167,10 +167,10 @@ describe("FundTrail date filter refetch", () => {
 
     // The user narrows the window via the From/To date inputs. Each change
     // updates startDate/endDate, which toDateRange folds into the query key.
-    fireEvent.change(screen.getByTestId("fund-trail-start-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-from"), {
       target: { value: FROM },
     });
-    fireEvent.change(screen.getByTestId("fund-trail-end-date"), {
+    fireEvent.change(screen.getByTestId("input-fund-trail-date-range-to"), {
       target: { value: TO },
     });
 

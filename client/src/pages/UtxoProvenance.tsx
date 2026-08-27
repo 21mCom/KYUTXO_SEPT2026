@@ -18,6 +18,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  ANY_DATE_RANGE_FILTER,
+  DateRangeFilter,
+  dateRangeFilterToUnixRange,
+  type DateRangeFilterValue,
+} from "@/components/DateRangeFilter";
 import { useToast } from "@/hooks/use-toast";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
@@ -332,6 +338,7 @@ export default function UtxoProvenancePage() {
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState<string>("any");
   const [minHops, setMinHops] = useState<string>("0");
+  const [dateRange, setDateRange] = useState<DateRangeFilterValue>(ANY_DATE_RANGE_FILTER);
   const [ignoreDust, setIgnoreDust] = useState(false);
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -348,11 +355,20 @@ export default function UtxoProvenancePage() {
     undefined as LoadedData | undefined,
   );
 
-  const visibleResults = useMemo(() => {
-    return filterProvenanceResultsByDust(data?.results ?? [], dustFlaggedOutpoints, ignoreDust);
-  }, [data, ignoreDust, dustFlaggedOutpoints]);
+  const dateScopedResults = useMemo(() => {
+    const unixRange = dateRangeFilterToUnixRange(dateRange);
+    return (data?.results ?? []).filter((r) => {
+      if (unixRange?.start !== undefined && r.utxo.blockTime < unixRange.start) return false;
+      if (unixRange?.end !== undefined && r.utxo.blockTime > unixRange.end) return false;
+      return true;
+    });
+  }, [data, dateRange]);
 
-  const hiddenDustCount = data ? data.results.length - visibleResults.length : 0;
+  const visibleResults = useMemo(() => {
+    return filterProvenanceResultsByDust(dateScopedResults, dustFlaggedOutpoints, ignoreDust);
+  }, [dateScopedResults, ignoreDust, dustFlaggedOutpoints]);
+
+  const hiddenDustCount = dateScopedResults.length - visibleResults.length;
 
   const filtered = useMemo(() => {
     if (!data) return [];
@@ -400,7 +416,7 @@ export default function UtxoProvenancePage() {
     setPage(0);
     setExpanded(new Set());
     setOpenHop(null);
-  }, [effectiveWallet, ignoreDust]);
+  }, [effectiveWallet, ignoreDust, dateRange]);
 
   return (
     <TooltipProvider>
@@ -455,6 +471,12 @@ export default function UtxoProvenancePage() {
                   onChange={(e) => { setSearch(e.target.value); setPage(0); }}
                 />
               </div>
+              <DateRangeFilter
+                value={dateRange}
+                onChange={setDateRange}
+                label="Date Range"
+                testId="utxo-provenance-date-range"
+              />
               <div>
                 <Label>Pattern</Label>
                 <Select value={classFilter} onValueChange={(v) => { setClassFilter(v); setPage(0); }}>
@@ -492,14 +514,14 @@ export default function UtxoProvenancePage() {
                   data-testid="switch-ignore-prov-dust"
                 />
                 <Label htmlFor="switch-ignore-prov-dust" className="cursor-pointer whitespace-nowrap text-sm">
-                  Ignore flagged dust
+                  Hide dust
                 </Label>
               </div>
             </div>
             {ignoreDust && hiddenDustCount > 0 && (
               <div className="pt-2">
                 <Badge variant="secondary" data-testid="prov-dust-status">
-                  Ignoring {hiddenDustCount.toLocaleString()} flagged dust UTXO{hiddenDustCount === 1 ? "" : "s"}
+                  Hiding {hiddenDustCount.toLocaleString()} flagged dust UTXO{hiddenDustCount === 1 ? "" : "s"}
                 </Badge>
               </div>
             )}
@@ -519,8 +541,14 @@ export default function UtxoProvenancePage() {
             ) : visibleResults.length === 0 ? (
               <div className="flex flex-col items-center gap-2 p-10 text-center text-muted-foreground" data-testid="prov-empty">
                 <Coins className="h-8 w-8" />
-                <p>All unspent UTXOs in this view are flagged as dust.</p>
-                <p className="text-xs">Turn off “Ignore flagged dust” to show them.</p>
+                {dateScopedResults.length === 0 ? (
+                  <p>No unspent UTXOs match the selected date range.</p>
+                ) : (
+                  <>
+                    <p>All unspent UTXOs in this view are flagged as dust.</p>
+                    <p className="text-xs">Turn off “Hide dust” to show them.</p>
+                  </>
+                )}
               </div>
             ) : (
               <>

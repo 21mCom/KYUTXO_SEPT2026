@@ -7,6 +7,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 
+Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+  configurable: true,
+  value: vi.fn(),
+});
+
 const { toastMock, downloadCapture } = vi.hoisted(() => ({
   toastMock: vi.fn(),
   downloadCapture: { blob: null as Blob | null, name: null as string | null },
@@ -172,5 +177,17 @@ describe("ExportPage CSV export filters", () => {
 
     const rows = await downloadedRows();
     expect(rows).toHaveLength(5);
+  });
+
+  it("scopes UTXO records through Transactions plus UTXO refs only", async () => {
+    render(<ExportPage />);
+    fireEvent.click(await screen.findByTestId("select-csv-type"));
+    fireEvent.click(await screen.findByText("Transactions"));
+    fireEvent.click(await screen.findByTestId("checkbox-csv-utxo-only"));
+    fireEvent.click(screen.getByTestId("button-export-csv"));
+
+    const rows = await downloadedRows();
+    expect(rows).toHaveLength(2); // header + the outpoint record
+    expect(rows[1]).toContain(OUTPOINT);
   });
 });

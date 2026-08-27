@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { AlertTriangle, FileDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,10 +7,11 @@ import { Separator } from "@/components/ui/separator";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { SearchableEntityPicker, type EntityPickerOption } from "@/components/SearchableEntityPicker";
+import { DateRangeFilter, ANY_DATE_RANGE_FILTER, dateRangeFilterToUnixRange, type DateRangeFilterValue } from "@/components/DateRangeFilter";
 import { formatBTC } from "@/lib/bitcoin";
 import { sanitizePdfText } from "@/lib/pdfText";
 import { useTags } from "@/hooks/use-tags";
@@ -23,7 +24,7 @@ import {
   getParticipantsByPrevOutKeys,
 } from "@/lib/data/transaction-crud";
 import { getPriceDataByDateCurrencyAssetKeys } from "@/lib/data/price-data-crud";
-import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
+import type { TransactionParticipant, BlockchainTransaction, Record as DbRecord } from "@/lib/database";
 
 type BalanceMode = "modeA" | "modeB" | "modeC";
 
@@ -58,12 +59,12 @@ function formatUsd(amount: number): string {
 
 export default function StatementReport() {
   const [addressMode, setAddressMode] = useState<string>("paste");
-  const [pastedAddresses, setPastedAddresses] = useState("");
+  const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
+  const [addressRecords, setAddressRecords] = useState<DbRecord[]>([]);
   const [filterOwner, setFilterOwner] = useState<string>("");
   const [filterWallet, setFilterWallet] = useState<string>("");
   const [filterTag, setFilterTag] = useState<string>("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [dateRange, setDateRange] = useState<DateRangeFilterValue>(ANY_DATE_RANGE_FILTER);
   const [currency, setCurrency] = useState<"BTC" | "USD">("BTC");
   const [balanceMode, setBalanceMode] = useState<BalanceMode>("modeA");
   const [showTxids, setShowTxids] = useState(false);
@@ -81,12 +82,20 @@ export default function StatementReport() {
   const filteredOwners = useMemo(() => owners.filter(o => o.name), [owners]);
   const filteredWalletNames = useMemo(() => walletNames.filter(w => w.name), [walletNames]);
 
+  useEffect(() => {
+    getRecordsByType('address').then(setAddressRecords).catch(() => setAddressRecords([]));
+  }, []);
+
+  const addressOptions = useMemo<EntityPickerOption[]>(() => addressRecords.map(r => ({
+    value: r.inputString,
+    label: r.label || undefined,
+    sublabel: r.owner && r.owner !== 'Pending Review' ? r.owner : undefined,
+    searchText: r.walletName,
+  })), [addressRecords]);
+
   const resolveAddresses = useCallback(async (): Promise<string[]> => {
     if (addressMode === "paste") {
-      return pastedAddresses
-        .split(/[\n,;]+/)
-        .map(a => a.trim())
-        .filter(a => a.length > 0);
+      return selectedAddresses.map(a => a.trim()).filter(a => a.length > 0);
     }
 
     const rawRecords = await getRecordsByType('address');
@@ -101,7 +110,7 @@ export default function StatementReport() {
       records = records.filter(r => r.tags && r.tags.includes(filterTag));
     }
     return records.map(r => r.inputString).filter(s => s.length > 0);
-  }, [addressMode, pastedAddresses, filterOwner, filterWallet, filterTag]);
+  }, [addressMode, selectedAddresses, filterOwner, filterWallet, filterTag]);
 
   const batchLookupPrices = useCallback(async (dateStrings: string[]): Promise<Map<string, number>> => {
     const priceCache = new Map<string, number>();
@@ -366,13 +375,12 @@ export default function StatementReport() {
         .filter(e => e.tx !== undefined)
         .sort((a, b) => a.tx!.blockTime - b.tx!.blockTime);
 
-      if (startDate) {
-        const startUnix = new Date(startDate).getTime() / 1000;
-        entries = entries.filter(e => e.tx!.blockTime >= startUnix);
+      const unixRange = dateRangeFilterToUnixRange(dateRange);
+      if (unixRange?.start !== undefined) {
+        entries = entries.filter(e => e.tx!.blockTime >= unixRange.start!);
       }
-      if (endDate) {
-        const endUnix = new Date(endDate + "T23:59:59").getTime() / 1000;
-        entries = entries.filter(e => e.tx!.blockTime <= endUnix);
+      if (unixRange?.end !== undefined) {
+        entries = entries.filter(e => e.tx!.blockTime <= unixRange.end!);
       }
 
       let priceCache = new Map<string, number>();
@@ -435,7 +443,7 @@ export default function StatementReport() {
         setIsGenerating(false);
       }
     }
-  }, [resolveAddresses, startDate, endDate, currency, batchLookupPrices]);
+  }, [resolveAddresses, dateRange, currency, batchLookupPrices]);
 
   const exportPdf = useCallback(async () => {
     try {
@@ -450,8 +458,10 @@ export default function StatementReport() {
 
       doc.setFontSize(10);
       let subtitle = "";
-      if (startDate || endDate) {
-        subtitle += `Date Range: ${startDate || "start"} to ${endDate || "present"}`;
+      if (dateRange.mode === "range" && (dateRange.from || dateRange.to)) {
+        subtitle += `Date Range: ${dateRange.from || "start"} to ${dateRange.to || "present"}`;
+      } else if (dateRange.mode === "exact" && dateRange.date) {
+        subtitle += `Date: ${dateRange.date}`;
       }
       if (usedAddresses.length > 0) {
         const addrText = usedAddresses.length <= 3
@@ -535,7 +545,7 @@ export default function StatementReport() {
     } catch (error) {
       console.error("Failed to generate PDF:", error);
     }
-  }, [rows, showTxids, showAddresses, currency, balanceMode, startDate, endDate, usedAddresses]);
+  }, [rows, showTxids, showAddresses, currency, balanceMode, dateRange, usedAddresses]);
 
   const showRunningBtcBalance = currency === "BTC" || balanceMode === "modeB" || balanceMode === "modeC";
   const showUsdValue = currency === "USD" && balanceMode === "modeB";
@@ -553,12 +563,17 @@ export default function StatementReport() {
               <TabsTrigger value="filter" data-testid="tab-filter-vocabulary">Filter by Vocabulary</TabsTrigger>
             </TabsList>
             <TabsContent value="paste">
-              <Textarea
-                placeholder="Paste one or more Bitcoin addresses, one per line"
-                value={pastedAddresses}
-                onChange={e => setPastedAddresses(e.target.value)}
-                rows={4}
-                data-testid="textarea-paste-addresses"
+              <SearchableEntityPicker
+                multiple
+                value={selectedAddresses}
+                onChange={setSelectedAddresses}
+                options={addressOptions}
+                allowFreeText
+                monospace
+                placeholder="Type or paste a Bitcoin address, then press Enter"
+                searchPlaceholder="Search addresses, labels, owners..."
+                emptyText="No addresses found"
+                testId="statement-report-addresses"
               />
             </TabsContent>
             <TabsContent value="filter">
@@ -612,26 +627,7 @@ export default function StatementReport() {
           <Separator />
 
           <div className="flex flex-wrap items-end gap-4">
-            <div className="space-y-1">
-              <Label data-testid="label-start-date">Start Date</Label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={e => setStartDate(e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                data-testid="input-start-date"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label data-testid="label-end-date">End Date</Label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={e => setEndDate(e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                data-testid="input-end-date"
-              />
-            </div>
+            <DateRangeFilter value={dateRange} onChange={setDateRange} label="Date Range" testId="statement-date-range" />
             <div className="space-y-1">
               <Label data-testid="label-currency">Currency</Label>
               <Select value={currency} onValueChange={(v) => setCurrency(v as "BTC" | "USD")}>

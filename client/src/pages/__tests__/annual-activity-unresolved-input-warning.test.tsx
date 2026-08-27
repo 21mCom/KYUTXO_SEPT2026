@@ -140,6 +140,10 @@ vi.mock("@/lib/data/transaction-crud", () => ({
   getParticipantsByPrevOutKeys,
 }));
 
+vi.mock("@/lib/data/record-crud", () => ({
+  getRecordsByType: vi.fn(() => Promise.resolve([])),
+}));
+
 beforeAll(() => {
   (globalThis as any).ResizeObserver = class {
     observe() {}
@@ -165,9 +169,11 @@ afterEach(() => {
 
 function generateReport() {
   renderWithProviders(<AnnualActivityReport />);
-  fireEvent.change(screen.getByTestId("textarea-addresses"), {
+  const addressInput = screen.getByTestId("input-annual-activity-addresses");
+  fireEvent.change(addressInput, {
     target: { value: MINE },
   });
+  fireEvent.keyDown(addressInput, { key: "Enter" });
   fireEvent.click(screen.getByTestId("button-generate"));
 }
 
