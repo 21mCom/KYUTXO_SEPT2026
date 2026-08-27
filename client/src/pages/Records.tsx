@@ -50,6 +50,7 @@ import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { TxidLink } from "@/components/TxidLink";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RecordFilters, ColumnFilter } from "@/components/RecordFilters";
+import { ActiveFiltersBar } from "@/components/ActiveFiltersBar";
 import { BehaviorFilter } from "@/components/BehaviorFilter";
 import { behaviorLabelFromCachedStats, type BehaviorLabel } from "@/lib/behavior-profile";
 import { useBehaviorTally } from "@/hooks/use-behavior-tally";
@@ -140,7 +141,8 @@ function buildResidualNoTier(opts: {
         record.owner?.toLowerCase().includes(search) ||
         record.walletName?.toLowerCase().includes(search) ||
         record.notes?.toLowerCase().includes(search) ||
-        record.tags?.some((t) => t.toLowerCase().includes(search))
+        record.tags?.some((t) => t.toLowerCase().includes(search)) ||
+        record.categories?.some((c) => c.toLowerCase().includes(search))
       )) return false;
     }
     return true;
@@ -175,6 +177,19 @@ function matchesColumnFilter(record: DbRecord, filter: ColumnFilter): boolean {
       return true;
     case 'isTrue': return Boolean(value);
     case 'isFalse': return !value;
+    case 'isAnyOf': {
+      let allowed: string[] = [];
+      try {
+        const parsed = JSON.parse(filter.value);
+        if (Array.isArray(parsed)) allowed = parsed.filter((v): v is string => typeof v === 'string');
+      } catch {
+        allowed = [];
+      }
+      if (allowed.length === 0) return true;
+      const normalizedAllowed = allowed.map((v) => v.toLowerCase());
+      if (Array.isArray(value)) return value.some((v: unknown) => normalizedAllowed.includes(String(v).toLowerCase()));
+      return normalizedAllowed.includes(String(value ?? '').toLowerCase());
+    }
     default: return true;
   }
 }
@@ -1320,7 +1335,7 @@ export default function Records() {
                 )}
                 <Input
                   id="search"
-                  placeholder="Search by label, address, txid, owner, wallet, or notes..."
+                  placeholder="Search by label, address/txid, owner, wallet, notes, tags, or categories..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="pl-10"
@@ -1336,7 +1351,20 @@ export default function Records() {
               />
             </div>
           </div>
-          
+
+          <ActiveFiltersBar
+            searchValue={searchQuery}
+            onSearchChange={setSearchQuery}
+            filters={columnFilters}
+            onFiltersChange={setColumnFilters}
+            extraActiveCount={(dateAddedActive ? 1 : 0) + behaviorFilters.size}
+            onClearExtra={() => {
+              setDateSort('default');
+              setAddedSince(null);
+              setBehaviorFilters(new Set());
+            }}
+          />
+
           <RecordFilters
             filters={columnFilters}
             onFiltersChange={setColumnFilters}

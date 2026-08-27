@@ -1,10 +1,11 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Filter, Plus, X, ChevronDown, ChevronRight } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { type AddressImportance, ALL_IMPORTANCE_TIERS } from "@/lib/database";
 
 export interface ColumnFilter {
@@ -21,17 +22,18 @@ export interface FilterableField {
   options?: string[];
 }
 
+// Type/tags/categories/owner/wallet/seed are surfaced as dedicated controls
+// (below) rather than through the generic field/operator/value builder, so a
+// vault's record type or high-cardinality lists aren't filterable two
+// different ways at once. They are still stored as ordinary ColumnFilter
+// entries (under reserved ids, see TYPE_FILTER_ID/FACET_FILTER_ID) so every
+// existing consumer of `filters`/`applyColumnFilters`/the residual predicate
+// picks them up automatically.
 const FILTERABLE_FIELDS: FilterableField[] = [
-  { key: 'type', label: 'Type', type: 'enum', options: ['address', 'transaction', 'other'] },
   { key: 'label', label: 'Label', type: 'text' },
   { key: 'inputString', label: 'Address/Txid', type: 'text' },
-  { key: 'owner', label: 'Owner', type: 'text' },
-  { key: 'walletName', label: 'Wallet Name', type: 'text' },
-  { key: 'seedName', label: 'Seed Name', type: 'text' },
   { key: 'walletSoftware', label: 'Wallet Software', type: 'text' },
   { key: 'privateKeyStatus', label: 'Private Key', type: 'enum', options: ['has-private-key', 'no-private-key', 'unknown'] },
-  { key: 'tags', label: 'Tags', type: 'array' },
-  { key: 'categories', label: 'Categories', type: 'array' },
   { key: 'source', label: 'Source', type: 'text' },
   { key: 'addressImportance', label: 'Importance', type: 'enum', options: ALL_IMPORTANCE_TIERS },
   { key: 'chainType', label: 'Chain', type: 'enum', options: ['mainnet', 'testnet', 'signet', 'regtest'] },
@@ -77,6 +79,109 @@ function getOperatorsForField(field: FilterableField) {
 
 function needsValueInput(operator: string): boolean {
   return !['isEmpty', 'isNotEmpty', 'isTrue', 'isFalse'].includes(operator);
+}
+
+// ---------------------------------------------------------------------------
+// Record type ("kind") filter — the single canonical address/transaction/
+// other set shared with the rest of the app. Stored as an ordinary equals
+// ColumnFilter under a reserved id so the Dexie/engine fast paths (which
+// pattern-match on field+operator, never on id) keep working unmodified.
+// ---------------------------------------------------------------------------
+export type RecordKindFilterValue = 'all' | 'address' | 'transaction' | 'other';
+
+export const TYPE_FILTER_ID = 'facet-type';
+
+export const TYPE_FILTER_LABELS: Record<RecordKindFilterValue, string> = {
+  all: 'All Types',
+  address: 'Bitcoin Addresses',
+  transaction: 'Transactions',
+  other: 'Other',
+};
+
+export function getTypeFilterValue(filters: ColumnFilter[]): RecordKindFilterValue {
+  const entry = filters.find((f) => f.id === TYPE_FILTER_ID);
+  if (entry?.value === 'address' || entry?.value === 'transaction' || entry?.value === 'other') {
+    return entry.value;
+  }
+  return 'all';
+}
+
+export function setTypeFilterValue(filters: ColumnFilter[], value: RecordKindFilterValue): ColumnFilter[] {
+  const rest = filters.filter((f) => f.id !== TYPE_FILTER_ID);
+  if (value === 'all') return rest;
+  return [...rest, { id: TYPE_FILTER_ID, field: 'type', operator: 'equals', value }];
+}
+
+// ---------------------------------------------------------------------------
+// High-cardinality facets (tags/categories/owner/wallet/seed) — dedicated
+// searchable multi-selects. Each is stored as a single ColumnFilter entry
+// under a reserved id with the new 'isAnyOf' operator (JSON-encoded array of
+// selected values), so `applyColumnFilters` / the residual predicate handle
+// them exactly like any other column filter with zero extra plumbing.
+// ---------------------------------------------------------------------------
+export const FACET_KEYS = ['tags', 'categories', 'owner', 'walletName', 'seedName'] as const;
+export type FacetKey = typeof FACET_KEYS[number];
+
+export const FACET_FILTER_ID: Record<FacetKey, string> = {
+  tags: 'facet-tags',
+  categories: 'facet-categories',
+  owner: 'facet-owner',
+  walletName: 'facet-walletName',
+  seedName: 'facet-seedName',
+};
+
+export const FACET_LABELS: Record<FacetKey, string> = {
+  tags: 'Tag',
+  categories: 'Category',
+  owner: 'Owner',
+  walletName: 'Wallet',
+  seedName: 'Seed',
+};
+
+export function getFacetValues(filters: ColumnFilter[], key: FacetKey): string[] {
+  const entry = filters.find((f) => f.id === FACET_FILTER_ID[key]);
+  if (!entry) return [];
+  try {
+    const parsed = JSON.parse(entry.value);
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setFacetValues(filters: ColumnFilter[], key: FacetKey, values: string[]): ColumnFilter[] {
+  const rest = filters.filter((f) => f.id !== FACET_FILTER_ID[key]);
+  if (values.length === 0) return rest;
+  return [...rest, { id: FACET_FILTER_ID[key], field: key, operator: 'isAnyOf', value: JSON.stringify(values) }];
+}
+
+const RESERVED_FILTER_IDS = new Set<string>([TYPE_FILTER_ID, ...FACET_KEYS.map((k) => FACET_FILTER_ID[k])]);
+
+export function isReservedFilterId(id: string): boolean {
+  return RESERVED_FILTER_IDS.has(id);
+}
+
+/** The subset of `filters` the generic field/operator/value builder owns. */
+export function genericFilters(filters: ColumnFilter[]): ColumnFilter[] {
+  return filters.filter((f) => !isReservedFilterId(f.id));
+}
+
+/** Human-readable summary of a single generic column filter, e.g. `Label contains "foo"`. */
+export function describeColumnFilter(filter: ColumnFilter): string {
+  const field = FILTERABLE_FIELDS.find((f) => f.key === filter.field);
+  const operators = field ? getOperatorsForField(field) : TEXT_OPERATORS;
+  const operator = operators.find((op) => op.value === filter.operator);
+  const label = field?.label ?? filter.field;
+  const opLabel = operator?.label ?? filter.operator;
+  return needsValueInput(filter.operator) ? `${label} ${opLabel} "${filter.value}"` : `${label} ${opLabel}`;
+}
+
+/** Total number of active record-type/facet/generic filters in `filters`. */
+export function countActiveRecordFilters(filters: ColumnFilter[]): number {
+  let count = getTypeFilterValue(filters) === 'all' ? 0 : 1;
+  for (const key of FACET_KEYS) count += getFacetValues(filters, key).length;
+  count += genericFilters(filters).length;
+  return count;
 }
 
 interface FilterRowProps {
@@ -168,20 +273,71 @@ function FilterRow({ filter, onUpdate, onRemove, uniqueValues }: FilterRowProps)
   );
 }
 
+export interface RecordFiltersTableColumns {
+  tags?: boolean;
+  categories?: boolean;
+  owner?: boolean;
+  walletName?: boolean;
+  seedName?: boolean;
+}
+
 interface RecordFiltersProps {
   filters: ColumnFilter[];
   onFiltersChange: (filters: ColumnFilter[]) => void;
   uniqueValues: Record<string, string[]>;
+  /** Optional column-visibility gating (Dashboard only — Records has no table-column settings). */
+  tableColumns?: RecordFiltersTableColumns;
 }
 
-export function RecordFilters({ filters, onFiltersChange, uniqueValues }: RecordFiltersProps) {
-  const [isOpen, setIsOpen] = useState(filters.length > 0);
+const FACET_UI: Record<FacetKey, { placeholder: string; searchPlaceholder: string; testId: string }> = {
+  tags: { placeholder: 'Filter by tags...', searchPlaceholder: 'Search tags...', testId: 'select-tag-filter' },
+  categories: { placeholder: 'Filter by category...', searchPlaceholder: 'Search categories...', testId: 'select-category-filter' },
+  owner: { placeholder: 'Filter by owner...', searchPlaceholder: 'Search owners...', testId: 'select-owner-filter' },
+  walletName: { placeholder: 'Filter by wallet...', searchPlaceholder: 'Search wallets...', testId: 'select-wallet-filter' },
+  seedName: { placeholder: 'Filter by seed...', searchPlaceholder: 'Search seeds...', testId: 'select-seed-filter' },
+};
+
+/**
+ * Single consolidated filter surface for Dashboard and Records: record type,
+ * the high-cardinality facets (tags/categories/owner/wallet/seed — searchable
+ * multi-selects), and the generic column-condition builder. Type and facets
+ * are stored as reserved-id entries in the same `filters` array the generic
+ * builder edits, so every caller only has to track one array.
+ */
+export function RecordFilters({ filters, onFiltersChange, uniqueValues, tableColumns }: RecordFiltersProps) {
+  const generic = genericFilters(filters);
+  const [isOpen, setIsOpen] = useState(generic.length > 0);
+
+  const showFacet: Record<FacetKey, boolean> = {
+    tags: tableColumns?.tags !== false,
+    categories: tableColumns?.categories !== false,
+    owner: tableColumns?.owner !== false,
+    walletName: tableColumns?.walletName !== false,
+    seedName: tableColumns?.seedName !== false,
+  };
+
+  // Mirrors the legacy FilterBar behavior: if a table column backing a facet
+  // is toggled off while that facet has an active selection, clear it so the
+  // filter can't silently keep narrowing on a hidden column.
+  const prevShowFacet = useRef(showFacet);
+  useEffect(() => {
+    let next = filters;
+    for (const key of FACET_KEYS) {
+      if (prevShowFacet.current[key] && !showFacet[key] && getFacetValues(next, key).length > 0) {
+        next = setFacetValues(next, key, []);
+      }
+    }
+    if (next !== filters) onFiltersChange(next);
+    prevShowFacet.current = showFacet;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showFacet.tags, showFacet.categories, showFacet.owner, showFacet.walletName, showFacet.seedName]);
 
   const addFilter = () => {
+    const defaultField = FILTERABLE_FIELDS[0];
     const newFilter: ColumnFilter = {
       id: `filter-${Date.now()}`,
-      field: 'type',
-      operator: 'equals',
+      field: defaultField.key,
+      operator: getOperatorsForField(defaultField)[0].value,
       value: '',
     };
     onFiltersChange([...filters, newFilter]);
@@ -196,21 +352,52 @@ export function RecordFilters({ filters, onFiltersChange, uniqueValues }: Record
     onFiltersChange(filters.filter(f => f.id !== id));
   };
 
-  const clearAllFilters = () => {
-    onFiltersChange([]);
-  };
-
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={getTypeFilterValue(filters)}
+          onValueChange={(value) => onFiltersChange(setTypeFilterValue(filters, value as RecordKindFilterValue))}
+        >
+          <SelectTrigger className="w-[160px]" data-testid="select-type-filter">
+            <SelectValue placeholder="Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{TYPE_FILTER_LABELS.all}</SelectItem>
+            <SelectItem value="address">{TYPE_FILTER_LABELS.address}</SelectItem>
+            <SelectItem value="transaction">{TYPE_FILTER_LABELS.transaction}</SelectItem>
+            <SelectItem value="other">{TYPE_FILTER_LABELS.other}</SelectItem>
+          </SelectContent>
+        </Select>
+
+        {FACET_KEYS.map((key) => {
+          const options = uniqueValues[key] || [];
+          if (!showFacet[key] || options.length === 0) return null;
+          const ui = FACET_UI[key];
+          return (
+            <div key={key} className="w-[180px]">
+              <MultiSelectCombobox
+                values={getFacetValues(filters, key)}
+                onChange={(values) => onFiltersChange(setFacetValues(filters, key, values))}
+                options={options}
+                placeholder={ui.placeholder}
+                searchPlaceholder={ui.searchPlaceholder}
+                testId={ui.testId}
+              />
+            </div>
+          );
+        })}
+      </div>
+
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <div className="flex items-center gap-2">
           <CollapsibleTrigger asChild>
             <Button variant="outline" size="sm" data-testid="button-toggle-filters">
               {isOpen ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronRight className="h-4 w-4 mr-1" />}
               <Filter className="h-4 w-4 mr-1" />
-              Filters
-              {filters.length > 0 && (
-                <Badge variant="secondary" className="ml-2">{filters.length}</Badge>
+              More Filters
+              {generic.length > 0 && (
+                <Badge variant="secondary" className="ml-2">{generic.length}</Badge>
               )}
             </Button>
           </CollapsibleTrigger>
@@ -223,26 +410,16 @@ export function RecordFilters({ filters, onFiltersChange, uniqueValues }: Record
             <Plus className="h-4 w-4 mr-1" />
             Add Filter
           </Button>
-          {filters.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={clearAllFilters}
-              data-testid="button-clear-filters"
-            >
-              Clear All
-            </Button>
-          )}
         </div>
 
         <CollapsibleContent className="pt-3">
-          {filters.length === 0 ? (
+          {generic.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No filters active. Click "Add Filter" to filter records by column values.
+              No column filters active. Click "Add Filter" to filter by label, address/txid, wallet software, private key status, source, importance, chain, or notes.
             </p>
           ) : (
             <div className="space-y-2">
-              {filters.map((filter) => (
+              {generic.map((filter) => (
                 <FilterRow
                   key={filter.id}
                   filter={filter}
@@ -255,33 +432,6 @@ export function RecordFilters({ filters, onFiltersChange, uniqueValues }: Record
           )}
         </CollapsibleContent>
       </Collapsible>
-
-      {!isOpen && filters.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {filters.map((filter) => {
-            const field = FILTERABLE_FIELDS.find(f => f.key === filter.field);
-            const operators = field ? getOperatorsForField(field) : TEXT_OPERATORS;
-            const operator = operators.find(op => op.value === filter.operator);
-            return (
-              <Badge 
-                key={filter.id} 
-                variant="secondary" 
-                className="text-xs cursor-pointer"
-                onClick={() => setIsOpen(true)}
-              >
-                {field?.label} {operator?.label} {needsValueInput(filter.operator) ? `"${filter.value}"` : ''}
-                <X 
-                  className="h-3 w-3 ml-1" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeFilter(filter.id);
-                  }}
-                />
-              </Badge>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
@@ -335,10 +485,24 @@ export function applyColumnFilters<T extends Record<string, unknown>>(
           return Boolean(value);
         case 'isFalse':
           return !value;
+        case 'isAnyOf': {
+          let allowed: string[] = [];
+          try {
+            const parsed = JSON.parse(filter.value);
+            if (Array.isArray(parsed)) allowed = parsed.filter((v): v is string => typeof v === 'string');
+          } catch {
+            allowed = [];
+          }
+          if (allowed.length === 0) return true;
+          const normalizedAllowed = allowed.map((v) => v.toLowerCase());
+          if (Array.isArray(value)) {
+            return value.some((v) => normalizedAllowed.includes(String(v).toLowerCase()));
+          }
+          return normalizedAllowed.includes(String(value ?? '').toLowerCase());
+        }
         default:
           return true;
       }
     });
   });
 }
-

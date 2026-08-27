@@ -118,23 +118,27 @@ vi.mock("@/components/RecordDetailPanel", () => ({
   RecordDetailPanel: () => <div data-testid="mock-record-detail-panel" />,
 }));
 // Interactive stand-in so tests can apply a tag column filter without a search.
-vi.mock("@/components/RecordFilters", () => ({
-  RecordFilters: ({
-    onFiltersChange,
-  }: {
-    onFiltersChange: (filters: unknown[]) => void;
-  }) => (
-    <button
-      type="button"
-      data-testid="mock-record-filters"
-      onClick={() =>
-        onFiltersChange([
-          { id: "t1", field: "tags", operator: "includes", value: "hiddenonlytag" },
-        ])
-      }
-    />
-  ),
-}));
+vi.mock("@/components/RecordFilters", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/RecordFilters")>();
+  return {
+    ...actual,
+    RecordFilters: ({
+      onFiltersChange,
+    }: {
+      onFiltersChange: (filters: unknown[]) => void;
+    }) => (
+      <button
+        type="button"
+        data-testid="mock-record-filters"
+        onClick={() =>
+          onFiltersChange([
+            { id: "t1", field: "tags", operator: "includes", value: "hiddenonlytag" },
+          ])
+        }
+      />
+    ),
+  };
+});
 // Inert tally hook so the real BehaviorFilter's vault-wide counts never touch
 // the fake db surface.
 vi.mock("@/hooks/use-behavior-tally", () => ({

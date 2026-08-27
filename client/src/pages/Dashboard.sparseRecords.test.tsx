@@ -122,17 +122,21 @@ vi.mock("@/components/DemoVaultLoader", () => ({
 }));
 // Interactive stub so the test can activate a tag filter without driving the
 // real combobox UI.
-vi.mock("@/components/FilterBar", () => ({
-  FilterBar: ({ filter, onChange }: any) => (
-    <div>
-      <button
-        type="button"
-        data-testid="stub-filter-tag"
-        onClick={() => onChange({ ...filter, tags: ["sometag"] })}
-      />
-    </div>
-  ),
-}));
+vi.mock("@/components/RecordFilters", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/RecordFilters")>();
+  return {
+    ...actual,
+    RecordFilters: ({ filters, onFiltersChange }: any) => (
+      <div>
+        <button
+          type="button"
+          data-testid="stub-filter-tag"
+          onClick={() => onFiltersChange(actual.setFacetValues(filters, "tags", ["sometag"]))}
+        />
+      </div>
+    ),
+  };
+});
 
 vi.mock("@/hooks/use-toast", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/use-toast")>();
@@ -210,7 +214,7 @@ describe("Dashboard with sparse records (optional fields omitted)", { timeout: 3
 
     // The search predicate reads label/tags/categories on EVERY row,
     // including the sparse one, before deciding matches.
-    fireEvent.change(screen.getByPlaceholderText("Search records..."), {
+    fireEvent.change(screen.getByPlaceholderText(/Search by label, address\/txid/), {
       target: { value: "sparsedashboard" },
     });
 

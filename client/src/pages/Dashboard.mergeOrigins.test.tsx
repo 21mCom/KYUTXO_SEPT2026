@@ -129,9 +129,6 @@ vi.mock("@/components/RecordDetailPanel", () => ({
 vi.mock("@/components/DemoVaultLoader", () => ({
   DemoVaultLoader: () => null,
 }));
-vi.mock("@/components/FilterBar", () => ({
-  FilterBar: () => null,
-}));
 
 testDb = new TestDb(`KYUTXO-dashmerge-${Date.now()}-${Math.random()}`);
 

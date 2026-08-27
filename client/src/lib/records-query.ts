@@ -84,12 +84,17 @@ const FIELD_PRIORITY: Record<string, number> = {
   inputString_startsWith: 2,
   tags_includes: 3,
   categories_includes: 3,
+  tags_isAnyOf: 3,
+  categories_isAnyOf: 3,
   label_equals: 4,
   label_startsWith: 5,
   owner_equals: 6,
   walletName_equals: 6,
   seedName_equals: 6,
   walletSoftware_equals: 6,
+  owner_isAnyOf: 6,
+  walletName_isAnyOf: 6,
+  seedName_isAnyOf: 6,
   owner_startsWith: 7,
   walletName_startsWith: 7,
   seedName_startsWith: 7,
@@ -114,7 +119,27 @@ function classifyFilter(f: ColumnFilter): { narrow: IndexedNarrowing; priority: 
       return { narrow: { kind: "equals", field: f.field, value: trimmed }, priority };
     case "tags":
     case "categories":
-      return { narrow: { kind: "multiEntry", field: f.field, value: trimmed }, priority };
+      // "includes" (single value) uses a multiEntry equality lookup.
+      // "isAnyOf" (the facet multi-select) OR-matches several values via the
+      // same multiEntry index. Any other operator (e.g. "excludes") can't be
+      // expressed as an index narrowing without inverting the semantics —
+      // leave it to the residual predicate instead of misreading raw filter
+      // values (a JSON-encoded array, for "isAnyOf") as a single tag string.
+      if (f.operator === "includes") {
+        return { narrow: { kind: "multiEntry", field: f.field, value: trimmed }, priority };
+      }
+      if (f.operator === "isAnyOf") {
+        let values: string[] = [];
+        try {
+          const parsed = JSON.parse(f.value);
+          if (Array.isArray(parsed)) values = parsed.filter((v): v is string => typeof v === "string");
+        } catch {
+          values = [];
+        }
+        if (values.length === 0) return null;
+        return { narrow: { kind: "anyOf", field: f.field, values }, priority };
+      }
+      return null;
     case "label":
     case "owner":
     case "walletName":
@@ -125,6 +150,17 @@ function classifyFilter(f: ColumnFilter): { narrow: IndexedNarrowing; priority: 
       }
       if (f.operator === "startsWith") {
         return { narrow: { kind: "startsWith", field: f.field, value: trimmed }, priority };
+      }
+      if (f.operator === "isAnyOf") {
+        let values: string[] = [];
+        try {
+          const parsed = JSON.parse(f.value);
+          if (Array.isArray(parsed)) values = parsed.filter((v): v is string => typeof v === "string");
+        } catch {
+          values = [];
+        }
+        if (values.length === 0) return null;
+        return { narrow: { kind: "anyOf", field: f.field, values }, priority };
       }
       return null;
     case "inputString": {
@@ -258,7 +294,11 @@ export function buildRecordsCollection(
     } else if (n.kind === "multiEntry") {
       collection = db.records.where(n.field).equalsIgnoreCase(n.value);
     } else {
-      collection = db.records.where(n.field).anyOf(n.values);
+      // "anyOf" narrowing for the facet multi-selects (tags/categories via
+      // the multiEntry index; owner/walletName/seedName via their plain
+      // index). All of these are user-typed text, so match the
+      // case-insensitive comparison the residual isAnyOf predicate does.
+      collection = db.records.where(n.field).anyOfIgnoreCase(n.values);
     }
   } else if (strategy.source === "address-importance-tiers" && strategy.narrowing?.kind === "anyOf") {
     collection = db.records.where(strategy.narrowing.field).anyOf(strategy.narrowing.values);

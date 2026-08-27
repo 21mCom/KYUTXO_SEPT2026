@@ -87,9 +87,13 @@ vi.mock("@/components/RecordTable", () => ({
 vi.mock("@/components/RecordDetailPanel", () => ({
   RecordDetailPanel: () => <div data-testid="mock-record-detail-panel" />,
 }));
-vi.mock("@/components/RecordFilters", () => ({
-  RecordFilters: () => <div data-testid="mock-record-filters" />,
-}));
+vi.mock("@/components/RecordFilters", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/RecordFilters")>();
+  return {
+    ...actual,
+    RecordFilters: () => <div data-testid="mock-record-filters" />,
+  };
+});
 vi.mock("@/components/BlockchainToggle", () => ({
   BlockchainToggle: () => <div data-testid="mock-blockchain-toggle" />,
 }));

@@ -115,24 +115,28 @@ vi.mock("@/components/RecordDetailPanel", () => ({
 vi.mock("@/components/DemoVaultLoader", () => ({
   DemoVaultLoader: () => null,
 }));
-// Interactive stub so tests can activate FilterBar-style filters (tag /
+// Interactive stub so tests can activate RecordFilters-style filters (tag /
 // category / type) without driving the real combobox UI.
-vi.mock("@/components/FilterBar", () => ({
-  FilterBar: ({ filter, onChange }: any) => (
-    <div>
-      <button
-        type="button"
-        data-testid="stub-filter-tag"
-        onClick={() => onChange({ ...filter, tags: ["hiddenonlytag"] })}
-      />
-      <button
-        type="button"
-        data-testid="stub-filter-type-other"
-        onClick={() => onChange({ ...filter, type: "other" })}
-      />
-    </div>
-  ),
-}));
+vi.mock("@/components/RecordFilters", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/RecordFilters")>();
+  return {
+    ...actual,
+    RecordFilters: ({ filters, onFiltersChange }: any) => (
+      <div>
+        <button
+          type="button"
+          data-testid="stub-filter-tag"
+          onClick={() => onFiltersChange(actual.setFacetValues(filters, "tags", ["hiddenonlytag"]))}
+        />
+        <button
+          type="button"
+          data-testid="stub-filter-type-other"
+          onClick={() => onFiltersChange(actual.setTypeFilterValue(filters, "other"))}
+        />
+      </div>
+    ),
+  };
+});
 
 // Failure injection for the vault-wide reveal fetch: when the flag is set the
 // mocked getHiddenTierMatches rejects, simulating e.g. a transient IndexedDB

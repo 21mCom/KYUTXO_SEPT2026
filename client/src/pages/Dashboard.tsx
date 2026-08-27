@@ -16,7 +16,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { SearchBar } from "@/components/SearchBar";
-import { FilterBar } from "@/components/FilterBar";
 import { RecordFilters, ColumnFilter, applyColumnFilters } from "@/components/RecordFilters";
 import { RecordCard } from "@/components/RecordCard";
 import { DemoVaultLoader } from "@/components/DemoVaultLoader";
@@ -58,6 +57,7 @@ import { countHiddenTierMatches, getHiddenTierMatches, type HiddenTierMatchCount
 import type { Record } from "@/lib/database";
 import type { Attachment } from "@/lib/database";
 import { searchPendingClass } from "@/lib/search-pending-class";
+import { ActiveFiltersBar } from "@/components/ActiveFiltersBar";
 
 type SortDirection = "asc" | "desc" | null;
 type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | "walletName" | "balance" | "lastTxDate" | "txCount" | string;
@@ -72,15 +72,6 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.Dashboard);
   const [view, setView] = useState<"grid" | "table">("table");
-  const [filter, setFilter] = useState<{
-    type?: "address" | "transaction" | "other" | "all";
-    tags: string[];
-    categories: string[];
-  }>({
-    type: "all",
-    tags: [],
-    categories: [],
-  });
   const [filteredRecords, setFilteredRecords] = useState<Record[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
@@ -127,9 +118,6 @@ export default function Dashboard() {
   const revealVersionRef = useRef(0);
 
   const hasClientSideFilters = debouncedSearch.trim() !== '' ||
-    (filter.type !== undefined && filter.type !== 'all') || 
-    filter.tags.length > 0 || 
-    filter.categories.length > 0 || 
     columnFilters.length > 0 ||
     sortColumn !== null;
 
@@ -245,25 +233,6 @@ export default function Dashboard() {
       });
       let results = applyColumnFilters(enrichedRecords as unknown as Array<{ [key: string]: unknown }>, columnFilters) as unknown as typeof records;
 
-      // Apply type filter
-      if (filter.type && filter.type !== "all") {
-        results = results.filter(r => r.type === filter.type);
-      }
-
-      // Apply tag filter
-      if (filter.tags.length > 0) {
-        results = results.filter(r => 
-          filter.tags.some(tag => (r.tags ?? []).includes(tag))
-        );
-      }
-
-      // Apply category filter
-      if (filter.categories.length > 0) {
-        results = results.filter(r => 
-          filter.categories.some(cat => (r.categories ?? []).includes(cat))
-        );
-      }
-
       // Apply search (on already filtered results)
       if (debouncedSearch.trim()) {
         const lowerQuery = debouncedSearch.toLowerCase();
@@ -285,7 +254,7 @@ export default function Dashboard() {
     };
 
     applyFiltersAsync();
-  }, [debouncedSearch, filter, records, includeBlockchainDiscovered, columnFilters, allAddressStats, revealedHidden]);
+  }, [debouncedSearch, records, includeBlockchainDiscovered, columnFilters, allAddressStats, revealedHidden]);
 
   // Deferred hidden-matches count (parity with the Records page): when a
   // search or column filter runs over the default view (discovered hidden),
@@ -294,14 +263,12 @@ export default function Dashboard() {
   // bounded on both sides (match cap / scan cap inside countHiddenTierMatches),
   // and is version-guarded so a superseded filter change never sets state.
   // Any narrowing that could match hidden rows activates the count: text
-  // search, column filters, and the FilterBar's type/tag/category filters
-  // (the hidden-match predicate below already includes all of these).
+  // search and column filters (which also carry the type/tag/category/
+  // owner/wallet/seed facets — the hidden-match predicate below already
+  // includes all of these via applyColumnFilters).
   const searchOrColumnFilterActive =
     debouncedSearch.trim() !== '' ||
-    columnFilters.length > 0 ||
-    (filter.type !== undefined && filter.type !== 'all') ||
-    filter.tags.length > 0 ||
-    filter.categories.length > 0;
+    columnFilters.length > 0;
 
   // One predicate shared by the hidden-match count below and the reveal fetch
   // further down, so the notice and the rows the button surfaces can never
@@ -313,9 +280,6 @@ export default function Dashboard() {
       if (applyColumnFilters([record] as unknown as Array<{ [key: string]: unknown }>, columnFilters).length === 0) {
         return false;
       }
-      if (filter.type && filter.type !== "all" && record.type !== filter.type) return false;
-      if (filter.tags.length > 0 && !filter.tags.some(tag => (record.tags ?? []).includes(tag))) return false;
-      if (filter.categories.length > 0 && !filter.categories.some(cat => (record.categories ?? []).includes(cat))) return false;
       if (lowerQuery) {
         return (
           record.label?.toLowerCase().includes(lowerQuery) ||
@@ -329,7 +293,7 @@ export default function Dashboard() {
       }
       return true;
     };
-  }, [debouncedSearch, filter, columnFilters]);
+  }, [debouncedSearch, columnFilters]);
 
   useEffect(() => {
     const version = ++hiddenMatchVersionRef.current;
@@ -388,7 +352,7 @@ export default function Dashboard() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearch, filter, includeBlockchainDiscovered, columnFilters]);
+  }, [debouncedSearch, includeBlockchainDiscovered, columnFilters]);
   
   // Handle sort column clicks from RecordTable
   const handleSort = (column: SortColumn) => {
@@ -1151,7 +1115,7 @@ export default function Dashboard() {
           <SearchBar
             value={search}
             onChange={setSearch}
-            placeholder="Search records..."
+            placeholder="Search by label, address/txid, owner, wallet, notes, tags, or categories..."
             className="max-w-md"
             isPending={isSearchPending}
           />
@@ -1269,18 +1233,18 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <FilterBar
-          filter={filter}
-          onChange={setFilter}
-          availableTags={tags.map(t => t.name).filter(n => n)}
-          availableCategories={categories.map(c => c.name).filter(n => n)}
-          tableColumns={settings?.tableColumns}
+        <ActiveFiltersBar
+          searchValue={search}
+          onSearchChange={setSearch}
+          filters={columnFilters}
+          onFiltersChange={setColumnFilters}
         />
-        
+
         <RecordFilters
           filters={columnFilters}
           onFiltersChange={setColumnFilters}
           uniqueValues={uniqueFilterValues}
+          tableColumns={settings?.tableColumns}
         />
       </div>
 
