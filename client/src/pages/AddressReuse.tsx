@@ -50,6 +50,8 @@ import { useCategories } from "@/hooks/use-categories";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { searchPendingClass } from "@/lib/search-pending-class";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
+import { FilterChip } from "@/components/FilterChip";
 
 type ReuseReason = 'multi-receive' | 'change-to-self' | 'both';
 
@@ -271,9 +273,9 @@ export default function AddressReuse() {
   
   // Filter states
   const [reuseTypeFilter, setReuseTypeFilter] = useState<ReuseReason | 'all'>('all');
-  const [ownerFilter, setOwnerFilter] = useState<string>('all');
+  const [ownerFilters, setOwnerFilters] = useState<string[]>([]);
   const [importanceFilter, setImportanceFilter] = useState<AddressImportance | 'all'>('all');
-  const [walletNameFilter, setWalletNameFilter] = useState<string>('all');
+  const [walletNameFilters, setWalletNameFilters] = useState<string[]>([]);
   
   // Dialog state for editing records
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -338,8 +340,8 @@ export default function AddressReuse() {
     }
     
     // Filter by owner
-    if (ownerFilter !== 'all') {
-      result = result.filter(item => item.record?.owner === ownerFilter);
+    if (ownerFilters.length > 0) {
+      result = result.filter(item => !!item.record?.owner && ownerFilters.includes(item.record.owner));
     }
     
     // Filter by importance tier
@@ -348,8 +350,8 @@ export default function AddressReuse() {
     }
     
     // Filter by wallet name
-    if (walletNameFilter !== 'all') {
-      result = result.filter(item => item.record?.walletName === walletNameFilter);
+    if (walletNameFilters.length > 0) {
+      result = result.filter(item => !!item.record?.walletName && walletNameFilters.includes(item.record.walletName));
     }
     
     // Filter by search text
@@ -360,21 +362,23 @@ export default function AddressReuse() {
         if (item.record?.label?.toLowerCase().includes(searchLower)) return true;
         if (item.record?.owner?.toLowerCase().includes(searchLower)) return true;
         if (item.record?.walletName?.toLowerCase().includes(searchLower)) return true;
+        if (item.record?.tags?.some(t => t.toLowerCase().includes(searchLower))) return true;
+        if (item.record?.categories?.some(c => c.toLowerCase().includes(searchLower))) return true;
         return false;
       });
     }
     
     return result;
-  }, [yourReusedAddresses, debouncedSearch, reuseTypeFilter, ownerFilter, importanceFilter, walletNameFilter]);
+  }, [yourReusedAddresses, debouncedSearch, reuseTypeFilter, ownerFilters, importanceFilter, walletNameFilters]);
 
   // Check if any filters are active
-  const hasActiveFilters = reuseTypeFilter !== 'all' || ownerFilter !== 'all' || importanceFilter !== 'all' || walletNameFilter !== 'all';
+  const hasActiveFilters = reuseTypeFilter !== 'all' || ownerFilters.length > 0 || importanceFilter !== 'all' || walletNameFilters.length > 0 || search.trim() !== '';
   
   const clearAllFilters = () => {
     setReuseTypeFilter('all');
-    setOwnerFilter('all');
+    setOwnerFilters([]);
     setImportanceFilter('all');
-    setWalletNameFilter('all');
+    setWalletNameFilters([]);
     setSearch('');
   };
   
@@ -571,33 +575,27 @@ export default function AddressReuse() {
               {/* Owner Filter */}
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-muted-foreground">Owner</label>
-                <Select value={ownerFilter} onValueChange={setOwnerFilter}>
-                  <SelectTrigger data-testid="select-owner-filter">
-                    <SelectValue placeholder="All Owners" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Owners</SelectItem>
-                    {owners.map(owner => (
-                      <SelectItem key={owner.id} value={owner.name}>{owner.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <MultiSelectCombobox
+                  values={ownerFilters}
+                  onChange={setOwnerFilters}
+                  options={owners.map(o => o.name)}
+                  placeholder="All Owners"
+                  searchPlaceholder="Search owners..."
+                  testId="combobox-owner-filter"
+                />
               </div>
               
               {/* Wallet Name Filter */}
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-muted-foreground">Wallet</label>
-                <Select value={walletNameFilter} onValueChange={setWalletNameFilter}>
-                  <SelectTrigger data-testid="select-wallet-filter">
-                    <SelectValue placeholder="All Wallets" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Wallets</SelectItem>
-                    {walletNames.map(wallet => (
-                      <SelectItem key={wallet.id} value={wallet.name}>{wallet.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <MultiSelectCombobox
+                  values={walletNameFilters}
+                  onChange={setWalletNameFilters}
+                  options={walletNames.map(w => w.name)}
+                  placeholder="All Wallets"
+                  searchPlaceholder="Search wallets..."
+                  testId="combobox-wallet-filter"
+                />
               </div>
               
               {/* Importance Tier Filter */}
@@ -615,6 +613,48 @@ export default function AddressReuse() {
                 </Select>
               </div>
             </div>
+
+            {hasActiveFilters && (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                {search.trim() && (
+                  <FilterChip
+                    label={`Search: "${search.trim()}"`}
+                    onRemove={() => setSearch('')}
+                    testId="chip-filter-search"
+                  />
+                )}
+                {reuseTypeFilter !== 'all' && (
+                  <FilterChip
+                    label={`Type: ${reuseTypeFilter === 'multi-receive' ? 'Multi-Receive' : reuseTypeFilter === 'change-to-self' ? 'Change-to-Self' : 'Both'}`}
+                    onRemove={() => setReuseTypeFilter('all')}
+                    testId="chip-filter-reuse-type"
+                  />
+                )}
+                {ownerFilters.map(owner => (
+                  <FilterChip
+                    key={`owner-${owner}`}
+                    label={`Owner: ${owner}`}
+                    onRemove={() => setOwnerFilters(prev => prev.filter(o => o !== owner))}
+                    testId={`chip-filter-owner-${owner}`}
+                  />
+                ))}
+                {walletNameFilters.map(wallet => (
+                  <FilterChip
+                    key={`wallet-${wallet}`}
+                    label={`Wallet: ${wallet}`}
+                    onRemove={() => setWalletNameFilters(prev => prev.filter(w => w !== wallet))}
+                    testId={`chip-filter-wallet-${wallet}`}
+                  />
+                ))}
+                {importanceFilter !== 'all' && (
+                  <FilterChip
+                    label={`Importance: ${IMPORTANCE_OPTIONS.find(o => o.value === importanceFilter)?.label || importanceFilter}`}
+                    onRemove={() => setImportanceFilter('all')}
+                    testId="chip-filter-importance"
+                  />
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -642,7 +682,7 @@ export default function AddressReuse() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 )}
                 <Input
-                  placeholder="Search by address, label, owner..."
+                  placeholder="Search by address, label, owner, wallet, tags, or categories..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="pl-10"

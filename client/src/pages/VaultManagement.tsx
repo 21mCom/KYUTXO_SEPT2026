@@ -18,6 +18,7 @@ import { engineGetVaultSummaries, subscribeEngineReadiness } from "@/lib/engine/
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { searchPendingClass } from "@/lib/search-pending-class";
 import { renderSourceNote } from "@/lib/renderSourceNote";
+import { FilterChip } from "@/components/FilterChip";
 
 const VAULT_TIERS: AddressImportance[] = ['xpub-derived', 'verified'];
 
@@ -334,7 +335,7 @@ export default function VaultManagement() {
         <h1 className="text-2xl font-semibold" data-testid="heading-vault-management">Vault Management</h1>
       </div>
 
-      <div className="mb-6">
+      <div className="mb-6 space-y-2">
         <div className="relative">
           {isSearchPending ? (
             <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" data-testid="icon-search-pending" />
@@ -342,13 +343,30 @@ export default function VaultManagement() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           )}
           <Input
-            placeholder="Search vaults by name, cosigner, or script type..."
+            placeholder="Search vaults by name, cosigner, script type, or notes..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
             data-testid="input-search-vaults"
           />
         </div>
+        {searchQuery.trim() && (
+          <div className="flex flex-wrap items-center gap-2">
+            <FilterChip
+              label={`Search: "${searchQuery.trim()}"`}
+              onRemove={() => setSearchQuery('')}
+              testId="chip-filter-search"
+            />
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 ml-1"
+              data-testid="button-clear-all-filters"
+            >
+              Clear all filters
+            </button>
+          </div>
+        )}
       </div>
 
       <div className={`${searchPendingClass(isSearchPending, 'VaultManagement')}`}>

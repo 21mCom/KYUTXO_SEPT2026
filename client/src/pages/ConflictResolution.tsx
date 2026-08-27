@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { FilterChip } from "@/components/FilterChip";
 import { type Record as DBRecord, type RecordOrigin } from "@/lib/database";
 import { getRecord, updateRecord, getRecordsByIds } from "@/lib/dataFacade";
 import { getAllRecordOrigins } from "@/lib/data/record-origins-crud";
@@ -155,6 +156,20 @@ export default function ConflictResolution() {
   const totalConflicts = useMemo(() => {
     return filteredRecords.reduce((sum, r) => sum + r.conflicts.length, 0);
   }, [filteredRecords]);
+
+  const fieldFilterLabel = fieldFilter !== "all"
+    ? SINGULAR_FIELDS.find(f => f.key === fieldFilter)?.label || fieldFilter
+    : null;
+
+  const hasActiveFilters = Boolean(searchQuery.trim()) || fieldFilter !== "all" || Boolean(filterRecordId);
+
+  function clearAllFilters() {
+    setSearchQuery("");
+    setFieldFilter("all");
+    if (filterRecordId) {
+      navigate("/conflict-resolution");
+    }
+  }
 
   function openResolveDialog(recordData: RecordWithConflicts, conflict: FieldConflict) {
     setSelectedRecord(recordData);
@@ -305,14 +320,14 @@ export default function ConflictResolution() {
             Resolve metadata conflicts where multiple import sources have different values
           </p>
         </div>
-        {filterRecordId && (
+        {hasActiveFilters && (
           <Button 
             variant="outline" 
-            onClick={() => navigate("/conflict-resolution")}
-            data-testid="button-clear-filter"
+            onClick={clearAllFilters}
+            data-testid="button-clear-all-filters"
           >
             <X className="h-4 w-4 mr-2" />
-            Clear Filter
+            Clear All Filters
           </Button>
         )}
       </div>
@@ -328,7 +343,7 @@ export default function ConflictResolution() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 )}
                 <Input
-                  placeholder="Search addresses or labels..."
+                  placeholder="Search by address, label, or owner..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="pl-10"
@@ -357,6 +372,31 @@ export default function ConflictResolution() {
               </Badge>
             </div>
           </div>
+          {hasActiveFilters && (
+            <div className="flex flex-wrap items-center gap-2 pt-3">
+              {searchQuery.trim() && (
+                <FilterChip
+                  label={`Search: "${searchQuery.trim()}"`}
+                  onRemove={() => setSearchQuery("")}
+                  testId="chip-filter-search"
+                />
+              )}
+              {fieldFilterLabel && (
+                <FilterChip
+                  label={`Field: ${fieldFilterLabel}`}
+                  onRemove={() => setFieldFilter("all")}
+                  testId="chip-filter-field"
+                />
+              )}
+              {filterRecordId && (
+                <FilterChip
+                  label={`Record #${filterRecordId}`}
+                  onRemove={() => navigate("/conflict-resolution")}
+                  testId="chip-filter-record"
+                />
+              )}
+            </div>
+          )}
         </CardHeader>
         <CardContent className={`${searchPendingClass(isSearchPending, 'ConflictResolution')}`}>
           {filteredRecords.length === 0 ? (

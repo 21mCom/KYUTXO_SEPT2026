@@ -36,6 +36,7 @@ import {
   Pencil,
   ShieldCheck
 } from "lucide-react";
+import { FilterChip } from "@/components/FilterChip";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -180,6 +181,14 @@ export default function EvidencePage() {
     
     return matchesSearch && matchesType && matchesImportance;
   });
+
+  const hasActiveFilters = debouncedSearchTerm.trim() !== "" || filterType !== "all" || filterImportance !== "all";
+
+  const clearAllFilters = () => {
+    setSearchTerm("");
+    setFilterType("all");
+    setFilterImportance("all");
+  };
 
   const sortedEvidence = [...filteredEvidence].sort((a, b) => {
     let comparison = 0;
@@ -687,7 +696,7 @@ export default function EvidencePage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           )}
           <Input
-            placeholder="Search by title, notes, parties, or tags..."
+            placeholder="Search by title, notes, parties, tags, or source..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="pl-10"
@@ -724,6 +733,19 @@ export default function EvidencePage() {
           </SelectContent>
         </Select>
 
+        {hasActiveFilters && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearAllFilters}
+            className="h-9 text-xs"
+            data-testid="button-clear-all-filters"
+          >
+            <X className="h-3 w-3 mr-1" />
+            Clear All Filters
+          </Button>
+        )}
+
         <div className="flex items-center gap-1 border-l pl-4">
           <Button
             size="icon"
@@ -745,6 +767,32 @@ export default function EvidencePage() {
           </Button>
         </div>
       </div>
+
+      {hasActiveFilters && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b">
+          {searchTerm.trim() && (
+            <FilterChip
+              label={`Search: "${searchTerm.trim()}"`}
+              onRemove={() => setSearchTerm("")}
+              testId="chip-filter-search"
+            />
+          )}
+          {filterType !== "all" && (
+            <FilterChip
+              label={`Type: ${EVIDENCE_DOCUMENT_TYPE_OPTIONS.find(o => o.value === filterType)?.label || filterType}`}
+              onRemove={() => setFilterType("all")}
+              testId="chip-filter-type"
+            />
+          )}
+          {filterImportance !== "all" && (
+            <FilterChip
+              label={`Importance: ${EVIDENCE_IMPORTANCE_OPTIONS.find(o => o.value === filterImportance)?.label || filterImportance}`}
+              onRemove={() => setFilterImportance("all")}
+              testId="chip-filter-importance"
+            />
+          )}
+        </div>
+      )}
 
       <ScrollArea className={`flex-1 ${searchPendingClass(isSearchPending, 'Evidence')}`}>
         <div className="p-4">

@@ -1066,10 +1066,29 @@ export default function BulkEditor() {
       {/* Step 1: Filter Builder */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Filter className="h-5 w-5" />
-            Step 1: Find Records
-          </CardTitle>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Filter className="h-5 w-5" />
+              Step 1: Find Records
+              {conditions.length > 0 && (
+                <Badge variant="secondary" className="text-xs" data-testid="badge-condition-count">
+                  {conditions.length} {conditions.length === 1 ? 'condition' : 'conditions'} active
+                </Badge>
+              )}
+            </CardTitle>
+            {conditions.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConditions([])}
+                className="h-7 text-xs"
+                data-testid="button-clear-all-conditions"
+              >
+                <X className="h-3 w-3 mr-1" />
+                Clear All
+              </Button>
+            )}
+          </div>
           <CardDescription>
             Define criteria to find records you want to edit
           </CardDescription>
