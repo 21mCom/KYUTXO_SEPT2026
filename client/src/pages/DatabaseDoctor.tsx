@@ -1748,12 +1748,18 @@ export function StaleAddressList({
 
   // Feed the visible range to the shared loader. setRange is stable;
   // virtualItems identity changes per scroll frame, so key off the boundary
-  // indices instead.
+  // indices instead. virtualItems.length must also be a dep: the pre-mount
+  // render (before parentRef attaches) has zero items and these indices
+  // default to 0, which is indistinguishable from a genuine single-item list
+  // starting at index 0 — without the length in the array, React sees
+  // identical deps across that transition and never re-runs the effect, so
+  // `range` stays null and the window never loads (reproduced with exactly
+  // one stale address).
   useEffect(() => {
     if (virtualItems.length === 0) return;
     setRange({ first: firstIndex, last: lastIndex });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstIndex, lastIndex]);
+  }, [virtualItems.length, firstIndex, lastIndex]);
 
   return (
     <div className="border rounded-md" data-testid="list-stale-addresses">

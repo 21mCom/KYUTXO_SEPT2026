@@ -587,6 +587,10 @@ args = "database-doctor-select-all-loaded-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "database-doctor-stale-single-row-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "filtered-scan-gate-node-check"
 
 [[workflows.workflow.tasks]]
@@ -1833,6 +1837,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-database-doctor-select-all-loaded-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-stale-single-row-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-stale-single-row-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
