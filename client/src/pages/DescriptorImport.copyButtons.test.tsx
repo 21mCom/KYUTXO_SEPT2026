@@ -184,6 +184,68 @@ describe("DescriptorImport copy buttons toast", () => {
   });
 });
 
+// Task #2137: each address row has both a row-level onClick and the row's own
+// Checkbox onCheckedChange, both wired to the same toggle function. Clicking
+// the checkbox bubbles the click up to the row's onClick too, so a naive fix
+// can leave the two handlers cancelling each other out (toggles twice, looks
+// like a no-op). Guard that a direct checkbox click toggles selection exactly
+// once, and that clicking elsewhere in the row still works.
+function checkboxState(testId: string) {
+  return screen.getByTestId(testId).getAttribute("data-state");
+}
+
+describe("DescriptorImport row selection checkbox", () => {
+  it("toggles a receive row exactly once when the checkbox itself is clicked", async () => {
+    await renderAndDerive();
+
+    // Freshly derived addresses start selected.
+    expect(checkboxState("checkbox-receive-0")).toBe("checked");
+
+    // A real click on the checkbox bubbles up to the row's onClick handler
+    // too. If both handlers fire the toggle, the net effect is zero change
+    // (double-toggle) -- this must flip state exactly once instead.
+    fireEvent.click(screen.getByTestId("checkbox-receive-0"));
+    await flush();
+
+    expect(checkboxState("checkbox-receive-0")).toBe("unchecked");
+
+    fireEvent.click(screen.getByTestId("checkbox-receive-0"));
+    await flush();
+
+    expect(checkboxState("checkbox-receive-0")).toBe("checked");
+  });
+
+  it("still toggles a receive row when clicking elsewhere in the row (not the checkbox)", async () => {
+    await renderAndDerive();
+
+    expect(checkboxState("checkbox-receive-0")).toBe("checked");
+
+    fireEvent.click(screen.getByTestId("button-copy-receive-0").closest("div")!);
+    await flush();
+
+    expect(checkboxState("checkbox-receive-0")).toBe("unchecked");
+  });
+
+  it("toggles a change row exactly once when the checkbox itself is clicked", async () => {
+    await renderAndDerive();
+
+    fireEvent.click(screen.getByTestId("button-toggle-change"));
+    await waitFor(() => screen.getByTestId("checkbox-change-0"));
+
+    expect(checkboxState("checkbox-change-0")).toBe("checked");
+
+    fireEvent.click(screen.getByTestId("checkbox-change-0"));
+    await flush();
+
+    expect(checkboxState("checkbox-change-0")).toBe("unchecked");
+
+    fireEvent.click(screen.getByTestId("checkbox-change-0"));
+    await flush();
+
+    expect(checkboxState("checkbox-change-0")).toBe("checked");
+  });
+});
+
 // Task #1038: the multisig derivation path (deriveMultisigDualChain) renders the
 // SAME receive/change copy buttons as the taproot path, so it needs equivalent
 // coverage of the clipboard + toast wiring. We override the parser to return a

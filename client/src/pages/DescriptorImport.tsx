@@ -1331,6 +1331,7 @@ export default function DescriptorImport() {
                       <Checkbox
                         checked={selectedReceiveAddresses.has(addr.index)}
                         onCheckedChange={() => toggleReceiveAddress(addr.index)}
+                        onClick={(e) => e.stopPropagation()}
                         data-testid={`checkbox-receive-${addr.index}`}
                       />
                       <Badge variant="outline" className="w-12 justify-center">
@@ -1404,6 +1405,7 @@ export default function DescriptorImport() {
                         <Checkbox
                           checked={selectedChangeAddresses.has(addr.index)}
                           onCheckedChange={() => toggleChangeAddress(addr.index)}
+                          onClick={(e) => e.stopPropagation()}
                           data-testid={`checkbox-change-${addr.index}`}
                         />
                         <Badge variant="outline" className="w-12 justify-center">
