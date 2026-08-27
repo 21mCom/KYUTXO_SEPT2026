@@ -38,3 +38,23 @@ See `scripts/check-records-index-usage.js` (and its
 `scripts/check-records-index-usage.test.mjs`, which self-modifies a copy of
 the script/schema to exercise each layer) for a concrete implementation of
 this pattern.
+
+**Generalizing to other tables:** `database.ts` uses delta declarations — a
+`this.version(N).stores({...})` block only redeclares a table if that
+version changed it, so a table's live schema is whichever version block
+mentions it with the *highest* N (not necessarily `CURRENT_SCHEMA_VERSION`,
+and not the first occurrence in file order). Parse per-table, not per-file.
+
+Applying the same 3-layer guard to other heavily-indexed tables surfaces a
+4th situation the `records` guard didn't need: pre-existing dead indexes
+nobody has cleaned up yet (unlike `records`, which was already cleaned by a
+prior task before its guard was written). Do not silently pin dead tokens as
+"verified used," and do not unilaterally bump the schema version to remove
+them as a drive-by inside a "add a guard" task — that's a separate, riskier
+migration. Instead add a third bucket per table: a `knownUnused` map (token →
+audit reason) that Layer 3 skips without failing. This keeps the guard honest
+(dead indexes are catalogued, not hidden) while still failing on any *new*
+uncatalogued dead index. True `boolean` fields are a durable subclass of this
+bucket: IndexedDB rejects booleans as keys, so `.where(bool).equals(true)`
+always throws and the field can only ever be read in-memory — permanently
+unindexable, not just currently unused.

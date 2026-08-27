@@ -959,6 +959,14 @@ args = "records-index-usage-guard-tests"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "table-index-usage-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "table-index-usage-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "bulk-import-batched-save-browser-check"
 
 [[workflows.workflow]]
@@ -3378,6 +3386,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-bulk-import-batched-save-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "table-index-usage-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-table-index-usage.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "table-index-usage-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-table-index-usage.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
