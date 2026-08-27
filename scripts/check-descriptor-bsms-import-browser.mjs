@@ -32,7 +32,7 @@ await acquireBrowserCheckLock();
 
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
-import { unlockIfNeeded, waitForLoginScreenVisible } from './browser-check-utils.mjs';
+import { unlockIfNeeded, isLoginScreenVisible } from './browser-check-utils.mjs';
 
 const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
 const BASE_URL = `http://localhost:${PORT}/`;
@@ -297,9 +297,7 @@ async function runSession(exe, steps) {
     const deadline = Date.now() + 90_000;
     for (;;) {
       if (await page.getByTestId('textarea-descriptor').isVisible().catch(() => false)) break;
-      const loginVisible = await waitForLoginScreenVisible(page, { timeoutMs: 1 })
-        .then(() => true)
-        .catch(() => false);
+      const loginVisible = await isLoginScreenVisible(page);
       if (loginVisible) {
         await unlockIfNeeded(page, SETUP_PASSWORD);
         await page.getByTestId('button-logout').waitFor({ state: 'visible', timeout: 60_000 });

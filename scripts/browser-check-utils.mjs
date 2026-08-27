@@ -61,6 +61,19 @@ export async function waitForLoginScreenVisible(page, { timeoutMs = DEFAULT_APPE
 }
 
 /**
+ * Instant (non-waiting) check for whether the LoginScreen's password field is
+ * currently visible. Use this inside a polling loop that needs to distinguish
+ * "already unlocked" from "showing the lock screen right now" on every tick —
+ * `waitForLoginScreenVisible` is the wrong tool there because Playwright's
+ * `waitFor` needs a real timeout budget to resolve (even a 1ms timeout
+ * effectively always fails, even when the element is already visible), so it
+ * cannot be used as a zero-wait poll. Never throws.
+ */
+export async function isLoginScreenVisible(page) {
+  return page.getByTestId('input-password').isVisible().catch(() => false);
+}
+
+/**
  * Fills and submits the LoginScreen form if it is showing — covers both
  * vault setup (confirm-password field present) and unlock (field absent) —
  * then waits for the form to disappear. Returns `false` without doing

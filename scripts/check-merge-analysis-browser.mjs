@@ -271,7 +271,7 @@ async function main() {
 
     // ── Phase C: drive the REAL Settings restore dialog's Analyze pass ──────
     await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     const openBtn = page.getByTestId('button-open-restore');
     await openBtn.scrollIntoViewIfNeeded();
@@ -387,7 +387,7 @@ async function main() {
 
     // Fresh dialog: reload the settings page so prior analysis state is gone.
     await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
     const openBtn2 = page.getByTestId('button-open-restore');
     await openBtn2.scrollIntoViewIfNeeded();
     await openBtn2.click();
@@ -455,7 +455,7 @@ async function main() {
     // load) to open a real cancel window, then assert the "Analysis Cancelled"
     // toast, the reset UI, and that a re-run Analyze completes normally.
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     const LARGE_COUNT = 6000;
     const largeZipB64 = await page.evaluate(
@@ -554,7 +554,7 @@ async function main() {
     step('live vault reshaped to large disjoint vault', largeLive.recordCount === LARGE_COUNT, `records=${largeLive.recordCount}`);
 
     await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
     const openBtn3 = page.getByTestId('button-open-restore');
     await openBtn3.scrollIntoViewIfNeeded();
     await openBtn3.click();
@@ -669,7 +669,7 @@ async function main() {
 
     // Fresh dialog so Phase H's analysis state is gone.
     await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
     const openBtn4 = page.getByTestId('button-open-restore');
     await openBtn4.scrollIntoViewIfNeeded();
     await openBtn4.click();

@@ -154,7 +154,7 @@ async function main() {
 
     // ── Dashboard: reload so the page loads the seed on mount ───────────────
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
 
     const toggleBtn = page.getByTestId('button-blockchain-toggle');
     await toggleBtn.waitFor({ state: 'visible', timeout: 30_000 });
@@ -201,7 +201,7 @@ async function main() {
 
     // ── Provenance: type an address, assert the clear X geometry ────────────
     await page.goto(`${BASE_URL}provenance`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
 
     const explorerInput = page.getByTestId('input-explorer-address');
     await explorerInput.waitFor({ state: 'visible', timeout: 30_000 });

@@ -183,7 +183,7 @@ async function main() {
       }
     }
     if (!loaded) throw new Error('app never loaded');
-    await unlockIfNeeded(page);
+    await unlockIfNeeded(page, SETUP_PASSWORD);
 
     // ── Phase A: seed source vault, export zipFull + zipEmpty, then reshape
     //    the live vault so exactly ONE row per table collides by natural key ──

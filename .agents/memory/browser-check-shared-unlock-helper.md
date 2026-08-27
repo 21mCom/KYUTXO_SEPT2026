@@ -22,3 +22,17 @@ guard because it deliberately exercises LoginScreen's own internals (wrong-passw
 stuck-fill detection) rather than just getting past it. The shared `dismissMigrationOverlayIfPresent`
 throws if the overlay never clears (fail loud), unlike most of the old inline copies which silently
 timed out.
+
+**Migration pitfalls confirmed by a full end-to-end run of all check-*-browser*.mjs scripts:**
+- `isVisible()` (instant, no wait) and `waitForLoginScreenVisible(page, { timeoutMs: 1 })` are NOT
+  equivalent. A 1ms `waitFor` almost always times out even when the element is already visible
+  (CDP round-trip overhead exceeds 1ms), so any script polling "is the login screen showing right
+  now, without blocking" must use a dedicated instant check (`isLoginScreenVisible(page)`, added
+  alongside the other helpers), never a `waitFor` with a near-zero timeout.
+- Files whose old local `unlockIfNeeded(page)` had closure access to a module-level `SETUP_PASSWORD`
+  often have MULTIPLE call sites (one per page reload/re-lock point). Migrating only the first
+  call site to `unlockIfNeeded(page, SETUP_PASSWORD, ...)` and leaving later ones as bare
+  `unlockIfNeeded(page)` compiles fine (no TS/syntax error) but throws at runtime
+  (`locator.fill: value: expected string, got undefined`) the moment that later re-lock actually
+  needs to fill the password. After any such migration, grep the whole repo for
+  `unlockIfNeeded(page)` with no second argument — every hit is a bug.
