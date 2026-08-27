@@ -38,6 +38,7 @@ import {
   captureMergeOrigin,
   bulkCreateRecords,
   bulkAddRecordOrigins,
+  bulkDeleteRecordsWithArchiving,
   type CreateRecordData,
 } from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
@@ -1013,21 +1014,47 @@ export default function Dashboard() {
     });
   }, [filteredRecords]);
 
+  // Chunk size for the batched delete phase below. Mirrors
+  // TX_ADDRESS_WRITE_CHUNK_SIZE / VAULT_NOTES_WRITE_CHUNK_SIZE (Task #2122 /
+  // #2129): large enough to collapse per-record IndexedDB round-trips into a
+  // handful of transactions (a "select all" on a large loaded page can select
+  // thousands of records), small enough that a single bad chunk falling back
+  // to the slow per-record path stays bounded.
+  const BULK_DELETE_WRITE_CHUNK_SIZE = 1000;
+
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
     
     setIsDeleting(true);
-    const idsToDelete = Array.from(selectedIds);
+    const idsToDelete = Array.from(selectedIds).map(id => parseInt(id));
     let successCount = 0;
     let failCount = 0;
-    
-    for (const id of idsToDelete) {
-      try {
-        await deleteRecord(parseInt(id));
-        successCount++;
-      } catch {
-        failCount++;
+
+    beginBulkOperation();
+    try {
+      for (let start = 0; start < idsToDelete.length; start += BULK_DELETE_WRITE_CHUNK_SIZE) {
+        const chunk = idsToDelete.slice(start, start + BULK_DELETE_WRITE_CHUNK_SIZE);
+        try {
+          await bulkDeleteRecordsWithArchiving(chunk);
+          successCount += chunk.length;
+        } catch (error) {
+          // The whole chunk failed to write — fall back to the original
+          // per-record path (which still does the attachment-archiving
+          // cascade) for just this chunk so a single bad row can't sink the
+          // rest of the selection.
+          console.error("Bulk delete chunk failed, falling back to per-record deletes:", error);
+          for (const id of chunk) {
+            try {
+              await deleteRecord(id);
+              successCount++;
+            } catch {
+              failCount++;
+            }
+          }
+        }
       }
+    } finally {
+      endBulkOperation();
     }
     
     setSelectedIds(new Set());

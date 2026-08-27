@@ -41,3 +41,18 @@ setup overhead is real and shrinks the win as chunk count grows relative to
 total N — measure with the actual chunked code path, not a single unchunked
 bulk call, and expect run-to-run noise (shared container) rather than a fixed
 multiplier.
+
+The delete side has the same anti-pattern (a `for` loop calling
+`deleteRecord` once per selected id, e.g. Dashboard.tsx's/Records.tsx's
+`handleBulkDelete`) but one extra wrinkle: `deleteRecord` has an auxiliary
+per-record side effect (archiving each record's attachments into a
+recoverable trash table before the row is removed) that the existing
+merge-cancel-only `bulkDeleteRecords` helper deliberately skips. A correct
+bulk-delete-with-archiving helper must batch *both* the side effect (one
+`archiveAttachments` bulkAdd call covering every id's attachments, fetched via
+a single `anyOf(ids)` query) and the primary table deletes — batching only
+the record-table delete while still looping the archiving per-record would
+silently reintroduce the same bottleneck one call site later. Measured ~5.5x
+on 3000 records/chunk-1000 in this container, with an exact-parity check
+(archived-attachment count matches N) proving the batched path didn't drop
+the archiving cascade.

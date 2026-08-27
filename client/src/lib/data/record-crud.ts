@@ -586,6 +586,51 @@ export interface DeleteRecordOptions {
   skipNotification?: boolean;
 }
 
+// Bulk delete WITH the attachment-archiving cascade that deleteRecord performs
+// per-record (unlike bulkDeleteRecords above, which is merge-cancel-undo-only
+// and skips archiving). Used by user-initiated multi-record deletes (Dashboard
+// bulk delete) so a many-thousand-record selection doesn't serialize one
+// IndexedDB round-trip per record — attachments for every id are archived in a
+// single bulkAdd, then attachment rows and record rows are each removed in one
+// bulkDelete. Same fix pattern as bulkCreateRecords/bulkUpdateRecords (Task
+// #2129): callers should chunk `ids` themselves and fall back to per-record
+// deleteRecord() for any chunk that throws.
+export async function bulkDeleteRecordsWithArchiving(
+  ids: number[],
+  options?: DeleteRecordOptions
+): Promise<void> {
+  if (ids.length === 0) return;
+
+  const { archiveAttachments } = await import('./trash-crud');
+  const existing = await db.records.bulkGet(ids);
+  const attachments = await db.attachments.where('recordId').anyOf(ids).toArray();
+
+  // Archiving happens before any rows are removed; if it throws we abort so
+  // nothing becomes unrecoverable (same ordering as deleteRecord).
+  if (attachments.length > 0) {
+    await archiveAttachments(attachments, 'record-delete', { skipNotification: true });
+  }
+
+  await db.attachments.where('recordId').anyOf(ids).delete();
+  await db.records.bulkDelete(ids);
+
+  // Drop the hover-metadata cache for every deleted record so a visible
+  // AddressLink/TxidLink's orange FileText indicator / tooltip clears
+  // immediately instead of lingering for up to the cache TTL.
+  invalidateHoverCacheMany(
+    existing
+      .filter((r): r is Record => !!r?.inputString)
+      .map((r) => r.inputString)
+  );
+
+  if (!options?.skipNotification) {
+    notifyDbChange('records');
+    if (attachments.length > 0) {
+      notifyDbChange('trashedAttachments');
+    }
+  }
+}
+
 export async function deleteRecord(id: number, options?: DeleteRecordOptions): Promise<void> {
   const { getAttachmentsByRecordId, deleteAttachmentsByRecordId } = await import('./attachments-crud');
   const { archiveAttachments } = await import('./trash-crud');
