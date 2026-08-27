@@ -843,6 +843,10 @@ args = "vocab-ensure-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "vocab-combobox-add-new-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "backup-compare-node-check"
 
 [[workflows.workflow.tasks]]
@@ -2610,6 +2614,14 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/data/vocabulary-crud.ensure.test.ts"
+
+[[workflows.workflow]]
+name = "vocab-combobox-add-new-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/VocabularyCombobox.addNew.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
