@@ -125,3 +125,4 @@
 - [Combobox create-new wording convention](combobox-create-new-wording.md) — app-wide "select or add" pickers label the new-entry row `Add "<value>"`; a shared component drifting to `Create "<value>"` silently breaks any `[cmdk-item]` text-matcher check.
 - [Dexie dead-index guard pattern](dexie-dead-index-guard.md) — dynamic `.where(variable)` dispatch defeats literal grep for index usage; pin the exact index token set + an explicit denylist, not just a generic scanner.
 - [Virtualizer range-effect index collision](virtualizer-range-effect-index-collision.md) — windowed-list effects that default virtualItems[0].index to 0 when empty never fire if real content also starts at index 0; add virtualItems.length to deps.
+- [Bulk-write batching root cause](bulk-write-batching-root-cause.md) — a slow "bulk" operation is often a serial per-record loop that never calls the batch helper at all; verify the call site batches before optimizing the helper/schema.

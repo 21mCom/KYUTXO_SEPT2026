@@ -28,8 +28,19 @@ import {
 } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { createRecord } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, captureMergeOrigin, saveDerivationTemplate } from "@/lib/dataFacade";
-import { beginBulkOperation, endBulkOperation } from "@/lib/database";
+import {
+  syncTagsToMaster,
+  syncCategoriesToMaster,
+  createRecordOrigin,
+  captureMergeOrigin,
+  saveDerivationTemplate,
+  bulkCreateRecords,
+  bulkUpdateRecords,
+  bulkAddRecordOrigins,
+  type CreateRecordData,
+  type MergeOriginInput,
+} from "@/lib/dataFacade";
+import { beginBulkOperation, endBulkOperation, type Record as DBRecord } from "@/lib/database";
 import { getRecordsByType } from "@/lib/dataFacade";
 import { updateRecord } from "@/hooks/use-records";
 import { 
@@ -446,8 +457,19 @@ export default function BulkImport() {
       let reattributedCount = 0;
       let curatedReattributedCount = 0;
 
+      // Phase 1: compute every address's create/merge payload in memory (pure
+      // — no DB access). Interleaving one createRecord()/updateRecord()
+      // IndexedDB round-trip per address here used to be the bottleneck on
+      // large xpub scans (Task #2122); batching the writes below collapses
+      // that into a handful of bulk transactions instead of thousands.
+      const WRITE_CHUNK_SIZE = 1000;
+      interface PendingAddrCreate { data: CreateRecordData; originInput: MergeOriginInput }
+      interface PendingAddrMerge { existingRecord: DBRecord; data: Partial<DBRecord>; originInput: MergeOriginInput }
+      const pendingAddrCreates: PendingAddrCreate[] = [];
+      const pendingAddrMerges: PendingAddrMerge[] = [];
+
       for (let i = 0; i < allAddresses.length; i++) {
-        if (i % 10 === 0) {
+        if (i % 500 === 0) {
           await new Promise(r => setTimeout(r, 0));
         }
         const addr = allAddresses[i];
@@ -464,7 +486,15 @@ export default function BulkImport() {
           totalCount: allAddresses.length,
           walletName: walletNameInput || seedName || 'Derived',
         }) + chainSuffix;
-        
+
+        const vaultForAddress = isMultisigMode ? {
+          isVaultXpub: true,
+          vaultName: walletNameInput || seedName || 'Multisig Vault',
+          m: multisigResult?.m ?? null,
+          n: multisigResult?.n ?? null,
+          vaultNotes: buildMultisigVaultNotes(),
+        } : vaultMetadata;
+
         try {
           const existingRecord = recordLookup.get(addr.address.trim().toLowerCase()) || null;
 
@@ -510,57 +540,52 @@ export default function BulkImport() {
               }
             }
 
-            // Update the record with merged metadata
-            // Keep existing values if they exist, otherwise use new values
-            await updateRecord(existingRecord.id, {
-              tags: mergedTags,
-              categories: mergedCategories,
-              walletName: newWalletName,
-              // Only update empty fields with new xpub-derived data
-              seedName: existingRecord.seedName || seedName || undefined,
-              walletSoftware: existingRecord.walletSoftware || walletSoftware || undefined,
-              privateKeyStatus: existingRecord.privateKeyStatus || privateKeyStatus || undefined,
-              notes: existingRecord.notes || notes || undefined,
-              // Always update xpub-related metadata (more specific info)
-              chainType: addr.chainType,
-              derivationPath: derivationPath,
-              xpub: isMultisigMode ? undefined : xpub,
-              source: addressSource,
-              // Add vault metadata (overwrite with new vault info if provided, use multisig config in multisig mode)
-              vault: isMultisigMode ? {
-                isVaultXpub: true,
-                vaultName: walletNameInput || seedName || 'Multisig Vault',
-                m: multisigResult?.m ?? null,
-                n: multisigResult?.n ?? null,
-                vaultNotes: buildMultisigVaultNotes(),
-              } : vaultMetadata,
-              // Handle addressImportance upgrade
-              addressImportance: newImportance,
+            pendingAddrMerges.push({
+              existingRecord,
+              data: {
+                tags: mergedTags,
+                categories: mergedCategories,
+                walletName: newWalletName,
+                // Only update empty fields with new xpub-derived data
+                seedName: existingRecord.seedName || seedName || undefined,
+                walletSoftware: existingRecord.walletSoftware || walletSoftware || undefined,
+                privateKeyStatus: existingRecord.privateKeyStatus || privateKeyStatus || undefined,
+                notes: existingRecord.notes || notes || undefined,
+                // Always update xpub-related metadata (more specific info)
+                chainType: addr.chainType,
+                derivationPath: derivationPath,
+                xpub: isMultisigMode ? undefined : xpub,
+                source: addressSource,
+                // Add vault metadata (overwrite with new vault info if provided, use multisig config in multisig mode)
+                vault: vaultForAddress,
+                // Handle addressImportance upgrade
+                addressImportance: newImportance,
+              },
+              // Record the incoming xpub metadata as an origin (backfilling a
+              // baseline origin first when the record has none) so differing
+              // values surface on the Conflict Resolution page. Non-fatal.
+              originInput: {
+                originType: 'xpub-derived',
+                label: generatedLabel,
+                notes: notes || undefined,
+                tags: parsedTags,
+                categories: parsedCategories,
+                seedName: seedName || undefined,
+                walletSoftware: walletSoftware || undefined,
+                privateKeyStatus: privateKeyStatus || undefined,
+                owner: ownerInput || undefined,
+                walletName: walletNameInput || undefined,
+                xpub: isMultisigMode ? undefined : xpub,
+                derivationPath: derivationPath,
+                chainType: addr.chainType,
+              },
             });
-
-            // Record the incoming xpub metadata as an origin (backfilling a
-            // baseline origin first when the record has none) so differing
-            // values surface on the Conflict Resolution page. Non-fatal.
-            await captureMergeOrigin(existingRecord, {
-              originType: 'xpub-derived',
-              label: generatedLabel,
-              notes: notes || undefined,
-              tags: parsedTags,
-              categories: parsedCategories,
-              seedName: seedName || undefined,
-              walletSoftware: walletSoftware || undefined,
-              privateKeyStatus: privateKeyStatus || undefined,
-              owner: ownerInput || undefined,
-              walletName: walletNameInput || undefined,
-              xpub: isMultisigMode ? undefined : xpub,
-              derivationPath: derivationPath,
-              chainType: addr.chainType,
-            });
-
-            mergedCount++;
           } else {
-            // New address - create record with vault metadata
-            await createRecord({
+            // New address - create record with vault metadata. syncDepth and
+            // maxSyncedDepth default to 0/-1 the same way the use-records
+            // createRecord() wrapper does, since the batched path below calls
+            // the lower-level bulkCreateRecords() directly.
+            const data: CreateRecordData = {
               type: "address",
               inputString: addr.address,
               label: generatedLabel,
@@ -576,20 +601,124 @@ export default function BulkImport() {
               chainType: addr.chainType,
               derivationPath: derivationPath,
               xpub: isMultisigMode ? undefined : xpub,
-              vault: isMultisigMode ? {
-                isVaultXpub: true,
-                vaultName: walletNameInput || seedName || 'Multisig Vault',
-                m: multisigResult?.m ?? null,
-                n: multisigResult?.n ?? null,
-                vaultNotes: buildMultisigVaultNotes(),
-              } : vaultMetadata,
+              vault: vaultForAddress,
               addressImportance: markAsVerified ? 'verified' : 'xpub-derived',
+              syncDepth: 0,
+              maxSyncedDepth: -1,
+            };
+            // Every created row here always carries a derivationPath, which
+            // always classifies as 'xpub-derived' under the same origin-type
+            // inference the use-records createRecord() wrapper uses.
+            pendingAddrCreates.push({
+              data,
+              originInput: {
+                originType: 'xpub-derived',
+                source: addressSource,
+                label: generatedLabel,
+                notes: notes || undefined,
+                owner: ownerInput || undefined,
+                walletName: walletNameInput || undefined,
+                seedName: seedName || undefined,
+                walletSoftware: walletSoftware || undefined,
+                tags: parsedTags,
+                categories: parsedCategories,
+                xpub: isMultisigMode ? undefined : xpub,
+                derivationPath: derivationPath,
+                chainType: addr.chainType,
+              },
             });
-            createdCount++;
           }
         } catch (error) {
           console.error(`Failed to save address ${addr.address}:`, error);
           errorCount++;
+        }
+      }
+
+      // Phase 2a: batch-create new addresses.
+      for (let start = 0; start < pendingAddrCreates.length; start += WRITE_CHUNK_SIZE) {
+        const chunk = pendingAddrCreates.slice(start, start + WRITE_CHUNK_SIZE);
+        try {
+          const ids = await bulkCreateRecords(chunk.map(c => c.data));
+          try {
+            const originRows = ids.map((recordId, j) => ({ recordId, ...chunk[j].originInput }));
+            await bulkAddRecordOrigins(originRows, { skipNotification: true });
+          } catch (originError) {
+            console.error('[BulkImport] Failed to bulk-create record origins:', originError);
+          }
+          createdCount += ids.length;
+        } catch (error) {
+          console.error('[BulkImport] Bulk create chunk failed, falling back to per-record inserts:', error);
+          for (const c of chunk) {
+            try {
+              const recordId = await createRecord(c.data) as number;
+              try {
+                await createRecordOrigin({ recordId, ...c.originInput });
+              } catch (originError) {
+                console.error('[BulkImport] Failed to create record origin:', originError);
+              }
+              createdCount++;
+            } catch (e2) {
+              console.error(`Failed to save address ${c.data.inputString}:`, e2);
+              errorCount++;
+            }
+          }
+        }
+      }
+
+      // Phase 2b: batch-update merges. Duplicate input addresses resolving to
+      // the SAME existing record (also possible, though rare, for the
+      // pre-loop recordLookup snapshot) fall back to the original per-record
+      // path (which re-reads before each write) so compounding merges land
+      // exactly like the previous serial loop; every other group of size 1 —
+      // the overwhelmingly common case — takes the fast batched path.
+      const mergesByExistingId = new Map<number, PendingAddrMerge[]>();
+      for (const merge of pendingAddrMerges) {
+        const id = merge.existingRecord.id!;
+        const group = mergesByExistingId.get(id);
+        if (group) group.push(merge);
+        else mergesByExistingId.set(id, [merge]);
+      }
+      const singleAddrMerges: PendingAddrMerge[] = [];
+      const duplicateAddrMergeGroups: PendingAddrMerge[][] = [];
+      for (const group of mergesByExistingId.values()) {
+        if (group.length === 1) singleAddrMerges.push(group[0]);
+        else duplicateAddrMergeGroups.push(group);
+      }
+
+      for (let start = 0; start < singleAddrMerges.length; start += WRITE_CHUNK_SIZE) {
+        const chunk = singleAddrMerges.slice(start, start + WRITE_CHUNK_SIZE);
+        try {
+          await bulkUpdateRecords(chunk.map(m => ({ id: m.existingRecord.id!, changes: m.data })));
+          mergedCount += chunk.length;
+          // Origin bookkeeping is per-record but every record in this chunk
+          // is distinct, so the reads/writes inside captureMergeOrigin can
+          // never collide — safe to run concurrently.
+          await Promise.all(chunk.map(m => captureMergeOrigin(m.existingRecord, m.originInput)));
+        } catch (error) {
+          console.error('[BulkImport] Bulk update chunk failed, falling back to per-record updates:', error);
+          for (const m of chunk) {
+            try {
+              await updateRecord(m.existingRecord.id!, m.data);
+              await captureMergeOrigin(m.existingRecord, m.originInput);
+              mergedCount++;
+            } catch (e2) {
+              console.error(`Failed to save address ${m.existingRecord.inputString}:`, e2);
+              errorCount++;
+            }
+          }
+        }
+      }
+
+      for (const group of duplicateAddrMergeGroups) {
+        for (const m of group) {
+          try {
+            await updateRecord(m.existingRecord.id!, m.data);
+            await captureMergeOrigin(m.existingRecord, m.originInput);
+            mergedCount++;
+          } catch (error) {
+            console.error(`Failed to save address ${m.existingRecord.inputString}:`, error);
+            errorCount++;
+          }
         }
       }
 

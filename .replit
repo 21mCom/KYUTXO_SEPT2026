@@ -957,6 +957,10 @@ args = "records-index-usage-guard"
 task = "workflow.run"
 args = "records-index-usage-guard-tests"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bulk-import-batched-save-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3363,6 +3367,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/check-records-index-usage.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bulk-import-batched-save-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bulk-import-batched-save-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
