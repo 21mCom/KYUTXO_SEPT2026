@@ -126,7 +126,7 @@ export function VocabularyCombobox({
               <CommandEmpty>No options found.</CommandEmpty>
             )}
             {showCreateNew && (
-              <CommandGroup heading="Create new">
+              <CommandGroup heading="Add new">
                 <CommandItem
                   value={`create:${inputValue}`}
                   onSelect={handleCreateNew}
@@ -134,7 +134,7 @@ export function VocabularyCombobox({
                   data-testid={`option-create-new-${fieldKey}`}
                 >
                   <Plus className="mr-2 h-4 w-4" />
-                  {isCreating ? "Creating..." : `Create "${inputValue.trim()}"`}
+                  {isCreating ? "Adding..." : `Add "${inputValue.trim()}"`}
                 </CommandItem>
               </CommandGroup>
             )}
@@ -285,7 +285,7 @@ export function VocabularyMultiSelect({
                 )}
               </CommandEmpty>
               {showCreateNew && (
-                <CommandGroup heading="Create new">
+                <CommandGroup heading="Add new">
                   <CommandItem
                     value={`create:${searchInput}`}
                     onSelect={handleCreateNew}
@@ -293,7 +293,7 @@ export function VocabularyMultiSelect({
                     data-testid={`multiselect-create-${fieldKey}`}
                   >
                     <Plus className="mr-2 h-4 w-4" />
-                    {isCreating ? "Creating..." : `Create "${searchInput.trim()}"`}
+                    {isCreating ? "Adding..." : `Add "${searchInput.trim()}"`}
                   </CommandItem>
                 </CommandGroup>
               )}
