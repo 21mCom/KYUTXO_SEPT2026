@@ -14,3 +14,5 @@ description: Any balance/ownership aggregation over cached address stats must al
 - `recomputeAllAddressStats` intentionally stamps ALL records (per-record caches are used elsewhere) — filter at read/aggregation time, not at stamp time.
 
 **Import gotcha:** page code should import pure helpers/consts from `@/lib/db-types`, NOT `@/lib/database` — the latter instantiates Dexie at module load and drags IndexedDB errors into every jsdom test that doesn't mock it.
+
+**Compound-index curated lookups exclude undefined importance:** `isUserCuratedImportance()` treats a missing tier as curated, but any lookup built on the `[type+addressImportance]` compound index (`getAddressRecordsByImportanceTiers`, the `curatedOnly` dimension in `getTxidsForTxEntityFilter`) does an exact `anyOf(['address', tier])` match — a record with `addressImportance` left `undefined` has no compound-index entry and is invisible to it, even though it conceptually counts as curated. Seeding a curated-view test fixture (Transactions/UTXOs entity/curated-filter tests) needs an explicit tier like `'manual'`, not an omitted field.

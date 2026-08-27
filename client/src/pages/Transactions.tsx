@@ -64,7 +64,10 @@ import {
   ChevronsUpDown,
   Loader2,
   AlertTriangle,
-  Info
+  Info,
+  ArrowUp,
+  ArrowDown,
+  X
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fetchParticipantsByTxids } from "@/lib/participant-repo";
@@ -568,8 +571,27 @@ export default function Transactions() {
   
   // OP_RETURN filter: only show transactions with OP_RETURN data
   const [opReturnOnly, setOpReturnOnly] = useState(false);
+  // Explicit sort control: date-only (no per-tx amount index to sort on).
+  // Defaults to newest-first, matching the page's previous hard-coded order.
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [searchProgress, setSearchProgress] = useState<{ scanned: number; total: number; matches: number } | null>(null);
   const [virtualizedStats, setVirtualizedStats] = useState<VirtualizedLoadedStats | null>(null);
+
+  // Single control resets free-text search, every advanced filter, and the
+  // page-specific OP_RETURN toggle together (sort direction is a display
+  // preference, not a filter, so it's intentionally left alone).
+  const activeFilterCount =
+    (search.trim() ? 1 : 0) +
+    (hasActiveSearchFilters(searchFilters) ? 1 : 0) +
+    (hasActiveEntityFilters(searchFilters) ? 1 : 0) +
+    (opReturnOnly ? 1 : 0);
+  const hasAnyActiveFilters = activeFilterCount > 0;
+  const clearAllFilters = useCallback(() => {
+    setSearch("");
+    setSearchFilters(defaultFilters);
+    setOpReturnOnly(false);
+    setCurrentPage(1);
+  }, []);
 
   const handleVirtualizedStatsChange = useCallback((stats: VirtualizedLoadedStats) => {
     setVirtualizedStats(stats);
@@ -631,6 +653,13 @@ export default function Transactions() {
     ...entityFilter,
     curatedOnly: !includeBlockchainDiscovered || undefined,
   }), [entityFilter, includeBlockchainDiscovered]);
+
+  // Engine page options additionally carry the sort direction (count queries
+  // are order-independent, so engineFilterOpts alone is enough for those).
+  const enginePageFilterOpts = useMemo(() => ({
+    ...engineFilterOpts,
+    sortDirection,
+  }), [engineFilterOpts, sortDirection]);
 
   // Dropdown value pools for the entity selects: vocabulary tables merged with
   // distinct values found on records, so values that only exist on records
@@ -705,7 +734,9 @@ export default function Transactions() {
   }>({ signature: '', result: null });
   const { value: fallbackTxidPrefix } = useAsyncMemo(async (signal) => {
     const needsSet = !includeBlockchainDiscovered || hasEntityFilter;
-    if (!needsSet || fallbackTxidState.set !== null || fallbackTxidState.engine) {
+    // The prefix walk is always newest-first; ascending sort can't use it, so
+    // skip the work entirely and let the caller wait on the full-set walk.
+    if (!needsSet || sortDirection === 'asc' || fallbackTxidState.set !== null || fallbackTxidState.engine) {
       return null as TxEntityFilterPrefix | null;
     }
     const decision = await evaluateEngineFreshness('transactions');
@@ -732,7 +763,7 @@ export default function Transactions() {
     if (cache.signature === signature) cache.result = result;
     return result;
   }, [includeBlockchainDiscovered, hasEntityFilter, entitySignature, currentPage,
-      fallbackTxidState, txDbSignal, engineReadySignal],
+      fallbackTxidState, txDbSignal, engineReadySignal, sortDirection],
      null as TxEntityFilterPrefix | null);
 
   const { value: txCounts } = useAsyncMemo(async (signal) => {
@@ -800,7 +831,7 @@ export default function Transactions() {
 
     return { totalDbCount, filteredCount, blockchainOnlyCount };
   }, [includeBlockchainDiscovered, opReturnOnly, hasEntityFilter, entitySignature,
-      fallbackTxidState, fallbackTxidPrefix, txDbSignal, engineReadySignal],
+      fallbackTxidState, fallbackTxidPrefix, txDbSignal, engineReadySignal, sortDirection],
      { totalDbCount: 0, filteredCount: 0, blockchainOnlyCount: 0 });
 
   const blockchainOnlyTxCount = txCounts.blockchainOnlyCount;
@@ -827,6 +858,7 @@ export default function Transactions() {
       const anchorState = txPageAnchorsRef.current;
       const querySignature = JSON.stringify({
         op: opReturnOnly, inc: includeBlockchainDiscovered, ent: entitySignature, db: txDbSignal,
+        dir: sortDirection,
       });
       if (anchorState.signature !== querySignature) {
         anchorState.signature = querySignature;
@@ -844,7 +876,7 @@ export default function Transactions() {
           limit: ITEMS_PER_PAGE,
           cursor,
           opReturnOnly: opReturnOnly || undefined,
-          ...engineFilterOpts,
+          ...enginePageFilterOpts,
         });
         checkAbort(signal);
         // Record the boundary for the next page once a full page is loaded; a
@@ -870,23 +902,25 @@ export default function Transactions() {
     }
 
     const needsFilter = !includeBlockchainDiscovered || hasEntityFilter || opReturnOnly;
+    const ascending = sortDirection === 'asc';
 
     if (!needsFilter) {
-      return getTransactionsPageByBlockTime(dbOffset, ITEMS_PER_PAGE);
+      return getTransactionsPageByBlockTime(dbOffset, ITEMS_PER_PAGE, ascending);
     }
 
     if (includeBlockchainDiscovered && !hasEntityFilter && opReturnOnly) {
-      return getOpReturnTransactionsPageByBlockTime(dbOffset, ITEMS_PER_PAGE);
+      return getOpReturnTransactionsPageByBlockTime(dbOffset, ITEMS_PER_PAGE, ascending);
     }
 
     const txidSet = fallbackTxidState.set;
     if (txidSet == null) {
       // Full set still resolving — serve this page from the bounded newest-first
       // prefix so huge vaults render immediately. The prefix is already in
-      // blockTime-descending order, so it slices directly. OP_RETURN composes on
-      // the full set only (rare combo), so it keeps waiting.
+      // blockTime-descending order, so it slices directly. Ascending sort and
+      // OP_RETURN compose on the full set only (rarer combos), so they keep
+      // waiting rather than serving a wrongly-ordered/incomplete page.
       const prefix = fallbackTxidPrefix;
-      if (!prefix || opReturnOnly) return [];
+      if (!prefix || opReturnOnly || ascending) return [];
       if (!prefix.exhausted && prefix.orderedTxids.length < dbOffset + ITEMS_PER_PAGE) return [];
       const pageTxids = prefix.orderedTxids.slice(dbOffset, dbOffset + ITEMS_PER_PAGE);
       if (pageTxids.length === 0) return [];
@@ -910,11 +944,12 @@ export default function Transactions() {
     }
 
     const filtered = opReturnOnly ? allMatching.filter(tx => tx.hasOpReturn) : allMatching;
-    filtered.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+    const sortMultiplier = sortDirection === 'asc' ? 1 : -1;
+    filtered.sort((a, b) => sortMultiplier * ((a.blockTime ?? 0) - (b.blockTime ?? 0)));
     return filtered.slice(dbOffset, dbOffset + ITEMS_PER_PAGE);
   }, [needsClientSideFiltering, includeBlockchainDiscovered, hasEntityFilter, entitySignature,
       fallbackTxidState, fallbackTxidPrefix, opReturnOnly, dbOffset, safePageForOffset,
-      txDbSignal, engineReadySignal],
+      txDbSignal, engineReadySignal, sortDirection],
      [] as BlockchainTransaction[]);
 
   const { value: scanResult, isComputing: scanLoading } = useAsyncMemo(async (signal) => {
@@ -1145,12 +1180,13 @@ export default function Transactions() {
       }
     }
 
-    allMatches.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+    const searchSortMultiplier = sortDirection === 'asc' ? 1 : -1;
+    allMatches.sort((a, b) => searchSortMultiplier * ((a.blockTime ?? 0) - (b.blockTime ?? 0)));
     setSearchProgress(null);
     return { matches: allMatches, totalMatchCount, limitReached: totalMatchCount > allMatches.length, totalLinkedAddressCount: totalLinkedAddresses.size };
   }, [needsClientSideFiltering, includeBlockchainDiscovered, opReturnOnly, hasEntityFilter,
       entitySignature, fallbackTxidState, debouncedSearch, searchFilters, curatedRecords,
-      txDbSignal, engineReadySignal],
+      txDbSignal, engineReadySignal, sortDirection],
      { matches: [] as BlockchainTransaction[], totalMatchCount: 0, limitReached: false, totalLinkedAddressCount: 0 });
 
   const needsBroadParticipants = debouncedSearch.trim() !== '' || searchFilters.amountMode !== 'any';
@@ -1674,6 +1710,37 @@ export default function Transactions() {
           <FileCode className="h-4 w-4 mr-1" />
           OP_RETURN
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setSortDirection(d => d === 'desc' ? 'asc' : 'desc');
+            setCurrentPage(1);
+          }}
+          data-testid="button-sort-date"
+          title={sortDirection === 'desc' ? "Sorted newest first" : "Sorted oldest first"}
+        >
+          {sortDirection === 'desc' ? (
+            <ArrowDown className="h-4 w-4 mr-1" />
+          ) : (
+            <ArrowUp className="h-4 w-4 mr-1" />
+          )}
+          Date
+        </Button>
+        {hasAnyActiveFilters && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={clearAllFilters}
+            data-testid="button-clear-filters"
+          >
+            <X className="h-4 w-4 mr-1" />
+            Clear all filters
+            <span className="ml-1 rounded-full bg-muted-foreground/20 text-foreground h-5 w-5 text-xs flex items-center justify-center">
+              {activeFilterCount}
+            </span>
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"

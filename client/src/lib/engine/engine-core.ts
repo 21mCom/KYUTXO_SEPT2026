@@ -1035,16 +1035,20 @@ export function getAddressAggregates(db: EngineDb, addresses: string[]): Map<str
 export interface TransactionEntityFilter {
   /** A participant with exactly this address (linked or not). */
   address?: string;
-  /** A participant linked (via recordId) to a record with this walletName. */
-  wallet?: string;
-  /** A participant linked to a record with this seedName. */
-  seed?: string;
-  /** A participant linked to a record with this owner. */
-  owner?: string;
-  /** A participant linked to a record whose tags JSON array contains this value. */
-  tag?: string;
-  /** A participant linked to a record whose categories JSON array contains this value. */
-  category?: string;
+  /**
+   * A participant linked (via recordId) to a record whose walletName matches
+   * ANY of these values (OR within the dimension). A bare string is a
+   * single-value array.
+   */
+  wallet?: string | string[];
+  /** A participant linked to a record whose seedName matches any of these. */
+  seed?: string | string[];
+  /** A participant linked to a record whose owner matches any of these. */
+  owner?: string | string[];
+  /** A participant linked to a record whose tags JSON array contains any of these. */
+  tag?: string | string[];
+  /** A participant linked to a record whose categories JSON array contains any of these. */
+  category?: string | string[];
 }
 
 export interface TransactionQueryOptions extends TransactionEntityFilter {
@@ -1067,9 +1071,11 @@ export interface TransactionPageCursor {
 }
 
 export interface TransactionPageOptions extends TransactionQueryOptions {
-  /** Return rows AFTER this cursor in (blockTime DESC, id DESC) order. */
+  /** Return rows AFTER this cursor, in `sortDirection` (blockTime, id) order. */
   cursor?: TransactionPageCursor;
   limit: number;
+  /** Sort order for blockTime (ties broken the same way on id). Default 'desc' (newest first). */
+  sortDirection?: 'asc' | 'desc';
 }
 
 /** A transaction row enriched with the per-tx aggregates the page renders. */
@@ -1112,6 +1118,17 @@ function participantRecordTxidSelect(predicate: string): string {
  * dimension may be satisfied by a DIFFERENT participant of the same tx).
  * Returns null when no entity dimension is active.
  */
+/** Normalizes a single-value-or-array filter field to a non-empty array, or undefined. */
+function toValueArray(v: string | string[] | undefined): string[] | undefined {
+  if (v === undefined) return undefined;
+  const arr = Array.isArray(v) ? v : [v];
+  return arr.length > 0 ? arr : undefined;
+}
+
+function inPlaceholders(values: unknown[]): string {
+  return values.map(() => '?').join(',');
+}
+
 function buildTransactionMatchSubquery(
   opts: TransactionQueryOptions,
 ): { sql: string; bind: unknown[] } | null {
@@ -1123,35 +1140,40 @@ function buildTransactionMatchSubquery(
     selects.push('SELECT DISTINCT tp.txid FROM transactionParticipants tp WHERE tp.address = ?');
     bind.push(opts.address);
   }
-  if (opts.wallet) {
-    selects.push(participantRecordTxidSelect('r.walletName = ?'));
-    bind.push(opts.wallet);
+  const wallet = toValueArray(opts.wallet);
+  if (wallet) {
+    selects.push(participantRecordTxidSelect(`r.walletName IN (${inPlaceholders(wallet)})`));
+    bind.push(...wallet);
   }
-  if (opts.seed) {
-    selects.push(participantRecordTxidSelect('r.seedName = ?'));
-    bind.push(opts.seed);
+  const seed = toValueArray(opts.seed);
+  if (seed) {
+    selects.push(participantRecordTxidSelect(`r.seedName IN (${inPlaceholders(seed)})`));
+    bind.push(...seed);
   }
-  if (opts.owner) {
-    selects.push(participantRecordTxidSelect('r.owner = ?'));
-    bind.push(opts.owner);
+  const owner = toValueArray(opts.owner);
+  if (owner) {
+    selects.push(participantRecordTxidSelect(`r.owner IN (${inPlaceholders(owner)})`));
+    bind.push(...owner);
   }
-  if (opts.tag) {
+  const tag = toValueArray(opts.tag);
+  if (tag) {
     // tags is JSON array text; match per-element via json_each (exact value),
     // mirroring Dexie's multi-entry tags index equality.
     selects.push(
       participantRecordTxidSelect(
-        "r.tags IS NOT NULL AND json_valid(r.tags) AND EXISTS (SELECT 1 FROM json_each(r.tags) je WHERE je.value = ?)",
+        `r.tags IS NOT NULL AND json_valid(r.tags) AND EXISTS (SELECT 1 FROM json_each(r.tags) je WHERE je.value IN (${inPlaceholders(tag)}))`,
       ),
     );
-    bind.push(opts.tag);
+    bind.push(...tag);
   }
-  if (opts.category) {
+  const category = toValueArray(opts.category);
+  if (category) {
     selects.push(
       participantRecordTxidSelect(
-        "r.categories IS NOT NULL AND json_valid(r.categories) AND EXISTS (SELECT 1 FROM json_each(r.categories) je WHERE je.value = ?)",
+        `r.categories IS NOT NULL AND json_valid(r.categories) AND EXISTS (SELECT 1 FROM json_each(r.categories) je WHERE je.value IN (${inPlaceholders(category)}))`,
       ),
     );
-    bind.push(opts.category);
+    bind.push(...category);
   }
   if (opts.curatedOnly) {
     selects.push(participantRecordTxidSelect(CURATED_RECORD_SQL));
@@ -1246,6 +1268,11 @@ export function getTransactionPage(db: EngineDb, opts: TransactionPageOptions): 
     clauses.push(match ? where.sql.replace(/hasOpReturn/g, 'bt.hasOpReturn') : where.sql);
     bind.push(...where.bind);
   }
+  // Ascending pages walk oldest-first; the cursor comparison and ORDER BY flip
+  // together so "after this cursor" always means "further from the start".
+  const ascending = opts.sortDirection === 'asc';
+  const cmp = ascending ? '>' : '<';
+  const order = ascending ? 'ASC' : 'DESC';
   let txRows: TransactionRow[];
   if (match) {
     // Entity-filtered page: derive the matching txid set from the selective
@@ -1253,7 +1280,7 @@ export function getTransactionPage(db: EngineDb, opts: TransactionPageOptions): 
     // sort ONLY the matched rows — cost is O(|matches| log |matches|), never a
     // walk of the whole transaction table skipping non-matching rows.
     if (opts.cursor) {
-      clauses.push('(COALESCE(bt.blockTime, 0) < ? OR (COALESCE(bt.blockTime, 0) = ? AND bt.id < ?))');
+      clauses.push(`(COALESCE(bt.blockTime, 0) ${cmp} ? OR (COALESCE(bt.blockTime, 0) = ? AND bt.id ${cmp} ?))`);
       bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
     }
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -1262,13 +1289,13 @@ export function getTransactionPage(db: EngineDb, opts: TransactionPageOptions): 
       `SELECT bt.id, bt.txid, bt.blockHeight, bt.blockTime, bt.fee, bt.feeRate, bt.vsize, bt.hasOpReturn
          FROM (${match.sql}) m CROSS JOIN blockchainTransactions bt ON bt.txid = m.txid
          ${whereSql}
-         ORDER BY COALESCE(bt.blockTime, 0) DESC, bt.id DESC
+         ORDER BY COALESCE(bt.blockTime, 0) ${order}, bt.id ${order}
          LIMIT ?`,
       [...match.bind, ...bind, opts.limit],
     );
   } else {
     if (opts.cursor) {
-      clauses.push('(COALESCE(blockTime, 0) < ? OR (COALESCE(blockTime, 0) = ? AND id < ?))');
+      clauses.push(`(COALESCE(blockTime, 0) ${cmp} ? OR (COALESCE(blockTime, 0) = ? AND id ${cmp} ?))`);
       bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
     }
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -1277,7 +1304,7 @@ export function getTransactionPage(db: EngineDb, opts: TransactionPageOptions): 
       `SELECT id, txid, blockHeight, blockTime, fee, feeRate, vsize, hasOpReturn
          FROM blockchainTransactions
          ${whereSql}
-         ORDER BY COALESCE(blockTime, 0) DESC, id DESC
+         ORDER BY COALESCE(blockTime, 0) ${order}, id ${order}
          LIMIT ?`,
       [...bind, opts.limit],
     );

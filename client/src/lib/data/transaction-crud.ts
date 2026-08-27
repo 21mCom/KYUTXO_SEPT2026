@@ -215,11 +215,13 @@ export async function countTransactionsWithOpReturn(): Promise<number> {
 
 export async function getTransactionsPageByBlockTime(
   offset: number,
-  limit: number
+  limit: number,
+  ascending = false,
 ): Promise<BlockchainTransaction[]> {
-  return db.blockchainTransactions
-    .orderBy('blockTime')
-    .reverse()
+  // Dexie's natural orderBy('blockTime') is already ascending — .reverse()
+  // only for the default newest-first view.
+  const query = db.blockchainTransactions.orderBy('blockTime');
+  return (ascending ? query : query.reverse())
     .offset(offset)
     .limit(limit)
     .toArray();
@@ -227,11 +229,11 @@ export async function getTransactionsPageByBlockTime(
 
 export async function getOpReturnTransactionsPageByBlockTime(
   offset: number,
-  limit: number
+  limit: number,
+  ascending = false,
 ): Promise<BlockchainTransaction[]> {
-  return db.blockchainTransactions
-    .orderBy('blockTime')
-    .reverse()
+  const query = db.blockchainTransactions.orderBy('blockTime');
+  return (ascending ? query : query.reverse())
     .filter(tx => tx.hasOpReturn === true)
     .offset(offset)
     .limit(limit)
@@ -249,10 +251,9 @@ export async function getTransactionsByTxidStartsWith(
     .toArray();
 }
 
-export async function getOrderedTransactionPrimaryKeysByBlockTime(): Promise<string[]> {
-  return (await db.blockchainTransactions
-    .orderBy('blockTime')
-    .reverse()
+export async function getOrderedTransactionPrimaryKeysByBlockTime(ascending = false): Promise<string[]> {
+  const query = db.blockchainTransactions.orderBy('blockTime');
+  return (await (ascending ? query : query.reverse())
     .primaryKeys()) as unknown as string[];
 }
 
@@ -276,16 +277,20 @@ export async function getOpReturnTransactionPrimaryKeys(): Promise<string[]> {
 export interface TxEntityFilter {
   /** A participant with exactly this address (linked or not). */
   address?: string;
-  /** A participant linked (via recordId) to a record with this walletName. */
-  wallet?: string;
-  /** A participant linked to a record with this seedName. */
-  seed?: string;
-  /** A participant linked to a record with this owner. */
-  owner?: string;
-  /** A participant linked to a record whose tags array contains this value. */
-  tag?: string;
-  /** A participant linked to a record whose categories array contains this value. */
-  category?: string;
+  /**
+   * A participant linked (via recordId) to a record whose walletName matches
+   * ANY of these values (OR within the dimension). A bare string is treated
+   * as a single-value array.
+   */
+  wallet?: string | string[];
+  /** A participant linked to a record whose seedName matches any of these. */
+  seed?: string | string[];
+  /** A participant linked to a record whose owner matches any of these. */
+  owner?: string | string[];
+  /** A participant linked to a record whose tags array contains any of these. */
+  tag?: string | string[];
+  /** A participant linked to a record whose categories array contains any of these. */
+  category?: string | string[];
   /**
    * A participant linked to a user-curated address record (type='address',
    * addressImportance in USER_CURATED_TIERS). Matches the engine's curatedOnly.
@@ -293,9 +298,23 @@ export interface TxEntityFilter {
   curatedOnly?: boolean;
 }
 
+/** Normalizes a single-value-or-array filter field to a non-empty array, or undefined. */
+function toValueArray(v: string | string[] | undefined): string[] | undefined {
+  if (v === undefined) return undefined;
+  const arr = Array.isArray(v) ? v : [v];
+  return arr.length > 0 ? arr : undefined;
+}
+
 /** True when any per-value entity dimension (not curatedOnly) is set. */
 export function hasTxEntityDimensions(f: TxEntityFilter): boolean {
-  return !!(f.address || f.wallet || f.seed || f.owner || f.tag || f.category);
+  return !!(
+    f.address ||
+    toValueArray(f.wallet) ||
+    toValueArray(f.seed) ||
+    toValueArray(f.owner) ||
+    toValueArray(f.tag) ||
+    toValueArray(f.category)
+  );
 }
 
 const ENTITY_BATCH = 500;
@@ -332,25 +351,25 @@ function intersect(a: Set<string> | null, b: Set<string>): Set<string> {
  */
 function entityFilterRecordIdLoaders(filter: TxEntityFilter): Array<() => Promise<number[]>> {
   const recordDims: Array<() => Promise<number[]>> = [];
-  if (filter.wallet) {
-    const w = filter.wallet;
-    recordDims.push(async () => (await db.records.where('walletName').equals(w).primaryKeys()) as number[]);
+  const wallet = toValueArray(filter.wallet);
+  if (wallet) {
+    recordDims.push(async () => (await db.records.where('walletName').anyOf(wallet).primaryKeys()) as number[]);
   }
-  if (filter.seed) {
-    const s = filter.seed;
-    recordDims.push(async () => (await db.records.where('seedName').equals(s).primaryKeys()) as number[]);
+  const seed = toValueArray(filter.seed);
+  if (seed) {
+    recordDims.push(async () => (await db.records.where('seedName').anyOf(seed).primaryKeys()) as number[]);
   }
-  if (filter.owner) {
-    const o = filter.owner;
-    recordDims.push(async () => (await db.records.where('owner').equals(o).primaryKeys()) as number[]);
+  const owner = toValueArray(filter.owner);
+  if (owner) {
+    recordDims.push(async () => (await db.records.where('owner').anyOf(owner).primaryKeys()) as number[]);
   }
-  if (filter.tag) {
-    const t = filter.tag;
-    recordDims.push(async () => (await db.records.where('tags').equals(t).primaryKeys()) as number[]);
+  const tag = toValueArray(filter.tag);
+  if (tag) {
+    recordDims.push(async () => (await db.records.where('tags').anyOf(tag).primaryKeys()) as number[]);
   }
-  if (filter.category) {
-    const c = filter.category;
-    recordDims.push(async () => (await db.records.where('categories').equals(c).primaryKeys()) as number[]);
+  const category = toValueArray(filter.category);
+  if (category) {
+    recordDims.push(async () => (await db.records.where('categories').anyOf(category).primaryKeys()) as number[]);
   }
   if (filter.curatedOnly) {
     recordDims.push(async () =>

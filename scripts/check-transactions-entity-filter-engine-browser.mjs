@@ -137,15 +137,28 @@ const ENGINE_BRIDGE_INIT = buildEngineBridgeInitScript({
   // dimension, AND-composed by intersection. Returns null when no dimension is
   // active (no restriction). Each dimension may be satisfied by a DIFFERENT
   // participant of the same transaction — sets are per-dimension, not per-row.
+  // Normalizes a single-value-or-array filter field to a non-empty array, or
+  // undefined — mirrors toValueArray in client/src/lib/engine/engine-core.ts.
+  function toValueArray(v) {
+    if (v === undefined || v === null) return undefined;
+    const arr = Array.isArray(v) ? v : [v];
+    return arr.length > 0 ? arr : undefined;
+  }
+
   function matchTxidSet(opts, participants, recordsById) {
     const dims = [];
     const recOf = (p) => (p.recordId != null ? recordsById.get(Number(p.recordId)) : undefined);
     if (opts.address) dims.push((p) => p.address === opts.address);
-    if (opts.wallet) dims.push((p) => recOf(p)?.walletName === opts.wallet);
-    if (opts.seed) dims.push((p) => recOf(p)?.seedName === opts.seed);
-    if (opts.owner) dims.push((p) => recOf(p)?.owner === opts.owner);
-    if (opts.tag) dims.push((p) => Array.isArray(recOf(p)?.tags) && recOf(p).tags.includes(opts.tag));
-    if (opts.category) dims.push((p) => Array.isArray(recOf(p)?.categories) && recOf(p).categories.includes(opts.category));
+    const wallet = toValueArray(opts.wallet);
+    if (wallet) dims.push((p) => wallet.includes(recOf(p)?.walletName));
+    const seed = toValueArray(opts.seed);
+    if (seed) dims.push((p) => seed.includes(recOf(p)?.seedName));
+    const owner = toValueArray(opts.owner);
+    if (owner) dims.push((p) => owner.includes(recOf(p)?.owner));
+    const tag = toValueArray(opts.tag);
+    if (tag) dims.push((p) => Array.isArray(recOf(p)?.tags) && recOf(p).tags.some((t) => tag.includes(t)));
+    const category = toValueArray(opts.category);
+    if (category) dims.push((p) => Array.isArray(recOf(p)?.categories) && recOf(p).categories.some((c) => category.includes(c)));
     if (opts.curatedOnly) dims.push((p) => {
       const r = recOf(p);
       return !!r && r.type === 'address' && OWNED_TIERS.includes(r.addressImportance);
@@ -341,9 +354,11 @@ async function setInputValue(page, testid, value) {
 }
 
 async function selectEntity(page, dimension, value) {
+  // Each entity dimension is now a searchable MultiSelectCombobox (cmdk),
+  // whose items expose role="option" but no per-item testid.
   await openFilters(page);
   await page.getByTestId(`select-entity-${dimension}`).click();
-  await page.getByTestId(`option-entity-${dimension}-${value}`).click();
+  await page.getByRole('option', { name: value, exact: true }).click();
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
 }
@@ -658,18 +673,21 @@ async function main() {
     // reads through the bridge, with the expected filter opts observed, and
     // the bridge must never have thrown while answering.
     const sawOpts = (arr, pred) => arr.some(pred);
+    // Entity dimensions are now string | string[] (multi-select comboboxes);
+    // match either shape the way toValueArray in engine-core.ts does.
+    const dimIs = (v, value) => (Array.isArray(v) ? v.length === 1 && v[0] === value : v === value);
     const countOpts = mock.countCalls.map((c) => c.opts);
     const proof = {
       countCallsDuringWalkthrough: mock.countCalls.length - Math.max(0, callsBefore.counts),
       pageCallsDuringWalkthrough: mock.pageCalls.length - Math.max(0, callsBefore.pages),
       sawCuratedDefault: sawOpts(countOpts, (o) => o.curatedOnly === true && !o.wallet && !o.owner && !o.address && !o.tag),
-      sawWalletAlphaCurated: sawOpts(countOpts, (o) => o.wallet === 'Alpha' && o.curatedOnly === true),
-      sawWalletAlphaAllTiers: sawOpts(countOpts, (o) => o.wallet === 'Alpha' && !o.curatedOnly),
-      sawOwnerBob: sawOpts(countOpts, (o) => o.owner === 'Bob'),
+      sawWalletAlphaCurated: sawOpts(countOpts, (o) => dimIs(o.wallet, 'Alpha') && o.curatedOnly === true),
+      sawWalletAlphaAllTiers: sawOpts(countOpts, (o) => dimIs(o.wallet, 'Alpha') && !o.curatedOnly),
+      sawOwnerBob: sawOpts(countOpts, (o) => dimIs(o.owner, 'Bob')),
       sawAddressBeta: sawOpts(countOpts, (o) => o.address === ADDR_BETA),
-      sawTagHot: sawOpts(countOpts, (o) => o.tag === 'hot'),
-      pageSawWalletAlpha: sawOpts(mock.pageCalls, (o) => o.wallet === 'Alpha' && o.curatedOnly === true),
-      pageSawTagHot: sawOpts(mock.pageCalls, (o) => o.tag === 'hot'),
+      sawTagHot: sawOpts(countOpts, (o) => dimIs(o.tag, 'hot')),
+      pageSawWalletAlpha: sawOpts(mock.pageCalls, (o) => dimIs(o.wallet, 'Alpha') && o.curatedOnly === true),
+      pageSawTagHot: sawOpts(mock.pageCalls, (o) => dimIs(o.tag, 'hot')),
       // Task #1882: opReturnOnly must reach the engine on the browse count/page
       // reads AND on the scanResult candidate enumeration (limit=1000 batches);
       // amount/date scans run the same enumeration with curatedOnly only.

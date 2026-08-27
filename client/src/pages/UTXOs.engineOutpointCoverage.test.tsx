@@ -11,7 +11,7 @@
 //   2. an engine coverage failure never falsely claims 100% coverage.
 import "fake-indexeddb/auto";
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
-import { screen, waitFor, cleanup } from "@testing-library/react";
+import { screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 
 // jsdom has no layout: render every row instead of a measured window.
 vi.mock("@tanstack/react-virtual", () => ({
@@ -75,15 +75,27 @@ import UTXOs from "./UTXOs";
 
 beforeAll(() => {
   Element.prototype.scrollTo = () => {};
+  Element.prototype.scrollIntoView = vi.fn();
+  (Element.prototype as any).hasPointerCapture = vi.fn();
 });
 
-const SETTINGS_KEY = "kyutxo-utxos-settings";
+// Open the Radix "Calculation Mode" <Select> via keyboard (pointer events
+// don't open it under jsdom) and pick "Exact (Beta)". The page no longer
+// persists this choice to localStorage, so tests must drive it via the UI.
+async function switchModeToExact() {
+  const trigger = await screen.findByTestId("select-utxo-mode");
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  const option = await screen.findByRole("option", { name: /^Exact \(Beta\)$/ });
+  fireEvent.click(option);
+}
+
 const ADDR_1 = "bc1qaffectedaddressone000000000000000000001";
 const ADDR_2 = "bc1qaffectedaddresstwo000000000000000000002";
 
 describe("UTXOs coverage warning on the engine fast path", () => {
   beforeEach(() => {
-    localStorage.clear();
+    // The page no longer persists any settings to localStorage.
   });
 
   afterEach(() => {
@@ -119,10 +131,10 @@ describe("UTXOs coverage warning on the engine fast path", () => {
   it("does not falsely claim 100% coverage when the engine coverage query fails", async () => {
     // Exact mode makes the claim observable: 100% renders "using outpoint-based
     // UTXO matching", 0% renders the "requires re-sync" warning.
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ utxoMode: "exact" }));
     engineGetOutpointCoverage.mockRejectedValue(new Error("engine worker crashed"));
 
     renderWithProviders(<UTXOs />);
+    await switchModeToExact();
 
     await waitFor(
       () => {

@@ -35,6 +35,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -86,54 +87,18 @@ import { batchPreloadIdentifiers } from "@/lib/metadata-hover";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 import { searchPendingClass } from "@/lib/search-pending-class";
 
-const SETTINGS_KEY = "kyutxo-utxos-settings";
-
 type UTXOCalculationMode = "heuristic" | "exact";
 
-interface UTXOSettings {
-  displayUnit: "btc" | "sats";
-  sortColumn: SortColumn;
-  sortDirection: SortDirection;
-  ownerFilter: string;
-  walletFilter: string;
-  tagFilter: string;
-  categoryFilter: string;
-  utxoMode: UTXOCalculationMode;
-  hideDust: boolean;
-}
+// Filters reset to these defaults on every navigation/reload — this page does
+// not persist filter/sort/mode/hide-dust selections across sessions, matching
+// the rest of the app's filtered list pages.
+const DEFAULT_DISPLAY_UNIT: "btc" | "sats" = "btc";
+const DEFAULT_SORT_COLUMN: SortColumn = "date";
+const DEFAULT_SORT_DIRECTION: SortDirection = "desc";
+const DEFAULT_UTXO_MODE: UTXOCalculationMode = "heuristic";
 
-const DEFAULT_SETTINGS: UTXOSettings = {
-  displayUnit: "btc",
-  sortColumn: "date",
-  sortDirection: "desc",
-  ownerFilter: "all",
-  walletFilter: "all",
-  tagFilter: "all",
-  categoryFilter: "all",
-  utxoMode: "heuristic",
-  hideDust: false
-};
-
-function loadSettings(): UTXOSettings {
-  try {
-    const stored = localStorage.getItem(SETTINGS_KEY);
-    if (stored) {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return DEFAULT_SETTINGS;
-}
-
-function saveSettings(settings: Partial<UTXOSettings>) {
-  try {
-    const current = loadSettings();
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...current, ...settings }));
-  } catch {
-    // Ignore storage errors
-  }
-}
+/** Sentinel option in the owner/wallet/tag/category multi-selects meaning "no value assigned". */
+const UNASSIGNED_SENTINEL = "Unassigned";
 
 function satsToBtc(sats: number): string {
   return (sats / 100_000_000).toFixed(8);
@@ -568,20 +533,19 @@ export function VirtualizedUtxoList({
 
 export default function UTXOs() {
   const { toast } = useToast();
-  const initialSettings = useMemo(() => loadSettings(), []);
-  
+
   const [search, setSearch] = useState("");
   const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.UTXOs);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [searchFilters, setSearchFilters] = useState<SearchFilters>(defaultFilters);
-  const [ownerFilter, setOwnerFilter] = useState<string>(initialSettings.ownerFilter);
-  const [walletFilter, setWalletFilter] = useState<string>(initialSettings.walletFilter);
-  const [tagFilter, setTagFilter] = useState<string>(initialSettings.tagFilter);
-  const [categoryFilter, setCategoryFilter] = useState<string>(initialSettings.categoryFilter);
-  const [sortColumn, setSortColumn] = useState<SortColumn>(initialSettings.sortColumn);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(initialSettings.sortDirection);
-  const [utxoMode, setUtxoMode] = useState<UTXOCalculationMode>(initialSettings.utxoMode);
-  const [displayUnit, setDisplayUnit] = useState<"btc" | "sats">(initialSettings.displayUnit);
+  const [ownerFilter, setOwnerFilter] = useState<string[]>([]);
+  const [walletFilter, setWalletFilter] = useState<string[]>([]);
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
+  const [sortColumn, setSortColumn] = useState<SortColumn>(DEFAULT_SORT_COLUMN);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(DEFAULT_SORT_DIRECTION);
+  const [utxoMode, setUtxoMode] = useState<UTXOCalculationMode>(DEFAULT_UTXO_MODE);
+  const [displayUnit, setDisplayUnit] = useState<"btc" | "sats">(DEFAULT_DISPLAY_UNIT);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const [selectedUtxo, setSelectedUtxo] = useState<UTXO | null>(null);
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
@@ -613,12 +577,7 @@ export default function UTXOs() {
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
 
   // Hide user-flagged dust UTXOs from the list and totals when enabled.
-  const [hideDust, setHideDust] = useState(initialSettings.hideDust === true);
-
-  // Save settings when they change
-  useEffect(() => {
-    saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode, hideDust });
-  }, [displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode, hideDust]);
+  const [hideDust, setHideDust] = useState(false);
 
   const txDbSignal = useDbChangeSignal(['blockchainTransactions', 'transactionParticipants']);
 
@@ -1618,36 +1577,30 @@ export default function UTXOs() {
       });
     }
 
-    if (ownerFilter !== "all") {
-      if (ownerFilter === "unassigned") {
-        filtered = filtered.filter(g => !g.owner);
-      } else {
-        filtered = filtered.filter(g => g.owner === ownerFilter);
-      }
+    // Each dimension is OR-within (matches ANY selected value, including the
+    // "Unassigned" sentinel) and AND-across (must also satisfy other dims).
+    if (ownerFilter.length > 0) {
+      filtered = filtered.filter(g =>
+        ownerFilter.some(v => v === UNASSIGNED_SENTINEL ? !g.owner : g.owner === v)
+      );
     }
 
-    if (walletFilter !== "all") {
-      if (walletFilter === "unassigned") {
-        filtered = filtered.filter(g => !g.walletName);
-      } else {
-        filtered = filtered.filter(g => g.walletName === walletFilter);
-      }
+    if (walletFilter.length > 0) {
+      filtered = filtered.filter(g =>
+        walletFilter.some(v => v === UNASSIGNED_SENTINEL ? !g.walletName : g.walletName === v)
+      );
     }
 
-    if (tagFilter !== "all") {
-      if (tagFilter === "unassigned") {
-        filtered = filtered.filter(g => !g.tags || g.tags.length === 0);
-      } else {
-        filtered = filtered.filter(g => g.tags?.includes(tagFilter));
-      }
+    if (tagFilter.length > 0) {
+      filtered = filtered.filter(g =>
+        tagFilter.some(v => v === UNASSIGNED_SENTINEL ? (!g.tags || g.tags.length === 0) : !!g.tags?.includes(v))
+      );
     }
 
-    if (categoryFilter !== "all") {
-      if (categoryFilter === "unassigned") {
-        filtered = filtered.filter(g => !g.categories || g.categories.length === 0);
-      } else {
-        filtered = filtered.filter(g => g.categories?.includes(categoryFilter));
-      }
+    if (categoryFilter.length > 0) {
+      filtered = filtered.filter(g =>
+        categoryFilter.some(v => v === UNASSIGNED_SENTINEL ? (!g.categories || g.categories.length === 0) : !!g.categories?.includes(v))
+      );
     }
 
     if (debouncedSearch.trim()) {
@@ -1726,16 +1679,22 @@ export default function UTXOs() {
 
   const clearFilters = () => {
     setSearch("");
-    setOwnerFilter("all");
-    setWalletFilter("all");
-    setTagFilter("all");
-    setCategoryFilter("all");
+    setOwnerFilter([]);
+    setWalletFilter([]);
+    setTagFilter([]);
+    setCategoryFilter([]);
     setSelectedDate(undefined);
     setSearchFilters(defaultFilters);
     setHideDust(false);
   };
 
-  const hasActiveFilters = search || ownerFilter !== "all" || walletFilter !== "all" || tagFilter !== "all" || categoryFilter !== "all" || selectedDate || hasActiveSearchFilters(searchFilters) || hideDust;
+  const activeFilterCount =
+    (search.trim() ? 1 : 0) +
+    ownerFilter.length + walletFilter.length + tagFilter.length + categoryFilter.length +
+    (selectedDate ? 1 : 0) +
+    (hasActiveSearchFilters(searchFilters) ? 1 : 0) +
+    (hideDust ? 1 : 0);
+  const hasActiveFilters = activeFilterCount > 0;
 
   const isDataLoading = engineDecision === 'pending'
     ? true
@@ -2049,7 +2008,7 @@ export default function UTXOs() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 )}
                 <Input
-                  placeholder="Search address, txid, label..."
+                  placeholder="Search address, txid, label, owner, wallet, tag, or category..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="pl-10"
@@ -2062,70 +2021,55 @@ export default function UTXOs() {
               filters={searchFilters}
               onChange={setSearchFilters}
               onClear={() => setSearchFilters(defaultFilters)}
+              displayUnit={displayUnit}
             />
 
             <div className="w-[180px]">
               <Label className="sr-only">Owner</Label>
-              <Select value={ownerFilter} onValueChange={setOwnerFilter}>
-                <SelectTrigger data-testid="select-owner">
-                  <SelectValue placeholder="All Owners" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Owners</SelectItem>
-                  <SelectItem value="unassigned">Unassigned</SelectItem>
-                  {owners.map(owner => (
-                    <SelectItem key={owner} value={owner}>{owner}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <MultiSelectCombobox
+                values={ownerFilter}
+                onChange={setOwnerFilter}
+                options={[UNASSIGNED_SENTINEL, ...owners]}
+                placeholder="All Owners"
+                searchPlaceholder="Search owners..."
+                testId="select-owner"
+              />
             </div>
 
             <div className="w-[180px]">
               <Label className="sr-only">Wallet</Label>
-              <Select value={walletFilter} onValueChange={setWalletFilter}>
-                <SelectTrigger data-testid="select-wallet">
-                  <SelectValue placeholder="All Wallets" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Wallets</SelectItem>
-                  <SelectItem value="unassigned">Unassigned</SelectItem>
-                  {walletNames.map(wallet => (
-                    <SelectItem key={wallet} value={wallet}>{wallet}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <MultiSelectCombobox
+                values={walletFilter}
+                onChange={setWalletFilter}
+                options={[UNASSIGNED_SENTINEL, ...walletNames]}
+                placeholder="All Wallets"
+                searchPlaceholder="Search wallets..."
+                testId="select-wallet"
+              />
             </div>
 
             <div className="w-[160px]">
               <Label className="sr-only">Tag</Label>
-              <Select value={tagFilter} onValueChange={setTagFilter}>
-                <SelectTrigger data-testid="select-tag">
-                  <SelectValue placeholder="All Tags" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Tags</SelectItem>
-                  <SelectItem value="unassigned">No Tags</SelectItem>
-                  {tags.map(tag => (
-                    <SelectItem key={tag} value={tag}>{tag}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <MultiSelectCombobox
+                values={tagFilter}
+                onChange={setTagFilter}
+                options={[UNASSIGNED_SENTINEL, ...tags]}
+                placeholder="All Tags"
+                searchPlaceholder="Search tags..."
+                testId="select-tag"
+              />
             </div>
 
             <div className="w-[160px]">
               <Label className="sr-only">Category</Label>
-              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger data-testid="select-category">
-                  <SelectValue placeholder="All Categories" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Categories</SelectItem>
-                  <SelectItem value="unassigned">No Category</SelectItem>
-                  {categories.map(cat => (
-                    <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <MultiSelectCombobox
+                values={categoryFilter}
+                onChange={setCategoryFilter}
+                options={[UNASSIGNED_SENTINEL, ...categories]}
+                placeholder="All Categories"
+                searchPlaceholder="Search categories..."
+                testId="select-category"
+              />
             </div>
 
             <div className="w-[200px]">
@@ -2218,13 +2162,17 @@ export default function UTXOs() {
 
             {hasActiveFilters && (
               <Button
-                variant="ghost"
-                size="icon"
+                variant="outline"
+                size="sm"
                 onClick={clearFilters}
                 title="Clear all filters"
                 data-testid="button-clear-filters"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4 mr-1" />
+                Clear all filters
+                <span className="ml-1 rounded-full bg-muted-foreground/20 text-foreground h-5 w-5 text-xs flex items-center justify-center">
+                  {activeFilterCount}
+                </span>
               </Button>
             )}
           </div>

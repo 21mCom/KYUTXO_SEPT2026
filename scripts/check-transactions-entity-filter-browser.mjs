@@ -99,9 +99,11 @@ async function openFilters(page) {
 }
 
 async function selectEntity(page, dimension, value) {
+  // Each entity dimension is now a searchable MultiSelectCombobox (cmdk),
+  // whose items expose role="option" but no per-item testid.
   await openFilters(page);
   await page.getByTestId(`select-entity-${dimension}`).click();
-  await page.getByTestId(`option-entity-${dimension}-${value}`).click();
+  await page.getByRole('option', { name: value, exact: true }).click();
   // Close the popover so the page re-queries without an overlay in the way.
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');

@@ -126,3 +126,4 @@
 - [Dexie dead-index guard pattern](dexie-dead-index-guard.md) — dynamic `.where(variable)` dispatch defeats literal grep for index usage; pin the exact index token set + an explicit denylist, not just a generic scanner.
 - [Virtualizer range-effect index collision](virtualizer-range-effect-index-collision.md) — windowed-list effects that default virtualItems[0].index to 0 when empty never fire if real content also starts at index 0; add virtualItems.length to deps.
 - [Bulk-write batching root cause](bulk-write-batching-root-cause.md) — a slow "bulk" operation is often a serial per-record loop that never calls the batch helper at all; verify the call site batches before optimizing the helper/schema.
+- [Widening filter field to string[]](multi-select-filter-widening.md) — audit === consumers (incl. test-harness proofs) for array-blindness; MultiSelectCombobox popover stays open after a pick, don't re-click the trigger between selections.

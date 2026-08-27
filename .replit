@@ -1728,12 +1728,12 @@ isValidation = true
 name = "transactions-entity-filter-node-check"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/engine/__tests__/engine-core.test.ts client/src/lib/engine/__tests__/transactions-entity-filter-equivalence.test.ts client/src/lib/engine/__tests__/engine-core.entityFilterScale.test.ts"
-
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/engine/__tests__/engine-core.test.ts client/src/lib/engine/__tests__/transactions-entity-filter-equivalence.test.ts client/src/lib/engine/__tests__/engine-core.entityFilterScale.test.ts client/src/pages/UTXOs.entityFilters.test.tsx client/src/pages/Transactions.sortControl.test.tsx"
 
 [[workflows.workflow]]
 name = "transactions-entity-filter-browser-check"

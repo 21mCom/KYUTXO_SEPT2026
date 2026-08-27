@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { 
   CalendarIcon, 
   Search, 
@@ -20,6 +20,27 @@ import {
 import { SiBitcoin } from "react-icons/si";
 import { cn } from "@/lib/utils";
 
+const SATS_PER_BTC = 100_000_000;
+
+/** Display unit for the amount-range filter; storage stays canonical BTC. */
+export type AmountDisplayUnit = "btc" | "sats";
+
+function btcToDisplay(btc: number | undefined, unit: AmountDisplayUnit): number | undefined {
+  if (btc === undefined) return undefined;
+  return unit === "sats" ? Math.round(btc * SATS_PER_BTC) : btc;
+}
+
+function displayToBtc(value: number | undefined, unit: AmountDisplayUnit): number | undefined {
+  if (value === undefined) return undefined;
+  return unit === "sats" ? value / SATS_PER_BTC : value;
+}
+
+function formatDisplayAmount(btc: number, unit: AmountDisplayUnit): string {
+  return unit === "sats"
+    ? `${Math.round(btc * SATS_PER_BTC).toLocaleString()} sats`
+    : `${btc} BTC`;
+}
+
 export interface SearchFilters {
   dateMode: "any" | "range" | "exact";
   dateStart?: Date;
@@ -29,14 +50,14 @@ export interface SearchFilters {
   amountMinBtc?: number;
   amountMaxBtc?: number;
   amountExactBtc?: number;
-  // Entity filters — one value per dimension; each restricts to transactions
-  // with a participant matching that dimension (see TxEntityFilter).
+  // Entity filters — each dimension restricts to transactions with a
+  // participant matching ANY of the selected values (see TxEntityFilter).
   entityAddress?: string;
-  entityWallet?: string;
-  entitySeed?: string;
-  entityOwner?: string;
-  entityTag?: string;
-  entityCategory?: string;
+  entityWallet?: string[];
+  entitySeed?: string[];
+  entityOwner?: string[];
+  entityTag?: string[];
+  entityCategory?: string[];
 }
 
 /** Dropdown value pools for the entity selects, sourced from vocabulary. */
@@ -53,6 +74,8 @@ interface TransactionSearchFiltersProps {
   onChange: (filters: SearchFilters) => void;
   onClear: () => void;
   entityOptions?: EntityFilterOptions;
+  /** Unit the amount-range inputs/labels display in. Default 'btc'. */
+  displayUnit?: AmountDisplayUnit;
   className?: string;
 }
 
@@ -73,11 +96,11 @@ export function hasActiveSearchFilters(filters: SearchFilters): boolean {
 export function hasActiveEntityFilters(filters: SearchFilters): boolean {
   return !!(
     filters.entityAddress?.trim() ||
-    filters.entityWallet ||
-    filters.entitySeed ||
-    filters.entityOwner ||
-    filters.entityTag ||
-    filters.entityCategory
+    filters.entityWallet?.length ||
+    filters.entitySeed?.length ||
+    filters.entityOwner?.length ||
+    filters.entityTag?.length ||
+    filters.entityCategory?.length
   );
 }
 
@@ -94,12 +117,16 @@ export function TransactionSearchFilters({
   onChange, 
   onClear,
   entityOptions,
+  displayUnit = "btc",
   className 
 }: TransactionSearchFiltersProps) {
   const [isOpen, setIsOpen] = useState(false);
   
   const hasEntity = hasActiveEntityFilters(filters);
   const hasFilters = hasActiveSearchFilters(filters) || hasEntity;
+  const unitLabel = displayUnit === "sats" ? "Sats" : "BTC";
+  const amountStep = displayUnit === "sats" ? "1" : "0.00000001";
+  const amountPlaceholder = displayUnit === "sats" ? "0" : "0.00000000";
 
   const updateFilter = <K extends keyof SearchFilters>(key: K, value: SearchFilters[K]) => {
     onChange({ ...filters, [key]: value });
@@ -121,14 +148,14 @@ export function TransactionSearchFilters({
 
   const formatAmountRange = () => {
     if (filters.amountMode === "exact" && filters.amountExactBtc !== undefined) {
-      return `${filters.amountExactBtc} BTC`;
+      return formatDisplayAmount(filters.amountExactBtc, displayUnit);
     }
     if (filters.amountMode === "range") {
-      const parts: string[] = [];
-      if (filters.amountMinBtc !== undefined) parts.push(`${filters.amountMinBtc}`);
-      if (filters.amountMaxBtc !== undefined) parts.push(`${filters.amountMaxBtc}`);
-      if (parts.length === 2) return `${parts[0]} - ${parts[1]} BTC`;
-      if (parts.length === 1) return filters.amountMinBtc !== undefined ? `Min ${parts[0]} BTC` : `Max ${parts[0]} BTC`;
+      const min = filters.amountMinBtc !== undefined ? formatDisplayAmount(filters.amountMinBtc, displayUnit) : undefined;
+      const max = filters.amountMaxBtc !== undefined ? formatDisplayAmount(filters.amountMaxBtc, displayUnit) : undefined;
+      if (min && max) return `${min} - ${max}`;
+      if (min) return `Min ${min}`;
+      if (max) return `Max ${max}`;
     }
     return null;
   };
@@ -137,7 +164,7 @@ export function TransactionSearchFilters({
   const amountDisplay = formatAmountRange();
   const activeEntityCount =
     (filters.entityAddress?.trim() ? 1 : 0) +
-    ENTITY_DIMENSIONS.reduce((n, d) => n + (filters[d.key] ? 1 : 0), 0);
+    ENTITY_DIMENSIONS.reduce((n, d) => n + (filters[d.key]?.length ?? 0), 0);
 
   return (
     <div className={cn("flex items-center gap-2 flex-wrap", className)}>
@@ -285,7 +312,7 @@ export function TransactionSearchFilters({
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <SiBitcoin className="h-4 w-4 text-muted-foreground" />
-                <Label className="font-medium">BTC Amount</Label>
+                <Label className="font-medium">{unitLabel} Amount</Label>
               </div>
               <Tabs 
                 value={filters.amountMode} 
@@ -300,32 +327,32 @@ export function TransactionSearchFilters({
                 <TabsContent value="range" className="mt-3 space-y-3">
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <Label className="text-xs text-muted-foreground">Min BTC</Label>
+                      <Label className="text-xs text-muted-foreground">Min {unitLabel}</Label>
                       <Input
                         type="number"
-                        step="0.00000001"
+                        step={amountStep}
                         min="0"
-                        placeholder="0.00000000"
-                        value={filters.amountMinBtc ?? ""}
+                        placeholder={amountPlaceholder}
+                        value={btcToDisplay(filters.amountMinBtc, displayUnit) ?? ""}
                         onChange={(e) => {
                           const val = e.target.value;
-                          updateFilter("amountMinBtc", val === "" ? undefined : parseFloat(val));
+                          updateFilter("amountMinBtc", val === "" ? undefined : displayToBtc(parseFloat(val), displayUnit));
                         }}
                         className="h-8"
                         data-testid="input-amount-min"
                       />
                     </div>
                     <div>
-                      <Label className="text-xs text-muted-foreground">Max BTC</Label>
+                      <Label className="text-xs text-muted-foreground">Max {unitLabel}</Label>
                       <Input
                         type="number"
-                        step="0.00000001"
+                        step={amountStep}
                         min="0"
                         placeholder="No limit"
-                        value={filters.amountMaxBtc ?? ""}
+                        value={btcToDisplay(filters.amountMaxBtc, displayUnit) ?? ""}
                         onChange={(e) => {
                           const val = e.target.value;
-                          updateFilter("amountMaxBtc", val === "" ? undefined : parseFloat(val));
+                          updateFilter("amountMaxBtc", val === "" ? undefined : displayToBtc(parseFloat(val), displayUnit));
                         }}
                         className="h-8"
                         data-testid="input-amount-max"
@@ -336,16 +363,16 @@ export function TransactionSearchFilters({
                 
                 <TabsContent value="exact" className="mt-3">
                   <div>
-                    <Label className="text-xs text-muted-foreground">Exact BTC Amount</Label>
+                    <Label className="text-xs text-muted-foreground">Exact {unitLabel} Amount</Label>
                     <Input
                       type="number"
-                      step="0.00000001"
+                      step={amountStep}
                       min="0"
-                      placeholder="0.00000000"
-                      value={filters.amountExactBtc ?? ""}
+                      placeholder={amountPlaceholder}
+                      value={btcToDisplay(filters.amountExactBtc, displayUnit) ?? ""}
                       onChange={(e) => {
                         const val = e.target.value;
-                        updateFilter("amountExactBtc", val === "" ? undefined : parseFloat(val));
+                        updateFilter("amountExactBtc", val === "" ? undefined : displayToBtc(parseFloat(val), displayUnit));
                       }}
                       className="h-8"
                       data-testid="input-amount-exact"
@@ -373,29 +400,18 @@ export function TransactionSearchFilters({
               <div className="grid grid-cols-2 gap-2">
                 {ENTITY_DIMENSIONS.map((dim) => {
                   const options = entityOptions?.[dim.optionsKey] ?? [];
-                  const value = filters[dim.key];
+                  const values = filters[dim.key] ?? [];
                   return (
                     <div key={dim.key}>
                       <Label className="text-xs text-muted-foreground">{dim.label}</Label>
-                      <Select
-                        value={value ?? "__any__"}
-                        onValueChange={(v) => updateFilter(dim.key, v === "__any__" ? undefined : v)}
-                      >
-                        <SelectTrigger className="h-8" data-testid={`select-entity-${dim.label.toLowerCase()}`}>
-                          <SelectValue placeholder="Any" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__any__">Any</SelectItem>
-                          {options.map((opt) => (
-                            <SelectItem key={opt} value={opt} data-testid={`option-entity-${dim.label.toLowerCase()}-${opt}`}>
-                              {opt}
-                            </SelectItem>
-                          ))}
-                          {value && !options.includes(value) && (
-                            <SelectItem value={value}>{value}</SelectItem>
-                          )}
-                        </SelectContent>
-                      </Select>
+                      <MultiSelectCombobox
+                        values={values}
+                        onChange={(v) => updateFilter(dim.key, v.length ? v : undefined)}
+                        options={options}
+                        placeholder="Any"
+                        searchPlaceholder={`Search ${dim.label.toLowerCase()}...`}
+                        testId={`select-entity-${dim.label.toLowerCase()}`}
+                      />
                     </div>
                   );
                 })}
@@ -478,15 +494,17 @@ export function TransactionSearchFilters({
           </Button>
         </div>
       )}
-      {ENTITY_DIMENSIONS.map((dim) =>
-        filters[dim.key] ? (
+      {ENTITY_DIMENSIONS.map((dim) => {
+        const values = filters[dim.key];
+        if (!values || values.length === 0) return null;
+        return (
           <div
             key={dim.key}
             className="flex items-center gap-1 text-sm bg-muted px-2 py-1 rounded-md"
             data-testid={`chip-entity-${dim.label.toLowerCase()}`}
           >
             <LinkIcon className="h-3 w-3 text-muted-foreground" />
-            <span>{dim.label}: {filters[dim.key]}</span>
+            <span className="max-w-[220px] truncate">{dim.label}: {values.join(", ")}</span>
             <Button
               variant="ghost"
               size="icon"
@@ -497,8 +515,8 @@ export function TransactionSearchFilters({
               <X className="h-3 w-3" />
             </Button>
           </div>
-        ) : null,
-      )}
+        );
+      })}
     </div>
   );
 }

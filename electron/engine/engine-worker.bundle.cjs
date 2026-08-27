@@ -772,6 +772,14 @@ var CURATED_RECORD_SQL = `r.type = 'address' AND r.addressImportance IN (${OWNED
 function participantRecordTxidSelect(predicate) {
   return `SELECT DISTINCT tp.txid FROM records r JOIN transactionParticipants tp ON tp.recordId = r.id WHERE ${predicate}`;
 }
+function toValueArray(v) {
+  if (v === void 0) return void 0;
+  const arr = Array.isArray(v) ? v : [v];
+  return arr.length > 0 ? arr : void 0;
+}
+function inPlaceholders(values) {
+  return values.map(() => "?").join(",");
+}
 function buildTransactionMatchSubquery(opts) {
   const selects = [];
   const bind = [];
@@ -779,33 +787,38 @@ function buildTransactionMatchSubquery(opts) {
     selects.push("SELECT DISTINCT tp.txid FROM transactionParticipants tp WHERE tp.address = ?");
     bind.push(opts.address);
   }
-  if (opts.wallet) {
-    selects.push(participantRecordTxidSelect("r.walletName = ?"));
-    bind.push(opts.wallet);
+  const wallet = toValueArray(opts.wallet);
+  if (wallet) {
+    selects.push(participantRecordTxidSelect(`r.walletName IN (${inPlaceholders(wallet)})`));
+    bind.push(...wallet);
   }
-  if (opts.seed) {
-    selects.push(participantRecordTxidSelect("r.seedName = ?"));
-    bind.push(opts.seed);
+  const seed = toValueArray(opts.seed);
+  if (seed) {
+    selects.push(participantRecordTxidSelect(`r.seedName IN (${inPlaceholders(seed)})`));
+    bind.push(...seed);
   }
-  if (opts.owner) {
-    selects.push(participantRecordTxidSelect("r.owner = ?"));
-    bind.push(opts.owner);
+  const owner = toValueArray(opts.owner);
+  if (owner) {
+    selects.push(participantRecordTxidSelect(`r.owner IN (${inPlaceholders(owner)})`));
+    bind.push(...owner);
   }
-  if (opts.tag) {
+  const tag = toValueArray(opts.tag);
+  if (tag) {
     selects.push(
       participantRecordTxidSelect(
-        "r.tags IS NOT NULL AND json_valid(r.tags) AND EXISTS (SELECT 1 FROM json_each(r.tags) je WHERE je.value = ?)"
+        `r.tags IS NOT NULL AND json_valid(r.tags) AND EXISTS (SELECT 1 FROM json_each(r.tags) je WHERE je.value IN (${inPlaceholders(tag)}))`
       )
     );
-    bind.push(opts.tag);
+    bind.push(...tag);
   }
-  if (opts.category) {
+  const category = toValueArray(opts.category);
+  if (category) {
     selects.push(
       participantRecordTxidSelect(
-        "r.categories IS NOT NULL AND json_valid(r.categories) AND EXISTS (SELECT 1 FROM json_each(r.categories) je WHERE je.value = ?)"
+        `r.categories IS NOT NULL AND json_valid(r.categories) AND EXISTS (SELECT 1 FROM json_each(r.categories) je WHERE je.value IN (${inPlaceholders(category)}))`
       )
     );
-    bind.push(opts.category);
+    bind.push(...category);
   }
   if (opts.curatedOnly) {
     selects.push(participantRecordTxidSelect(CURATED_RECORD_SQL));
@@ -868,10 +881,13 @@ function getTransactionPage(db2, opts) {
     clauses.push(match ? where.sql.replace(/hasOpReturn/g, "bt.hasOpReturn") : where.sql);
     bind.push(...where.bind);
   }
+  const ascending = opts.sortDirection === "asc";
+  const cmp = ascending ? ">" : "<";
+  const order = ascending ? "ASC" : "DESC";
   let txRows;
   if (match) {
     if (opts.cursor) {
-      clauses.push("(COALESCE(bt.blockTime, 0) < ? OR (COALESCE(bt.blockTime, 0) = ? AND bt.id < ?))");
+      clauses.push(`(COALESCE(bt.blockTime, 0) ${cmp} ? OR (COALESCE(bt.blockTime, 0) = ? AND bt.id ${cmp} ?))`);
       bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
     }
     const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -880,13 +896,13 @@ function getTransactionPage(db2, opts) {
       `SELECT bt.id, bt.txid, bt.blockHeight, bt.blockTime, bt.fee, bt.feeRate, bt.vsize, bt.hasOpReturn
          FROM (${match.sql}) m CROSS JOIN blockchainTransactions bt ON bt.txid = m.txid
          ${whereSql}
-         ORDER BY COALESCE(bt.blockTime, 0) DESC, bt.id DESC
+         ORDER BY COALESCE(bt.blockTime, 0) ${order}, bt.id ${order}
          LIMIT ?`,
       [...match.bind, ...bind, opts.limit]
     );
   } else {
     if (opts.cursor) {
-      clauses.push("(COALESCE(blockTime, 0) < ? OR (COALESCE(blockTime, 0) = ? AND id < ?))");
+      clauses.push(`(COALESCE(blockTime, 0) ${cmp} ? OR (COALESCE(blockTime, 0) = ? AND id ${cmp} ?))`);
       bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
     }
     const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -895,7 +911,7 @@ function getTransactionPage(db2, opts) {
       `SELECT id, txid, blockHeight, blockTime, fee, feeRate, vsize, hasOpReturn
          FROM blockchainTransactions
          ${whereSql}
-         ORDER BY COALESCE(blockTime, 0) DESC, id DESC
+         ORDER BY COALESCE(blockTime, 0) ${order}, id ${order}
          LIMIT ?`,
       [...bind, opts.limit]
     );
