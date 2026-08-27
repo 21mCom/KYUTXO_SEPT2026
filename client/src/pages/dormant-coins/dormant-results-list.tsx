@@ -236,9 +236,19 @@ export function DormantResultsList({
       last: virtualItems[virtualItems.length - 1].index,
     });
     // setRange is stable; virtualItems identity changes per scroll frame, so
-    // key off the visible boundary indices instead.
+    // key off the visible boundary indices instead. virtualItems.length must
+    // also be a dep: the pre-mount render (before parentRef attaches) has
+    // zero items and these indices default to 0, which is indistinguishable
+    // from a genuine single-item list starting at index 0 — without the
+    // length in the array, React sees identical deps across that transition
+    // and never re-runs the effect, so `range` stays null and the window
+    // never loads (reproduced with exactly one clue group).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [virtualItems.length ? virtualItems[0].index : 0, virtualItems.length ? virtualItems[virtualItems.length - 1].index : 0]);
+  }, [
+    virtualItems.length,
+    virtualItems.length ? virtualItems[0].index : 0,
+    virtualItems.length ? virtualItems[virtualItems.length - 1].index : 0,
+  ]);
 
   return (
     <div className="border rounded-md" data-testid="list-dormant-rows">
@@ -503,8 +513,15 @@ export function DormantGroupsList({ count }: { count: number }) {
       first: virtualItems[0].index,
       last: virtualItems[virtualItems.length - 1].index,
     });
+    // virtualItems.length must be a dep — see the matching comment in
+    // DormantResultsList above. A group list that mounts directly with a
+    // single group (the common case) hits exactly this transition.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [virtualItems.length ? virtualItems[0].index : 0, virtualItems.length ? virtualItems[virtualItems.length - 1].index : 0]);
+  }, [
+    virtualItems.length,
+    virtualItems.length ? virtualItems[0].index : 0,
+    virtualItems.length ? virtualItems[virtualItems.length - 1].index : 0,
+  ]);
 
   return (
     <div className="border rounded-md" data-testid="list-dormant-groups">
