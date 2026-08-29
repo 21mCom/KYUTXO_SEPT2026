@@ -26,6 +26,8 @@ Even with the dev server pre-started, concurrent runs can crash individual Chrom
 ## Checks now self-serialize via a shared /tmp lock
 Every real-Chromium check script acquires an exclusive lock (`scripts/browser-check-lock.mjs`) via top-level await before doing anything, so validation's parallel launch runs them one at a time. The contention symptoms above should no longer occur — if a browser check fails now, suspect a real regression first. **How to apply:** every NEW `check-*-browser*.mjs` must add the same import + `await acquireBrowserCheckLock();` before any server/Chromium work, and still pre-start "Start application" before validation so no script owns/kills the shared dev server.
 
+**Subprocess liveness-test rule:** An unresolved top-level await does not keep a Node child process alive by itself; Node exits it with an unsettled-await warning. **Why:** a fake “live lock owner” test can silently become a dead-owner test and let the waiter acquire. **How to apply:** when a fixture child must remain alive, give it an active event-loop handle (such as an interval) until the test sends a termination signal.
+
 ## Long-lived dev server goes stale mid-marathon
 After many back-to-back validation runs, a check can fail on `input-password` timeout even on an idle machine because the long-running Vite dev server itself is wedged/stale. Restarting the "Start application" workflow (then re-running the check standalone to confirm green) fixes it; persistence + retry-on-idle eventually lands a fully green run without skip_validation_reason.
 

@@ -1462,12 +1462,12 @@ isValidation = true
 name = "browser-check-lock-guard"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "node scripts/check-browser-check-lock.js"
-
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-browser-check-lock.test.mjs"
 
 [[workflows.workflow]]
 name = "descriptor-import-node-check"
