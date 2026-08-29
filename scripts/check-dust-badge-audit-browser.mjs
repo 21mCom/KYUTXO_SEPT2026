@@ -14,18 +14,19 @@
 // Chromium against the running dev server:
 //
 //   1. creates a fresh vault (fresh browser context => empty IndexedDB)
-//   2. seeds one owned address record + one confirmed transaction with a single
-//      unspent 800-sat output (dust: <= 1000 sats, above the 546 strict line)
+//   2. seeds one owned address record + one confirmed transaction with two
+//      unspent dust outputs (dust: <= 1000 sats, above the 546 strict line)
 //      via the live Vite module singletons (record-crud / transaction-crud)
 //   3. reloads the Dusted page so the scan picks the seed up on mount, proves
 //      the bulk toolbar round-trip (Mark all flags everything and Unmark all
 //      clears every flag, with the toolbar buttons swapping via the live flag
-//      subscription), then clicks the real per-row "Mark as dust" button and
-//      waits for it to flip to "Unmark"
-//   4. opens the UTXOs page and asserts the group-level "1 dust" badge AND the
+//      subscription), verifies the partially flagged state shows both bulk
+//      buttons with the correct counts, then flags both outputs for the
+//      downstream badge/audit checks
+//   4. opens the UTXOs page and asserts the group-level "2 dust" badge AND the
 //      per-UTXO "Dust" badge (after expanding the address group)
 //   5. opens Reports → Privacy tab, generates the audit, and asserts exactly
-//      one DUST finding for the seeded output: severity "Low" with the
+//      two DUST findings for the seeded outputs: severity "Low" with the
 //      "already marked as dust by you" annotation — and that NO non-downgraded
 //      (Medium/Critical) unspent-dust finding remains.
 //
@@ -54,6 +55,8 @@ const OWNED_ADDR = 'bc1qdustcheckownedaddressxxxxxxxxxxxxxxx';
 const DUST_TXID = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2';
 const DUST_VOUT = 0;
 const DUST_SATS = 800; // <= 1000 (dust) but > 546 (so the undowngraded severity would be MEDIUM)
+const SECOND_DUST_VOUT = 1;
+const SECOND_DUST_SATS = 700;
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -134,11 +137,11 @@ async function main() {
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000, label: 'dust-badge-audit-browser' });
     steps.push({ name: 'vault created and app unlocked', passed: true, detail: 'setup form submitted' });
 
-    // ── Seed: one owned address record + one tx with a single unspent dust
-    //    output, via the LIVE Vite module singletons (same URLs the app
+    // ── Seed: one owned address record + one tx with two unspent dust
+    //    outputs, via the LIVE Vite module singletons (same URLs the app
     //    imported => same Dexie instance). ────────────────────────────────────
     const seed = await page.evaluate(
-      async ({ addr, txid, vout, sats }) => {
+      async ({ addr, txid, vout, sats, secondVout, secondSats }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
         const txCrud = await import('/src/lib/data/transaction-crud.ts');
         const recordId = await recordCrud.createRecord({
@@ -163,69 +166,86 @@ async function main() {
           vout,
           recordId,
         });
+        await txCrud.addParticipant({
+          txid,
+          role: 'output',
+          address: addr,
+          amount: secondSats,
+          vout: secondVout,
+          recordId,
+        });
         return { recordId };
       },
-      { addr: OWNED_ADDR, txid: DUST_TXID, vout: DUST_VOUT, sats: DUST_SATS },
+      {
+        addr: OWNED_ADDR,
+        txid: DUST_TXID,
+        vout: DUST_VOUT,
+        sats: DUST_SATS,
+        secondVout: SECOND_DUST_VOUT,
+        secondSats: SECOND_DUST_SATS,
+      },
     );
     const recordId = seed.recordId;
     steps.push({
-      name: 'seeded owned address + unspent dust output',
+      name: 'seeded owned address + two unspent dust outputs',
       passed: Number.isInteger(recordId) && recordId > 0,
-      detail: `recordId=${recordId}, ${DUST_SATS} sats at vout ${DUST_VOUT}`,
+      detail: `recordId=${recordId}, ${DUST_SATS} sats at vout ${DUST_VOUT} + ${SECOND_DUST_SATS} sats at vout ${SECOND_DUST_VOUT}`,
     });
 
-    // ── Dusted page: reload so the scan picks the seed up on mount, then
-    //    click the real "Mark as dust" button. ───────────────────────────────
+    // ── Dusted page: reload so the scan picks the seed up on mount. ──────────
     await page.goto(`${BASE_URL}dusted`, { waitUntil: 'load', timeout: 60_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000, label: 'dust-badge-audit-browser' });
 
     const markBtn = page.getByTestId(`button-mark-dust-${recordId}`);
     await markBtn.waitFor({ state: 'visible', timeout: 30_000 });
     steps.push({
-      name: 'Dusted page scan surfaced the seeded address with a Mark as dust action',
+      name: 'Dusted page scan surfaced the seeded address with two unspent dust outputs',
       passed: true,
-      detail: `button-mark-dust-${recordId} visible`,
+      detail: `button-mark-dust-${recordId} visible; expected ${DUST_SATS} and ${SECOND_DUST_SATS} sats`,
     });
 
-    // ── Bulk toolbar: Mark all → Unmark all round-trip ─────────────────────
-    // The toolbar offers "Mark all" while any unspent scan output is unflagged
-    // and "Unmark all" while any is flagged. Prove the full bulk cycle in the
-    // real toolbar: Mark all flags everything (Unmark all appears, per-row
-    // button flips to Unmark), then Unmark all clears every flag (flag count
-    // reaches zero in Dexie, Mark all + per-row Mark reappear via the live
-    // flag subscription).
     const markAllBtn = page.getByTestId('button-mark-all-dust');
-    await markAllBtn.waitFor({ state: 'visible', timeout: 30_000 });
-    await markAllBtn.click();
-
     const unmarkAllBtn = page.getByTestId('button-unmark-all-dust');
+
+    const output0MarkBtn = page.getByTestId(
+      `button-mark-output-${recordId}-${DUST_TXID}-${DUST_VOUT}`,
+    );
+    const output1MarkBtn = page.getByTestId(
+      `button-mark-output-${recordId}-${DUST_TXID}-${SECOND_DUST_VOUT}`,
+    );
+    await page.getByTestId(`button-toggle-outputs-${recordId}`).click();
+    await output0MarkBtn.waitFor({ state: 'visible', timeout: 30_000 });
+    await output1MarkBtn.waitFor({ state: 'visible', timeout: 30_000 });
+
+    // ── Partially flagged toolbar: both bulk actions together ───────────────
+    // Flag exactly one of the two outputs through the real per-output action.
+    // A mixed scan must show both Mark all (one remaining output) and Unmark all
+    // (one flagged output) at the same time.
+    await output0MarkBtn.click();
+    const output0UnmarkBtn = page.getByTestId(
+      `button-unmark-output-${recordId}-${DUST_TXID}-${DUST_VOUT}`,
+    );
+    await output0UnmarkBtn.waitFor({ state: 'visible', timeout: 30_000 });
+    await markAllBtn.waitFor({ state: 'visible', timeout: 30_000 });
     await unmarkAllBtn.waitFor({ state: 'visible', timeout: 30_000 });
-    // Mark all flagged every unspent output, so nothing markable remains and
-    // the Mark-all button must have left the toolbar.
-    const markAllGoneAfterBulk = await markAllBtn
-      .waitFor({ state: 'detached', timeout: 30_000 })
-      .then(() => true)
-      .catch(() => false);
-    const perRowFlippedToUnmark = await page
-      .getByTestId(`button-unmark-dust-${recordId}`)
-      .waitFor({ state: 'visible', timeout: 30_000 })
-      .then(() => true)
-      .catch(() => false);
-    const flagsAfterMarkAll = await page.evaluate(async () => {
+    const mixedMarkAllText = ((await markAllBtn.textContent()) ?? '').trim();
+    const mixedUnmarkAllText = ((await unmarkAllBtn.textContent()) ?? '').trim();
+    const flagsAfterPartialMark = await page.evaluate(async () => {
       const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
       return (await dustCrud.getAllDustFlags()).length;
     });
     steps.push({
-      name: 'Mark all flagged every unspent output (Unmark all appeared, Mark all left)',
-      passed: markAllGoneAfterBulk && perRowFlippedToUnmark && flagsAfterMarkAll === 1,
-      detail: `markAllGone=${markAllGoneAfterBulk} perRowUnmarkVisible=${perRowFlippedToUnmark} dustFlags=${flagsAfterMarkAll} (expected 1)`,
+      name: 'Partially flagged scan shows Mark all and Unmark all together',
+      passed:
+        /Mark all as dust\s*\(1\)/i.test(mixedMarkAllText) &&
+        /Unmark all\s*\(1\)/i.test(mixedUnmarkAllText) &&
+        flagsAfterPartialMark === 1,
+      detail: `markAll="${mixedMarkAllText}" unmarkAll="${mixedUnmarkAllText}" dustFlags=${flagsAfterPartialMark} (expected both counts 1, flags 1)`,
     });
 
+    // Clear the mixed state through Unmark all before exercising the original
+    // all-flagged bulk round trip.
     await unmarkAllBtn.click();
-    // Unmark all must clear every flag: the Unmark-all button leaves the
-    // toolbar, Mark all reappears, and the per-row button flips back to Mark —
-    // all driven by the live flag subscription refreshing after the bulk
-    // delete.
     const unmarkAllGone = await unmarkAllBtn
       .waitFor({ state: 'detached', timeout: 30_000 })
       .then(() => true)
@@ -244,24 +264,72 @@ async function main() {
       return (await dustCrud.getAllDustFlags()).length;
     });
     steps.push({
-      name: 'Unmark all cleared every flag (flags=0, Mark all + per-row Mark reappeared)',
+      name: 'Unmark all cleared the partially flagged output',
       passed: unmarkAllGone && markAllBack && perRowBackToMark && flagsAfterUnmarkAll === 0,
       detail: `unmarkAllGone=${unmarkAllGone} markAllBack=${markAllBack} perRowMarkVisible=${perRowBackToMark} dustFlags=${flagsAfterUnmarkAll} (expected 0)`,
     });
 
-    await markBtn.click();
+    // ── Bulk toolbar: Mark all → Unmark all round-trip ─────────────────────
+    await markAllBtn.click();
+    await unmarkAllBtn.waitFor({ state: 'visible', timeout: 30_000 });
+    // Mark all flagged every unspent output, so nothing markable remains and
+    // the Mark-all button must have left the toolbar.
+    const markAllGoneAfterBulk = await markAllBtn
+      .waitFor({ state: 'detached', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const perRowFlippedToUnmark = await page
+      .getByTestId(`button-unmark-dust-${recordId}`)
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const flagsAfterMarkAll = await page.evaluate(async () => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      return (await dustCrud.getAllDustFlags()).length;
+    });
+    steps.push({
+      name: 'Mark all flagged every unspent output (Unmark all appeared, Mark all left)',
+      passed: markAllGoneAfterBulk && perRowFlippedToUnmark && flagsAfterMarkAll === 2,
+      detail: `markAllGone=${markAllGoneAfterBulk} perRowUnmarkVisible=${perRowFlippedToUnmark} dustFlags=${flagsAfterMarkAll} (expected 2)`,
+    });
+
+    await unmarkAllBtn.click();
+    const unmarkAllGoneAfterBulk = await unmarkAllBtn
+      .waitFor({ state: 'detached', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const markAllBackAfterBulk = await markAllBtn
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false);
+    const flagsAfterBulkUnmark = await page.evaluate(async () => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      return (await dustCrud.getAllDustFlags()).length;
+    });
+    steps.push({
+      name: 'Bulk Unmark all cleared both output flags',
+      passed: unmarkAllGoneAfterBulk && markAllBackAfterBulk && flagsAfterBulkUnmark === 0,
+      detail: `unmarkAllGone=${unmarkAllGoneAfterBulk} markAllBack=${markAllBackAfterBulk} dustFlags=${flagsAfterBulkUnmark} (expected 0)`,
+    });
+
+    // Flag both outputs for the downstream UTXOs and Privacy Audit checks.
+    await markAllBtn.click();
     // The row flips to "Unmark" only after the flag write lands and the live
     // query re-fires — this is the proof the click actually persisted.
     await page
       .getByTestId(`button-unmark-dust-${recordId}`)
       .waitFor({ state: 'visible', timeout: 30_000 });
+    const flagsForDownstreamChecks = await page.evaluate(async () => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      return (await dustCrud.getAllDustFlags()).length;
+    });
     steps.push({
-      name: 'Mark as dust persisted (button flipped to Unmark via live query)',
-      passed: true,
-      detail: `button-unmark-dust-${recordId} visible after click`,
+      name: 'Both outputs marked as dust persisted for downstream checks',
+      passed: flagsForDownstreamChecks === 2,
+      detail: `button-unmark-dust-${recordId} visible after click; dustFlags=${flagsForDownstreamChecks} (expected 2)`,
     });
 
-    // ── UTXOs page: group-level "1 dust" badge + per-UTXO "Dust" badge ──────
+    // ── UTXOs page: group-level "2 dust" badge + per-UTXO "Dust" badge ──────
     await page.goto(`${BASE_URL}utxos`, { waitUntil: 'load', timeout: 60_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000, label: 'dust-badge-audit-browser' });
 
@@ -270,8 +338,8 @@ async function main() {
     const groupBadgeText = (await groupBadge.textContent()) ?? '';
     steps.push({
       name: 'UTXOs page shows the group-level dust badge',
-      passed: /1\s*dust/i.test(groupBadgeText),
-      detail: `badge text: "${groupBadgeText.trim()}" (expected "1 dust")`,
+      passed: /2\s*dust/i.test(groupBadgeText),
+      detail: `badge text: "${groupBadgeText.trim()}" (expected "2 dust")`,
     });
 
     // Expand the address group and assert the per-UTXO Dust badge.
@@ -327,21 +395,23 @@ async function main() {
       f.description.includes('already marked as dust by you'),
     );
     steps.push({
-      name: 'Privacy Audit contains the annotated dust finding',
-      passed: annotated.length === 1 && annotated[0].description.includes(OWNED_ADDR),
+      name: 'Privacy Audit contains both annotated dust findings',
+      passed:
+        annotated.length === 2 &&
+        annotated.every((f) => f.description.includes(OWNED_ADDR)),
       detail:
-        annotated.length === 1
-          ? `finding #${annotated[0].index}: "${annotated[0].description.slice(0, 120)}"`
-          : `found ${annotated.length} annotated dust finding(s) (expected exactly 1); all findings: ${JSON.stringify(findings)}`,
+        annotated.length === 2
+          ? `finding #${annotated.map((f) => f.index).join(', #')}: both include the seeded address`
+          : `found ${annotated.length} annotated dust finding(s) (expected exactly 2); all findings: ${JSON.stringify(findings)}`,
     });
 
     steps.push({
-      name: 'annotated dust finding is downgraded to Low severity',
-      passed: annotated.length === 1 && /^low$/i.test(annotated[0].severity),
+      name: 'both annotated dust findings are downgraded to Low severity',
+      passed: annotated.length === 2 && annotated.every((f) => /^low$/i.test(f.severity)),
       detail:
-        annotated.length === 1
-          ? `severity badge: "${annotated[0].severity}" (expected "Low")`
-          : 'annotated finding missing, cannot check severity',
+        annotated.length === 2
+          ? `severity badges: ${annotated.map((f) => `"${f.severity}"`).join(', ')} (expected all "Low")`
+          : 'annotated findings missing, cannot check severity',
     });
 
     // The downgrade must REPLACE the normal finding — an un-downgraded unspent
@@ -356,7 +426,7 @@ async function main() {
       passed: undowngraded.length === 0,
       detail:
         undowngraded.length === 0
-          ? 'only the annotated Low finding reports this dust output'
+          ? 'only the annotated Low findings report these dust outputs'
           : `unexpected finding(s): ${JSON.stringify(undowngraded)}`,
     });
   } finally {
