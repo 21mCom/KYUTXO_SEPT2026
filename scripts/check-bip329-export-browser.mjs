@@ -34,6 +34,12 @@ const OUTPUT_LABEL = 'BIP-329 export check output';
 const WALLET = 'Bip329CheckWallet';
 const OTHER_WALLET = 'Bip329OtherWallet';
 const TAG = 'bip329checktag';
+const ADDRESS_CREATED_DATE = '2024-01-10';
+const ADDRESS_UPDATED_DATE = '2024-02-15';
+const TX_BLOCK_DATE = '2024-02-10';
+const OUTPUT_BLOCK_DATE = '2024-03-10';
+const DATE_FILTER_FROM = '2024-02-01';
+const DATE_FILTER_TO = '2024-02-28';
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -162,10 +168,31 @@ async function main() {
     // The address/output records carry a wallet + tag so the filter controls
     // have something to select; vocabulary rows are created explicitly (and
     // awaited) so the dropdown options exist before the page reload below.
+    // Keep the address's creation and update dates distinct, and keep the
+    // transaction/UTXO record edit dates in the selected range. The date
+    // filter must use the address's updatedAt and each transaction's separate
+    // blockchain blockTime, not a generic record timestamp.
     await page.evaluate(
-      async ({ addr, addrLabel, txid, txLabel, outpoint, outputLabel, wallet, otherWallet, tag }) => {
+      async ({
+        addr,
+        addrLabel,
+        txid,
+        txLabel,
+        outpoint,
+        outputLabel,
+        wallet,
+        otherWallet,
+        tag,
+        addressCreatedDate,
+        addressUpdatedDate,
+        txBlockDate,
+        outputBlockDate,
+      }) => {
         const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const txCrud = await import('/src/lib/data/transaction-crud.ts');
         const vocab = await import('/src/lib/data/vocabulary-crud.ts');
+        const localNoon = (date) => new Date(`${date}T12:00:00`).getTime();
+        const blockTime = (date) => Math.floor(localNoon(date) / 1000);
         await vocab.createWalletName(wallet);
         await vocab.createWalletName(otherWallet);
         await vocab.createTag(tag);
@@ -175,12 +202,16 @@ async function main() {
           label: addrLabel,
           walletName: wallet,
           tags: [tag],
+          createdAt: localNoon(addressCreatedDate),
+          updatedAt: localNoon(addressUpdatedDate),
         });
         await recordCrud.createRecord({
           type: 'transaction',
           inputString: txid,
           label: txLabel,
           walletName: otherWallet,
+          createdAt: localNoon(addressUpdatedDate),
+          updatedAt: localNoon(addressUpdatedDate),
         });
         await recordCrud.createRecord({
           type: 'transaction',
@@ -189,11 +220,43 @@ async function main() {
           notes: 'BIP-329 output at index 1. Spendable: false',
           walletName: wallet,
           tags: [tag],
+          createdAt: localNoon(addressUpdatedDate),
+          updatedAt: localNoon(addressUpdatedDate),
+        });
+        await txCrud.addTransaction({
+          txid,
+          blockHeight: 800000,
+          blockTime: blockTime(txBlockDate),
+          fee: 100,
+          feeRate: 1,
+          syncedAt: Date.now(),
+        });
+        await txCrud.addTransaction({
+          txid: outpoint.split(':')[0],
+          blockHeight: 800001,
+          blockTime: blockTime(outputBlockDate),
+          fee: 100,
+          feeRate: 1,
+          syncedAt: Date.now(),
         });
       },
-      { addr: ADDR, addrLabel: ADDR_LABEL, txid: TXID, txLabel: TX_LABEL, outpoint: OUTPOINT, outputLabel: OUTPUT_LABEL, wallet: WALLET, otherWallet: OTHER_WALLET, tag: TAG }
+      {
+        addr: ADDR,
+        addrLabel: ADDR_LABEL,
+        txid: TXID,
+        txLabel: TX_LABEL,
+        outpoint: OUTPOINT,
+        outputLabel: OUTPUT_LABEL,
+        wallet: WALLET,
+        otherWallet: OTHER_WALLET,
+        tag: TAG,
+        addressCreatedDate: ADDRESS_CREATED_DATE,
+        addressUpdatedDate: ADDRESS_UPDATED_DATE,
+        txBlockDate: TX_BLOCK_DATE,
+        outputBlockDate: OUTPUT_BLOCK_DATE,
+      }
     );
-    steps.push({ name: 'seeded labeled address/tx/output records (with wallet/tag vocabulary)', passed: true });
+    steps.push({ name: 'seeded labeled records with distinct address timestamps and transaction block times', passed: true });
 
     // Reload once so the page's live queries pick up the dynamically-imported
     // writes (records, tag/wallet vocabulary) before asserting on the UI.
@@ -319,6 +382,22 @@ async function main() {
     const filteredLines = await downloadJsonl(page, exportButton);
     assertExactLines(filteredLines, [expectedAllLines[2]], 'search-filtered');
     steps.push({ name: 'filtered export downloads only the matching label', passed: true });
+
+    // ── Date-filtered export must match its displayed count exactly ─────────
+    // This range includes the address's updatedAt and the bare transaction's
+    // blockTime. The UTXO record was also edited in-range, but its transaction
+    // blockTime is outside the range and must keep it out of the download.
+    await page.getByTestId('input-bip329-search').fill('');
+    await waitForMatchCount(page, 3);
+    await page.getByTestId('input-bip329-date-range-from').fill(DATE_FILTER_FROM);
+    await page.getByTestId('input-bip329-date-range-to').fill(DATE_FILTER_TO);
+    await waitForMatchCount(page, 2);
+    assertExactLines(
+      await downloadJsonl(page, exportButton),
+      [expectedAllLines[0], expectedAllLines[1]],
+      'date-range'
+    );
+    steps.push({ name: 'date-range download has exactly its 2 counted labels', passed: true });
 
     // ── Clear filters restores the full set ─────────────────────────────────
     await page.getByTestId('button-bip329-clear-filters').click();
