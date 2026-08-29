@@ -1007,6 +1007,10 @@ args = "settings-entity-list-scale-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "entity-list-import-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "settings-history-trim-node-check"
 
 [[workflows.workflow.tasks]]
@@ -3566,6 +3570,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-settings-entity-list-scale-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "entity-list-import-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-entity-list-import-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
