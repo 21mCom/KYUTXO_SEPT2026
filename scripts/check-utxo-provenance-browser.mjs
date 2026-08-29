@@ -17,6 +17,8 @@
 //   tx5 (origin):        ext input (no prevout) -> OWN_A 70k
 //   tx6 (partial spend): BLANK-address input spending tx5:0 (Electrum-style)
 //                        -> merchant 40k + OWN_C 29k (change, unspent)
+//   long fixture: 101 later-dated unspent outputs per wallet, used to cross
+//                 the 100-row page boundary without changing the hop fixtures
 //
 // Expected unspent UTXOs:
 //   tx2:0 / tx2:1 — hopsBack 3, patterns {wallet-reorg, partial-spend, origin}
@@ -61,6 +63,38 @@ const TX2 = 'cc22cc22' + '30'.repeat(28);
 const TX3 = 'dd33dd33' + '40'.repeat(28);
 const TX5 = 'ee44ee44' + '50'.repeat(28);
 const TX6 = 'ff55ff55' + '60'.repeat(28);
+const LONG_A_COUNT = 101;
+const LONG_C_COUNT = 101;
+const LONG_A_TXS = Array.from({ length: LONG_A_COUNT }, (_, i) =>
+  `a1${i.toString(16).padStart(6, '0')}${'f'.repeat(56)}`,
+);
+const LONG_C_TXS = Array.from({ length: LONG_C_COUNT }, (_, i) =>
+  `c2${i.toString(16).padStart(6, '0')}${'f'.repeat(56)}`,
+);
+const LONG_TXS = [
+  ...LONG_A_TXS.map((txid, i) => ({
+    txid,
+    blockHeight: 701_000 + i,
+    blockTime: NOW - 20 * DAY + i,
+    fee: 0,
+    feeRate: 0,
+  })),
+  ...LONG_C_TXS.map((txid, i) => ({
+    txid,
+    blockHeight: 702_000 + i,
+    blockTime: NOW - 10 * DAY + i,
+    fee: 0,
+    feeRate: 0,
+  })),
+];
+const LONG_PARTICIPANTS = [
+  ...LONG_A_TXS.map((txid, i) => ({ txid, role: 'output', address: OWN_A, amount: 10_000 + i, vout: 0 })),
+  ...LONG_C_TXS.map((txid, i) => ({ txid, role: 'output', address: OWN_C, amount: 20_000 + i, vout: 0 })),
+];
+const LONG_A_FIRST = LONG_A_TXS[0];
+const LONG_A_LAST = LONG_A_TXS.at(-1);
+const LONG_C_FIRST = LONG_C_TXS[0];
+const LONG_C_LAST = LONG_C_TXS.at(-1);
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -427,6 +461,179 @@ async function main() {
       'filter-classification',
       countAfterClass?.startsWith('3 ') ?? false,
       `partial-spend filter leaves ${countAfterClass} (tx2:0, tx2:1 via tx1; tx6:1 via tx6)`,
+    );
+
+    // ── Long-list wallet/search/pagination coverage ────────────────────────
+    // Keep these outputs later than the six hop fixtures so the original
+    // assertions above remain on page 1. Their first-8 txid prefixes are
+    // distinct and each wallet has 101 extra rows: 103 rows per wallet,
+    // 206 total, spanning the 100-row page boundary.
+    await page.evaluate(
+      async ({ transactions, participants }) => {
+        const txCrud = await import('/src/lib/data/transaction-crud.ts');
+        await txCrud.bulkAddTransactions(
+          transactions.map((tx) => ({ ...tx, syncedAt: Date.now() })),
+        );
+        await txCrud.bulkAddParticipants(participants);
+        return true;
+      },
+      { transactions: LONG_TXS, participants: LONG_PARTICIPANTS },
+    );
+    record('long-list-seed', true, '202 later-dated unspent outputs seeded (101 per wallet)');
+
+    // As with the first seed, reload to make the page re-read the live CRUD
+    // writes. The reload also proves controls return to their default scope.
+    await page.reload({ waitUntil: 'load' });
+    await unlockPageIfNeeded();
+    const pageStatus = page.getByTestId('prov-page-status');
+    const rowVisible = async (txid, vout = 0) =>
+      page.getByTestId(`utxo-prov-row-${txid.slice(0, 8)}-${vout}`).isVisible().catch(() => false);
+    const waitForPage = async (status) => {
+      await pageStatus.waitFor({ state: 'visible', timeout: 15_000 });
+      await page.getByText(status, { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
+    };
+    await page.getByTestId(`utxo-prov-row-${LONG_A_FIRST.slice(0, 8)}-0`).waitFor({ state: 'visible', timeout: 60_000 });
+    await waitForPage('Page 1 of 3');
+    const longAllCount = await page.getByTestId('prov-count').textContent();
+    record(
+      'long-list-all-wallets',
+      longAllCount?.startsWith('206 ') &&
+        await rowVisible(LONG_A_FIRST) &&
+        !(await rowVisible(LONG_C_LAST)),
+      `all-wallet view shows ${longAllCount} on page 1 of 3 without a page-3 row`,
+    );
+
+    // Navigate to the end, then switch wallets. The selected wallet must
+    // reset to its own first page rather than leave the old page-3 slice
+    // visible or show rows from the other wallet.
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 3');
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 3 of 3');
+    record(
+      'long-list-last-page',
+      await rowVisible(LONG_C_LAST) && !(await rowVisible(LONG_A_FIRST)),
+      'page 3 shows the final Spending-wallet row and no stale page-1 row',
+    );
+
+    await page.getByTestId('prov-wallet-filter').click();
+    await page.getByRole('option', { name: 'Savings wallet' }).click();
+    await page.getByTestId('prov-count').waitFor({ state: 'visible', timeout: 15_000 });
+    await waitForPage('Page 1 of 2');
+    const longSavingsCount = await page.getByTestId('prov-count').textContent();
+    record(
+      'long-list-wallet-savings-reset',
+      longSavingsCount?.startsWith('103 ') &&
+        await rowVisible(TX2, 1) &&
+        await rowVisible(LONG_A_FIRST) &&
+        !(await rowVisible(LONG_C_LAST)),
+      `Savings wallet resets to page 1 of 2 with ${longSavingsCount}; no Spending row`,
+    );
+
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 2');
+    record(
+      'long-list-wallet-savings-page-2',
+      await rowVisible(LONG_A_LAST) && !(await rowVisible(LONG_A_FIRST)),
+      'Savings page 2 contains its final output across the page boundary',
+    );
+
+    // Address search keeps all 103 Savings rows and reaches the same second
+    // page; this catches filtering against only the currently rendered page.
+    const longSearch = page.getByTestId('prov-search');
+    await longSearch.fill(OWN_A);
+    await waitForPage('Page 1 of 2');
+    const longAddressCount = await page.getByTestId('prov-count').textContent();
+    const addressPageOneCorrect =
+      longAddressCount?.startsWith('103 ') &&
+      await rowVisible(TX2, 1) &&
+      await rowVisible(LONG_A_FIRST) &&
+      !(await rowVisible(LONG_A_LAST));
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 2');
+    record(
+      'long-list-search-address',
+      addressPageOneCorrect && await rowVisible(LONG_A_LAST) && !(await rowVisible(LONG_C_FIRST)),
+      `address search keeps ${longAddressCount} rows across two pages`,
+    );
+
+    // The label is attached to OWN_A, so label search must have identical
+    // count/page behavior and must not retain the address-search page slice.
+    await longSearch.fill('Savings');
+    await waitForPage('Page 1 of 2');
+    const longLabelCount = await page.getByTestId('prov-count').textContent();
+    const labelPageOneCorrect =
+      longLabelCount?.startsWith('103 ') &&
+      await rowVisible(TX2, 1) &&
+      await rowVisible(LONG_A_FIRST) &&
+      !(await rowVisible(LONG_A_LAST));
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 2');
+    record(
+      'long-list-search-label',
+      labelPageOneCorrect && await rowVisible(LONG_A_LAST) && !(await rowVisible(LONG_C_FIRST)),
+      `label search keeps ${longLabelCount} rows across two pages`,
+    );
+
+    // Every A fixture txid shares the "a1" prefix. This is a transaction-ID
+    // search with 101 matches, so its final matching row is only on page 2.
+    await longSearch.fill('a1');
+    await waitForPage('Page 1 of 2');
+    const longTxidCount = await page.getByTestId('prov-count').textContent();
+    const txidPageOneCorrect =
+      longTxidCount?.startsWith('101 ') &&
+      await rowVisible(LONG_A_FIRST) &&
+      !(await rowVisible(LONG_A_LAST));
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 2');
+    record(
+      'long-list-search-transaction-id',
+      txidPageOneCorrect && await rowVisible(LONG_A_LAST) && !(await rowVisible(LONG_C_FIRST)),
+      `transaction-ID search keeps ${longTxidCount} rows across two pages`,
+    );
+
+    // Narrowing from page 2 to one exact transaction must reset to page 1
+    // and remove every previously rendered row, not merely clamp its label.
+    await longSearch.fill(LONG_A_LAST);
+    await page.getByTestId('prov-count').waitFor({ state: 'visible', timeout: 15_000 });
+    await waitForPage('Page 1 of 1');
+    const exactTxidCount = await page.getByTestId('prov-count').textContent();
+    record(
+      'long-list-search-reset',
+      exactTxidCount?.startsWith('1 ') &&
+        await rowVisible(LONG_A_LAST) &&
+        !(await rowVisible(LONG_A_FIRST)) &&
+        !(await rowVisible(LONG_C_FIRST)),
+      `exact txid search resets to ${exactTxidCount} on page 1 of 1 without stale rows`,
+    );
+
+    // Switch from the narrowed Savings view to Spending and back to All to
+    // verify both wallet scopes and the page count are recalculated.
+    await longSearch.fill('');
+    await waitForPage('Page 1 of 2');
+    await page.getByTestId('prov-wallet-filter').click();
+    await page.getByRole('option', { name: 'Spending wallet' }).click();
+    await waitForPage('Page 1 of 2');
+    const longSpendingCount = await page.getByTestId('prov-count').textContent();
+    record(
+      'long-list-wallet-spending',
+      longSpendingCount?.startsWith('103 ') &&
+        await rowVisible(TX2, 0) &&
+        await rowVisible(LONG_C_FIRST) &&
+        !(await rowVisible(LONG_A_FIRST)),
+      `Spending wallet shows ${longSpendingCount} on page 1 of 2 without Savings rows`,
+    );
+    await page.getByTestId('prov-wallet-filter').click();
+    await page.getByRole('option', { name: 'All wallets' }).click();
+    await waitForPage('Page 1 of 3');
+    const longRestoredAllCount = await page.getByTestId('prov-count').textContent();
+    record(
+      'long-list-wallet-all-reset',
+      longRestoredAllCount?.startsWith('206 ') &&
+        await rowVisible(TX2, 0) &&
+        await rowVisible(LONG_A_FIRST) &&
+        !(await rowVisible(LONG_C_LAST)),
+      `All wallets restores ${longRestoredAllCount} on page 1 of 3`,
     );
   } finally {
     await browser.close();

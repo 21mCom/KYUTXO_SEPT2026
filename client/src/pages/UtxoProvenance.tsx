@@ -587,7 +587,7 @@ export default function UtxoProvenancePage() {
                   <span data-testid="prov-count">{filtered.length.toLocaleString()} UTXOs</span>
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="sm" disabled={clampedPage === 0} onClick={() => setPage(clampedPage - 1)} data-testid="prov-prev">Previous</Button>
-                    <span>Page {clampedPage + 1} of {pageCount}</span>
+                    <span data-testid="prov-page-status">Page {clampedPage + 1} of {pageCount}</span>
                     <Button variant="outline" size="sm" disabled={clampedPage >= pageCount - 1} onClick={() => setPage(clampedPage + 1)} data-testid="prov-next">Next</Button>
                   </div>
                 </div>
