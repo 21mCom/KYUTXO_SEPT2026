@@ -433,10 +433,10 @@ export default function UtxoProvenancePage() {
         </div>
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Card><CardHeader className="p-3 pb-1"><CardDescription>Unspent UTXOs</CardDescription><CardTitle className="text-xl">{stats.total.toLocaleString()}</CardTitle></CardHeader></Card>
-          <Card><CardHeader className="p-3 pb-1"><CardDescription>History beyond 1 hop</CardDescription><CardTitle className="text-xl">{stats.withHistory.toLocaleString()}</CardTitle></CardHeader></Card>
-          <Card><CardHeader className="p-3 pb-1"><CardDescription>Partial spends seen</CardDescription><CardTitle className="text-xl">{stats.partialSpend.toLocaleString()}</CardTitle></CardHeader></Card>
-          <Card><CardHeader className="p-3 pb-1"><CardDescription>Wallet reorgs seen</CardDescription><CardTitle className="text-xl">{stats.reorg.toLocaleString()}</CardTitle></CardHeader></Card>
+          <Card><CardHeader className="p-3 pb-1"><CardDescription>Unspent UTXOs</CardDescription><CardTitle className="text-xl" data-testid="prov-stat-total">{stats.total.toLocaleString()}</CardTitle></CardHeader></Card>
+          <Card><CardHeader className="p-3 pb-1"><CardDescription>History beyond 1 hop</CardDescription><CardTitle className="text-xl" data-testid="prov-stat-history">{stats.withHistory.toLocaleString()}</CardTitle></CardHeader></Card>
+          <Card><CardHeader className="p-3 pb-1"><CardDescription>Partial spends seen</CardDescription><CardTitle className="text-xl" data-testid="prov-stat-partial">{stats.partialSpend.toLocaleString()}</CardTitle></CardHeader></Card>
+          <Card><CardHeader className="p-3 pb-1"><CardDescription>Wallet reorgs seen</CardDescription><CardTitle className="text-xl" data-testid="prov-stat-reorg">{stats.reorg.toLocaleString()}</CardTitle></CardHeader></Card>
         </div>
 
         <Card>

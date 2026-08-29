@@ -340,35 +340,80 @@ async function main() {
     await search.fill('');
 
     // ── Flagged dust toggle + live flag updates ─────────────────────────────
+    // Keep a date filter active while changing dust. Marking the wallet-reorg
+    // output plus the blank-input partial-spend output changes all four summary
+    // cards as well as the table without touching either filter control.
+    const liveDustDateRange = page.getByTestId('utxo-provenance-date-range');
+    await liveDustDateRange.getByTestId('input-utxo-provenance-date-range-from').fill(dateDaysAgo(120));
+    await liveDustDateRange.getByTestId('input-utxo-provenance-date-range-to').fill(dateDaysAgo(1));
+    await page.getByText('4 UTXOs', { exact: true }).waitFor({ state: 'visible', timeout: 10_000 });
+    const scopedSummaryBeforeDust = await Promise.all(
+      ['prov-stat-total', 'prov-stat-history', 'prov-stat-partial', 'prov-stat-reorg'].map((testId) =>
+        page.getByTestId(testId).textContent(),
+      ),
+    );
+    record(
+      'dust-summary-scoped-baseline',
+      scopedSummaryBeforeDust.map((value) => value?.trim()).join(',') === '4,3,3,2',
+      `date-filtered baseline summaries total/history/partial/reorg=${scopedSummaryBeforeDust.join('/')}`,
+    );
+
     await page.getByTestId('switch-ignore-prov-dust').click();
     await page.evaluate(
-      async ({ txid, address }) => {
+      async (outpoints) => {
         const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
-        await dustCrud.markOutpointsAsDust([{ txid, vout: 0, address, amountSats: 50_000 }]);
+        await dustCrud.markOutpointsAsDust(outpoints);
       },
-      { txid: TX3, address: OWN_A },
+      [
+        { txid: TX2, vout: 0, address: OWN_C, amountSats: 38_000 },
+        { txid: TX6, vout: 1, address: OWN_C, amountSats: 29_000 },
+      ],
     );
     await page.getByTestId('prov-dust-status').waitFor({ state: 'visible', timeout: 10_000 });
-    await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).waitFor({ state: 'hidden', timeout: 10_000 });
+    await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-0`).waitFor({ state: 'hidden', timeout: 10_000 });
+    await page.getByTestId(`utxo-prov-row-${TX6.slice(0, 8)}-1`).waitFor({ state: 'hidden', timeout: 10_000 });
     const countIgnoringDust = await page.getByTestId('prov-count').textContent();
-    const dustRowVisible = await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).isVisible().catch(() => false);
+    const dustRowsVisible = await Promise.all([
+      page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-0`).isVisible().catch(() => false),
+      page.getByTestId(`utxo-prov-row-${TX6.slice(0, 8)}-1`).isVisible().catch(() => false),
+    ]);
     const dustStatus = await page.getByTestId('prov-dust-status').textContent();
+    const scopedSummaryIgnoringDust = await Promise.all(
+      ['prov-stat-total', 'prov-stat-history', 'prov-stat-partial', 'prov-stat-reorg'].map((testId) =>
+        page.getByTestId(testId).textContent(),
+      ),
+    );
     record(
-      'ignore-flagged-dust',
-      countIgnoringDust?.startsWith('3 ') && !dustRowVisible && dustStatus?.includes('Hiding 1 flagged dust UTXO') === true,
-      `ignoring dust shows ${countIgnoringDust}, dust row hidden=${!dustRowVisible}, status="${dustStatus}"`,
+      'ignore-flagged-dust-summary',
+      countIgnoringDust?.startsWith('2 ') &&
+        dustRowsVisible.every((visible) => !visible) &&
+        dustStatus?.includes('Hiding 2 flagged dust UTXOs') === true &&
+        scopedSummaryIgnoringDust.map((value) => value?.trim()).join(',') === '2,1,1,1',
+      `ignoring dust shows ${countIgnoringDust}, summaries total/history/partial/reorg=${scopedSummaryIgnoringDust.join('/')} and dust rows hidden=${dustRowsVisible.every((visible) => !visible)}`,
     );
     await page.evaluate(
-      async (outpoint) => {
+      async (outpoints) => {
         const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
-        await dustCrud.unmarkDustOutpoints([outpoint]);
+        await dustCrud.unmarkDustOutpoints(outpoints);
       },
-      `${TX3}:0`,
+      [`${TX2}:0`, `${TX6}:1`],
     );
     await page.getByTestId('prov-dust-status').waitFor({ state: 'hidden', timeout: 10_000 });
-    await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-0`).waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByTestId(`utxo-prov-row-${TX6.slice(0, 8)}-1`).waitFor({ state: 'visible', timeout: 10_000 });
     const restoredDustCount = await page.getByTestId('prov-count').textContent();
-    record('live-dust-unflag', restoredDustCount?.startsWith('4 ') ?? false, `unflagging dust live restores ${restoredDustCount}`);
+    const scopedSummaryAfterUnflag = await Promise.all(
+      ['prov-stat-total', 'prov-stat-history', 'prov-stat-partial', 'prov-stat-reorg'].map((testId) =>
+        page.getByTestId(testId).textContent(),
+      ),
+    );
+    record(
+      'live-dust-unflag-summary',
+      restoredDustCount?.startsWith('4 ') &&
+        scopedSummaryAfterUnflag.map((value) => value?.trim()).join(',') === '4,3,3,2',
+      `unflagging dust live restores ${restoredDustCount}; summaries total/history/partial/reorg=${scopedSummaryAfterUnflag.join('/')}`,
+    );
+    await liveDustDateRange.getByTestId('button-utxo-provenance-date-range-clear').click();
     await page.getByTestId('switch-ignore-prov-dust').click();
     if (process.env.UTXO_PROVENANCE_SCREENSHOT) {
       await page.screenshot({

@@ -135,3 +135,4 @@
 - [Filter chips / Clear-All browser-check gotchas](filter-chips-clear-all-browser-check.md) — sidebar nav links live in collapsible groups (check visibility before clicking the header); debounced hasActiveFilters lags a Clear click, so wait for hidden, don't assert synchronously.
 - [Export date filter uses blockTime](export-date-filter-blocktime.md) — tx/UTXO export rows scope date filters by the transaction's blockTime (batched txid lookup), never updatedAt/createdAt; address/other kinds keep the old fallback.
 - [React DayPicker jsdom selection](react-day-picker-jsdom-selection.md) — day numbers repeat for outside-month cells; target button[name=day], reject day-outside, and verify the trigger date.
+- [Provenance summary browser fixtures](provenance-summary-browser-fixtures.md) — use a date filter, not wallet scope, when a browser fixture must retain full-vault hop classifications.
