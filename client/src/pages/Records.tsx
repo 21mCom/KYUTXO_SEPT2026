@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
-import { type Record as DbRecord, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS, isHiddenDiscoveryTier } from "@/lib/database";
+import { type Record as DbRecord, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS, isHiddenDiscoveryTier, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { type PanelRecord, toPanelRecord } from "@/lib/recordToPanel";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
@@ -34,6 +34,7 @@ import {
   bulkGetRecords,
   countHiddenTierMatches,
   type HiddenTierMatchCount,
+  bulkDeleteRecordsWithArchiving,
 } from "@/lib/data/record-crud";
 import { DateAddedFilter, type DateAddedSort } from "@/components/DateAddedFilter";
 import {
@@ -1193,47 +1194,64 @@ export default function Records() {
     }
   };
 
+  // Chunk size for the batched delete phase below. Mirrors Dashboard.tsx's
+  // BULK_DELETE_WRITE_CHUNK_SIZE (Task #2130): large enough to collapse
+  // per-record IndexedDB round-trips into a handful of transactions (a
+  // "select all" on the Records page can select thousands of rows), small
+  // enough that a single bad chunk falling back to the slow per-record path
+  // stays bounded.
+  const BULK_DELETE_WRITE_CHUNK_SIZE = 1000;
+
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
     setIsDeleting(true);
-    try {
-      const idsToDelete = Array.from(selectedIds);
-      let successCount = 0;
-      let failCount = 0;
+    const idsToDelete = Array.from(selectedIds).map(id => parseInt(id));
+    let successCount = 0;
+    let failCount = 0;
 
-      for (const id of idsToDelete) {
+    beginBulkOperation();
+    try {
+      for (let start = 0; start < idsToDelete.length; start += BULK_DELETE_WRITE_CHUNK_SIZE) {
+        const chunk = idsToDelete.slice(start, start + BULK_DELETE_WRITE_CHUNK_SIZE);
         try {
-          await deleteRecord(parseInt(id));
-          successCount++;
-        } catch {
-          failCount++;
+          await bulkDeleteRecordsWithArchiving(chunk);
+          successCount += chunk.length;
+        } catch (error) {
+          // The whole chunk failed to write — fall back to the original
+          // per-record path (which still does the attachment-archiving
+          // cascade) for just this chunk so a single bad row can't sink the
+          // rest of the selection.
+          console.error("Bulk delete chunk failed, falling back to per-record deletes:", error);
+          for (const id of chunk) {
+            try {
+              await deleteRecord(id);
+              successCount++;
+            } catch {
+              failCount++;
+            }
+          }
         }
       }
+    } finally {
+      endBulkOperation();
+    }
 
-      if (failCount === 0) {
-        toast({
-          title: "Records deleted",
-          description: `Successfully deleted ${successCount} record${successCount !== 1 ? 's' : ''}.`,
-        });
-      } else {
-        toast({
-          title: "Partial deletion",
-          description: `Deleted ${successCount} record${successCount !== 1 ? 's' : ''}, but ${failCount} failed.`,
-          variant: "destructive",
-        });
-      }
-      
-      setSelectedIds(new Set());
-      setBulkDeleteDialogOpen(false);
-    } catch (error) {
+    if (failCount === 0) {
       toast({
-        title: "Delete failed",
-        description: error instanceof Error ? error.message : "Failed to delete records",
+        title: "Records deleted",
+        description: `Successfully deleted ${successCount} record${successCount !== 1 ? 's' : ''}.`,
+      });
+    } else {
+      toast({
+        title: "Partial deletion",
+        description: `Deleted ${successCount} record${successCount !== 1 ? 's' : ''}, but ${failCount} failed.`,
         variant: "destructive",
       });
-    } finally {
-      setIsDeleting(false);
     }
+
+    setSelectedIds(new Set());
+    setBulkDeleteDialogOpen(false);
+    setIsDeleting(false);
   };
 
   const handleRecomputeSelection = async () => {
