@@ -1003,6 +1003,10 @@ args = "settings-entity-list-actions-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "settings-entity-list-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "settings-history-trim-node-check"
 
 [[workflows.workflow.tasks]]
@@ -3547,6 +3551,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.entityErrorDownload.test.tsx client/src/pages/SettingsPage.entityListConfirm.test.tsx client/src/pages/SettingsPage.entityListConfirmFailure.test.tsx client/src/pages/SettingsPage.entityListReplaceSummary.test.tsx client/src/pages/SettingsPage.entityListSummary.test.tsx client/src/pages/SettingsPage.entityRevertFailure.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-entity-list-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-settings-entity-list-scale-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
