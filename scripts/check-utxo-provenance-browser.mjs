@@ -4,8 +4,9 @@
 // Page under test: client/src/pages/UtxoProvenance.tsx (/utxo-provenance);
 // walk engine: client/src/lib/utxo-provenance.ts (unit-tested in
 // utxo-provenance.test.ts). This script proves the real wiring in Chromium:
-// vault create → seed → page computes the unspent set + hop chains → filters
-// → expand a row → hover a hop chip (tooltip) → click it (details dialog).
+// vault create → seed → page computes the unspent set + hop chains → wallet,
+// search, and provenance filters → expand a row → hover a hop chip (tooltip)
+// → click it (details dialog).
 //
 // Seed design (deterministic):
 //   OWN_A/OWN_B/OWN_C owned records (manual tier), split between two wallets.
@@ -226,17 +227,72 @@ async function main() {
     await page.getByTestId('prov-wallet-filter').click();
     await page.getByRole('option', { name: 'Savings wallet' }).click();
     const savingsCount = await page.getByTestId('prov-count').textContent();
-    const secondSavingsRowVisible = await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).isVisible().catch(() => false);
-    const spendingRowVisibleInSavings = await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-0`).isVisible().catch(() => false);
+    const savingsTx2ChangeVisible = await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-1`).isVisible().catch(() => false);
+    const savingsTx3Visible = await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).isVisible().catch(() => false);
+    const spendingTx2OutputVisible = await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-0`).isVisible().catch(() => false);
+    const spendingTx6ChangeVisible = await page.getByTestId(`utxo-prov-row-${TX6.slice(0, 8)}-1`).isVisible().catch(() => false);
     record(
       'wallet-scope',
-      savingsCount?.startsWith('2 ') && secondSavingsRowVisible && !spendingRowVisibleInSavings,
-      `Savings wallet shows ${savingsCount}; both Savings-address UTXOs visible=${secondSavingsRowVisible}; Spending wallet row hidden=${!spendingRowVisibleInSavings}`,
+      savingsCount?.startsWith('2 ') &&
+        savingsTx2ChangeVisible &&
+        savingsTx3Visible &&
+        !spendingTx2OutputVisible &&
+        !spendingTx6ChangeVisible,
+      `Savings wallet shows ${savingsCount}; Savings rows visible=${savingsTx2ChangeVisible && savingsTx3Visible}; Spending rows hidden=${!spendingTx2OutputVisible && !spendingTx6ChangeVisible}`,
     );
     await page.getByTestId('prov-wallet-filter').click();
     await page.getByRole('option', { name: 'All wallets' }).click();
     const allWalletsCount = await page.getByTestId('prov-count').textContent();
     record('all-wallets-scope', allWalletsCount?.startsWith('4 ') ?? false, `All wallets restores ${allWalletsCount}`);
+
+    // ── Search independently by address, transaction ID, and label ─────────
+    const search = page.getByTestId('prov-search');
+    await search.fill(OWN_A);
+    await page.getByTestId('prov-count').waitFor({ state: 'visible', timeout: 10_000 });
+    const addressSearchCount = await page.getByTestId('prov-count').textContent();
+    const addressTx2ChangeVisible = await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-1`).isVisible().catch(() => false);
+    const addressTx3Visible = await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).isVisible().catch(() => false);
+    const addressTx2OutputVisible = await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-0`).isVisible().catch(() => false);
+    const addressTx6ChangeVisible = await page.getByTestId(`utxo-prov-row-${TX6.slice(0, 8)}-1`).isVisible().catch(() => false);
+    record(
+      'search-address',
+      addressSearchCount?.startsWith('2 ') &&
+        addressTx2ChangeVisible &&
+        addressTx3Visible &&
+        !addressTx2OutputVisible &&
+        !addressTx6ChangeVisible,
+      `address search shows ${addressSearchCount}; OWN_A rows visible=${addressTx2ChangeVisible && addressTx3Visible}; other rows hidden=${!addressTx2OutputVisible && !addressTx6ChangeVisible}`,
+    );
+
+    await search.fill(TX6);
+    const txidSearchCount = await page.getByTestId('prov-count').textContent();
+    const txidRowVisible = await page.getByTestId(`utxo-prov-row-${TX6.slice(0, 8)}-1`).isVisible().catch(() => false);
+    const txidOtherRowsHidden =
+      !(await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-0`).isVisible().catch(() => false)) &&
+      !(await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-1`).isVisible().catch(() => false)) &&
+      !(await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).isVisible().catch(() => false));
+    record(
+      'search-transaction-id',
+      txidSearchCount?.startsWith('1 ') && txidRowVisible && txidOtherRowsHidden,
+      `transaction-ID search shows ${txidSearchCount}; TX6 row visible=${txidRowVisible}; other rows hidden=${txidOtherRowsHidden}`,
+    );
+
+    await search.fill('Savings');
+    const labelSearchCount = await page.getByTestId('prov-count').textContent();
+    const labelTx2ChangeVisible = await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-1`).isVisible().catch(() => false);
+    const labelTx3Visible = await page.getByTestId(`utxo-prov-row-${TX3.slice(0, 8)}-0`).isVisible().catch(() => false);
+    const labelOtherRowsHidden =
+      !(await page.getByTestId(`utxo-prov-row-${TX2.slice(0, 8)}-0`).isVisible().catch(() => false)) &&
+      !(await page.getByTestId(`utxo-prov-row-${TX6.slice(0, 8)}-1`).isVisible().catch(() => false));
+    record(
+      'search-label',
+      labelSearchCount?.startsWith('2 ') &&
+        labelTx2ChangeVisible &&
+        labelTx3Visible &&
+        labelOtherRowsHidden,
+      `label search shows ${labelSearchCount}; Savings rows visible=${labelTx2ChangeVisible && labelTx3Visible}; other rows hidden=${labelOtherRowsHidden}`,
+    );
+    await search.fill('');
 
     // ── Flagged dust toggle + live flag updates ─────────────────────────────
     await page.getByTestId('switch-ignore-prov-dust').click();
@@ -254,7 +310,7 @@ async function main() {
     const dustStatus = await page.getByTestId('prov-dust-status').textContent();
     record(
       'ignore-flagged-dust',
-      countIgnoringDust?.startsWith('3 ') && !dustRowVisible && dustStatus?.includes('Ignoring 1 flagged dust UTXO') === true,
+      countIgnoringDust?.startsWith('3 ') && !dustRowVisible && dustStatus?.includes('Hiding 1 flagged dust UTXO') === true,
       `ignoring dust shows ${countIgnoringDust}, dust row hidden=${!dustRowVisible}, status="${dustStatus}"`,
     );
     await page.evaluate(
