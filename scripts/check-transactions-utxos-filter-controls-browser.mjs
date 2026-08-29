@@ -678,40 +678,91 @@ async function main() {
     // pages intentionally reset list filters on a route remount, so the
     // Back/Forward assertions below ensure a restored route does not inherit
     // the other page's state (and that its own controls are mounted again).
-    await pickComboboxValue(page, 'select-entity-wallet', 'Alpha');
+    await setInputValue(page, 'input-search', 'Alpha addr');
+    const transactionSearchFilter = await waitForText(page, totalTransactionsText, N_ALPHA);
+    await openAdvancedFilters(page);
+    await activateTab(page, 'tab-amount-range');
+    await setInputValue(page, 'input-amount-min', '0.0001');
     await closePopover(page);
-    const transactionHistoryFilter = await waitForText(page, totalTransactionsText, N_ALPHA);
+    const transactionAmountFilter = await waitForText(page, totalTransactionsText, N_ALPHA);
+    await clickEl(page, 'button-opreturn-filter');
+    const transactionToggleFilter = await waitForText(page, totalTransactionsText, 0);
+    const transactionSearchValue = await page.getByTestId('input-search').inputValue();
+    const transactionOpReturnClass = await page.getByTestId('button-opreturn-filter').getAttribute('class');
+    await openAdvancedFilters(page);
+    const transactionAmountValue = await page.getByTestId('input-amount-min').inputValue();
+    await closePopover(page);
     steps.push({
-      name: '[History] Transactions wallet=Alpha filter is active before navigation',
-      passed: transactionHistoryFilter.ok,
-      detail: `total="${transactionHistoryFilter.text}" expected=${N_ALPHA}`,
+      name: '[History] Transactions keeps its search, amount range, and OP_RETURN filters together',
+      passed: transactionSearchFilter.ok &&
+        transactionAmountFilter.ok &&
+        transactionToggleFilter.ok &&
+        transactionSearchValue === 'Alpha addr' &&
+        transactionAmountValue === '0.0001' &&
+        (transactionOpReturnClass ?? '').includes('bg-purple-600'),
+      detail: `searchTotal="${transactionSearchFilter.text}" amountTotal="${transactionAmountFilter.text}" ` +
+        `opReturnTotal="${transactionToggleFilter.text}" search="${transactionSearchValue}" ` +
+        `min="${transactionAmountValue}" opReturnClass="${transactionOpReturnClass}"`,
     });
 
     await navigateInApp(page, 'link-utxos', '/utxos');
     await page.getByTestId('text-utxo-count').waitFor({ state: 'visible', timeout: 15_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 1_000 });
-    await pickComboboxValue(page, 'select-owner', 'Bob');
+    await setInputValue(page, 'input-search', 'Beta addr');
+    const utxoSearchFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
+    await openAdvancedFilters(page);
+    await activateTab(page, 'tab-amount-range');
+    await setInputValue(page, 'input-amount-min', '0.00004');
     await closePopover(page);
-    const utxoHistoryFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
+    const utxoAmountFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
+    await clickEl(page, 'button-toggle-unit');
+    await openAdvancedFilters(page);
+    const utxoAmountValue = await page.getByTestId('input-amount-min').inputValue();
+    await closePopover(page);
+    await clickEl(page, 'switch-hide-dust');
+    const utxoToggleFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
+    const utxoSearchValue = await page.getByTestId('input-search').inputValue();
+    const utxoHideDustState = await page.getByTestId('switch-hide-dust').getAttribute('data-state');
+    const utxoDisplayToggleText = (await page.getByTestId('button-toggle-unit').textContent())?.trim() ?? '';
+    await closePopover(page);
     steps.push({
-      name: '[History] UTXOs owner=Bob filter is active before navigation',
-      passed: utxoHistoryFilter.ok,
-      detail: `text="${utxoHistoryFilter.text}" expected="1 / ${N_BETA}"`,
+      name: '[History] UTXOs keeps its search, amount range, sats unit, and Hide dust filters together',
+      passed: utxoSearchFilter.ok &&
+        utxoAmountFilter.ok &&
+        utxoToggleFilter.ok &&
+        utxoSearchValue === 'Beta addr' &&
+        utxoAmountValue === '4000' &&
+        utxoHideDustState === 'checked' &&
+        utxoDisplayToggleText === 'BTC',
+      detail: `search="${utxoSearchValue}" searchResult="${utxoSearchFilter.text}" ` +
+        `amountResult="${utxoAmountFilter.text}" toggleResult="${utxoToggleFilter.text}" ` +
+        `min="${utxoAmountValue}" hideDust="${utxoHideDustState}" unitToggle="${utxoDisplayToggleText}"`,
     });
 
     await navigateHistory(page, 'back', '/transactions');
     await page.getByTestId('text-total-transactions').waitFor({ state: 'visible', timeout: 15_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 1_000 });
     const transactionsAfterBack = await waitForText(page, totalTransactionsText, N_ALPHA + N_BETA);
+    const transactionSearchAfterBack = await page.getByTestId('input-search').inputValue();
+    const transactionOpReturnAfterBack = await page.getByTestId('button-opreturn-filter').getAttribute('class');
     await openAdvancedFilters(page);
+    const transactionAmountTabAfterBack = await page.getByTestId('tab-amount-any').getAttribute('data-state');
+    const transactionAmountInputCountAfterBack = await page.getByTestId('input-amount-min').count();
     const transactionControlsAfterBack = await Promise.all(
       linkedEntityControlTestIds.map((testId) => page.getByTestId(testId).count()),
     );
     await closePopover(page);
     steps.push({
-      name: '[History] browser Back restores Transactions without inheriting the UTXOs filter',
-      passed: transactionsAfterBack.ok && transactionControlsAfterBack.every((count) => count === 1),
+      name: '[History] browser Back restores Transactions defaults without UTXO search/amount/toggle state',
+      passed: transactionsAfterBack.ok &&
+        transactionSearchAfterBack === '' &&
+        !(transactionOpReturnAfterBack ?? '').includes('bg-purple-600') &&
+        transactionAmountTabAfterBack === 'active' &&
+        transactionAmountInputCountAfterBack === 0 &&
+        transactionControlsAfterBack.every((count) => count === 1),
       detail: `total="${transactionsAfterBack.text}" expected=${N_ALPHA + N_BETA} ` +
+        `search="${transactionSearchAfterBack}" opReturnClass="${transactionOpReturnAfterBack}" ` +
+        `amountAny="${transactionAmountTabAfterBack}" amountMinCount=${transactionAmountInputCountAfterBack} ` +
         linkedEntityControlTestIds
           .map((testId, index) => `${testId}=${transactionControlsAfterBack[index]}`)
           .join(' '),
@@ -721,15 +772,29 @@ async function main() {
     await page.getByTestId('text-utxo-count').waitFor({ state: 'visible', timeout: 15_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 1_000 });
     const utxosAfterForward = await waitForText(page, utxoCountText, '2 / 23');
+    const utxoSearchAfterForward = await page.getByTestId('input-search').inputValue();
+    const utxoHideDustAfterForward = await page.getByTestId('switch-hide-dust').getAttribute('data-state');
+    const utxoDisplayToggleAfterForward = (await page.getByTestId('button-toggle-unit').textContent())?.trim() ?? '';
     await openAdvancedFilters(page);
+    const utxoAmountTabAfterForward = await page.getByTestId('tab-amount-any').getAttribute('data-state');
+    const utxoAmountInputCountAfterForward = await page.getByTestId('input-amount-min').count();
     const linkedControlsAfterForward = await Promise.all(
       linkedEntityControlTestIds.map((testId) => page.getByTestId(testId).count()),
     );
     await closePopover(page);
     steps.push({
-      name: '[History] browser Forward restores UTXOs without inheriting the Transactions filter',
-      passed: utxosAfterForward.ok && linkedControlsAfterForward.every((count) => count === 0),
+      name: '[History] browser Forward restores UTXOs defaults without Transactions search/amount/toggle state',
+      passed: utxosAfterForward.ok &&
+        utxoSearchAfterForward === '' &&
+        utxoHideDustAfterForward === 'unchecked' &&
+        utxoDisplayToggleAfterForward === 'sats' &&
+        utxoAmountTabAfterForward === 'active' &&
+        utxoAmountInputCountAfterForward === 0 &&
+        linkedControlsAfterForward.every((count) => count === 0),
       detail: `text="${utxosAfterForward.text}" expected="2 / 23" ` +
+        `search="${utxoSearchAfterForward}" hideDust="${utxoHideDustAfterForward}" ` +
+        `unitToggle="${utxoDisplayToggleAfterForward}" amountAny="${utxoAmountTabAfterForward}" ` +
+        `amountMinCount=${utxoAmountInputCountAfterForward} ` +
         linkedEntityControlTestIds
           .map((testId, index) => `${testId}=${linkedControlsAfterForward[index]}`)
           .join(' '),
