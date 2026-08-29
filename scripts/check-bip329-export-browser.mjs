@@ -625,6 +625,41 @@ async function main() {
       { timeout: 30_000 }
     );
 
+    // ── CSV search changes must export the current query immediately ─────────
+    // The live count intentionally debounces the search input. Start with one
+    // distinct label, then type a second distinct label and click before the
+    // count can catch up. The download must use the newly typed query rather
+    // than the stale query represented by the still-visible count.
+    const csvSearch = page.getByTestId('input-csv-search');
+    await csvSearch.fill(ADDR_LABEL);
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
+        '1 record will be exported.',
+      { timeout: 30_000 }
+    );
+    await csvSearch.fill(OUTPUT_LABEL);
+    const staleCsvCount = await page.getByTestId('text-csv-match-count').textContent();
+    if (staleCsvCount?.trim() !== '1 record will be exported.') {
+      throw new Error(`CSV search debounce did not remain pending; saw count ${JSON.stringify(staleCsvCount)}`);
+    }
+    const fastCsvDownload = await downloadCsv(page, csvExportButton);
+    assertExactCsvRows(
+      fastCsvDownload.rows,
+      [
+        ['Type', 'Identifier', 'Label', 'Wallet', 'Owner', 'Tags', 'Categories', 'Notes', 'Amount', 'Date'],
+        ['utxo', OUTPOINT, OUTPUT_LABEL, WALLET, '', TAG, '', 'BIP-329 output at index 1. Spendable: false', '', ''],
+      ],
+      'fast search-change'
+    );
+    steps.push({ name: 'fast CSV search change exports only the newly typed label before the count debounce completes', passed: true });
+
+    await csvSearch.fill('');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
+        '11 records will be exported.',
+      { timeout: 30_000 }
+    );
+
     const csvExactToggle = page.getByTestId('checkbox-csv-date-range-exact');
     await csvExactToggle.check();
     if (!(await csvExactToggle.isChecked())) {
