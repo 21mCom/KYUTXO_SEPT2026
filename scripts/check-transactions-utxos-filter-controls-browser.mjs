@@ -196,6 +196,15 @@ async function setInputValue(page, testId, value) {
   }, value);
 }
 
+async function navigateInApp(page, linkTestId, expectedPath) {
+  await clickEl(page, linkTestId);
+  await page.waitForFunction(
+    (path) => window.location.pathname === path,
+    expectedPath,
+    { timeout: 15_000 },
+  );
+}
+
 async function main() {
   const exe = resolveChromium();
   console.log(`[tx-utxo-filter-controls] chromium: ${exe}`);
@@ -439,8 +448,32 @@ async function main() {
     });
 
     // ══════════════════════════════════ UTXOs ═══════════════════════════════
-    await page.goto(`${BASE_URL}utxos`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000 });
+    // Leave the Transactions popover open while switching routes. This
+    // exercises the client-side unmount/remount path instead of only testing
+    // two independent page loads.
+    await openAdvancedFilters(page);
+    const linkedEntityControlTestIds = [
+      'input-entity-address',
+      'select-entity-wallet',
+      'select-entity-seed',
+      'select-entity-owner',
+      'select-entity-tag',
+      'select-entity-category',
+    ];
+    const transactionLinkedEntityControlCounts = await Promise.all(
+      linkedEntityControlTestIds.map((testId) => page.getByTestId(testId).count()),
+    );
+    steps.push({
+      name: '[Transactions] Advanced Filters exposes linked-entity address and wallet/seed/owner/tag/category controls',
+      passed: transactionLinkedEntityControlCounts.every((count) => count === 1),
+      detail: linkedEntityControlTestIds
+        .map((testId, index) => `${testId}=${transactionLinkedEntityControlCounts[index]}`)
+        .join(' '),
+    });
+
+    await navigateInApp(page, 'link-utxos', '/utxos');
+    await page.getByTestId('text-utxo-count').waitFor({ state: 'visible', timeout: 15_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 1_000 });
 
     const utxoDefault = await waitForText(page, utxoCountText, '2 / 23');
     steps.push({
@@ -454,14 +487,6 @@ async function main() {
     // because this page does not wire those component filters into its
     // filtering path.
     await openAdvancedFilters(page);
-    const linkedEntityControlTestIds = [
-      'input-entity-address',
-      'select-entity-wallet',
-      'select-entity-seed',
-      'select-entity-owner',
-      'select-entity-tag',
-      'select-entity-category',
-    ];
     const linkedEntityControlCounts = await Promise.all(
       linkedEntityControlTestIds.map((testId) => page.getByTestId(testId).count()),
     );
@@ -609,6 +634,25 @@ async function main() {
       name: '[UTXOs] Clear-all resets search, every entity dimension, and hide-dust together',
       passed: utxoAfterClear.ok && utxoSearchCleared === '' && hideDustState === 'unchecked' && utxoClearButtonGone === 0,
       detail: `text="${utxoAfterClear.text}" search="${utxoSearchCleared}" hideDust="${hideDustState}" clearButtonCount=${utxoClearButtonGone}`,
+    });
+
+    // Return through the sidebar in the same browser session. The second
+    // assertion catches a route transition that leaves the page-specific
+    // showEntityFilters contract stale after UTXOs has unmounted.
+    await navigateInApp(page, 'link-transactions', '/transactions');
+    await page.getByTestId('text-total-transactions').waitFor({ state: 'visible', timeout: 15_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 1_000 });
+    await openAdvancedFilters(page);
+    const transactionControlsAfterTransition = await Promise.all(
+      linkedEntityControlTestIds.map((testId) => page.getByTestId(testId).count()),
+    );
+    await closePopover(page);
+    steps.push({
+      name: '[Transactions] linked-entity controls return after navigating back from UTXOs',
+      passed: transactionControlsAfterTransition.every((count) => count === 1),
+      detail: linkedEntityControlTestIds
+        .map((testId, index) => `${testId}=${transactionControlsAfterTransition[index]}`)
+        .join(' '),
     });
   } finally {
     await browser.close();
