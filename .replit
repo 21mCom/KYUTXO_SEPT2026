@@ -3381,12 +3381,12 @@ isValidation = true
 name = "browser-check-unlock-guard"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "node scripts/check-browser-check-unlock-guard.js"
-
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-browser-check-unlock-guard.js && node --test scripts/unlock-flow-utils.test.mjs"
 
 [[workflows.workflow]]
 name = "vault-health-scale-browser-check"

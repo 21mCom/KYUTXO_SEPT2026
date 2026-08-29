@@ -22,6 +22,28 @@
 export const DEFAULT_APPEAR_TIMEOUT_MS = 15_000;
 export const DEFAULT_SUBMIT_TIMEOUT_MS = 30_000;
 
+function isTimeoutError(error) {
+  return (
+    error?.name === 'TimeoutError' ||
+    /timed?\s*out|timeout/i.test(error instanceof Error ? error.message : String(error))
+  );
+}
+
+function phaseError(label, phase, error) {
+  if (!label) return error;
+
+  const detail = error instanceof Error ? error.message : String(error);
+  return new Error(`[${label}] browser check failed during ${phase}: ${detail}`, { cause: error });
+}
+
+async function runPhase(label, phase, operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    throw phaseError(label, phase, error);
+  }
+}
+
 /**
  * Waits out (and dismisses) the legacy-migration overlay if it appears.
  * Safe to call unconditionally — resolves quickly when the overlay never
@@ -32,7 +54,13 @@ export async function dismissMigrationOverlayIfPresent(page, { label, timeoutMs 
   const appeared = await overlay
     .waitFor({ state: 'visible', timeout: 3_000 })
     .then(() => true)
-    .catch(() => false);
+    .catch((error) => {
+      // A timeout means the overlay never appeared, which is the normal path.
+      // Other errors (closed page, broken locator, etc.) are real check
+      // failures and must not be mistaken for an already-clean migration.
+      if (isTimeoutError(error)) return false;
+      throw phaseError(label, 'migration overlay detection', error);
+    });
   if (!appeared) return false;
 
   if (label) {
@@ -40,14 +68,16 @@ export async function dismissMigrationOverlayIfPresent(page, { label, timeoutMs 
   }
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!(await overlay.isVisible().catch(() => false))) return true;
+    const visible = await runPhase(label, 'migration cleanup', () => overlay.isVisible());
+    if (!visible) return true;
     const dismiss = page.getByTestId('button-dismiss-migration');
-    if (await dismiss.isVisible().catch(() => false)) {
-      await dismiss.click().catch(() => {});
+    const dismissVisible = await runPhase(label, 'migration cleanup', () => dismiss.isVisible());
+    if (dismissVisible) {
+      await runPhase(label, 'migration cleanup', () => dismiss.click());
     }
-    await page.waitForTimeout(500);
+    await runPhase(label, 'migration cleanup', () => page.waitForTimeout(500));
   }
-  throw new Error('legacy-migration overlay did not clear within the timeout');
+  throw phaseError(label, 'migration cleanup', new Error('legacy-migration overlay did not clear within the timeout'));
 }
 
 /**
@@ -98,20 +128,31 @@ export async function unlockIfNeeded(page, password, options = {}) {
   const appeared = await pwInput
     .waitFor({ state: 'visible', timeout: appearTimeoutMs })
     .then(() => true)
-    .catch(() => false);
+    .catch((error) => {
+      // A missing login form is expected when the vault is already unlocked.
+      // Only Playwright's timeout represents that state; preserve all other
+      // failures so browser checks identify a broken page instead.
+      if (isTimeoutError(error)) return false;
+      throw phaseError(label, 'login screen detection', error);
+    });
 
   if (!appeared) {
     if (dismissMigration) await dismissMigrationOverlayIfPresent(page, { label });
     return false;
   }
 
-  await pwInput.fill(password);
   const confirmInput = page.getByTestId('input-confirm-password');
-  if (await confirmInput.isVisible().catch(() => false)) {
-    await confirmInput.fill(password);
+  const isSetup = await runPhase(label, 'login form detection', () => confirmInput.isVisible());
+  const unlockPhase = isSetup ? 'vault setup' : 'vault unlock';
+
+  await runPhase(label, `${unlockPhase} password entry`, () => pwInput.fill(password));
+  if (isSetup) {
+    await runPhase(label, 'vault setup confirmation entry', () => confirmInput.fill(password));
   }
-  await page.getByTestId('button-submit').click();
-  await pwInput.waitFor({ state: 'detached', timeout: submitTimeoutMs });
+  await runPhase(label, `${unlockPhase} submission`, () => page.getByTestId('button-submit').click());
+  await runPhase(label, `${unlockPhase} completion`, () =>
+    pwInput.waitFor({ state: 'detached', timeout: submitTimeoutMs }),
+  );
 
   if (dismissMigration) await dismissMigrationOverlayIfPresent(page, { label });
   return true;
