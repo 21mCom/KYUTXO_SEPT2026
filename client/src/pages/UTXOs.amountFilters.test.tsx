@@ -68,9 +68,12 @@ beforeAll(() => {
 const ADDR_546 = "bc1q546amountfilteraddress00000000000000000";
 const ADDR_547 = "bc1q547amountfilteraddress00000000000000000";
 const ADDR_550 = "bc1q550amountfilteraddress00000000000000000";
+const SHARED_ADDR = "bc1qsharedamountfilteraddress000000000000000";
 const TXID_546 = "a".repeat(64);
 const TXID_547 = "b".repeat(64);
 const TXID_550 = "c".repeat(64);
+const TXID_SHARED_MATCH = "d".repeat(64);
+const TXID_SHARED_UNRELATED = "e".repeat(64);
 
 async function seed() {
   await Promise.all(
@@ -112,6 +115,13 @@ async function openAmountRange() {
   const rangeTab = await screen.findByTestId("tab-amount-range");
   fireEvent.mouseDown(rangeTab, { button: 0 });
   await screen.findByTestId("input-amount-min");
+}
+
+async function openAmountExact() {
+  fireEvent.click(await screen.findByTestId("button-advanced-filters"));
+  const exactTab = await screen.findByTestId("tab-amount-exact");
+  fireEvent.mouseDown(exactTab, { button: 0 });
+  await screen.findByTestId("input-amount-exact");
 }
 
 describe("UTXOs page BTC/sats amount filters", () => {
@@ -196,5 +206,72 @@ describe("UTXOs page BTC/sats amount filters", () => {
     expect(min.value).toBe("547");
     expect(max.value).toBe("550");
     expect(screen.getByTestId("text-utxo-count").textContent).toBe("2 / 2");
+  });
+
+  it("keeps unrelated outputs out of a matching address group and totals", async () => {
+    await createRecord({
+      type: "address",
+      inputString: SHARED_ADDR,
+      label: "Shared amount filter address",
+      tags: [],
+      categories: [],
+    });
+    await bulkAddTransactions([
+      {
+        txid: TXID_SHARED_MATCH,
+        blockHeight: 800_000,
+        blockTime: 1_700_000_000,
+        fee: 100,
+        feeRate: 1,
+        syncedAt: Date.now(),
+      },
+      {
+        txid: TXID_SHARED_UNRELATED,
+        blockHeight: 800_000,
+        blockTime: 1_700_000_000,
+        fee: 100,
+        feeRate: 1,
+        syncedAt: Date.now(),
+      },
+    ]);
+    await bulkAddParticipants([
+      { txid: TXID_SHARED_MATCH, role: "output", address: SHARED_ADDR, amount: 600, vout: 0 },
+      { txid: TXID_SHARED_UNRELATED, role: "output", address: SHARED_ADDR, amount: 1_200, vout: 1 },
+    ]);
+
+    renderWithProviders(<UTXOs />);
+    await waitFor(
+      () => expect(screen.getByTestId("text-utxo-count").textContent).toBe("4 / 5"),
+      { timeout: 10000 },
+    );
+
+    await openAmountExact();
+    fireEvent.change(screen.getByTestId("input-amount-exact"), {
+      target: { value: "0.000006" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-utxo-count").textContent).toBe("1 / 1");
+      expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00000600 BTC");
+    });
+    expect(screen.getByTestId(`row-address-${SHARED_ADDR.slice(0, 8)}`)).toBeTruthy();
+    expect(screen.queryByTestId(`row-address-${ADDR_546.slice(0, 8)}`)).toBeNull();
+
+    fireEvent.click(screen.getByTestId(`row-address-${SHARED_ADDR.slice(0, 8)}`));
+    expect(
+      screen.getByTestId(`row-utxo-${TXID_SHARED_MATCH}:0`),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId(`row-utxo-${TXID_SHARED_UNRELATED}:1`),
+    ).toBeNull();
+
+    // The same narrowed result must remain in place when the balance display
+    // changes units.
+    fireEvent.click(screen.getByTestId("button-toggle-unit"));
+    expect(screen.getByTestId("text-total-balance").textContent).toContain("600 sats");
+    expect(screen.getByTestId("text-utxo-count").textContent).toBe("1 / 1");
+    fireEvent.click(screen.getByTestId("button-toggle-unit"));
+    expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00000600 BTC");
+    expect(screen.getByTestId("text-utxo-count").textContent).toBe("1 / 1");
   });
 });

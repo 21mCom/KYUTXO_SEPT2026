@@ -10,7 +10,7 @@ import { useAddressRecords } from "@/hooks/use-address-records";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { Link } from "wouter";
-import { BlockchainTransaction, TransactionParticipant, Record as DbRecord, PriceData, USER_CURATED_TIERS } from "@/lib/database";
+import { BlockchainTransaction, TransactionParticipant, Record as DbRecord, USER_CURATED_TIERS } from "@/lib/database";
 import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
 import { getDustFlaggedOutpointSet } from "@/lib/data/dust-flags-crud";
 import { getPriceDataByAsset } from "@/lib/data/price-data-crud";
@@ -148,6 +148,42 @@ export interface AddressGroup {
   totalCurrentValue?: number;
   gain?: number;
   gainPercent?: number;
+}
+
+function narrowAddressGroup(
+  group: AddressGroup,
+  matchingUtxos: UTXO[],
+  latestPrice: { price: number } | null,
+): AddressGroup {
+  const totalSats = matchingUtxos.reduce((sum, utxo) => sum + utxo.amountSats, 0);
+  const receiptValues = matchingUtxos
+    .map(utxo => utxo.valueAtReceipt)
+    .filter((value): value is number => value !== undefined);
+  const totalValueAtReceipt = receiptValues.length > 0
+    ? receiptValues.reduce((sum, value) => sum + value, 0)
+    : undefined;
+  const totalCurrentValue = latestPrice
+    ? (totalSats / 100_000_000) * latestPrice.price
+    : undefined;
+  const gain = totalCurrentValue !== undefined && totalValueAtReceipt !== undefined
+    ? totalCurrentValue - totalValueAtReceipt
+    : undefined;
+
+  return {
+    ...group,
+    utxos: matchingUtxos,
+    totalSats,
+    earliestDate: Math.min(...matchingUtxos.map(utxo => utxo.blockTime)),
+    latestDate: Math.max(...matchingUtxos.map(utxo => utxo.blockTime)),
+    totalValueAtReceipt,
+    totalCurrentValue,
+    gain,
+    gainPercent: gain !== undefined &&
+      totalValueAtReceipt !== undefined &&
+      totalValueAtReceipt > 0
+      ? (gain / totalValueAtReceipt) * 100
+      : undefined,
+  };
 }
 
 type SortColumn = "amount" | "date" | "address" | "gain";
@@ -1565,7 +1601,7 @@ export default function UTXOs() {
 
     // Apply date and amount filters from TransactionSearchFilters
     if (hasActiveSearchFilters(searchFilters)) {
-      filtered = filtered.filter(group => {
+      filtered = filtered.flatMap(group => {
         // Filter by checking if any UTXO in the group matches the criteria
         const matchingUtxos = filterByDateAndAmount(
           group.utxos,
@@ -1573,7 +1609,9 @@ export default function UTXOs() {
           (u) => u.blockTime,
           (u) => u.amountSats
         );
-        return matchingUtxos.length > 0;
+        return matchingUtxos.length > 0
+          ? [narrowAddressGroup(group, matchingUtxos, latestPrice)]
+          : [];
       });
     }
 
@@ -1617,7 +1655,7 @@ export default function UTXOs() {
     }
 
     return filtered;
-  }, [addressGroups, ownerFilter, walletFilter, tagFilter, categoryFilter, debouncedSearch, searchFilters, includeBlockchainDiscovered, userCuratedAddresses]);
+  }, [addressGroups, ownerFilter, walletFilter, tagFilter, categoryFilter, debouncedSearch, searchFilters, includeBlockchainDiscovered, userCuratedAddresses, latestPrice]);
 
   const sortedGroups = useMemo(() => {
     const sorted = [...filteredGroups];
