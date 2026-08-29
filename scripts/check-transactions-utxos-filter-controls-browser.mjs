@@ -39,7 +39,8 @@
 //      different, easy-to-regress semantic from the Transactions page).
 //   5. Applies distinct filters on both pages, then uses browser Back and
 //      Forward to confirm history restores each route with only its own
-//      controls/filter state and that the restored controls remain usable.
+//      controls/filter state (including distinct date filters) and that the
+//      restored controls remain usable.
 //
 // Everything runs offline against IndexedDB — no network request leaves the
 // machine. Usage: node scripts/check-transactions-utxos-filter-controls-browser.mjs
@@ -124,6 +125,10 @@ async function waitForClearButtonGone(page, timeoutMs = 10_000) {
 async function closePopover(page) {
   await page.keyboard.press('Escape').catch(() => {});
   await page.keyboard.press('Escape').catch(() => {});
+  await page
+    .getByTestId('tab-amount-any')
+    .waitFor({ state: 'detached', timeout: 2_000 })
+    .catch(() => {});
 }
 
 // Always closes any currently-open popover first (a no-op if nothing is
@@ -199,6 +204,53 @@ async function setInputValue(page, testId, value) {
     setter.call(node, v);
     node.dispatchEvent(new Event('input', { bubbles: true }));
   }, value);
+}
+
+function formatDateKey(dateKey) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return new Date(year, month - 1, day).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+/**
+ * Select a date from the real react-day-picker calendar. The seeded dates
+ * are adjacent to today, but navigating by the calendar's accessible month
+ * button keeps this robust across month/year boundaries.
+ */
+async function pickCalendarDate(page, triggerTestId, dateKey) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const target = new Date(year, month - 1, day);
+  const targetMonth = new Date(year, month - 1, 1);
+  const expectedCaption = targetMonth.toLocaleString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
+
+  await clickEl(page, triggerTestId);
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const caption = page.locator('[id^="react-day-picker-"]:visible').first();
+    await caption.waitFor({ state: 'visible', timeout: 2_000 });
+    const captionText = (await caption.textContent())?.trim() ?? '';
+    if (captionText === expectedCaption) {
+      const targetDay = page
+        .locator('button[name="day"]:not(.day-outside):visible')
+        .filter({ hasText: new RegExp(`^${day}$`) });
+      await targetDay.first().waitFor({ state: 'visible', timeout: 2_000 });
+      await targetDay.first().dispatchEvent('click');
+      return;
+    }
+
+    const displayedMonth = new Date(`${captionText} 1`);
+    const direction = targetMonth < displayedMonth ? 'previous' : 'next';
+    const navigation = page.getByRole('button', { name: `Go to ${direction} month` });
+    await navigation.waitFor({ state: 'visible', timeout: 2_000 });
+    await navigation.dispatchEvent('click');
+    await page.waitForTimeout(50);
+  }
+  throw new Error(`Could not find calendar date ${dateKey} (${expectedCaption}).`);
 }
 
 async function navigateInApp(page, linkTestId, expectedPath) {
@@ -311,7 +363,17 @@ async function main() {
         });
 
         const pad = (p, i) => `${p}${String(i).padStart(4, '0')}`.padEnd(64, 'e');
-        const now = Math.floor(Date.now() / 1000);
+        const today = new Date();
+        const alphaDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12, 0, 0);
+        const betaDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1, 12, 0, 0);
+        const alphaBlockTime = Math.floor(alphaDate.getTime() / 1000);
+        const betaBlockTime = Math.floor(betaDate.getTime() / 1000);
+        const dateKey = (date) => {
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        };
         const txs = [];
         const parts = [];
         // Alpha's transactions are all strictly newer than Beta's, so the
@@ -319,18 +381,24 @@ async function main() {
         // card last — a deterministic anchor for the sort-toggle check.
         for (let i = 0; i < nAlpha; i++) {
           const txid = pad('aaaa', i);
-          txs.push({ txid, blockHeight: 800_000 + i, blockTime: now - i * 60, fee: 100, feeRate: 1, syncedAt: Date.now() });
+          txs.push({ txid, blockHeight: 800_000 + i, blockTime: alphaBlockTime - i * 60, fee: 100, feeRate: 1, syncedAt: Date.now() });
           parts.push({ txid, role: 'output', address: addrAlpha, amount: alphaSats, vout: 0, recordId: alphaId });
         }
         for (let i = 0; i < nBeta; i++) {
           const txid = pad('bbbb', i);
-          txs.push({ txid, blockHeight: 900_000 + i, blockTime: now - 200_000 - i * 60, fee: 100, feeRate: 1, syncedAt: Date.now() });
+          txs.push({ txid, blockHeight: 900_000 + i, blockTime: betaBlockTime - i * 60, fee: 100, feeRate: 1, syncedAt: Date.now() });
           parts.push({ txid, role: 'output', address: addrBeta, amount: betaSats, vout: 0, recordId: betaId });
         }
 
         await txCrud.bulkAddTransactions(txs);
         await txCrud.bulkAddParticipants(parts);
-        return { alphaId, betaId, txCount: txs.length };
+        return {
+          alphaId,
+          betaId,
+          txCount: txs.length,
+          alphaDate: dateKey(alphaDate),
+          betaDate: dateKey(betaDate),
+        };
       },
       { addrAlpha: ADDR_ALPHA, addrBeta: ADDR_BETA, nAlpha: N_ALPHA, nBeta: N_BETA, alphaSats: ALPHA_SATS, betaSats: BETA_SATS },
     );
@@ -683,26 +751,36 @@ async function main() {
     await openAdvancedFilters(page);
     await activateTab(page, 'tab-amount-range');
     await setInputValue(page, 'input-amount-min', '0.0001');
+    await activateTab(page, 'tab-date-exact');
+    await pickCalendarDate(page, 'button-date-exact', seed.alphaDate);
     await closePopover(page);
     const transactionAmountFilter = await waitForText(page, totalTransactionsText, N_ALPHA);
+    const transactionDateFilter = await waitForText(page, totalTransactionsText, N_ALPHA);
     await clickEl(page, 'button-opreturn-filter');
     const transactionToggleFilter = await waitForText(page, totalTransactionsText, 0);
     const transactionSearchValue = await page.getByTestId('input-search').inputValue();
     const transactionOpReturnClass = await page.getByTestId('button-opreturn-filter').getAttribute('class');
     await openAdvancedFilters(page);
     const transactionAmountValue = await page.getByTestId('input-amount-min').inputValue();
+    const transactionDateMode = await page.getByTestId('tab-date-exact').getAttribute('data-state');
+    const transactionDateExact = (await page.getByTestId('button-date-exact').textContent())?.trim() ?? '';
     await closePopover(page);
     steps.push({
-      name: '[History] Transactions keeps its search, amount range, and OP_RETURN filters together',
+      name: '[History] Transactions keeps its search, amount range, exact date, and OP_RETURN filters together',
       passed: transactionSearchFilter.ok &&
         transactionAmountFilter.ok &&
+        transactionDateFilter.ok &&
         transactionToggleFilter.ok &&
         transactionSearchValue === 'Alpha addr' &&
         transactionAmountValue === '0.0001' &&
+        transactionDateMode === 'active' &&
+        transactionDateExact === formatDateKey(seed.alphaDate) &&
         (transactionOpReturnClass ?? '').includes('bg-purple-600'),
       detail: `searchTotal="${transactionSearchFilter.text}" amountTotal="${transactionAmountFilter.text}" ` +
-        `opReturnTotal="${transactionToggleFilter.text}" search="${transactionSearchValue}" ` +
-        `min="${transactionAmountValue}" opReturnClass="${transactionOpReturnClass}"`,
+        `dateTotal="${transactionDateFilter.text}" opReturnTotal="${transactionToggleFilter.text}" ` +
+        `search="${transactionSearchValue}" min="${transactionAmountValue}" ` +
+        `dateMode="${transactionDateMode}" exact="${transactionDateExact}" ` +
+        `opReturnClass="${transactionOpReturnClass}"`,
     });
 
     await navigateInApp(page, 'link-utxos', '/utxos');
@@ -715,9 +793,20 @@ async function main() {
     await setInputValue(page, 'input-amount-min', '0.00004');
     await closePopover(page);
     const utxoAmountFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
+    await openAdvancedFilters(page);
+    await activateTab(page, 'tab-date-exact');
+    await pickCalendarDate(page, 'button-date-exact', seed.betaDate);
+    await closePopover(page);
+    const utxoDateFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
     await clickEl(page, 'button-toggle-unit');
     await openAdvancedFilters(page);
-    const utxoAmountValue = await page.getByTestId('input-amount-min').inputValue();
+    const utxoAmountMode = await page.getByTestId('tab-amount-range').getAttribute('data-state');
+    const utxoAmountInputCount = await page.getByTestId('input-amount-min').count();
+    const utxoAmountValue = utxoAmountInputCount > 0
+      ? await page.getByTestId('input-amount-min').inputValue()
+      : '';
+    const utxoDateMode = await page.getByTestId('tab-date-exact').getAttribute('data-state');
+    const utxoDateExact = (await page.getByTestId('button-date-exact').textContent())?.trim() ?? '';
     await closePopover(page);
     await clickEl(page, 'switch-hide-dust');
     const utxoToggleFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
@@ -726,17 +815,24 @@ async function main() {
     const utxoDisplayToggleText = (await page.getByTestId('button-toggle-unit').textContent())?.trim() ?? '';
     await closePopover(page);
     steps.push({
-      name: '[History] UTXOs keeps its search, amount range, sats unit, and Hide dust filters together',
+      name: '[History] UTXOs keeps its search, amount range, exact date, sats unit, and Hide dust filters together',
       passed: utxoSearchFilter.ok &&
         utxoAmountFilter.ok &&
+        utxoDateFilter.ok &&
         utxoToggleFilter.ok &&
         utxoSearchValue === 'Beta addr' &&
         utxoAmountValue === '4000' &&
+        utxoAmountMode === 'active' &&
+        utxoDateMode === 'active' &&
+        utxoDateExact === formatDateKey(seed.betaDate) &&
         utxoHideDustState === 'checked' &&
         utxoDisplayToggleText === 'BTC',
       detail: `search="${utxoSearchValue}" searchResult="${utxoSearchFilter.text}" ` +
-        `amountResult="${utxoAmountFilter.text}" toggleResult="${utxoToggleFilter.text}" ` +
-        `min="${utxoAmountValue}" hideDust="${utxoHideDustState}" unitToggle="${utxoDisplayToggleText}"`,
+        `amountResult="${utxoAmountFilter.text}" dateResult="${utxoDateFilter.text}" ` +
+        `toggleResult="${utxoToggleFilter.text}" min="${utxoAmountValue}" ` +
+        `amountMode="${utxoAmountMode}" amountInputCount=${utxoAmountInputCount} ` +
+        `dateMode="${utxoDateMode}" exact="${utxoDateExact}" ` +
+        `hideDust="${utxoHideDustState}" unitToggle="${utxoDisplayToggleText}"`,
     });
 
     await navigateHistory(page, 'back', '/transactions');
@@ -746,6 +842,12 @@ async function main() {
     const transactionSearchAfterBack = await page.getByTestId('input-search').inputValue();
     const transactionOpReturnAfterBack = await page.getByTestId('button-opreturn-filter').getAttribute('class');
     await openAdvancedFilters(page);
+    const transactionDateTabAfterBack = await page.getByTestId('tab-date-any').getAttribute('data-state');
+    const transactionDateControlCountAfterBack = await Promise.all([
+      page.getByTestId('button-date-start').count(),
+      page.getByTestId('button-date-end').count(),
+      page.getByTestId('button-date-exact').count(),
+    ]);
     const transactionAmountTabAfterBack = await page.getByTestId('tab-amount-any').getAttribute('data-state');
     const transactionAmountInputCountAfterBack = await page.getByTestId('input-amount-min').count();
     const transactionControlsAfterBack = await Promise.all(
@@ -757,11 +859,14 @@ async function main() {
       passed: transactionsAfterBack.ok &&
         transactionSearchAfterBack === '' &&
         !(transactionOpReturnAfterBack ?? '').includes('bg-purple-600') &&
+        transactionDateTabAfterBack === 'active' &&
+        transactionDateControlCountAfterBack.every((count) => count === 0) &&
         transactionAmountTabAfterBack === 'active' &&
         transactionAmountInputCountAfterBack === 0 &&
         transactionControlsAfterBack.every((count) => count === 1),
       detail: `total="${transactionsAfterBack.text}" expected=${N_ALPHA + N_BETA} ` +
         `search="${transactionSearchAfterBack}" opReturnClass="${transactionOpReturnAfterBack}" ` +
+        `dateAny="${transactionDateTabAfterBack}" dateControls=${transactionDateControlCountAfterBack.join(',')} ` +
         `amountAny="${transactionAmountTabAfterBack}" amountMinCount=${transactionAmountInputCountAfterBack} ` +
         linkedEntityControlTestIds
           .map((testId, index) => `${testId}=${transactionControlsAfterBack[index]}`)
@@ -776,6 +881,12 @@ async function main() {
     const utxoHideDustAfterForward = await page.getByTestId('switch-hide-dust').getAttribute('data-state');
     const utxoDisplayToggleAfterForward = (await page.getByTestId('button-toggle-unit').textContent())?.trim() ?? '';
     await openAdvancedFilters(page);
+    const utxoDateTabAfterForward = await page.getByTestId('tab-date-any').getAttribute('data-state');
+    const utxoDateControlCountAfterForward = await Promise.all([
+      page.getByTestId('button-date-start').count(),
+      page.getByTestId('button-date-end').count(),
+      page.getByTestId('button-date-exact').count(),
+    ]);
     const utxoAmountTabAfterForward = await page.getByTestId('tab-amount-any').getAttribute('data-state');
     const utxoAmountInputCountAfterForward = await page.getByTestId('input-amount-min').count();
     const linkedControlsAfterForward = await Promise.all(
@@ -788,16 +899,33 @@ async function main() {
         utxoSearchAfterForward === '' &&
         utxoHideDustAfterForward === 'unchecked' &&
         utxoDisplayToggleAfterForward === 'sats' &&
+        utxoDateTabAfterForward === 'active' &&
+        utxoDateControlCountAfterForward.every((count) => count === 0) &&
         utxoAmountTabAfterForward === 'active' &&
         utxoAmountInputCountAfterForward === 0 &&
         linkedControlsAfterForward.every((count) => count === 0),
       detail: `text="${utxosAfterForward.text}" expected="2 / 23" ` +
         `search="${utxoSearchAfterForward}" hideDust="${utxoHideDustAfterForward}" ` +
         `unitToggle="${utxoDisplayToggleAfterForward}" amountAny="${utxoAmountTabAfterForward}" ` +
+        `dateAny="${utxoDateTabAfterForward}" dateControls=${utxoDateControlCountAfterForward.join(',')} ` +
         `amountMinCount=${utxoAmountInputCountAfterForward} ` +
         linkedEntityControlTestIds
           .map((testId, index) => `${testId}=${linkedControlsAfterForward[index]}`)
           .join(' '),
+    });
+
+    await openAdvancedFilters(page);
+    await activateTab(page, 'tab-date-exact');
+    await pickCalendarDate(page, 'button-date-exact', seed.betaDate);
+    const utxoDateAfterForwardValue = (await page.getByTestId('button-date-exact').textContent())?.trim() ?? '';
+    await closePopover(page);
+    const utxoDateAfterForwardFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
+    steps.push({
+      name: '[History] UTXOs exact date filter remains usable after browser Forward',
+      passed: utxoDateAfterForwardFilter.ok &&
+        utxoDateAfterForwardValue === formatDateKey(seed.betaDate),
+      detail: `text="${utxoDateAfterForwardFilter.text}" expected="1 / ${N_BETA}" ` +
+        `exact="${utxoDateAfterForwardValue}"`,
     });
 
     await pickComboboxValue(page, 'select-owner', 'Bob');
