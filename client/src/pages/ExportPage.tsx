@@ -30,16 +30,23 @@ import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/database";
 import { countAttachments } from "@/lib/data/attachments-crud";
 import { countDerivationTemplates } from "@/lib/data/derivation-templates-crud";
-import { countRecords, eachRecord } from "@/lib/data/record-crud";
-import { countTransactions, countTransactionParticipants } from "@/lib/data/transaction-crud";
+import { countRecords, getRecordsAfterId } from "@/lib/data/record-crud";
+import { countTransactions, countTransactionParticipants, getTransactionsByTxids } from "@/lib/data/transaction-crud";
 import { countAddressSyncState } from "@/lib/data/address-sync-crud";
 import { countUtxoLineage, countCustodySegments, countLineageSnapshots } from "@/lib/data/lineage-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { exportBackup, estimateExportBytes } from "@/lib/backup/export";
 import { computeCompactPlan, type CompactPlan } from "@/lib/backup/compact";
-import { exportBip329LabelParts } from "@/lib/bip329-export";
-import { exportRecordsCsvParts } from "@/lib/csv-export";
-import { recordToBip329Line, matchesBip329ExportFilter, matchesRecordExportFilter, type Bip329ExportFilter } from "@/lib/bip329";
+import { exportBip329LabelParts, BIP329_EXPORT_BATCH_SIZE } from "@/lib/bip329-export";
+import { exportRecordsCsvParts, CSV_EXPORT_BATCH_SIZE } from "@/lib/csv-export";
+import {
+  recordToBip329Line,
+  matchesBip329ExportFilter,
+  matchesRecordExportFilter,
+  loadExportBlockTimes,
+  exportRowTxid,
+  type Bip329ExportFilter,
+} from "@/lib/bip329";
 import { useTags } from "@/hooks/use-tags";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -186,20 +193,38 @@ export default function ExportPage() {
     labelWalletFilter !== "all" ||
     isDateRangeFilterActive(labelDateRange);
 
-  // Live match count: stream the records table with the same cursor iteration
-  // the export itself uses, counting lines that survive the current filter.
-  // Cursor iteration yields between rows, so even a large vault stays
-  // responsive; the run token guards the setter against superseded passes.
+  // Live match count: walk the records table in the same keyset batches the
+  // export itself uses (needed so a date filter can resolve each batch's
+  // transaction block times in one bulk lookup rather than per record), with
+  // a yield between batches so even a large vault stays responsive. The run
+  // token guards the setter against superseded passes.
   useEffect(() => {
     const runId = ++labelCountRunRef.current;
     setLabelMatchCount(null);
     let cancelled = false;
     (async () => {
       let matched = 0;
-      await eachRecord((record) => {
-        const line = recordToBip329Line(record);
-        if (line && matchesBip329ExportFilter(record, line, labelFilter)) matched++;
-      });
+      let lastId = 0;
+      for (;;) {
+        const chunk = await getRecordsAfterId(lastId, BIP329_EXPORT_BATCH_SIZE);
+        if (chunk.length === 0) break;
+        lastId = chunk[chunk.length - 1].id ?? lastId;
+
+        const blockTimes = labelFilter.dateRange
+          ? await loadExportBlockTimes(chunk.map((r) => r.inputString || ""), getTransactionsByTxids)
+          : undefined;
+        for (const record of chunk) {
+          const line = recordToBip329Line(record);
+          if (!line) continue;
+          const txid = exportRowTxid(record.inputString || "");
+          const blockTime = txid ? blockTimes?.get(txid) : undefined;
+          if (matchesBip329ExportFilter(record, line, labelFilter, blockTime)) matched++;
+        }
+
+        if (cancelled || labelCountRunRef.current !== runId) return;
+        if (chunk.length < BIP329_EXPORT_BATCH_SIZE) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
       if (!cancelled && labelCountRunRef.current === runId) {
         setLabelMatchCount(matched);
       }
@@ -237,8 +262,8 @@ export default function ExportPage() {
     csvWalletFilter !== "all" ||
     isDateRangeFilterActive(csvDateRange);
 
-  // Live match count for the CSV export: same cursor walk + run-token guard as
-  // the BIP-329 count above, but every record is a candidate row (no
+  // Live match count for the CSV export: same batched walk + run-token guard
+  // as the BIP-329 count above, but every record is a candidate row (no
   // labeled-and-exportable precondition).
   useEffect(() => {
     const runId = ++csvCountRunRef.current;
@@ -246,9 +271,25 @@ export default function ExportPage() {
     let cancelled = false;
     (async () => {
       let matched = 0;
-      await eachRecord((record) => {
-        if (matchesRecordExportFilter(record, csvFilter)) matched++;
-      });
+      let lastId = 0;
+      for (;;) {
+        const chunk = await getRecordsAfterId(lastId, CSV_EXPORT_BATCH_SIZE);
+        if (chunk.length === 0) break;
+        lastId = chunk[chunk.length - 1].id ?? lastId;
+
+        const blockTimes = csvFilter.dateRange
+          ? await loadExportBlockTimes(chunk.map((r) => r.inputString || ""), getTransactionsByTxids)
+          : undefined;
+        for (const record of chunk) {
+          const txid = exportRowTxid(record.inputString || "");
+          const blockTime = txid ? blockTimes?.get(txid) : undefined;
+          if (matchesRecordExportFilter(record, csvFilter, blockTime)) matched++;
+        }
+
+        if (cancelled || csvCountRunRef.current !== runId) return;
+        if (chunk.length < CSV_EXPORT_BATCH_SIZE) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
       if (!cancelled && csvCountRunRef.current === runId) {
         setCsvMatchCount(matched);
       }

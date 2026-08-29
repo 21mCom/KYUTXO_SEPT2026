@@ -9,9 +9,12 @@
 // export.
 
 import { getRecordsAfterId } from "@/lib/data/record-crud";
+import { getTransactionsByTxids } from "@/lib/data/transaction-crud";
 import {
   matchesRecordExportFilter,
   recordExportKind,
+  loadExportBlockTimes,
+  exportRowTxid,
   type Bip329ExportFilter,
   type Bip329FilterableRecord,
 } from "@/lib/bip329";
@@ -130,9 +133,17 @@ export async function exportRecordsCsvParts(
     lastId = chunk[chunk.length - 1].id ?? lastId;
     scannedCount += chunk.length;
 
+    // Only resolve block times when a date filter is active — the common
+    // case (no date filter) skips this DB round trip entirely.
+    const blockTimes = options.filter?.dateRange
+      ? await loadExportBlockTimes(chunk.map((r) => r.inputString || ""), getTransactionsByTxids)
+      : undefined;
+
     const batchRows: string[] = [];
     for (const record of chunk) {
-      if (matchesRecordExportFilter(record, options.filter)) {
+      const txid = exportRowTxid(record.inputString || "");
+      const blockTime = txid ? blockTimes?.get(txid) : undefined;
+      if (matchesRecordExportFilter(record, options.filter, blockTime)) {
         batchRows.push(recordToCsvRow(record));
       }
     }

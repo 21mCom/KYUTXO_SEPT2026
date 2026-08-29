@@ -6,7 +6,12 @@ vi.mock("@/lib/data/record-crud", () => ({
   getRecordsAfterId: vi.fn(),
 }));
 
+vi.mock("@/lib/data/transaction-crud", () => ({
+  getTransactionsByTxids: vi.fn(async () => []),
+}));
+
 import { getRecordsAfterId } from "@/lib/data/record-crud";
+import { getTransactionsByTxids } from "@/lib/data/transaction-crud";
 import {
   csvEscape,
   csvSanitizeCell,
@@ -19,6 +24,7 @@ import {
 import { recordExportKind, matchesRecordExportFilter } from "@/lib/bip329";
 
 const getRecordsAfterIdMock = vi.mocked(getRecordsAfterId);
+const getTransactionsByTxidsMock = vi.mocked(getTransactionsByTxids);
 
 const ADDR = "bc1qcsvexporttestaddressxxxxxxxxxxxxxxxxxx";
 const TXID = "a".repeat(64);
@@ -92,6 +98,23 @@ describe("matchesRecordExportFilter", () => {
     expect(matchesRecordExportFilter(FIXTURE[2], { search: "frozen" })).toBe(true);
     expect(matchesRecordExportFilter(FIXTURE[2], { search: "no-match" })).toBe(false);
   });
+
+  it("scopes transaction/UTXO rows by an explicitly passed blockTime, not their timestamps", () => {
+    const txRecord = { ...FIXTURE[1], createdAt: 9_999_999_999_000, updatedAt: 9_999_999_999_000 };
+    // Timestamps are miles outside the window, but the caller-supplied
+    // blockTime (Unix seconds) is what the predicate consults for this kind.
+    expect(
+      matchesRecordExportFilter(txRecord, { dateRange: { start: 1000, end: 2000 } }, 1500)
+    ).toBe(true);
+    expect(
+      matchesRecordExportFilter(txRecord, { dateRange: { start: 1000, end: 2000 } }, 5000)
+    ).toBe(false);
+    // No blockTime supplied at all -> excluded, even inside a window that
+    // would otherwise match its timestamps.
+    expect(
+      matchesRecordExportFilter(txRecord, { dateRange: { start: 0, end: 9_999_999_999_999 } })
+    ).toBe(false);
+  });
 });
 
 describe("exportRecordsCsvParts", () => {
@@ -145,6 +168,39 @@ describe("exportRecordsCsvParts", () => {
     const { parts, rowCount } = await exportRecordsCsvParts({ filter: { search: "zzz-no-match" } });
     expect(rowCount).toBe(0);
     expect(parseCsv(parts)).toEqual([CSV_EXPORT_HEADER.join(",")]);
+  });
+
+  it("scopes a date filter by the underlying transaction's blockTime via a bulk per-batch lookup", async () => {
+    seed(FIXTURE);
+    getTransactionsByTxidsMock.mockImplementation(async (txids: string[]) =>
+      txids
+        .filter((txid) => txid === TXID)
+        .map((txid) => ({
+          txid,
+          blockTime: 1500,
+          blockHeight: 1,
+          fee: 0,
+          feeRate: 0,
+          syncedAt: 0,
+        })) as never
+    );
+
+    // FIXTURE[1] (bare txid) resolves to blockTime 1500 -> inside the window.
+    // FIXTURE[2] (outpoint on a different txid) has no matching row -> no
+    // fallback to its (unset) timestamps, so it's excluded.
+    // FIXTURE[0] (address) and FIXTURE[3] (other) fall back to their (unset)
+    // timestamps, which are undefined -> also excluded.
+    const { rowCount, parts } = await exportRecordsCsvParts({
+      filter: { dateRange: { start: 1000, end: 2000 } },
+    });
+    expect(getTransactionsByTxidsMock).toHaveBeenCalled();
+    expect(rowCount).toBe(1);
+    const lines = parseCsv(parts);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain("Coffee tx");
+
+    getTransactionsByTxidsMock.mockReset();
+    getTransactionsByTxidsMock.mockImplementation(async () => []);
   });
 });
 

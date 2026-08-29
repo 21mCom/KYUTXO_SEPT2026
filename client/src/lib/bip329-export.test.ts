@@ -19,6 +19,7 @@ import { db } from "@/lib/database";
 import { exportBip329LabelParts } from "@/lib/bip329-export";
 import { parseJsonLines } from "@/lib/bip329";
 import type { Record as DbRecord } from "@/lib/db-types";
+import type { BlockchainTransaction } from "@/lib/db-types";
 
 const TXID = (n: number) => n.toString(16).padStart(64, "0");
 const ADDR = (n: number) => `bc1qexport${n.toString(36).padStart(28, "0")}`;
@@ -173,6 +174,82 @@ describe("exportBip329LabelParts", () => {
       { type: "addr", ref: ADDR(1), label: "Address label 1", origin: "wpkh([abcd1234/84'/0'/0']xpubExample/0/0)" },
       { type: "addr", ref: ADDR(5), label: "Address label 5", origin: "wpkh([abcd1234/84'/0'/0']xpubExample/0/0)" },
     ]);
+  });
+
+  it("scopes transaction/UTXO rows by the underlying blockTime, not updatedAt", async () => {
+    await db.blockchainTransactions.clear();
+    const now = Date.now();
+    const inWindowTxid = TXID(100);
+    const outOfWindowTxid = TXID(101);
+    const unsyncedTxid = TXID(102);
+
+    const txs: Omit<BlockchainTransaction, "id">[] = [
+      { txid: inWindowTxid, blockHeight: 800000, blockTime: 1_650_000_000, fee: 0, feeRate: 0, syncedAt: now },
+      { txid: outOfWindowTxid, blockHeight: 800001, blockTime: 1_600_000_000, fee: 0, feeRate: 0, syncedAt: now },
+    ];
+    await db.blockchainTransactions.bulkAdd(txs as BlockchainTransaction[]);
+
+    const rows: Omit<DbRecord, "id">[] = [
+      {
+        // Last-edited timestamps are set INSIDE the date window, but the
+        // on-chain blockTime is what should decide this row's fate.
+        type: "transaction",
+        inputString: inWindowTxid,
+        label: "In-window on-chain, but edited long ago",
+        tags: [],
+        categories: [],
+        createdAt: 1_650_000_000_000,
+        updatedAt: 1_650_000_000_000,
+      },
+      {
+        // Same fresh updatedAt as the previous row, but its blockTime falls
+        // outside the window — must be excluded despite the recent edit.
+        type: "transaction",
+        inputString: `${outOfWindowTxid}:0`,
+        label: "Out-of-window on-chain, edited recently",
+        notes: "BIP-329 output at index 0",
+        tags: [],
+        categories: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        // No blockchainTransactions row at all (unsynced) — no fallback to
+        // updatedAt/createdAt even though they're inside the window.
+        type: "transaction",
+        inputString: unsyncedTxid,
+        label: "Unsynced tx, edited recently",
+        tags: [],
+        categories: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        // Address rows have no associated transaction — they fall back to
+        // updatedAt/createdAt as before, so an edit inside the window keeps
+        // them in (regardless of on-chain timing, which doesn't apply here).
+        type: "address",
+        inputString: ADDR(1),
+        label: "Address edited inside the window",
+        tags: [],
+        categories: [],
+        createdAt: 1_650_500_000_000,
+        updatedAt: 1_650_500_000_000,
+      },
+    ];
+    await db.records.bulkAdd(rows as DbRecord[]);
+
+    const dateRange = { start: 1_649_000_000, end: 1_651_000_000 };
+    const result = await exportBip329LabelParts({ batchSize: 10, filter: { dateRange } });
+
+    expect(result.scannedCount).toBe(4);
+    const parsed = parseJsonLines(result.parts.join(""));
+    expect(parsed.map((p) => p.label).sort()).toEqual([
+      "Address edited inside the window",
+      "In-window on-chain, but edited long ago",
+    ]);
+
+    await db.blockchainTransactions.clear();
   });
 
   it("reports progress cumulatively per batch", async () => {

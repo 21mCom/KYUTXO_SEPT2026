@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseJsonLines,
   convertToImportRecords,
@@ -8,6 +8,8 @@ import {
   bip329LineKind,
   matchesBip329ExportFilter,
   matchesRecordExportFilter,
+  exportRowTxid,
+  loadExportBlockTimes,
   type Bip329ExportFilter,
   type Bip329FilterableRecord,
   type Bip329ExportableRecord,
@@ -230,10 +232,61 @@ describe('matchesBip329ExportFilter', () => {
     expect(matchesRecordExportFilter(FIXTURE[0], { kind: 'other' })).toBe(false);
   });
 
-  it('scopes records to inclusive updated-at date bounds', () => {
+  it('scopes address/other records to inclusive updated-at date bounds', () => {
+    // FIXTURE[0] is an address record — no associated transaction, so it
+    // falls back to updatedAt/createdAt.
     const record = { ...FIXTURE[0], createdAt: 1_700_000_000_000, updatedAt: 1_700_086_400_000 };
     expect(matchesRecordExportFilter(record, { dateRange: { start: 1_700_086_400, end: 1_700_086_400 } })).toBe(true);
     expect(matchesRecordExportFilter(record, { dateRange: { end: 1_700_086_399 } })).toBe(false);
+  });
+
+  it('scopes transaction/UTXO records to the underlying blockTime, not updatedAt', () => {
+    const txRecord: Bip329FilterableRecord = {
+      type: 'transaction',
+      inputString: TXID,
+      label: 'Bought coffee',
+      // Deliberately far outside the date range: if the predicate fell back
+      // to updatedAt/createdAt for a transaction row (the old, wrong
+      // behavior) these would make it match.
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_086_400_000,
+    };
+    const line = recordToBip329Line(txRecord)!;
+    // On-chain block time (1_650_000_000) is inside the window -> matches,
+    // even though last-edited time is far outside it.
+    expect(
+      matchesBip329ExportFilter(txRecord, line, { dateRange: { start: 1_649_999_000, end: 1_650_000_000 } }, 1_650_000_000)
+    ).toBe(true);
+    // Block time outside the window -> no match, even with updatedAt inside
+    // a hypothetical window (there isn't one here, but the point is blockTime
+    // alone decides it).
+    expect(
+      matchesBip329ExportFilter(txRecord, line, { dateRange: { start: 1_649_999_000, end: 1_649_999_999 } }, 1_650_000_000)
+    ).toBe(false);
+    // Same holds for the raw-record CSV predicate, and for a UTXO (outpoint) kind.
+    expect(
+      matchesRecordExportFilter(txRecord, { dateRange: { start: 1_649_999_000, end: 1_650_000_000 } }, 1_650_000_000)
+    ).toBe(true);
+    const utxoRecord: Bip329FilterableRecord = { ...txRecord, inputString: `${TXID}:0` };
+    expect(
+      matchesRecordExportFilter(utxoRecord, { dateRange: { start: 1_649_999_000, end: 1_650_000_000 } }, 1_650_000_000)
+    ).toBe(true);
+  });
+
+  it('excludes transaction/UTXO records from a date filter when blockTime is unknown', () => {
+    // Even though updatedAt/createdAt fall squarely inside the window, an
+    // unsynced/unknown blockTime means the on-chain timing is unknown — no
+    // fallback to last-edited time for these kinds.
+    const txRecord: Bip329FilterableRecord = {
+      type: 'transaction',
+      inputString: TXID,
+      label: 'Unsynced tx',
+      createdAt: 1_650_000_000_000,
+      updatedAt: 1_650_000_000_000,
+    };
+    expect(
+      matchesRecordExportFilter(txRecord, { dateRange: { start: 1_649_999_000, end: 1_650_000_100 } })
+    ).toBe(false);
   });
 
   it('filters by tag', () => {
@@ -303,5 +356,48 @@ describe('matchesBip329ExportFilter', () => {
       { type: 'address', inputString: ADDR, label: '  ', walletName: 'Savings', tags: ['cold'] },
     ];
     expect(filteredExport(rows, { walletName: 'Savings', tag: 'cold' })).toBe('');
+  });
+});
+
+describe('exportRowTxid', () => {
+  it('resolves a bare txid to itself', () => {
+    expect(exportRowTxid(TXID)).toBe(TXID);
+    expect(exportRowTxid(`  ${TXID}  `)).toBe(TXID);
+  });
+
+  it('resolves a txid:vout outpoint to its txid', () => {
+    expect(exportRowTxid(`${TXID}:0`)).toBe(TXID);
+    expect(exportRowTxid(`${TXID}:12`)).toBe(TXID);
+  });
+
+  it('returns undefined for addresses and unrecognized refs', () => {
+    expect(exportRowTxid(ADDR)).toBeUndefined();
+    expect(exportRowTxid('not-a-txid')).toBeUndefined();
+    expect(exportRowTxid('')).toBeUndefined();
+  });
+});
+
+describe('loadExportBlockTimes', () => {
+  it('resolves block times for distinct txids only, skipping non-transaction refs', async () => {
+    const fetchByTxids = vi.fn(async (txids: string[]) =>
+      txids.map((txid) => ({ txid, blockTime: txid === TXID ? 1000 : 2000 }))
+    );
+    const refs = [TXID, `${TXID}:0`, `${TXID}:1`, TXID2, ADDR, 'garbage'];
+    const map = await loadExportBlockTimes(refs, fetchByTxids);
+
+    // One lookup call with the two DISTINCT txids (TXID appears 3x via the
+    // bare ref plus two outpoints; ADDR/garbage have no txid).
+    expect(fetchByTxids).toHaveBeenCalledTimes(1);
+    expect(new Set(fetchByTxids.mock.calls[0][0])).toEqual(new Set([TXID, TXID2]));
+    expect(map.get(TXID)).toBe(1000);
+    expect(map.get(TXID2)).toBe(2000);
+    expect(map.size).toBe(2);
+  });
+
+  it('skips the lookup entirely when no ref has an associated transaction', async () => {
+    const fetchByTxids = vi.fn(async () => []);
+    const map = await loadExportBlockTimes([ADDR, 'garbage', ''], fetchByTxids);
+    expect(fetchByTxids).not.toHaveBeenCalled();
+    expect(map.size).toBe(0);
   });
 });

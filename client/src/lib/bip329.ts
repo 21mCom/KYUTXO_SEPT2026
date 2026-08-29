@@ -116,6 +116,16 @@ export interface Bip329Line {
   spendable?: string;
 }
 
+// Extract the underlying txid an export ref is scoped to: a bare txid is
+// itself; a txid:vout outpoint (the UTXO input/output lines) resolves to its
+// txid. Address refs, and anything else, have no associated transaction.
+export function exportRowTxid(ref: string): string | undefined {
+  const trimmed = (ref || '').trim();
+  if (TXID_RE.test(trimmed)) return trimmed;
+  if (OUTPOINT_RE.test(trimmed)) return trimmed.split(':')[0];
+  return undefined;
+}
+
 // Pull an `Origin: <value>` fragment back out of the notes an import wrote.
 function extractOrigin(notes: string | undefined): string | undefined {
   if (!notes) return undefined;
@@ -209,8 +219,10 @@ export interface Bip329ExportFilter {
   search?: string;
   // 'all' (or undefined) keeps every exportable line.
   kind?: Bip329ExportKind | 'other' | 'all';
-  // Inclusive Unix-second bounds. Records are scoped by their most recently
-  // updated timestamp, falling back to creation time when no update exists.
+  // Inclusive Unix-second bounds. Transaction and UTXO rows are scoped by the
+  // underlying transaction's block time (on-chain timing) when it's known;
+  // address/other rows have no associated transaction, so they're scoped by
+  // their most recently updated timestamp, falling back to creation time.
   dateRange?: { start?: number; end?: number };
   // Single tag name; records match when they carry this tag.
   tag?: string;
@@ -250,6 +262,10 @@ export interface ExportFilterTarget {
   walletName?: string;
   createdAt?: number;
   updatedAt?: number;
+  // Unix-second block time of the underlying transaction, when known. Only
+  // meaningful for 'transaction'/'utxo' kinds — callers resolve this via a
+  // txid lookup (see exportRowTxid) since it isn't a field on the record.
+  blockTime?: number;
 }
 
 // Shared filter predicate for both the BIP-329 and CSV exports.
@@ -272,11 +288,21 @@ export function matchesExportFilter(
   }
 
   if (filter.dateRange) {
-    const timestamp = target.updatedAt ?? target.createdAt;
-    // Records persist timestamps in milliseconds; DateRangeFilter supplies
-    // inclusive Unix-second bounds.
-    if (timestamp === undefined) return false;
-    const timestampSeconds = Math.floor(timestamp / 1000);
+    let timestampSeconds: number | undefined;
+    if (target.kind === 'transaction' || target.kind === 'utxo') {
+      // On-chain timing, not last-edited time: transaction/UTXO rows scope by
+      // the underlying transaction's block time (already Unix seconds). No
+      // fallback to updatedAt/createdAt here — that would reintroduce the
+      // last-edited-time mismatch this predicate exists to avoid.
+      timestampSeconds = target.blockTime;
+    } else {
+      // Address/other rows have no associated transaction; fall back to the
+      // record's most recently updated timestamp (milliseconds), or creation
+      // time when no update exists.
+      const timestamp = target.updatedAt ?? target.createdAt;
+      timestampSeconds = timestamp !== undefined ? Math.floor(timestamp / 1000) : undefined;
+    }
+    if (timestampSeconds === undefined) return false;
     if (
       (filter.dateRange.start !== undefined && timestampSeconds < filter.dateRange.start) ||
       (filter.dateRange.end !== undefined && timestampSeconds > filter.dateRange.end)
@@ -299,10 +325,16 @@ export function matchesExportFilter(
 // Decide whether one record (and the BIP-329 line it produced) survives the
 // filter. Call recordToBip329Line first and skip the record entirely when it
 // returns null — a record with no exportable line can never match.
+//
+// `blockTime` (Unix seconds) is the caller-resolved block time of the
+// underlying transaction — see exportRowTxid/loadExportBlockTimes — since it
+// lives in a separate table, not on the record itself. Only meaningful (and
+// only consulted) when a date-range filter and a transaction/UTXO kind apply.
 export function matchesBip329ExportFilter(
   record: Bip329FilterableRecord,
   line: Bip329Line,
-  filter?: Bip329ExportFilter
+  filter?: Bip329ExportFilter,
+  blockTime?: number
 ): boolean {
   return matchesExportFilter(
     {
@@ -314,16 +346,19 @@ export function matchesBip329ExportFilter(
       walletName: record.walletName,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+      blockTime,
     },
     filter
   );
 }
 
 // Same predicate applied to a raw records-table row (the CSV export has no
-// BIP-329 line — every record is a CSV row).
+// BIP-329 line — every record is a CSV row). See matchesBip329ExportFilter for
+// what `blockTime` means.
 export function matchesRecordExportFilter(
   record: Bip329FilterableRecord,
-  filter?: Bip329ExportFilter
+  filter?: Bip329ExportFilter,
+  blockTime?: number
 ): boolean {
   return matchesExportFilter(
     {
@@ -335,7 +370,31 @@ export function matchesRecordExportFilter(
       walletName: record.walletName,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+      blockTime,
     },
     filter
   );
+}
+
+// Batch-resolve Unix-second block times for the transactions underlying a set
+// of export refs (bare txid or txid:vout), keyed by txid. Shared by the
+// BIP-329 export, CSV export, and their live match counts so each does one
+// bulk lookup per batch instead of a per-record DB round trip. Refs with no
+// associated transaction (addresses, unrecognized strings) are simply
+// skipped. Takes the lookup as a parameter so this module stays DB-free and
+// unit-testable; real callers pass getTransactionsByTxids.
+export async function loadExportBlockTimes(
+  refs: string[],
+  fetchByTxids: (txids: string[]) => Promise<Array<{ txid: string; blockTime: number }>>
+): Promise<Map<string, number>> {
+  const txids = new Set<string>();
+  for (const ref of refs) {
+    const txid = exportRowTxid(ref);
+    if (txid) txids.add(txid);
+  }
+  const blockTimes = new Map<string, number>();
+  if (txids.size === 0) return blockTimes;
+  const txs = await fetchByTxids([...txids]);
+  for (const tx of txs) blockTimes.set(tx.txid, tx.blockTime);
+  return blockTimes;
 }

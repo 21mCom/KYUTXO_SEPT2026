@@ -16,9 +16,12 @@
 // old implementation (every part ends in a newline).
 
 import { getRecordsAfterId } from "@/lib/data/record-crud";
+import { getTransactionsByTxids } from "@/lib/data/transaction-crud";
 import {
   recordToBip329Line,
   matchesBip329ExportFilter,
+  loadExportBlockTimes,
+  exportRowTxid,
   type Bip329ExportFilter,
 } from "@/lib/bip329";
 
@@ -67,10 +70,19 @@ export async function exportBip329LabelParts(
     lastId = chunk[chunk.length - 1].id ?? lastId;
     scannedCount += chunk.length;
 
+    // Only resolve block times when a date filter is active — the common
+    // case (no date filter) skips this DB round trip entirely.
+    const blockTimes = options.filter?.dateRange
+      ? await loadExportBlockTimes(chunk.map((r) => r.inputString || ""), getTransactionsByTxids)
+      : undefined;
+
     const batchLines: string[] = [];
     for (const record of chunk) {
       const line = recordToBip329Line(record);
-      if (line && matchesBip329ExportFilter(record, line, options.filter)) {
+      if (!line) continue;
+      const txid = exportRowTxid(record.inputString || "");
+      const blockTime = txid ? blockTimes?.get(txid) : undefined;
+      if (matchesBip329ExportFilter(record, line, options.filter, blockTime)) {
         batchLines.push(JSON.stringify(line));
       }
     }
