@@ -136,9 +136,64 @@ async function downloadJsonl(page, exportButton) {
   return parseJsonl(await readFile(await download.path(), 'utf8'));
 }
 
+function parseCsv(content) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+    if (inQuotes) {
+      if (char === '"' && content[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        field += char;
+      }
+    } else if (char === '"') {
+      inQuotes = true;
+    } else if (char === ',') {
+      row.push(field);
+      field = '';
+    } else if (char === '\n') {
+      row.push(field.endsWith('\r') ? field.slice(0, -1) : field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+
+  if (field || row.length > 0) {
+    row.push(field.endsWith('\r') ? field.slice(0, -1) : field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+async function downloadCsv(page, exportButton) {
+  const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+  await exportButton.click();
+  const download = await downloadPromise;
+  return {
+    suggestedFilename: download.suggestedFilename(),
+    rows: parseCsv(await readFile(await download.path(), 'utf8')),
+  };
+}
+
 function assertExactLines(actual, expected, filterName) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(`${filterName} export wrong: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function assertExactCsvRows(actual, expected, filterName) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${filterName} CSV export wrong: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
   }
 }
 
@@ -552,6 +607,44 @@ async function main() {
       'exact-date'
     );
     steps.push({ name: 'exact-date count and download include only inclusive same-day boundaries', passed: true });
+
+    // ── CSV exact-date boundaries use the same local calendar day ────────────
+    // The CSV controls are independent from BIP-329. Reuse the isolated
+    // boundary fixture set above, but assert the CSV count and downloaded rows
+    // separately so a CSV-only date-filter wiring regression is caught.
+    const csvExportButton = page.getByTestId('button-export-csv');
+    await csvExportButton.waitFor({ state: 'visible', timeout: 30_000 });
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
+        '11 records will be exported.',
+      { timeout: 30_000 }
+    );
+
+    const csvExactToggle = page.getByTestId('checkbox-csv-date-range-exact');
+    await csvExactToggle.check();
+    if (!(await csvExactToggle.isChecked())) {
+      throw new Error('CSV exact date checkbox did not become checked');
+    }
+    await page.getByTestId('input-csv-date-range-date').fill(EXACT_DATE);
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
+        '4 records will be exported.',
+      { timeout: 30_000 }
+    );
+
+    const csvDownload = await downloadCsv(page, csvExportButton);
+    if (!/^kyutxo-records-\d{4}-\d{2}-\d{2}\.csv$/.test(csvDownload.suggestedFilename)) {
+      throw new Error(`Unexpected CSV download filename: ${csvDownload.suggestedFilename}`);
+    }
+    const csvExpectedRows = [
+      ['Type', 'Identifier', 'Label', 'Wallet', 'Owner', 'Tags', 'Categories', 'Notes', 'Amount', 'Date'],
+      ['address', EXACT_ADDR_START, EXACT_ADDR_START_LABEL, '', '', '', '', '', '', ''],
+      ['address', EXACT_ADDR_END, EXACT_ADDR_END_LABEL, '', '', '', '', '', '', ''],
+      ['transaction', EXACT_TX_START, EXACT_TX_START_LABEL, '', '', '', '', '', '', ''],
+      ['transaction', EXACT_TX_END, EXACT_TX_END_LABEL, '', '', '', '', '', '', ''],
+    ];
+    assertExactCsvRows(csvDownload.rows, csvExpectedRows, 'exact-date');
+    steps.push({ name: 'CSV exact-date count and download include only inclusive same-day boundaries', passed: true });
 
     console.log('\n[bip329-export-browser] all steps passed:');
     for (const s of steps) console.log(`  ✓ ${s.name}`);
