@@ -1,11 +1,20 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const { version: pkgVersion } = require("./package.json") as { version: string };
 
 export default defineConfig({
   plugins: [react()],
   oxc: {
     jsx: "automatic",
+  },
+  define: {
+    // Keep Vitest aligned with Vite so modules that consume build-time
+    // constants can be imported by tests.
+    __APP_VERSION__: JSON.stringify(pkgVersion),
   },
   resolve: {
     alias: {

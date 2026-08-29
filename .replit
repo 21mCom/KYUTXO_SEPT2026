@@ -985,6 +985,10 @@ args = "filter-chips-clear-all-browser-check"
 task = "workflow.run"
 args = "amount-units-unit-toggle-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-auto-backfill-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3468,6 +3472,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/amount-units.test.ts client/src/pages/DustedPage.unitToggleThreshold.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-auto-backfill-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/SettingsPage.autoBackfill.test.tsx client/src/pages/SettingsPage.resolveInputsProgress.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
