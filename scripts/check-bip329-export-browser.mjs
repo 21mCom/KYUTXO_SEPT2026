@@ -60,6 +60,8 @@ const EXACT_TX_AFTER_LABEL = 'BIP-329 exact tx after';
 const COMPLEX_CSV_IDENTIFIER = 'bc1qbip329csvcomplexvalueaddressxxxxxxxx';
 const COMPLEX_CSV_LABEL = 'CSV complex export, "quoted"\nlabel';
 const COMPLEX_CSV_NOTES = 'Notes, with "quoted"\nline break';
+const NO_MATCH_CSV_IDENTIFIER = 'bc1qbip329csvnomatchaddressxxxxxxxxxx';
+const NO_MATCH_CSV_LABEL = 'CSV no-match export check';
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -698,6 +700,58 @@ async function main() {
       'complex-value-filtered'
     );
     steps.push({ name: 'filtered CSV preserves exact comma, quote, and line-break cell values', passed: true });
+
+    // ── Filtered CSV with no matches must stay download-free ────────────────
+    // Seed one more record through the browser's live CRUD path, then reload
+    // so the export page's live count observes it. The deliberately impossible
+    // search proves the zero-row early return does not create an empty file or
+    // show the success toast.
+    await page.evaluate(
+      async ({ inputString, label }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const now = Date.now();
+        await recordCrud.createRecord({
+          type: 'address',
+          inputString,
+          label,
+          createdAt: now,
+          updatedAt: now,
+        });
+      },
+      {
+        inputString: NO_MATCH_CSV_IDENTIFIER,
+        label: NO_MATCH_CSV_LABEL,
+      }
+    );
+
+    await page.reload({ waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000, label: 'bip329-export-browser' });
+    const noMatchCsvExportButton = page.getByTestId('button-export-csv');
+    await noMatchCsvExportButton.waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByTestId('input-csv-search').fill('CSV filter value that cannot match any record');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
+        '0 records will be exported.',
+      { timeout: 30_000 }
+    );
+
+    const noMatchDownloadPromise = page.waitForEvent('download', { timeout: 2_000 }).catch(() => null);
+    await noMatchCsvExportButton.click();
+    if (await noMatchDownloadPromise) {
+      throw new Error('No-match CSV export must not download an empty file');
+    }
+    await page.getByText('No Records To Export', { exact: true }).first().waitFor({
+      state: 'visible',
+      timeout: 5_000,
+    });
+    await page.getByText(
+      'No records match the current filters. Adjust or clear the filters and try again.',
+      { exact: true }
+    ).first().waitFor({ state: 'visible', timeout: 5_000 });
+    if (await page.getByText('CSV Exported', { exact: true }).count() > 0) {
+      throw new Error('No-match CSV export must not report a successful export');
+    }
+    steps.push({ name: 'filtered CSV with 0 matches downloads no file and explains how to adjust or clear filters', passed: true });
 
     console.log('\n[bip329-export-browser] all steps passed:');
     for (const s of steps) console.log(`  ✓ ${s.name}`);
