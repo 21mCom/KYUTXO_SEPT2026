@@ -222,13 +222,39 @@ async function main() {
 
     await pickSelectOption(page, 'select-bip329-type', 'Addresses');
     await waitForMatchCount(page, 1);
-    await pickSelectOption(page, 'select-bip329-type', 'UTXOs (inputs / outputs)');
-    await waitForMatchCount(page, 1);
+    if (await page.getByTestId('checkbox-bip329-utxo-only').count() !== 0) {
+      throw new Error('UTXO refs only checkbox should be hidden for the address kind');
+    }
+
     await pickSelectOption(page, 'select-bip329-type', 'Transactions');
     await waitForMatchCount(page, 1);
-    await pickSelectOption(page, 'select-bip329-type', 'All Types');
+    const utxoOnly = page.getByTestId('checkbox-bip329-utxo-only');
+    await utxoOnly.waitFor({ state: 'visible', timeout: 5_000 });
+    if (await utxoOnly.isChecked()) {
+      throw new Error('UTXO refs only checkbox should start unchecked');
+    }
+
+    await utxoOnly.check();
+    await waitForMatchCount(page, 1);
+    if (!(await utxoOnly.isChecked())) {
+      throw new Error('UTXO refs only checkbox did not become checked');
+    }
+
+    await utxoOnly.uncheck();
+    await waitForMatchCount(page, 1);
+    if (await utxoOnly.isChecked()) {
+      throw new Error('UTXO refs only checkbox did not become unchecked');
+    }
+
+    await pickSelectOption(page, 'select-bip329-type', 'Other');
+    await waitForMatchCount(page, 0);
+    if (await page.getByTestId('checkbox-bip329-utxo-only').count() !== 0) {
+      throw new Error('UTXO refs only checkbox should be hidden for the other kind');
+    }
+
+    await pickSelectOption(page, 'select-bip329-type', 'All');
     await waitForMatchCount(page, 3);
-    steps.push({ name: 'type filter narrows the count (address / utxo / transaction)', passed: true });
+    steps.push({ name: 'type filter covers address / transaction / UTXO-only / other / all', passed: true });
 
     await pickSelectOption(page, 'select-bip329-tag', TAG);
     await waitForMatchCount(page, 2);
