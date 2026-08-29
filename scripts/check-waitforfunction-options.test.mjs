@@ -63,9 +63,11 @@ test('passes an object-literal arg payload when a third options arg is present',
   assert.equal(res.status, 0, res.stderr);
 });
 
-test('ignores .test.mjs fixture files in the scanned directory', () => {
+test('ignores test fixture files in the scanned directory', () => {
   const res = runGuard({
     'something.test.mjs': 'await page.waitForFunction(() => 1, { timeout: 1 });\n',
+    'something.test.js': 'await page.waitForFunction(() => 2, { timeout: 1 });\n',
+    'something.test.ts': 'await page.waitForFunction(() => 3, { timeout: 1 });\n',
   });
   assert.equal(res.status, 0, res.stderr);
 });
@@ -91,6 +93,21 @@ test('fails a single-line bad call', () => {
   });
   assert.equal(res.status, 1);
   assert.match(res.stderr, /check-bad-inline\.mjs:1/);
+});
+
+test('detects the bad pattern in every supported script extension', () => {
+  const badCall =
+    'await page.waitForFunction(() => window.ready, { timeout: 60_000 });\n';
+  const res = runGuard({
+    'check-bad.js': badCall,
+    'check-bad.mjs': badCall,
+    'check-bad.ts': badCall,
+  });
+  assert.equal(res.status, 1);
+  for (const extension of ['js', 'mjs', 'ts']) {
+    assert.match(res.stderr, new RegExp(`check-bad\\.${extension}:1`));
+  }
+  assert.match(res.stderr, /SECOND argument is an object literal/);
 });
 
 test('is not fooled by object literals inside the function body', () => {

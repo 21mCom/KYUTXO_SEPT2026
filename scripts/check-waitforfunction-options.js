@@ -8,8 +8,9 @@
 // The correct pattern is `waitForFunction(fn, undefined, { timeout: ... })`
 // (or null as the arg placeholder).
 //
-// This guard scans scripts/*.mjs for waitForFunction calls whose second
-// top-level argument is an object literal and fails with file:line output.
+// This guard scans supported scripts source files for waitForFunction calls
+// whose second top-level argument is an object literal and fails with
+// file:line output.
 //
 // Test hook: set CHECK_WAITFORFUNCTION_SCRIPTS_DIR to scan a different
 // directory (used by check-waitforfunction-options.test.mjs).
@@ -23,6 +24,16 @@ const SCRIPTS_DIR = process.env.CHECK_WAITFORFUNCTION_SCRIPTS_DIR
   ? path.resolve(process.env.CHECK_WAITFORFUNCTION_SCRIPTS_DIR)
   : __dirname;
 const ROOT = path.resolve(__dirname, '..');
+const SUPPORTED_SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.ts']);
+const SELF_FILE = path.basename(fileURLToPath(import.meta.url));
+
+function isTestFile(name) {
+  return (
+    name.endsWith('.test.js') ||
+    name.endsWith('.test.mjs') ||
+    name.endsWith('.test.ts')
+  );
+}
 
 // Split the argument list of a call starting at `openParenIdx` (index of the
 // '(' character) into top-level argument source strings. Tracks strings,
@@ -141,7 +152,12 @@ function lineOf(src, idx) {
 const violations = [];
 const files = fs
   .readdirSync(SCRIPTS_DIR)
-  .filter((f) => f.endsWith('.mjs') && !f.endsWith('.test.mjs'))
+  .filter(
+    (f) =>
+      SUPPORTED_SOURCE_EXTENSIONS.has(path.extname(f)) &&
+      !isTestFile(f) &&
+      f !== SELF_FILE,
+  )
   .sort();
 
 for (const name of files) {
@@ -181,5 +197,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `check-waitforfunction-options: OK — no object-literal second arguments to waitForFunction in ${files.length} .mjs script(s).`,
+  `check-waitforfunction-options: OK — no object-literal second arguments to waitForFunction in ${files.length} script(s) (${[...SUPPORTED_SOURCE_EXTENSIONS].join(', ')}).`,
 );
