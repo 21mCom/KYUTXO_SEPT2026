@@ -13,6 +13,10 @@
 //      last rows render
 //   5. exercises the search and category controls after scrolling
 //   6. confirms the import and verifies the completion state and stored count
+//   7. reverts to bundled, then imports a large merge snapshot containing new
+//      entries and bundled overrides (both changed and identical)
+//   8. verifies the Overrides list stays virtualized, reaches its deep end,
+//      responds to search and Only show changed, and persists the merge
 //
 // Usage: node scripts/check-settings-entity-list-scale-browser.mjs
 // Requires: a `chromium` binary on PATH (Nix) and `playwright-core`.
@@ -35,6 +39,8 @@ const BASE_URL = `http://localhost:${PORT}/`;
 const SETTINGS_URL = `${BASE_URL}settings`;
 const SETUP_PASSWORD = 'entity-list-scale-check-123';
 const IMPORT_COUNT = 1_200;
+const MERGE_NEW_COUNT = 1_200;
+const MERGE_NEW_SCALAR_OFFSET = 10_000;
 const CATEGORIES = [
   'exchange',
   'payment-service',
@@ -104,9 +110,9 @@ function scalarFor(index) {
   return scalar;
 }
 
-function makeImportedEntries(count) {
+function makeImportedEntries(count, namePrefix = 'Large import entity', scalarOffset = 0) {
   return Array.from({ length: count }, (_, index) => {
-    const pubkey = ecc.pointFromScalar(scalarFor(index), true);
+    const pubkey = ecc.pointFromScalar(scalarFor(index + scalarOffset), true);
     if (!pubkey) throw new Error(`Could not derive test public key ${index}`);
     const address = bitcoin.payments.p2wpkh({
       pubkey,
@@ -115,7 +121,7 @@ function makeImportedEntries(count) {
     if (!address) throw new Error(`Could not derive test address ${index}`);
     return {
       address,
-      name: `Large import entity ${String(index).padStart(4, '0')}`,
+      name: `${namePrefix} ${String(index).padStart(4, '0')}`,
       category: CATEGORIES[index % CATEGORIES.length],
     };
   });
@@ -364,6 +370,229 @@ async function main() {
         storedState.snapshotMode === 'replace' &&
         storedState.snapshotEntries === IMPORT_COUNT,
       JSON.stringify({ importedBadge, activeCountText, storedState }),
+    );
+
+    // Reset through the real Settings UI so the merge preview is based on the
+    // bundled list, not the replace snapshot just imported above.
+    await page.getByTestId('button-reset-entities').click();
+    await waitUntil('revert to bundled completion', async () => {
+      const badge = await page.getByTestId('badge-entity-source').textContent();
+      const count = await page.getByTestId('text-entity-count').textContent();
+      return badge?.includes('Bundled') && numericText(count) === bundledCount;
+    });
+    record(
+      'reverting the replace import restores the bundled merge baseline',
+      (await page.getByTestId('badge-entity-source').textContent())?.includes('Bundled') &&
+        numericText(await page.getByTestId('text-entity-count').textContent()) === bundledCount,
+      `bundledCount=${bundledCount}`,
+    );
+
+    const bundledEntries = await page.evaluate(async () => {
+      const { getBundledEntityList } = await import('/src/lib/privacy-entity-list.ts');
+      return getBundledEntityList();
+    });
+    const mergeNewEntries = makeImportedEntries(
+      MERGE_NEW_COUNT,
+      'Large merge new entity',
+      MERGE_NEW_SCALAR_OFFSET,
+    );
+    const bundledAddresses = new Set(bundledEntries.map((entry) => entry.address));
+    const mergeNewOverlap = mergeNewEntries.filter((entry) => bundledAddresses.has(entry.address));
+    const mergeOverrides = bundledEntries.map((entry, index) =>
+      index % 2 === 0
+        ? {
+            ...entry,
+            name: `Large merge override ${String(index).padStart(4, '0')}`,
+            category: CATEGORIES[(index + 1) % CATEGORIES.length],
+          }
+        : { ...entry },
+    );
+    const mergeEntries = [...mergeNewEntries, ...mergeOverrides];
+    const mergeOverrideCount = mergeOverrides.length;
+    const mergeChangedOverrideCount = Math.ceil(mergeOverrideCount / 2);
+    const mergeUniqueAddresses = new Set(mergeEntries.map((entry) => entry.address)).size;
+    record(
+      `generated ${MERGE_NEW_COUNT.toLocaleString()} new entries and ${mergeOverrideCount.toLocaleString()} bundled overrides`,
+      mergeNewEntries.length === MERGE_NEW_COUNT &&
+        mergeNewOverlap.length === 0 &&
+        mergeUniqueAddresses === mergeEntries.length &&
+        mergeChangedOverrideCount > 0 &&
+        mergeChangedOverrideCount < mergeOverrideCount,
+      JSON.stringify({
+        newEntries: mergeNewEntries.length,
+        bundledEntries: bundledEntries.length,
+        overrideCount: mergeOverrideCount,
+        changedOverrideCount: mergeChangedOverrideCount,
+        overlap: mergeNewOverlap.length,
+        uniqueAddresses: mergeUniqueAddresses,
+      }),
+    );
+
+    await page.getByTestId('radio-entity-merge').click();
+    await page.getByTestId('input-entity-file').setInputFiles({
+      name: 'large-entity-list-merge.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(mergeEntries)),
+    });
+    await page.getByTestId('text-preview-incoming').waitFor({
+      state: 'visible',
+      timeout: 60_000,
+    });
+
+    const mergeIncomingText = await page.getByTestId('text-preview-incoming').textContent();
+    const mergeResultingText = await page.getByTestId('text-preview-current').textContent();
+    const mergeAddedText = await page.getByTestId('badge-preview-added').textContent();
+    const mergeOverriddenText = await page.getByTestId('badge-preview-overridden').textContent();
+    const mergeOverrideNote = await page.getByTestId('text-merge-override-note').textContent();
+    record(
+      'merge preview shows the expected new-entry and bundled-override summary',
+      numericText(mergeIncomingText) === mergeEntries.length &&
+        numericText(mergeResultingText) === bundledCount + MERGE_NEW_COUNT &&
+        mergeAddedText?.includes(`+${MERGE_NEW_COUNT.toLocaleString()} brand-new`) &&
+        mergeOverriddenText?.includes(`${mergeOverrideCount.toLocaleString()} override bundled`) &&
+        mergeOverriddenText?.includes(`(${mergeChangedOverrideCount.toLocaleString()} changed)`) &&
+        mergeOverrideNote?.includes(`${mergeOverrideCount.toLocaleString()} imported`) &&
+        mergeOverrideNote?.includes(`${mergeChangedOverrideCount.toLocaleString()} will actually change`),
+      JSON.stringify({
+        incomingText: mergeIncomingText,
+        resultingText: mergeResultingText,
+        addedText: mergeAddedText,
+        overriddenText: mergeOverriddenText,
+        overrideNote: mergeOverrideNote,
+      }),
+    );
+
+    await page.getByTestId('button-toggle-entity-diff').click();
+    const overridesTab = page.getByTestId('tab-entity-diff-overrides');
+    const overridesList = page.getByTestId('list-entity-overrides');
+    await overridesList.waitFor({ state: 'visible', timeout: 30_000 });
+    const initialOverridesState = await overridesList.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      renderedRows: element.querySelectorAll('[data-testid^="row-entity-override-"]').length,
+    }));
+    record(
+      'large Overrides diff is scrollable and virtualized',
+      initialOverridesState.scrollHeight > initialOverridesState.clientHeight &&
+        initialOverridesState.renderedRows > 0 &&
+        initialOverridesState.renderedRows < mergeOverrideCount,
+      JSON.stringify(initialOverridesState),
+    );
+
+    const overrideMidpoint = Math.floor(mergeOverrideCount / 2);
+    await overridesList.evaluate((element) => {
+      element.scrollTop = Math.floor(element.scrollHeight / 2);
+      element.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    await page.getByTestId(`row-entity-override-${overrideMidpoint}`).waitFor({
+      state: 'attached',
+      timeout: 30_000,
+    });
+    record(
+      'Overrides diff remains responsive at its midpoint',
+      (await page.getByTestId(`row-entity-override-${overrideMidpoint}`).count()) === 1,
+      `row-entity-override-${overrideMidpoint} rendered`,
+    );
+
+    await overridesList.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    const lastOverrideIndex = mergeOverrideCount - 1;
+    const lastOverrideRow = page.getByTestId(`row-entity-override-${lastOverrideIndex}`);
+    await lastOverrideRow.waitFor({ state: 'attached', timeout: 30_000 });
+    const lastOverrideText = await lastOverrideRow.textContent();
+    record(
+      'deep-scrolling Overrides reaches the final bundled row',
+      lastOverrideText?.includes(bundledEntries[lastOverrideIndex].address) &&
+        lastOverrideText?.includes(bundledEntries[lastOverrideIndex].name),
+      JSON.stringify({
+        lastOverrideIndex,
+        address: bundledEntries[lastOverrideIndex].address,
+        rowText: lastOverrideText,
+      }),
+    );
+
+    const mergeSearch = page.getByTestId('input-entity-diff-search');
+    await mergeSearch.fill('Large merge override 0000');
+    await waitUntil('search-filtered Overrides tab count', async () =>
+      (await overridesTab.textContent())?.includes('Overrides (1)'),
+    );
+    const searchedOverrideRow = page.getByTestId('row-entity-override-0');
+    await searchedOverrideRow.waitFor({ state: 'attached', timeout: 30_000 });
+    record(
+      'search filters the large Overrides list after deep scrolling',
+      (await searchedOverrideRow.textContent())?.includes('Large merge override 0000') &&
+        (await overridesTab.textContent())?.includes('Overrides (1)'),
+      (await searchedOverrideRow.textContent()) ?? '',
+    );
+
+    await mergeSearch.fill('');
+    await page.getByTestId('switch-overrides-only-changed').click();
+    await waitUntil('changed-only Overrides list count', async () =>
+      (await overridesTab.textContent())?.includes(
+        `Overrides (${mergeOverrideCount.toLocaleString()}, ${mergeChangedOverrideCount.toLocaleString()} changed)`,
+      ),
+    );
+    const changedOnlyState = await overridesList.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      renderedRows: element.querySelectorAll('[data-testid^="row-entity-override-"]').length,
+    }));
+    record(
+      'Only show changed keeps the large Overrides list virtualized',
+      changedOnlyState.scrollHeight > changedOnlyState.clientHeight &&
+        changedOnlyState.renderedRows > 0 &&
+        changedOnlyState.renderedRows < mergeChangedOverrideCount,
+      JSON.stringify(changedOnlyState),
+    );
+
+    await mergeSearch.fill(bundledEntries[1].address);
+    await waitUntil('changed-only identical override count', async () =>
+      (await overridesTab.textContent())?.includes('Overrides (1, 0 changed)'),
+    );
+    const changedOnlyEmpty = await page.getByTestId('text-entity-overrides-empty').textContent();
+    record(
+      'search plus Only show changed hides an identical override without freezing',
+      changedOnlyEmpty?.includes('No overrides change anything') &&
+        (await overridesTab.textContent())?.includes('Overrides (1, 0 changed)'),
+      JSON.stringify({ changedOnlyEmpty, tab: await overridesTab.textContent() }),
+    );
+
+    await page.getByTestId('button-confirm-entity-import').click();
+    await page.getByTestId('text-preview-incoming').waitFor({
+      state: 'detached',
+      timeout: 60_000,
+    });
+    await waitUntil('Settings merge completion state', async () => {
+      const badge = await page.getByTestId('badge-entity-source').textContent();
+      const count = await page.getByTestId('text-entity-count').textContent();
+      return badge?.includes('Imported') && numericText(count) === mergeEntries.length;
+    });
+    const mergeImportedBadge = await page.getByTestId('badge-entity-source').textContent();
+    const mergeActiveCountText = await page.getByTestId('text-entity-count').textContent();
+    const mergeStoredState = await page.evaluate(async () => {
+      const { getSettings } = await import('/src/lib/data/settings-crud.ts');
+      const { getActiveEntityList, getActiveEntitySource } = await import(
+        '/src/lib/privacy-entity-list.ts'
+      );
+      const settings = await getSettings('default');
+      return {
+        activeCount: getActiveEntityList().length,
+        activeSource: getActiveEntitySource(),
+        snapshotMode: settings?.entityListSnapshot?.mode ?? null,
+        snapshotEntries: settings?.entityListSnapshot?.entries.length ?? 0,
+      };
+    });
+    record(
+      'confirm closes the merge dialog and persists the merged snapshot',
+      mergeImportedBadge?.includes('Imported') &&
+        numericText(mergeActiveCountText) === mergeEntries.length &&
+        mergeStoredState.activeCount === bundledCount + MERGE_NEW_COUNT &&
+        mergeStoredState.activeSource === 'imported' &&
+        mergeStoredState.snapshotMode === 'merge' &&
+        mergeStoredState.snapshotEntries === mergeEntries.length,
+      JSON.stringify({ mergeImportedBadge, mergeActiveCountText, mergeStoredState }),
     );
 
     await context.close();
