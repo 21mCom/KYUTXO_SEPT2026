@@ -989,6 +989,26 @@ args = "amount-units-unit-toggle-node-check"
 task = "workflow.run"
 args = "settings-auto-backfill-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-entity-list-core-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-entity-list-diff-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-entity-list-actions-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-history-trim-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-restore-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3482,7 +3502,62 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/pages/SettingsPage.autoBackfill.test.tsx client/src/pages/SettingsPage.resolveInputsProgress.test.tsx"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.autoBackfill.test.tsx client/src/pages/SettingsPage.resolveInputsProgress.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-entity-list-core-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.entityList.test.tsx client/src/pages/SettingsPage.entityListMerge.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-entity-list-diff-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.entityDiffCategoryOptions.test.tsx client/src/pages/SettingsPage.entityDiffFilter.test.tsx client/src/pages/SettingsPage.entityListCategoryDiff.test.tsx client/src/pages/SettingsPage.entityListChangedDetail.test.tsx client/src/pages/SettingsPage.entityMergeDetailRows.test.tsx client/src/pages/SettingsPage.entityOverridesOnlyChanged.test.tsx client/src/pages/SettingsPage.entityReplaceDetailRows.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-entity-list-actions-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.entityErrorDownload.test.tsx client/src/pages/SettingsPage.entityListConfirm.test.tsx client/src/pages/SettingsPage.entityListConfirmFailure.test.tsx client/src/pages/SettingsPage.entityListReplaceSummary.test.tsx client/src/pages/SettingsPage.entityListSummary.test.tsx client/src/pages/SettingsPage.entityRevertFailure.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-history-trim-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.historyTrim.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-restore-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.restoreAttachmentWriteFailed.test.tsx client/src/pages/SettingsPage.restoreAttachmentWriteRaw.test.tsx client/src/pages/SettingsPage.restoreInterrupted.test.tsx client/src/pages/SettingsPage.restorePreview.test.tsx client/src/pages/SettingsPage.restorePreviewV3.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
