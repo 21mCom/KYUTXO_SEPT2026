@@ -123,6 +123,9 @@ describe("SettingsPage — entity list import (replace-mode summary badges)", ()
     // Preview dialog appears. Incoming snapshot has 4 entries.
     const incoming = await screen.findByTestId("text-preview-incoming");
     expect(incoming.textContent).toBe("4");
+    const confirmButton = screen.getByTestId("button-confirm-entity-import");
+    expect(confirmButton.textContent).toContain("Replace list");
+    expect(confirmButton.textContent).not.toContain("Merge list");
 
     // Each summary badge shows the count for its own bucket. We assert the
     // count is present in the correct badge so a swap of added/removed (or a

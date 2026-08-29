@@ -644,7 +644,7 @@ export function EntityImportDialog({
             ) : (
               <Upload className="h-4 w-4" />
             )}
-            Replace list
+            {entityPreview?.mode === "merge" ? "Merge list" : "Replace list"}
           </Button>
         </DialogFooter>
       </DialogContent>

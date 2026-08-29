@@ -197,6 +197,9 @@ describe("SettingsPage — entity list import (merge mode)", () => {
     // Preview dialog appears.
     const incoming = await screen.findByTestId("text-preview-incoming");
     expect(incoming.textContent).toBe("2");
+    const confirmButton = screen.getByTestId("button-confirm-entity-import");
+    expect(confirmButton.textContent).toContain("Merge list");
+    expect(confirmButton.textContent).not.toContain("Replace list");
 
     // "After merge" count = bundled + 1 brand-new.
     expect(screen.getByTestId("text-preview-current").textContent).toBe(
