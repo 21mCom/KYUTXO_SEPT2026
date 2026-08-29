@@ -2021,6 +2021,7 @@ export default function UTXOs() {
               filters={searchFilters}
               onChange={setSearchFilters}
               onClear={() => setSearchFilters(defaultFilters)}
+              showEntityFilters={false}
               displayUnit={displayUnit}
             />
 

@@ -190,6 +190,19 @@ describe("UTXOs page entity filters and clear-all", () => {
     expect(screen.getByTestId(`link-address-${ADDR_UNASSIGNED.slice(0, 8)}`)).toBeTruthy();
   });
 
+  it("does not show non-functional linked-entity controls in Advanced Filters", async () => {
+    renderWithProviders(<UTXOs />);
+
+    fireEvent.click(screen.getByTestId("button-advanced-filters"));
+
+    expect(screen.queryByTestId("input-entity-address")).toBeNull();
+    expect(screen.queryByTestId("select-entity-wallet")).toBeNull();
+    expect(screen.queryByTestId("select-entity-seed")).toBeNull();
+    expect(screen.queryByTestId("select-entity-owner")).toBeNull();
+    expect(screen.queryByTestId("select-entity-tag")).toBeNull();
+    expect(screen.queryByTestId("select-entity-category")).toBeNull();
+  });
+
   it("owner AND wallet filters compose (AND-across-dimensions)", async () => {
     renderWithProviders(<UTXOs />);
 

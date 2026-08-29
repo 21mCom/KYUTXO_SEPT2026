@@ -74,6 +74,8 @@ interface TransactionSearchFiltersProps {
   onChange: (filters: SearchFilters) => void;
   onClear: () => void;
   entityOptions?: EntityFilterOptions;
+  /** Whether to show the linked-entity controls inside Advanced Filters. */
+  showEntityFilters?: boolean;
   /** Unit the amount-range inputs/labels display in. Default 'btc'. */
   displayUnit?: AmountDisplayUnit;
   className?: string;
@@ -117,12 +119,13 @@ export function TransactionSearchFilters({
   onChange, 
   onClear,
   entityOptions,
+  showEntityFilters = true,
   displayUnit = "btc",
   className 
 }: TransactionSearchFiltersProps) {
   const [isOpen, setIsOpen] = useState(false);
   
-  const hasEntity = hasActiveEntityFilters(filters);
+  const hasEntity = showEntityFilters && hasActiveEntityFilters(filters);
   const hasFilters = hasActiveSearchFilters(filters) || hasEntity;
   const unitLabel = displayUnit === "sats" ? "Sats" : "BTC";
   const amountStep = displayUnit === "sats" ? "1" : "0.00000001";
@@ -162,9 +165,10 @@ export function TransactionSearchFilters({
 
   const dateDisplay = formatDateRange();
   const amountDisplay = formatAmountRange();
-  const activeEntityCount =
-    (filters.entityAddress?.trim() ? 1 : 0) +
-    ENTITY_DIMENSIONS.reduce((n, d) => n + (filters[d.key]?.length ?? 0), 0);
+  const activeEntityCount = showEntityFilters
+    ? (filters.entityAddress?.trim() ? 1 : 0) +
+      ENTITY_DIMENSIONS.reduce((n, d) => n + (filters[d.key]?.length ?? 0), 0)
+    : 0;
 
   return (
     <div className={cn("flex items-center gap-2 flex-wrap", className)}>
@@ -382,41 +386,43 @@ export function TransactionSearchFilters({
               </Tabs>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <LinkIcon className="h-4 w-4 text-muted-foreground" />
-                <Label className="font-medium">Linked Entity</Label>
+            {showEntityFilters && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <LinkIcon className="h-4 w-4 text-muted-foreground" />
+                  <Label className="font-medium">Linked Entity</Label>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Address</Label>
+                  <Input
+                    placeholder="Exact address"
+                    value={filters.entityAddress ?? ""}
+                    onChange={(e) => updateFilter("entityAddress", e.target.value === "" ? undefined : e.target.value)}
+                    className="h-8 font-mono text-xs"
+                    data-testid="input-entity-address"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {ENTITY_DIMENSIONS.map((dim) => {
+                    const options = entityOptions?.[dim.optionsKey] ?? [];
+                    const values = filters[dim.key] ?? [];
+                    return (
+                      <div key={dim.key}>
+                        <Label className="text-xs text-muted-foreground">{dim.label}</Label>
+                        <MultiSelectCombobox
+                          values={values}
+                          onChange={(v) => updateFilter(dim.key, v.length ? v : undefined)}
+                          options={options}
+                          placeholder="Any"
+                          searchPlaceholder={`Search ${dim.label.toLowerCase()}...`}
+                          testId={`select-entity-${dim.label.toLowerCase()}`}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Address</Label>
-                <Input
-                  placeholder="Exact address"
-                  value={filters.entityAddress ?? ""}
-                  onChange={(e) => updateFilter("entityAddress", e.target.value === "" ? undefined : e.target.value)}
-                  className="h-8 font-mono text-xs"
-                  data-testid="input-entity-address"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {ENTITY_DIMENSIONS.map((dim) => {
-                  const options = entityOptions?.[dim.optionsKey] ?? [];
-                  const values = filters[dim.key] ?? [];
-                  return (
-                    <div key={dim.key}>
-                      <Label className="text-xs text-muted-foreground">{dim.label}</Label>
-                      <MultiSelectCombobox
-                        values={values}
-                        onChange={(v) => updateFilter(dim.key, v.length ? v : undefined)}
-                        options={options}
-                        placeholder="Any"
-                        searchPlaceholder={`Search ${dim.label.toLowerCase()}...`}
-                        testId={`select-entity-${dim.label.toLowerCase()}`}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            )}
 
             <div className="pt-2 flex justify-end">
               <Button 
