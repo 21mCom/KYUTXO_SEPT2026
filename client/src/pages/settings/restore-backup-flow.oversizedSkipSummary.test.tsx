@@ -18,9 +18,11 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import JSZip from "jszip";
 
 const peekManifest = vi.fn();
 const restoreV3Backup = vi.fn();
+const runLegacyJsonRestore = vi.fn();
 vi.mock("@/lib/backup/restore", () => ({
   peekManifest: (...args: unknown[]) => peekManifest(...args),
   restoreV3Backup: (...args: unknown[]) => restoreV3Backup(...args),
@@ -42,7 +44,7 @@ vi.mock("@/lib/backup/post-restore-backfill", () => ({
 }));
 
 vi.mock("@/lib/backup/legacy-restore-pipeline", () => ({
-  runLegacyJsonRestore: vi.fn(),
+  runLegacyJsonRestore: (...args: unknown[]) => runLegacyJsonRestore(...args),
 }));
 
 vi.mock("@/lib/data/settings-crud", () => ({
@@ -102,6 +104,20 @@ function makeV3ZipFile(): File {
   });
 }
 
+async function makeLegacyZipFile(): Promise<File> {
+  const zip = new JSZip();
+  zip.file(
+    "backup.json",
+    JSON.stringify({
+      encrypted: false,
+      exportDate: "2026-08-01T00:00:00.000Z",
+      data: { records: [], settings: [] },
+    }),
+  );
+  const bytes = await zip.generateAsync({ type: "uint8array" });
+  return new File([bytes], "legacy-backup.zip", { type: "application/zip" });
+}
+
 async function openDialogAndSelectFile(file: File): Promise<void> {
   fireEvent.click(screen.getByTestId("button-open-restore"));
   const input = screen.getByTestId("input-restore-file") as HTMLInputElement;
@@ -157,6 +173,51 @@ describe("restore summary surfaces oversized attachment skips", () => {
       configurable: true,
       value: originalLocation,
     });
+  });
+
+  it("includes restored lineage snapshots in the v3 success summary", async () => {
+    restoreV3Backup.mockResolvedValue({
+      manifest: V3_MANIFEST,
+      counts: {
+        ...BASE_COUNTS,
+        lineageSnapshots: 2,
+      },
+    });
+
+    render(<RestoreBackupFlow />);
+    await openDialogAndSelectFile(makeV3ZipFile());
+    await continueAndRestore();
+
+    await waitFor(() => {
+      expect(successToast().description).toContain(", 2 snapshots.");
+    });
+  });
+
+  it("includes legacy snapshots in the success toast description", async () => {
+    // The legacy pipeline folds the snapshotsAdded result from
+    // restoreLegacySnapshots into baseMessage. Keep this test at the flow
+    // boundary so that the toast cannot silently discard that summary text.
+    peekManifest.mockResolvedValue(null);
+    runLegacyJsonRestore.mockResolvedValue({
+      baseMessage:
+        "Restored 0 records, 0 tags, 0 categories, 0 vocabulary items, 0 templates, 2 snapshots.",
+      orphanedFilesRouted: 0,
+      orphanedFilesLost: 0,
+    });
+
+    render(<RestoreBackupFlow />);
+    await openDialogAndSelectFile(await makeLegacyZipFile());
+
+    fireEvent.click(screen.getByTestId("button-continue-restore"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("button-confirm-restore")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("button-confirm-restore"));
+
+    await waitFor(() => {
+      expect(runLegacyJsonRestore).toHaveBeenCalledTimes(1);
+    });
+    expect(successToast().description).toContain(", 2 snapshots.");
   });
 
   it("names an oversized ORPHANED file in the merge summary alongside the orphaned-files notice", async () => {

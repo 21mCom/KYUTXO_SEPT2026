@@ -51,6 +51,7 @@ import {
   clearAddressSyncState,
   getAllAddressSyncState,
 } from "@/lib/data/address-sync-crud";
+import { clearLineageSnapshots, getAllLineageSnapshots } from "@/lib/data/lineage-crud";
 import {
   clearRecordOrigins,
   getAllRecordOrigins,
@@ -169,6 +170,7 @@ beforeEach(async () => {
   await clearParticipants({ skipNotification: true });
   await clearAddressSyncState({ skipNotification: true });
   await clearRecordOrigins({ skipNotification: true });
+  await clearLineageSnapshots({ skipNotification: true });
 
   writtenPaths = [];
   vi.stubGlobal(
@@ -193,6 +195,40 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("runLegacyJsonRestore: replace mode (plaintext)", () => {
+  it("includes restored lineage snapshots in the summary", async () => {
+    const file = await makePlainZip({
+      records: [],
+      lineageSnapshots: [
+        {
+          id: 42,
+          snapshotId: "legacy-snapshot-1",
+          targetType: "address",
+          targetAddress: "bc1qexampleexampleexampleexampleexampleexx",
+          targetTxid: "a".repeat(64),
+          targetVout: 0,
+          targetSegmentId: "segment-1",
+          segments: ["segment-1"],
+          evidenceTxids: [],
+          totalAmount: 1,
+          earliestDate: 1_600_000_000,
+          latestDate: 1_700_000_000,
+          hopCount: 1,
+          narrative: "Legacy snapshot",
+          redactedAddresses: [],
+          disclosureLevel: "full",
+          generatedAt: 1_700_000_100_000,
+          expiresAt: 1_800_000_000_000,
+        },
+      ],
+    });
+    const { cb } = makeCallbacks();
+
+    const summary = await runLegacyJsonRestore(file, "", "replace", cb);
+
+    expect(summary.baseMessage).toContain(", 1 snapshot.");
+    expect(await getAllLineageSnapshots()).toHaveLength(1);
+  });
+
   it("clears pre-existing data, fires onCleared at the right time, restores every table, and reports counts", async () => {
     // Pre-existing vault content that a replace restore must wipe.
     await bulkCreateRecords(
