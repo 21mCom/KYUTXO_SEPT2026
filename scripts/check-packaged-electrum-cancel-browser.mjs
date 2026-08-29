@@ -27,7 +27,7 @@
 // .agents/memory/packaged-electron-verify.md for the Electron/Xvfb recipe.
 
 import { chromium } from 'playwright-core';
-import { execSync, spawnSync, spawn } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -40,6 +40,7 @@ import {
   assertPackagedAsarFresh,
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
+import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -58,24 +59,6 @@ const CANCEL_ID = 'bu-packaged-cancel-check';
 const BATCH_TIMEOUT_MS = 120_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function findNixBinary({ envVar, storePattern, binName, requirement }) {
-  if (process.env[envVar]) return process.env[envVar];
-  try {
-    // Let the shell expand one narrow store glob. Reading + sorting the whole
-    // /nix/store directory from Node can block for minutes on Replit's store
-    // mount even though expansion of a concrete package pattern is immediate.
-    const candidate = execSync(
-      `for candidate in ${storePattern}; do ` +
-        `[ -x "$candidate" ] && { printf '%s\\n' "$candidate"; break; }; done`,
-      { encoding: 'utf8', timeout: 15_000 },
-    ).trim();
-    if (candidate) return candidate;
-  } catch {
-    /* handled by the explicit error below */
-  }
-  throw new Error(`${TAG} could not find ${binName} (${requirement}). Set ${envVar} to override.`);
-}
 
 function run(cmd, args, opts = {}) {
   console.log(`${TAG} $ ${cmd} ${args.join(' ')}`);
@@ -226,18 +209,7 @@ async function waitUntil(label, predicate, timeoutMs = 15_000) {
 async function main() {
   buildAsar();
 
-  const electronBin = findNixBinary({
-    envVar: 'KYUTXO_ELECTRON_BIN',
-    storePattern: '/nix/store/*-electron-29.*/bin/electron',
-    binName: 'electron',
-    requirement: 'nix electron 29.x — upstream Electron binaries FPE-crash here',
-  });
-  const xvfbBin = findNixBinary({
-    envVar: 'KYUTXO_XVFB_BIN',
-    storePattern: '/nix/store/*-xorg-server-2*/bin/Xvfb',
-    binName: 'Xvfb',
-    requirement: 'nix xorg-server Xvfb',
-  });
+  const { electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG });
   console.log(`${TAG} electron: ${electronBin}`);
   console.log(`${TAG} Xvfb: ${xvfbBin}`);
 

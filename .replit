@@ -1013,6 +1013,10 @@ args = "settings-history-trim-node-check"
 task = "workflow.run"
 args = "settings-restore-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-electron-binaries-tests"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3584,6 +3588,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.restoreAttachmentWriteFailed.test.tsx client/src/pages/SettingsPage.restoreAttachmentWriteRaw.test.tsx client/src/pages/SettingsPage.restoreInterrupted.test.tsx client/src/pages/SettingsPage.restorePreview.test.tsx client/src/pages/SettingsPage.restorePreviewV3.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-electron-binaries-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/packaged-electron-binaries.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

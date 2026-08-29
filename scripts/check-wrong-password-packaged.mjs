@@ -25,7 +25,7 @@
 //   Without the env var it builds everything first (several minutes).
 
 import { chromium } from 'playwright-core';
-import { execSync, spawnSync, spawn } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,6 +35,7 @@ import {
   assertPackagedAsarFresh,
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
+import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -48,24 +49,6 @@ const GOOD_PASSWORD = 'correct-horse-battery';
 const WRONG_PASSWORD = 'definitely-not-it-42';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function findNixBinary({ envVar, storePattern, binName, requirement }) {
-  if (process.env[envVar]) return process.env[envVar];
-  try {
-    // Let the shell expand one narrow store glob. Reading + sorting the whole
-    // /nix/store directory from Node can block for minutes on Replit's store
-    // mount even though expansion of a concrete package pattern is immediate.
-    const candidate = execSync(
-      `for candidate in ${storePattern}; do ` +
-        `[ -x "$candidate" ] && { printf '%s\\n' "$candidate"; break; }; done`,
-      { encoding: 'utf8', timeout: 15_000 },
-    ).trim();
-    if (candidate) return candidate;
-  } catch {
-    /* handled by the explicit error below */
-  }
-  throw new Error(`${TAG} could not find ${binName} (${requirement}). Set ${envVar} to override.`);
-}
 
 function run(cmd, args) {
   console.log(`${TAG} $ ${cmd} ${args.join(' ')}`);
@@ -179,18 +162,7 @@ async function connectAndFindPage() {
 async function main() {
   buildAsar();
 
-  const electronBin = findNixBinary({
-    envVar: 'KYUTXO_ELECTRON_BIN',
-    storePattern: '/nix/store/*-electron-29.*/bin/electron',
-    binName: 'electron',
-    requirement: 'nix electron 29.x — upstream Electron binaries FPE-crash here',
-  });
-  const xvfbBin = findNixBinary({
-    envVar: 'KYUTXO_XVFB_BIN',
-    storePattern: '/nix/store/*-xorg-server-2*/bin/Xvfb',
-    binName: 'Xvfb',
-    requirement: 'nix xorg-server Xvfb (xvfb-run\u2019s bundled 1.20 Xvfb segfaults here)',
-  });
+  const { electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG });
   console.log(`${TAG} electron: ${electronBin}`);
   console.log(`${TAG} Xvfb: ${xvfbBin}`);
 

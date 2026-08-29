@@ -37,7 +37,7 @@
 //   - playwright-core (driving via CDP connectOverCDP)
 
 import { chromium } from 'playwright-core';
-import { execSync, spawnSync, spawn } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,6 +48,7 @@ import {
   assertPackagedAsarFresh,
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
+import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -59,26 +60,6 @@ const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9223);
 const TAG = '[packaged-electron]';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function findNixBinary({ envVar, storePattern, binName, requirement }) {
-  if (process.env[envVar]) return process.env[envVar];
-  try {
-    // Let the shell expand one narrow store glob. Reading + sorting the whole
-    // /nix/store directory from Node can block for minutes on Replit's store
-    // mount even though expansion of a concrete package pattern is immediate.
-    const candidate = execSync(
-      `for candidate in ${storePattern}; do ` +
-        `[ -x "$candidate" ] && { printf '%s\\n' "$candidate"; break; }; done`,
-      { encoding: 'utf8', timeout: 15_000 },
-    ).trim();
-    if (candidate) return candidate;
-  } catch {
-    /* handled by the explicit error below */
-  }
-  throw new Error(
-    `${TAG} could not find ${binName} (${requirement}). Set ${envVar} to override.`,
-  );
-}
 
 function run(cmd, args, opts = {}) {
   console.log(`${TAG} $ ${cmd} ${args.join(' ')}`);
@@ -147,22 +128,7 @@ async function waitForCdp(timeoutMs) {
 async function main() {
   buildAsar();
 
-  const electronBin = findNixBinary({
-    envVar: 'KYUTXO_ELECTRON_BIN',
-    // Upstream electron >=~39 crashes with a floating point exception in this
-    // environment; the nix electron 29.x runs the asar fine.
-    storePattern: '/nix/store/*-electron-29.*/bin/electron',
-    binName: 'electron',
-    requirement: 'nix electron 29.x — upstream Electron binaries FPE-crash here',
-  });
-  const xvfbBin = findNixBinary({
-    envVar: 'KYUTXO_XVFB_BIN',
-    // Modern xorg-server Xvfb works; the one bundled inside nix xvfb-run
-    // (xorg-server 1.20) segfaults the whole session in this environment.
-    storePattern: '/nix/store/*-xorg-server-2*/bin/Xvfb',
-    binName: 'Xvfb',
-    requirement: 'nix xorg-server Xvfb (xvfb-run\u2019s bundled 1.20 Xvfb segfaults here)',
-  });
+  const { electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG });
   console.log(`${TAG} electron: ${electronBin}`);
   console.log(`${TAG} Xvfb: ${xvfbBin}`);
 
