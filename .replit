@@ -43,6 +43,10 @@ args = "dormant-coins-node-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "utxo-provenance-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "continuity-proof-all-segments-node-check"
 
 [[workflows.workflow.tasks]]
@@ -3020,6 +3024,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/dormant-coins.test.ts client/src/pages/DormantCoins.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "utxo-provenance-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/UtxoProvenance.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
