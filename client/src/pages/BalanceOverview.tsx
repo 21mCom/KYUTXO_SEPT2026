@@ -1467,7 +1467,7 @@ export default function BalanceOverview() {
       // Surface the per-transaction outcomes (rebuilt / skipped / failed, with
       // record links) below the banner. A cancelled run still shows whatever
       // was processed before the stop.
-      setImportDetails(result.details.length > 0 ? result.details : null);
+      setImportDetails(result.details && result.details.length > 0 ? result.details : null);
       setShowAllImportDetails(false);
 
       // Importing the source transactions made their outputs locally known. Now

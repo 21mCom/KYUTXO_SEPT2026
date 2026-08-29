@@ -91,8 +91,14 @@ vi.mock("@/lib/blockchain-api", () => ({
 }));
 
 const runTxidBackfill = vi.fn();
+// detectOrphanedTxRecords is also called by handleImportMissingHistory (to
+// stamp per-transaction record links) before runTxidBackfill; mock it too so
+// this test file's failures are never masked by it hitting the real,
+// unmocked Dexie database (which throws "IndexedDB API missing" in jsdom).
+const detectOrphanedTxRecords = vi.fn().mockResolvedValue({ recordIds: new Map() });
 vi.mock("@/lib/txid-backfill", () => ({
   runTxidBackfill: (...a: unknown[]) => runTxidBackfill(...a),
+  detectOrphanedTxRecords: (...a: unknown[]) => detectOrphanedTxRecords(...a),
 }));
 
 const resolvePrevouts = vi.fn().mockResolvedValue(undefined);
@@ -131,6 +137,7 @@ beforeEach(() => {
   // Sensible defaults; tests override as needed.
   getMissingSourceTxidDetails.mockResolvedValue([]);
   resolvePrevouts.mockResolvedValue(undefined);
+  detectOrphanedTxRecords.mockResolvedValue({ recordIds: new Map() });
   createProviderFromSettings.mockReturnValue({ getBlockHeight });
 });
 
