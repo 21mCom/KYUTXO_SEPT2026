@@ -95,6 +95,7 @@ const LONG_A_FIRST = LONG_A_TXS[0];
 const LONG_A_LAST = LONG_A_TXS.at(-1);
 const LONG_C_FIRST = LONG_C_TXS[0];
 const LONG_C_LAST = LONG_C_TXS.at(-1);
+const dateDaysAgo = (days) => new Date((NOW - days * DAY) * 1000).toISOString().slice(0, 10);
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -634,6 +635,60 @@ async function main() {
         await rowVisible(LONG_A_FIRST) &&
         !(await rowVisible(LONG_C_LAST)),
       `All wallets restores ${longRestoredAllCount} on page 1 of 3`,
+    );
+
+    // Date filtering from page 3 must reset to the first page of the
+    // filtered result, not leave the prior page-3 rows mounted. The A long
+    // fixture occupies a 21-to-19-days-ago window and has 101 rows, so its
+    // filtered result still crosses the 100-row boundary.
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 3');
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 3 of 3');
+    const dateRange = page.getByTestId('utxo-provenance-date-range');
+    await dateRange.getByTestId('input-utxo-provenance-date-range-from').fill(dateDaysAgo(21));
+    await dateRange.getByTestId('input-utxo-provenance-date-range-to').fill(dateDaysAgo(19));
+    await waitForPage('Page 1 of 2');
+    const dateFilteredCount = await page.getByTestId('prov-count').textContent();
+    const datePageOneCorrect =
+      dateFilteredCount?.startsWith('101 ') &&
+      await rowVisible(LONG_A_FIRST) &&
+      !(await rowVisible(LONG_A_LAST)) &&
+      !(await rowVisible(LONG_C_FIRST)) &&
+      !(await rowVisible(LONG_C_LAST));
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 2');
+    record(
+      'long-list-date-filter-reset',
+      datePageOneCorrect &&
+        await rowVisible(LONG_A_LAST) &&
+        !(await rowVisible(LONG_A_FIRST)) &&
+        !(await rowVisible(LONG_C_FIRST)) &&
+        !(await rowVisible(LONG_C_LAST)),
+      `date range leaves ${dateFilteredCount} A-wallet rows across two pages without stale C-wallet rows`,
+    );
+
+    // Clear the date window before testing the pattern filter, then move
+    // back to page 3 so the pattern change has to reset the page explicitly.
+    await dateRange.getByTestId('button-utxo-provenance-date-range-clear').click();
+    await waitForPage('Page 1 of 3');
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 3');
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 3 of 3');
+    await page.getByTestId('prov-class-filter').click();
+    await page.getByRole('option', { name: 'Has wallet reorg' }).click();
+    await waitForPage('Page 1 of 1');
+    const patternFilteredCount = await page.getByTestId('prov-count').textContent();
+    record(
+      'long-list-pattern-filter-reset',
+      patternFilteredCount?.startsWith('2 ') &&
+        await rowVisible(TX2, 0) &&
+        await rowVisible(TX2, 1) &&
+        !(await rowVisible(LONG_A_FIRST)) &&
+        !(await rowVisible(LONG_A_LAST)) &&
+        !(await rowVisible(LONG_C_LAST)),
+      `wallet-reorg pattern leaves ${patternFilteredCount} core rows on page 1 of 1 without stale long-list rows`,
     );
   } finally {
     await browser.close();
