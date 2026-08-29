@@ -95,6 +95,15 @@ const LONG_A_FIRST = LONG_A_TXS[0];
 const LONG_A_LAST = LONG_A_TXS.at(-1);
 const LONG_C_FIRST = LONG_C_TXS[0];
 const LONG_C_LAST = LONG_C_TXS.at(-1);
+const PAGE_BOUNDARY_DUST_OUTPOINTS = [
+  { txid: LONG_A_LAST, vout: 0, address: OWN_A, amountSats: 10_000 + LONG_A_COUNT - 1 },
+  ...LONG_C_TXS.slice(-6).map((txid, i) => ({
+    txid,
+    vout: 0,
+    address: OWN_C,
+    amountSats: 20_000 + LONG_C_COUNT - 6 + i,
+  })),
+];
 const dateDaysAgo = (days) => new Date((NOW - days * DAY) * 1000).toISOString().slice(0, 10);
 
 function resolveChromium() {
@@ -636,6 +645,62 @@ async function main() {
         !(await rowVisible(LONG_C_LAST)),
       `All wallets restores ${longRestoredAllCount} on page 1 of 3`,
     );
+
+    // Hide dust from page 3 after the user has navigated there. One additional
+    // page-2 row makes the exclusion cross the 200-row boundary: 206 rows
+    // become 199, so the control must reset to page 1 of 2 rather than leave
+    // the old page-3 slice mounted. The six C rows are exactly the original
+    // final page; the A row proves the filtered page-2 slice is also rebuilt.
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 3');
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 3 of 3');
+    await page.evaluate(async (outpoints) => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      await dustCrud.markOutpointsAsDust(outpoints);
+    }, PAGE_BOUNDARY_DUST_OUTPOINTS);
+    await page.getByTestId('switch-ignore-prov-dust').click();
+    await waitForPage('Page 1 of 2');
+    const hiddenBoundaryDustCount = await page.getByTestId('prov-count').textContent();
+    const boundaryDustRowsOnPageOne = await Promise.all(
+      PAGE_BOUNDARY_DUST_OUTPOINTS.map(({ txid, vout }) => rowVisible(txid, vout)),
+    );
+    record(
+      'long-list-hide-dust-pagination-reset',
+      hiddenBoundaryDustCount?.startsWith('199 ') &&
+        await rowVisible(LONG_A_FIRST) &&
+        boundaryDustRowsOnPageOne.every((visible) => !visible) &&
+        (await page.getByTestId('prov-dust-status').textContent()) === 'Hiding 7 flagged dust UTXOs',
+      `Hide dust resets page 3 to page 1 of 2 with ${hiddenBoundaryDustCount}; no flagged row remains mounted`,
+    );
+
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 2');
+    const boundaryDustRowsOnPageTwo = await Promise.all(
+      PAGE_BOUNDARY_DUST_OUTPOINTS.map(({ txid, vout }) => rowVisible(txid, vout)),
+    );
+    record(
+      'long-list-hide-dust-no-stale-rows',
+      await rowVisible(LONG_C_FIRST) &&
+        boundaryDustRowsOnPageTwo.every((visible) => !visible) &&
+        !(await rowVisible(LONG_A_LAST)),
+      'filtered page 2 contains live non-dust rows and no stale dust rows',
+    );
+
+    await page.getByTestId('switch-ignore-prov-dust').click();
+    await waitForPage('Page 1 of 3');
+    const restoredAfterHideDustCount = await page.getByTestId('prov-count').textContent();
+    record(
+      'long-list-hide-dust-page-count-restored',
+      restoredAfterHideDustCount?.startsWith('206 ') &&
+        await rowVisible(LONG_A_FIRST) &&
+        !(await page.getByTestId('prov-dust-status').isVisible().catch(() => false)),
+      `turning Hide dust off restores ${restoredAfterHideDustCount} on page 1 of 3`,
+    );
+    await page.evaluate(async (outpoints) => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      await dustCrud.unmarkDustOutpoints(outpoints.map(({ txid, vout }) => `${txid}:${vout}`));
+    }, PAGE_BOUNDARY_DUST_OUTPOINTS);
 
     // Date filtering from page 3 must reset to the first page of the
     // filtered result, not leave the prior page-3 rows mounted. The A long
