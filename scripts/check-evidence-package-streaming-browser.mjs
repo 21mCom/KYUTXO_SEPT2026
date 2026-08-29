@@ -469,14 +469,14 @@ async function main() {
       await streamToggle.click(); // back ON
       await page.getByTestId('button-export-evidence-package').click();
       // Give the stream a moment to start writing before cancelling.
-      await page.waitForFunction(() => window.__fsWrites.length > 0, { timeout: 15_000 }).catch(() => {});
+      await page.waitForFunction(() => window.__fsWrites.length > 0, undefined, { timeout: 15_000 }).catch(() => {});
       await page.getByTestId('button-cancel-evidence-package').click();
 
       const buttonReenabled = await page
         .waitForFunction(() => {
           const btn = document.querySelector('[data-testid="button-export-evidence-package"]');
           return btn && !btn.disabled;
-        }, { timeout: 30_000 })
+        }, undefined, { timeout: 30_000 })
         .then(() => true)
         .catch(() => false);
       step('[A3] export button re-enables after cancellation', buttonReenabled);
@@ -520,7 +520,7 @@ async function main() {
         .waitForFunction(() => {
           const btn = document.querySelector('[data-testid="button-export-evidence-package"]');
           return btn && !btn.disabled;
-        }, { timeout: 30_000 })
+        }, undefined, { timeout: 30_000 })
         .then(() => true)
         .catch(() => false);
       step('[A4] export button re-enables after the write failure', writeFailureButtonReenabled);

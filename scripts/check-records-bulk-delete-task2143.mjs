@@ -130,6 +130,7 @@ async function main() {
     // Wait for the toast confirming the deletion completed.
     await page.waitForFunction(
       () => document.body.innerText.includes('Records deleted') || document.body.innerText.includes('Partial deletion'),
+      undefined,
       { timeout: 20_000 },
     );
     const toastText = await page.evaluate(() => document.body.innerText.includes('Partial deletion') ? 'partial' : 'success');
