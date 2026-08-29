@@ -449,6 +449,31 @@ async function main() {
       detail: `text="${utxoDefault.text}" expected="2 / 23"`,
     });
 
+    // UTXOs owns the entity filters rendered beside the search box. Its
+    // Advanced Filters popover must not expose the linked-entity controls,
+    // because this page does not wire those component filters into its
+    // filtering path.
+    await openAdvancedFilters(page);
+    const linkedEntityControlTestIds = [
+      'input-entity-address',
+      'select-entity-wallet',
+      'select-entity-seed',
+      'select-entity-owner',
+      'select-entity-tag',
+      'select-entity-category',
+    ];
+    const linkedEntityControlCounts = await Promise.all(
+      linkedEntityControlTestIds.map((testId) => page.getByTestId(testId).count()),
+    );
+    await closePopover(page);
+    steps.push({
+      name: '[UTXOs] Advanced Filters omits linked-entity address and wallet/seed/owner/tag/category controls',
+      passed: linkedEntityControlCounts.every((count) => count === 0),
+      detail: linkedEntityControlTestIds
+        .map((testId, index) => `${testId}=${linkedEntityControlCounts[index]}`)
+        .join(' '),
+    });
+
     // NOTE: MultiSelectCombobox only ever renders UNselected options in its
     // list (selected values move to a Badge row above the trigger, and can
     // only be removed via the Badge's own X button — clicking an
