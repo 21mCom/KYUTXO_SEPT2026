@@ -220,6 +220,36 @@ describe("restore summary surfaces oversized attachment skips", () => {
     expect(successToast().description).toContain(", 2 snapshots.");
   });
 
+  it("reports only newly added snapshots for a legacy merge", async () => {
+    // The real legacy pipeline is covered by its runtime test; this boundary
+    // guard proves the selected merge mode and added-only baseMessage reach the
+    // success toast without the flow inflating the count.
+    peekManifest.mockResolvedValue(null);
+    runLegacyJsonRestore.mockResolvedValue({
+      baseMessage:
+        "Added 0 records (0 skipped), 0 tags, 0 categories, 0 vocabulary items, 0 templates, 1 snapshot.",
+      orphanedFilesRouted: 0,
+      orphanedFilesLost: 0,
+    });
+
+    render(<RestoreBackupFlow />);
+    await openDialogAndSelectFile(await makeLegacyZipFile());
+    await selectMerge();
+
+    fireEvent.click(screen.getByTestId("button-continue-restore"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("button-confirm-restore")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("button-confirm-restore"));
+
+    await waitFor(() => {
+      expect(runLegacyJsonRestore).toHaveBeenCalledTimes(1);
+      expect(successToast().description).toContain(", 1 snapshot.");
+    });
+    expect(runLegacyJsonRestore.mock.calls[0][2]).toBe("merge");
+    expect(successToast().description).not.toContain(", 2 snapshots.");
+  });
+
   it("names an oversized ORPHANED file in the merge summary alongside the orphaned-files notice", async () => {
     // A merge restore that met one orphaned attachment file which was ALSO
     // oversized: writeReview rejected it for size, so it is counted as an

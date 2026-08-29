@@ -51,7 +51,11 @@ import {
   clearAddressSyncState,
   getAllAddressSyncState,
 } from "@/lib/data/address-sync-crud";
-import { clearLineageSnapshots, getAllLineageSnapshots } from "@/lib/data/lineage-crud";
+import {
+  addLineageSnapshot,
+  clearLineageSnapshots,
+  getAllLineageSnapshots,
+} from "@/lib/data/lineage-crud";
 import {
   clearRecordOrigins,
   getAllRecordOrigins,
@@ -71,6 +75,28 @@ function backupRecord(id: number, inputString: string) {
     label: `Label ${inputString}`,
     tags: [],
     categories: [],
+  };
+}
+
+function backupSnapshot(snapshotId: string, narrative = "Legacy snapshot") {
+  return {
+    snapshotId,
+    targetType: "address",
+    targetAddress: "bc1qexampleexampleexampleexampleexampleexx",
+    targetTxid: "a".repeat(64),
+    targetVout: 0,
+    targetSegmentId: "segment-1",
+    segments: ["segment-1"],
+    evidenceTxids: [],
+    totalAmount: 1,
+    earliestDate: 1_600_000_000,
+    latestDate: 1_700_000_000,
+    hopCount: 1,
+    narrative,
+    redactedAddresses: [],
+    disclosureLevel: "full",
+    generatedAt: 1_700_000_100_000,
+    expiresAt: 1_800_000_000_000,
   };
 }
 
@@ -201,23 +227,7 @@ describe("runLegacyJsonRestore: replace mode (plaintext)", () => {
       lineageSnapshots: [
         {
           id: 42,
-          snapshotId: "legacy-snapshot-1",
-          targetType: "address",
-          targetAddress: "bc1qexampleexampleexampleexampleexampleexx",
-          targetTxid: "a".repeat(64),
-          targetVout: 0,
-          targetSegmentId: "segment-1",
-          segments: ["segment-1"],
-          evidenceTxids: [],
-          totalAmount: 1,
-          earliestDate: 1_600_000_000,
-          latestDate: 1_700_000_000,
-          hopCount: 1,
-          narrative: "Legacy snapshot",
-          redactedAddresses: [],
-          disclosureLevel: "full",
-          generatedAt: 1_700_000_100_000,
-          expiresAt: 1_800_000_000_000,
+          ...backupSnapshot("legacy-snapshot-1"),
         },
       ],
     });
@@ -369,6 +379,30 @@ describe("runLegacyJsonRestore: recordOrigins (source history)", () => {
 });
 
 describe("runLegacyJsonRestore: merge mode (plaintext)", () => {
+  it("reports only newly added lineage snapshots when a duplicate is skipped", async () => {
+    const duplicate = backupSnapshot("legacy-snapshot-duplicate", "Already present");
+    await addLineageSnapshot(duplicate, { skipNotification: true });
+
+    const file = await makePlainZip({
+      records: [],
+      lineageSnapshots: [
+        { id: 41, ...duplicate },
+        { id: 42, ...backupSnapshot("legacy-snapshot-new", "New snapshot") },
+      ],
+    });
+    const { cb } = makeCallbacks();
+
+    const summary = await runLegacyJsonRestore(file, "", "merge", cb);
+
+    const snapshots = await getAllLineageSnapshots();
+    expect(snapshots).toHaveLength(2);
+    expect(new Set(snapshots.map((snapshot) => snapshot.snapshotId))).toEqual(
+      new Set(["legacy-snapshot-duplicate", "legacy-snapshot-new"]),
+    );
+    expect(summary.baseMessage).toContain(", 1 snapshot.");
+    expect(summary.baseMessage).not.toContain(", 2 snapshots.");
+  });
+
   it("never fires onCleared, keeps pre-existing rows, de-dups colliding records, and uses the Added phrasing", async () => {
     // Pre-existing record colliding with backup record "addr-a".
     const [existingId] = await bulkCreateRecords(
