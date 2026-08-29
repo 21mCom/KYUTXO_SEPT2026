@@ -57,6 +57,9 @@ const EXACT_TX_BEFORE_LABEL = 'BIP-329 exact tx before';
 const EXACT_TX_START_LABEL = 'BIP-329 exact tx at start';
 const EXACT_TX_END_LABEL = 'BIP-329 exact tx at end';
 const EXACT_TX_AFTER_LABEL = 'BIP-329 exact tx after';
+const COMPLEX_CSV_IDENTIFIER = 'bc1qbip329csvcomplexvalueaddressxxxxxxxx';
+const COMPLEX_CSV_LABEL = 'CSV complex export, "quoted"\nlabel';
+const COMPLEX_CSV_NOTES = 'Notes, with "quoted"\nline break';
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -645,6 +648,56 @@ async function main() {
     ];
     assertExactCsvRows(csvDownload.rows, csvExpectedRows, 'exact-date');
     steps.push({ name: 'CSV exact-date count and download include only inclusive same-day boundaries', passed: true });
+
+    // ── Filtered CSV preserves commas, quotes, and line breaks ─────────────
+    // Seed this fixture after the other CSV assertions so it cannot alter their
+    // expected counts. The parsed download must retain the exact decoded cell
+    // values, not merely have the right number of rows.
+    await page.evaluate(
+      async ({ inputString, label, notes }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const now = Date.now();
+        await recordCrud.createRecord({
+          type: 'address',
+          inputString,
+          label,
+          notes,
+          createdAt: now,
+          updatedAt: now,
+        });
+      },
+      {
+        inputString: COMPLEX_CSV_IDENTIFIER,
+        label: COMPLEX_CSV_LABEL,
+        notes: COMPLEX_CSV_NOTES,
+      }
+    );
+
+    // Reload once so the CSV live count sees the dynamically imported record.
+    await page.reload({ waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000, label: 'bip329-export-browser' });
+    const complexCsvExportButton = page.getByTestId('button-export-csv');
+    await complexCsvExportButton.waitFor({ state: 'visible', timeout: 30_000 });
+    await page.getByTestId('input-csv-search').fill('CSV complex export');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
+        '1 record will be exported.',
+      { timeout: 30_000 }
+    );
+
+    const complexCsvDownload = await downloadCsv(page, complexCsvExportButton);
+    if (!/^kyutxo-records-\d{4}-\d{2}-\d{2}\.csv$/.test(complexCsvDownload.suggestedFilename)) {
+      throw new Error(`Unexpected complex CSV download filename: ${complexCsvDownload.suggestedFilename}`);
+    }
+    assertExactCsvRows(
+      complexCsvDownload.rows,
+      [
+        ['Type', 'Identifier', 'Label', 'Wallet', 'Owner', 'Tags', 'Categories', 'Notes', 'Amount', 'Date'],
+        ['address', COMPLEX_CSV_IDENTIFIER, COMPLEX_CSV_LABEL, '', '', '', '', COMPLEX_CSV_NOTES, '', ''],
+      ],
+      'complex-value-filtered'
+    );
+    steps.push({ name: 'filtered CSV preserves exact comma, quote, and line-break cell values', passed: true });
 
     console.log('\n[bip329-export-browser] all steps passed:');
     for (const s of steps) console.log(`  ✓ ${s.name}`);
