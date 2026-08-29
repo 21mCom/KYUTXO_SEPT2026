@@ -43,24 +43,26 @@ const baseSrc = scannerSrc.replace(ROOT_NEEDLE, ROOT_REPLACEMENT);
 
 // Real, currently-live schema strings (copied verbatim from database.ts) for
 // every table this guard covers, minus the leading `++id, ` primary key.
+// As of schema v41 (task #2142), the confirmed-dead indexes catalogued by
+// task #2127's audit have been removed from all of these.
 const LIVE_SCHEMAS = {
-  attachments: 'recordId, createdAt, identifier',
-  blockchainTransactions: '&txid, blockHeight, blockTime, syncedAt, hasOpReturn, rawFingerprintCaptured',
-  transactionParticipants: '[txid+role], txid, role, address, recordId, [prevTxid+prevVout]',
-  addressSyncState: '&address, recordId, lastSyncedAt',
-  derivationTemplates: 'fingerprint, scriptType, owner, walletName, seedName, createdAt',
-  utxoLineage: '[spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime',
-  custodySegments: '&segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate',
-  lineageSnapshots: '&snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel',
-  evidence: 'documentType, originalDate, *tags, importance, createdAt, updatedAt',
-  priceData: '[date+currency+asset], date, asset, currency, source, importedAt',
-  skippedAddresses: 'address, reason, syncRunTimestamp, dismissed, createdAt',
+  attachments: 'recordId, identifier',
+  blockchainTransactions: '&txid, blockTime',
+  transactionParticipants: 'txid, role, address, recordId, [prevTxid+prevVout]',
+  addressSyncState: '&address, lastSyncedAt',
+  derivationTemplates: '',
+  utxoLineage: '[spentTxid+spentVout], [createdTxid+createdVout], spentAddress, createdAddress',
+  custodySegments: '&segmentId, [originTxid+originVout], originAddress, currentAddress',
+  lineageSnapshots: '&snapshotId',
+  evidence: '',
+  priceData: '[date+currency+asset], date, asset',
+  skippedAddresses: 'syncRunTimestamp',
 };
 
 function makeDatabaseFixture(overrides = {}) {
   const schemas = { ...LIVE_SCHEMAS, ...overrides };
   const storesBody = Object.entries(schemas)
-    .map(([table, tokens]) => `      ${table}: '++id, ${tokens}',`)
+    .map(([table, tokens]) => `      ${table}: '++id${tokens ? `, ${tokens}` : ''}',`)
     .join('\n');
   return `
 export const CURRENT_SCHEMA_VERSION = 999;
@@ -122,18 +124,14 @@ test('passes against the real, unmodified schema for every configured table', ()
 // ---------------------------------------------------------------------------
 // Layer 2 (denylist): a proven-dead-and-removed index reappearing must fail
 // immediately, with an actionable message, even before the pin comparison.
-// Since no index has actually been removed from any of these tables yet
-// (that is deliberately left to a follow-up cleanup task — see the guard's
-// header comment), this exercises the mechanism with a synthetic denylist
-// entry patched into blockchainTransactions' config.
+// Task #2142 actually removed blockchainTransactions.syncedAt (among others)
+// from the live schema and populated the real denylist with it, so this
+// exercises the real config directly instead of a synthetic patch.
 // ---------------------------------------------------------------------------
 
-const BLOCKCHAIN_TX_DENYLIST_NEEDLE = "table: 'blockchainTransactions',\n    expectedTokens: ['txid', 'blockHeight', 'blockTime', 'syncedAt', 'hasOpReturn', 'rawFingerprintCaptured'],\n    denylist: new Map(),";
-const BLOCKCHAIN_TX_DENYLIST_REPLACEMENT = "table: 'blockchainTransactions',\n    expectedTokens: ['txid', 'blockHeight', 'blockTime', 'syncedAt', 'hasOpReturn', 'rawFingerprintCaptured'],\n    denylist: new Map([['syncedAt', 'synthetic test denylist entry']]),";
-
-test('fails when a synthetically denylisted index reappears', () => {
+test('fails when a real denylisted index (blockchainTransactions.syncedAt) reappears', () => {
   const result = runScanner({
-    scriptPatches: [[BLOCKCHAIN_TX_DENYLIST_NEEDLE, BLOCKCHAIN_TX_DENYLIST_REPLACEMENT]],
+    schemaOverrides: { blockchainTransactions: `${LIVE_SCHEMAS.blockchainTransactions}, syncedAt` },
   });
   assert.equal(
     result.status,
@@ -184,8 +182,8 @@ test('fails when a pinned index is removed from a covered table', () => {
 // must still fail for a brand-new, uncatalogued token.
 // ---------------------------------------------------------------------------
 
-const ADDRESS_SYNC_STATE_CONFIG_NEEDLE = "table: 'addressSyncState',\n    expectedTokens: ['address', 'recordId', 'lastSyncedAt'],\n    denylist: new Map(),";
-const ADDRESS_SYNC_STATE_CONFIG_REPLACEMENT = "table: 'addressSyncState',\n    expectedTokens: ['address', 'recordId', 'lastSyncedAt', 'phantomUnusedIndex'],\n    denylist: new Map(),";
+const ADDRESS_SYNC_STATE_CONFIG_NEEDLE = "table: 'addressSyncState',\n    expectedTokens: ['address', 'lastSyncedAt'],\n    denylist: new Map([\n      ['recordId', 'no `.where(\\'recordId\\')` caller anywhere; addressSyncState is always looked up by `address`, paged by `id`, or ordered by `lastSyncedAt` (removed in schema v41)'],\n    ]),\n    knownUnused: new Map(),";
+const ADDRESS_SYNC_STATE_CONFIG_REPLACEMENT = "table: 'addressSyncState',\n    expectedTokens: ['address', 'lastSyncedAt', 'phantomUnusedIndex'],\n    denylist: new Map([\n      ['recordId', 'no `.where(\\'recordId\\')` caller anywhere; addressSyncState is always looked up by `address`, paged by `id`, or ordered by `lastSyncedAt` (removed in schema v41)'],\n    ]),\n    knownUnused: new Map(),";
 
 test('fails when a pinned index has no real .where()/.orderBy() caller and is not catalogued as known-unused', () => {
   const result = runScanner({
@@ -201,12 +199,21 @@ test('fails when a pinned index has no real .where()/.orderBy() caller and is no
   assert.match(result.stderr, /'phantomUnusedIndex'/);
 });
 
-test('does not fail on a token already catalogued in knownUnused (e.g. addressSyncState.recordId)', () => {
-  // recordId is already catalogued as known-dead in the real config; sanity
-  // check it doesn't trip Layer 3 even though it genuinely has no caller.
-  const result = runScanner({});
-  assert.equal(result.status, 0);
-  assert.doesNotMatch(result.stderr, /'recordId'/);
+const ADDRESS_SYNC_STATE_KNOWN_UNUSED_REPLACEMENT = "table: 'addressSyncState',\n    expectedTokens: ['address', 'lastSyncedAt', 'phantomUnusedIndex'],\n    denylist: new Map([\n      ['recordId', 'no `.where(\\'recordId\\')` caller anywhere; addressSyncState is always looked up by `address`, paged by `id`, or ordered by `lastSyncedAt` (removed in schema v41)'],\n    ]),\n    knownUnused: new Map([['phantomUnusedIndex', 'synthetic test knownUnused entry']]),";
+
+test('does not fail on a token already catalogued in knownUnused', () => {
+  // A token with no real caller is still tolerated when explicitly
+  // catalogued in that table's knownUnused map (pending a future cleanup).
+  const result = runScanner({
+    schemaOverrides: { addressSyncState: `${LIVE_SCHEMAS.addressSyncState}, phantomUnusedIndex` },
+    scriptPatches: [[ADDRESS_SYNC_STATE_CONFIG_NEEDLE, ADDRESS_SYNC_STATE_KNOWN_UNUSED_REPLACEMENT]],
+  });
+  assert.equal(
+    result.status,
+    0,
+    `expected exit 0 for a knownUnused-catalogued index, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`
+  );
+  assert.doesNotMatch(result.stderr, /'phantomUnusedIndex'/);
 });
 
 // ---------------------------------------------------------------------------

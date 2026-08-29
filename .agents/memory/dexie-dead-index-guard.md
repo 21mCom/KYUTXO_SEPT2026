@@ -58,3 +58,16 @@ uncatalogued dead index. True `boolean` fields are a durable subclass of this
 bucket: IndexedDB rejects booleans as keys, so `.where(bool).equals(true)`
 always throws and the field can only ever be read in-memory — permanently
 unindexable, not just currently unused.
+
+**Before actually removing a `knownUnused` token** (the follow-up cleanup
+task performing the schema-version-bump half of this pattern): re-verify
+every catalogued token against current code, don't trust the audit
+catalogue as-is. A single-line `.where('field')` grep misses real call
+chains split across source lines (e.g. `db.table\n  .where(...)`); re-check
+with a multiline-aware search (`rg -U`). Doing this caught one cross-table
+false positive — a compound index the original audit had catalogued as dead
+actually had real callers via a multi-line call chain — so one catalogued
+token was kept instead of removed. Once confirmed dead, move the token from
+`knownUnused` to `denylist` (with the reason preserved, tagged with the
+schema version it was removed in) rather than deleting it — the denylist is
+what stops it from silently reappearing later.

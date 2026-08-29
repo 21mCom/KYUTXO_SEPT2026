@@ -17,7 +17,7 @@ import { reportDbUpgradeProgress } from './db-upgrade-progress';
  * KEEP IN SYNC when adding a new `this.version(N)` declaration — the
  * legacy-migration test asserts this matches the opened database.
  */
-export const CURRENT_SCHEMA_VERSION = 40;
+export const CURRENT_SCHEMA_VERSION = 41;
 
 // Import types needed for the class definition
 import type {
@@ -97,6 +97,65 @@ export class KYUTXODatabase extends Dexie {
 
   constructor() {
     super('KYUTXODatabase');
+
+    // v41: drop ~30 confirmed-dead indexes across 11 tables, following the
+    // same audit approach as the v40 `records` cleanup. Task #2127's guard
+    // (scripts/check-table-index-usage.js) catalogued every index across
+    // blockchainTransactions, transactionParticipants, utxoLineage,
+    // custodySegments, lineageSnapshots, priceData, skippedAddresses,
+    // addressSyncState, attachments, evidence, and derivationTemplates that
+    // has zero real `.where()`/`.orderBy()` caller. This change re-verified
+    // every catalogued token against the current codebase (a fresh grep
+    // across every table-qualified `.where()`/`.orderBy()` call site,
+    // including chained calls spanning multiple lines) before dropping it:
+    //   - blockchainTransactions: blockHeight, syncedAt, hasOpReturn,
+    //     rawFingerprintCaptured (the last two are booleans, which IndexedDB
+    //     can never validly index anyway) — kept: txid, blockTime.
+    //   - transactionParticipants: [txid+role] — kept: txid, role, address,
+    //     recordId, [prevTxid+prevVout].
+    //   - utxoLineage: consumingTxid, segmentId, spentOwned (boolean),
+    //     createdOwned (boolean), isChange (boolean), blockTime — kept:
+    //     [spentTxid+spentVout], [createdTxid+createdVout], spentAddress,
+    //     createdAddress.
+    //   - custodySegments: status, parentSegmentId, owner, walletName,
+    //     originDate — kept: segmentId, [originTxid+originVout],
+    //     originAddress, currentAddress.
+    //   - lineageSnapshots: targetType, targetAddress, targetSegmentId,
+    //     generatedAt, disclosureLevel — kept: snapshotId only.
+    //   - priceData: currency, source, importedAt — kept: date, asset, AND
+    //     [date+currency+asset], which the original audit had miscatalogued
+    //     as dead. Re-verification found real callers in
+    //     price-data-crud.ts's getPriceDataByKey/getPriceDataByDateCurrencyAssetKeys,
+    //     used by SourceOfFundsReport.tsx, PriceImport.tsx, StatementReport.tsx,
+    //     and backup/analyze.ts, so it is NOT dropped.
+    //   - skippedAddresses: address, reason, dismissed, createdAt — kept:
+    //     syncRunTimestamp only.
+    //   - addressSyncState: recordId — kept: address, lastSyncedAt.
+    //   - attachments: createdAt — kept: recordId, identifier.
+    //   - evidence: ALL secondary indexes (documentType, originalDate, tags,
+    //     importance, createdAt, updatedAt) — evidence-crud.ts reads the
+    //     whole table via `.toArray()` and filters in memory; collapses to
+    //     `++id` only.
+    //   - derivationTemplates: ALL secondary indexes (fingerprint, scriptType,
+    //     owner, walletName, seedName, createdAt) — derivation-templates-crud.ts
+    //     also reads the whole table via `.toArray()`; collapses to `++id` only.
+    // As with v40, IndexedDB index removal only drops the index B-tree — it
+    // does not rewrite row data — so this upgrade transaction is fast
+    // regardless of table size. Delta declaration — all other tables inherit
+    // unchanged from v40.
+    this.version(41).stores({
+      blockchainTransactions: '++id, &txid, blockTime',
+      transactionParticipants: '++id, txid, role, address, recordId, [prevTxid+prevVout]',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], spentAddress, createdAddress',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress',
+      lineageSnapshots: '++id, &snapshotId',
+      priceData: '++id, [date+currency+asset], date, asset',
+      skippedAddresses: '++id, syncRunTimestamp',
+      addressSyncState: '++id, &address, lastSyncedAt',
+      attachments: '++id, recordId, identifier',
+      evidence: '++id',
+      derivationTemplates: '++id',
+    });
 
     // v40: drop four `records` indexes that no read path ever queries by —
     // `syncDepth`, `flowType`, and the compound `[owner+id]`/`[walletName+id]`.

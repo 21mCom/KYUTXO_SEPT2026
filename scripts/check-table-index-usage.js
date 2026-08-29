@@ -13,18 +13,21 @@
 // and dynamic-dispatch) for blockchainTransactions, transactionParticipants,
 // utxoLineage, custodySegments, lineageSnapshots, priceData, skippedAddresses,
 // addressSyncState, attachments, evidence, and derivationTemplates. That
-// audit found a large amount of PRE-EXISTING dead-index bloat (see
-// KNOWN_UNUSED on each table config below) — unlike the `records` guard,
-// which was built AFTER task #2119 already removed its four dead indexes,
-// these tables have not yet had their dead indexes removed. Removing them is
-// a separate, deliberate schema migration (bumping CURRENT_SCHEMA_VERSION,
-// mirroring the v40 `records` change) that deserves its own reviewed task —
-// see the follow-up task filed alongside this guard. Silently pinning those
-// tokens as "verified used" would be dishonest, so instead each already-dead
-// token is catalogued explicitly in KNOWN_UNUSED with the audit's reasoning.
-// The guard does not fail on a catalogued token, but DOES fail the moment any
-// OTHER (i.e. new, uncatalogued) index shows up with no real caller — so the
-// bloat this audit found cannot silently get worse, only better.
+// audit found a large amount of PRE-EXISTING dead-index bloat, catalogued per
+// table with its reasoning at the time. Task #2142 re-verified every
+// catalogued token against the current codebase (a fresh, multi-line-aware
+// scan of every table-qualified `.where()`/`.orderBy()` call site — the
+// original audit had one false positive: priceData's `[date+currency+asset]`
+// compound index DOES have real callers via a call chain spanning multiple
+// source lines) and removed the genuinely dead ones from their
+// `this.version(N).stores({...})` declaration in schema v41, mirroring the
+// v40 `records` cleanup. Each removed token now lives in that table's
+// `denylist` map below so it can never silently reappear.
+//
+// This guard does not remove indexes itself — it PINS the current, audited
+// index set for each table and fails the moment any new (uncatalogued) index
+// shows up with no real caller, or a denylisted one reappears, so the bloat
+// this audit found and removed cannot silently regress.
 //
 // This guard has the same three layers as check-records-index-usage.js:
 //
@@ -38,8 +41,7 @@
 //   2. DENYLIST — indexes proven dead AND actually removed from a table's
 //      schema (mirroring the `records` v40 precedent) are named explicitly
 //      per table, so a reintroduction fails immediately with a specific,
-//      actionable message. Empty until a follow-up cleanup task removes one
-//      of the KNOWN_UNUSED indexes below.
+//      actionable message. Task #2142 populated these from the audit above.
 //
 //   3. BEST-EFFORT USAGE SCAN — every pinned token is checked against real
 //      `.where()`/`.orderBy()`/indexed-`.or()` usage in client/src. A token
@@ -64,139 +66,141 @@ const DATABASE_TS = path.resolve(ROOT, 'client/src/lib/database.ts');
 const TABLE_CONFIGS = [
   {
     table: 'blockchainTransactions',
-    expectedTokens: ['txid', 'blockHeight', 'blockTime', 'syncedAt', 'hasOpReturn', 'rawFingerprintCaptured'],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['blockHeight', 'no `.where()`/`.orderBy()` caller; blockHeight is only ever read as an in-memory row property, never used to look up or range-scan blockchainTransactions itself'],
-      ['syncedAt', 'no `.where()`/`.orderBy()` caller anywhere on blockchainTransactions'],
-      ['hasOpReturn', 'boolean field — IndexedDB rejects booleans as valid keys, so `.where(\'hasOpReturn\').equals(true)` throws a DataError; every real read filters in-memory via `.filter(tx => tx.hasOpReturn === true)` instead (see transaction-crud.ts\'s own comment on this)'],
-      ['rawFingerprintCaptured', 'boolean field — same unindexable-by-IndexedDB issue as hasOpReturn; only ever read as an in-memory property, never queried by index'],
+    expectedTokens: ['txid', 'blockTime'],
+    denylist: new Map([
+      ['blockHeight', 'no `.where()`/`.orderBy()` caller; blockHeight is only ever read as an in-memory row property, never used to look up or range-scan blockchainTransactions itself (removed in schema v41)'],
+      ['syncedAt', 'no `.where()`/`.orderBy()` caller anywhere on blockchainTransactions (removed in schema v41)'],
+      ['hasOpReturn', 'boolean field — IndexedDB rejects booleans as valid keys, so `.where(\'hasOpReturn\').equals(true)` throws a DataError; every real read filters in-memory via `.filter(tx => tx.hasOpReturn === true)` instead (removed in schema v41)'],
+      ['rawFingerprintCaptured', 'boolean field — same unindexable-by-IndexedDB issue as hasOpReturn; only ever read as an in-memory property, never queried by index (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
   {
     table: 'transactionParticipants',
-    expectedTokens: ['[txid+role]', 'txid', 'role', 'address', 'recordId', '[prevTxid+prevVout]'],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['[txid+role]', 'no `.where(\'[txid+role]\')` caller anywhere; every real query narrows via the plain `txid`, `role`, `address`, `recordId`, or `[prevTxid+prevVout]` index instead'],
+    expectedTokens: ['txid', 'role', 'address', 'recordId', '[prevTxid+prevVout]'],
+    denylist: new Map([
+      ['[txid+role]', 'no `.where(\'[txid+role]\')` caller anywhere; every real query narrows via the plain `txid`, `role`, `address`, `recordId`, or `[prevTxid+prevVout]` index instead (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
   {
     table: 'utxoLineage',
-    expectedTokens: [
-      '[spentTxid+spentVout]', '[createdTxid+createdVout]', 'consumingTxid', 'spentAddress',
-      'createdAddress', 'segmentId', 'spentOwned', 'createdOwned', 'isChange', 'blockTime',
-    ],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['consumingTxid', 'no `.where()`/`.orderBy()` caller; read only as an in-memory row property (grouping/dedup, blockTime lookups) after loading rows by another index'],
-      ['segmentId', 'no `.where(\'segmentId\')` caller on utxoLineage anywhere — custodySegments has its OWN, separately-indexed `segmentId` field that IS queried; do not confuse the two when auditing this entry'],
-      ['spentOwned', 'boolean field — same unindexable-by-IndexedDB issue as blockchainTransactions.hasOpReturn; read only via in-memory `.filter()`/property access'],
-      ['createdOwned', 'boolean field — same unindexable-by-IndexedDB issue; only production reads are in-memory. A regression test queries it by index on a throwaway test DB, but that is fixture-only, never live app behavior'],
-      ['isChange', 'boolean field — same unindexable-by-IndexedDB issue; read only via in-memory property access'],
-      ['blockTime', 'no `.where()`/`.orderBy()` caller on utxoLineage; rows are sorted by blockTime only in-memory after being loaded by another index'],
+    expectedTokens: ['[spentTxid+spentVout]', '[createdTxid+createdVout]', 'spentAddress', 'createdAddress'],
+    denylist: new Map([
+      ['consumingTxid', 'no `.where()`/`.orderBy()` caller; read only as an in-memory row property (grouping/dedup, blockTime lookups) after loading rows by another index (removed in schema v41)'],
+      ['segmentId', 'no `.where(\'segmentId\')` caller on utxoLineage anywhere — custodySegments has its OWN, separately-indexed `segmentId` field that IS queried; do not confuse the two when auditing this entry (removed in schema v41)'],
+      ['spentOwned', 'boolean field — same unindexable-by-IndexedDB issue as blockchainTransactions.hasOpReturn; read only via in-memory `.filter()`/property access (removed in schema v41)'],
+      ['createdOwned', 'boolean field — same unindexable-by-IndexedDB issue; only production reads are in-memory. A regression test queries it by index on a throwaway test DB, but that is fixture-only, never live app behavior (removed in schema v41)'],
+      ['isChange', 'boolean field — same unindexable-by-IndexedDB issue; read only via in-memory property access (removed in schema v41)'],
+      ['blockTime', 'no `.where()`/`.orderBy()` caller on utxoLineage; rows are sorted by blockTime only in-memory after being loaded by another index (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(['createdAddress', 'spentAddress']),
   },
   {
     table: 'custodySegments',
-    expectedTokens: [
-      'segmentId', '[originTxid+originVout]', 'originAddress', 'currentAddress', 'status',
-      'parentSegmentId', 'owner', 'walletName', 'originDate',
-    ],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['status', 'no `.where(\'status\')` caller anywhere on custodySegments'],
-      ['parentSegmentId', 'no `.where(\'parentSegmentId\')` caller anywhere — and per the CustodySegment type comment this field is RESERVED and currently never populated'],
-      ['owner', 'no `.where(\'owner\')` caller on custodySegments (records.owner queries are a different table\'s index)'],
-      ['walletName', 'no `.where(\'walletName\')` caller on custodySegments'],
-      ['originDate', 'no `.where()`/`.orderBy()` caller; only read as an in-memory property for display/export'],
+    expectedTokens: ['segmentId', '[originTxid+originVout]', 'originAddress', 'currentAddress'],
+    denylist: new Map([
+      ['status', 'no `.where(\'status\')` caller anywhere on custodySegments (removed in schema v41)'],
+      ['parentSegmentId', 'no `.where(\'parentSegmentId\')` caller anywhere — and per the CustodySegment type comment this field is RESERVED and currently never populated (removed in schema v41)'],
+      ['owner', 'no `.where(\'owner\')` caller on custodySegments (records.owner queries are a different table\'s index) (removed in schema v41)'],
+      ['walletName', 'no `.where(\'walletName\')` caller on custodySegments (removed in schema v41)'],
+      ['originDate', 'no `.where()`/`.orderBy()` caller; only read as an in-memory property for display/export (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
   {
     table: 'lineageSnapshots',
-    expectedTokens: ['snapshotId', 'targetType', 'targetAddress', 'targetSegmentId', 'generatedAt', 'disclosureLevel'],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['targetType', 'no `.where()`/`.orderBy()` caller anywhere; lineageSnapshots rows are only ever looked up by `snapshotId` or paged by `id`'],
-      ['targetAddress', 'no `.where()`/`.orderBy()` caller anywhere on lineageSnapshots'],
-      ['targetSegmentId', 'no `.where()`/`.orderBy()` caller anywhere on lineageSnapshots'],
-      ['generatedAt', 'no `.where()`/`.orderBy()` caller anywhere on lineageSnapshots'],
-      ['disclosureLevel', 'no `.where()`/`.orderBy()` caller anywhere on lineageSnapshots'],
+    expectedTokens: ['snapshotId'],
+    denylist: new Map([
+      ['targetType', 'no `.where()`/`.orderBy()` caller anywhere; lineageSnapshots rows are only ever looked up by `snapshotId` or paged by `id` (removed in schema v41)'],
+      ['targetAddress', 'no `.where()`/`.orderBy()` caller anywhere on lineageSnapshots (removed in schema v41)'],
+      ['targetSegmentId', 'no `.where()`/`.orderBy()` caller anywhere on lineageSnapshots (removed in schema v41)'],
+      ['generatedAt', 'no `.where()`/`.orderBy()` caller anywhere on lineageSnapshots (removed in schema v41)'],
+      ['disclosureLevel', 'no `.where()`/`.orderBy()` caller anywhere on lineageSnapshots (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
   {
     table: 'priceData',
-    expectedTokens: ['[date+currency+asset]', 'date', 'asset', 'currency', 'source', 'importedAt'],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['currency', 'no `.where(\'currency\')` caller; the one range query narrows by `date` alone and checks currency/asset via an in-memory `.and()` predicate'],
-      ['source', 'no `.where()`/`.orderBy()` caller anywhere on priceData'],
-      ['importedAt', 'no `.where()`/`.orderBy()` caller anywhere on priceData'],
-      ['[date+currency+asset]', 'no `.where(\'[date+currency+asset]\')` caller anywhere; the real lookup narrows by the plain `date` index instead'],
+    // NOTE: [date+currency+asset] was originally catalogued in KNOWN_UNUSED
+    // by the task #2127 audit as having "no caller — the real lookup narrows
+    // by the plain `date` index instead". Re-verification for this cleanup
+    // (task #2142) found that catalogue entry was WRONG: price-data-crud.ts's
+    // getPriceDataByKey() and getPriceDataByDateCurrencyAssetKeys() both do
+    // `.where('[date+currency+asset]')`, and are called from real app code
+    // (SourceOfFundsReport.tsx, PriceImport.tsx, StatementReport.tsx,
+    // backup/analyze.ts) — a multi-line `db.priceData\n  .where(...)` call
+    // chain that a naive same-line grep can miss. It stays pinned as used.
+    expectedTokens: ['[date+currency+asset]', 'date', 'asset'],
+    denylist: new Map([
+      ['currency', 'no `.where(\'currency\')` caller; the one range query narrows by `date` alone and checks currency/asset via an in-memory `.and()` predicate (removed in schema v41)'],
+      ['source', 'no `.where()`/`.orderBy()` caller anywhere on priceData (removed in schema v41)'],
+      ['importedAt', 'no `.where()`/`.orderBy()` caller anywhere on priceData (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
   {
     table: 'skippedAddresses',
-    expectedTokens: ['address', 'reason', 'syncRunTimestamp', 'dismissed', 'createdAt'],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['address', 'no `.where(\'address\')` caller on skippedAddresses (addressBlacklist and addressSyncState have their OWN, separately-indexed `address` fields that ARE queried)'],
-      ['reason', 'no `.where()`/`.orderBy()` caller anywhere on skippedAddresses'],
-      ['dismissed', 'no `.where(\'dismissed\')` caller anywhere, despite being a numeric 0|1 flag that IS a valid IndexedDB key — dismiss/undismiss flows always filter the already-loaded list in memory'],
-      ['createdAt', 'no `.where()`/`.orderBy()` caller anywhere on skippedAddresses'],
+    expectedTokens: ['syncRunTimestamp'],
+    denylist: new Map([
+      ['address', 'no `.where(\'address\')` caller on skippedAddresses (addressBlacklist and addressSyncState have their OWN, separately-indexed `address` fields that ARE queried) (removed in schema v41)'],
+      ['reason', 'no `.where()`/`.orderBy()` caller anywhere on skippedAddresses (removed in schema v41)'],
+      ['dismissed', 'no `.where(\'dismissed\')` caller anywhere, despite being a numeric 0|1 flag that IS a valid IndexedDB key — dismiss/undismiss flows always filter the already-loaded list in memory (removed in schema v41)'],
+      ['createdAt', 'no `.where()`/`.orderBy()` caller anywhere on skippedAddresses (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
   {
     table: 'addressSyncState',
-    expectedTokens: ['address', 'recordId', 'lastSyncedAt'],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['recordId', 'no `.where(\'recordId\')` caller anywhere; addressSyncState is always looked up by `address`, paged by `id`, or ordered by `lastSyncedAt`'],
+    expectedTokens: ['address', 'lastSyncedAt'],
+    denylist: new Map([
+      ['recordId', 'no `.where(\'recordId\')` caller anywhere; addressSyncState is always looked up by `address`, paged by `id`, or ordered by `lastSyncedAt` (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
   {
     table: 'attachments',
-    expectedTokens: ['recordId', 'createdAt', 'identifier'],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['createdAt', 'no `.where()`/`.orderBy()` caller anywhere on attachments'],
+    expectedTokens: ['recordId', 'identifier'],
+    denylist: new Map([
+      ['createdAt', 'no `.where()`/`.orderBy()` caller anywhere on attachments (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
   {
     table: 'evidence',
-    expectedTokens: ['documentType', 'originalDate', 'tags', 'importance', 'createdAt', 'updatedAt'],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['documentType', 'no `.where()`/`.orderBy()` caller anywhere; evidence-crud.ts reads the whole table via `.toArray()` and filters/sorts in memory'],
-      ['originalDate', 'no `.where()`/`.orderBy()` caller anywhere on evidence'],
-      ['tags', 'no `.where()`/`.orderBy()` caller anywhere on evidence'],
-      ['importance', 'no `.where()`/`.orderBy()` caller anywhere on evidence'],
-      ['createdAt', 'no `.where()`/`.orderBy()` caller anywhere on evidence'],
-      ['updatedAt', 'no `.where()`/`.orderBy()` caller anywhere on evidence'],
+    expectedTokens: [],
+    denylist: new Map([
+      ['documentType', 'no `.where()`/`.orderBy()` caller anywhere; evidence-crud.ts reads the whole table via `.toArray()` and filters/sorts in memory (removed in schema v41)'],
+      ['originalDate', 'no `.where()`/`.orderBy()` caller anywhere on evidence (removed in schema v41)'],
+      ['tags', 'no `.where()`/`.orderBy()` caller anywhere on evidence (removed in schema v41)'],
+      ['importance', 'no `.where()`/`.orderBy()` caller anywhere on evidence (removed in schema v41)'],
+      ['createdAt', 'no `.where()`/`.orderBy()` caller anywhere on evidence (removed in schema v41)'],
+      ['updatedAt', 'no `.where()`/`.orderBy()` caller anywhere on evidence (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
   {
     table: 'derivationTemplates',
-    expectedTokens: ['fingerprint', 'scriptType', 'owner', 'walletName', 'seedName', 'createdAt'],
-    denylist: new Map(),
-    knownUnused: new Map([
-      ['fingerprint', 'no `.where()`/`.orderBy()` caller anywhere; derivation-templates-crud.ts reads the whole table via `.toArray()`'],
-      ['scriptType', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates'],
-      ['owner', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates (records.owner is a different table\'s index)'],
-      ['walletName', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates'],
-      ['seedName', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates'],
-      ['createdAt', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates'],
+    expectedTokens: [],
+    denylist: new Map([
+      ['fingerprint', 'no `.where()`/`.orderBy()` caller anywhere; derivation-templates-crud.ts reads the whole table via `.toArray()` (removed in schema v41)'],
+      ['scriptType', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates (removed in schema v41)'],
+      ['owner', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates (records.owner is a different table\'s index) (removed in schema v41)'],
+      ['walletName', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates (removed in schema v41)'],
+      ['seedName', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates (removed in schema v41)'],
+      ['createdAt', 'no `.where()`/`.orderBy()` caller anywhere on derivationTemplates (removed in schema v41)'],
     ]),
+    knownUnused: new Map(),
     dynamicDispatchFields: new Set(),
   },
 ];
