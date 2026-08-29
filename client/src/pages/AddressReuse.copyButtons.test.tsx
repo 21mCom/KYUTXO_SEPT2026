@@ -134,8 +134,14 @@ describe("AddressReuse copy buttons", () => {
 
     fireEvent.click(getAllByTestId(`button-copy-address-${ADDRESS.slice(0, 8)}`)[0]);
 
-    expect(writeText).toHaveBeenCalledTimes(1);
-    expect(writeText).toHaveBeenCalledWith(ADDRESS);
+    // The copy path is async (it awaits resolveIdentifier(address) before
+    // deciding whether to copy or warn), so the clipboard write only lands
+    // after that promise settles — assert via waitFor rather than
+    // synchronously right after the click.
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith(ADDRESS);
+    });
     expect((await findAllByText("Address copied")).length).toBeGreaterThan(0);
   });
 
@@ -158,8 +164,11 @@ describe("AddressReuse copy buttons", () => {
 
     fireEvent.click(getAllByTestId(`button-copy-address-${ADDRESS.slice(0, 8)}`)[0]);
 
-    // The write was still attempted with the full address...
-    expect(writeText).toHaveBeenCalledWith(ADDRESS);
+    // As above, the write only happens after resolveIdentifier resolves —
+    // wait for it rather than asserting immediately after the click.
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(ADDRESS);
+    });
     // ...but it rejected, so the destructive failure toast surfaces.
     expect((await findAllByText("Copy failed")).length).toBeGreaterThan(0);
     expect((await findAllByText("Could not copy the address to your clipboard.")).length).toBeGreaterThan(0);
