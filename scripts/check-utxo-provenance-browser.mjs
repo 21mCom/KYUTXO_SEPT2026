@@ -104,6 +104,7 @@ const PAGE_BOUNDARY_DUST_OUTPOINTS = [
     amountSats: 20_000 + LONG_C_COUNT - 6 + i,
   })),
 ];
+const LIVE_UNFLAG_BOUNDARY_DUST_OUTPOINTS = PAGE_BOUNDARY_DUST_OUTPOINTS.slice(-2);
 const dateDaysAgo = (days) => new Date((NOW - days * DAY) * 1000).toISOString().slice(0, 10);
 
 function resolveChromium() {
@@ -687,6 +688,46 @@ async function main() {
       'filtered page 2 contains live non-dust rows and no stale dust rows',
     );
 
+    // Unflag two rows that were removed from the original final page while
+    // Hide dust remains enabled. The result grows from 199 to 201, crossing
+    // the 200-row boundary again; live dust CRUD must restore page 3 and its
+    // newly unflagged final-page row without requiring the toggle to be changed.
+    await page.evaluate(async (outpoints) => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      await dustCrud.unmarkDustOutpoints(outpoints.map(({ txid, vout }) => `${txid}:${vout}`));
+    }, LIVE_UNFLAG_BOUNDARY_DUST_OUTPOINTS);
+    await page.getByText('201 UTXOs', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
+    await waitForPage('Page 2 of 3');
+    const liveUnflagRowOnPageTwo = await rowVisible(LIVE_UNFLAG_BOUNDARY_DUST_OUTPOINTS[0].txid, LIVE_UNFLAG_BOUNDARY_DUST_OUTPOINTS[0].vout);
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 3 of 3');
+    const liveUnflagRowsOnPageThree = await Promise.all(
+      LIVE_UNFLAG_BOUNDARY_DUST_OUTPOINTS.map(({ txid, vout }) => rowVisible(txid, vout)),
+    );
+    const liveUnflagDustStatus = await page.getByTestId('prov-dust-status').textContent();
+    const hideDustStillEnabled = (await page.getByTestId('switch-ignore-prov-dust').getAttribute('data-state')) === 'checked';
+    const liveUnflagCount = await page.getByTestId('prov-count').textContent();
+    record(
+      'long-list-live-unflag-dust-pagination',
+      liveUnflagCount?.startsWith('201 ') &&
+        liveUnflagRowOnPageTwo &&
+        liveUnflagRowsOnPageThree[0] === false &&
+        liveUnflagRowsOnPageThree[1] === true &&
+        liveUnflagDustStatus === 'Hiding 5 flagged dust UTXOs' &&
+        hideDustStillEnabled,
+      `live unflagging shows ${liveUnflagCount} across pages 2/3; revived rows page 2=${liveUnflagRowOnPageTwo}, page 3=${liveUnflagRowsOnPageThree[1]}, Hide dust on=${hideDustStillEnabled}`,
+    );
+
+    // Clear the remaining boundary flags while the filter is still enabled so
+    // the existing toggle-off assertion continues to prove the original
+    // unfiltered count is restored.
+    await page.evaluate(async (outpoints) => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      await dustCrud.unmarkDustOutpoints(outpoints.map(({ txid, vout }) => `${txid}:${vout}`));
+    }, PAGE_BOUNDARY_DUST_OUTPOINTS);
+    await page.getByText('206 UTXOs', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByTestId('prov-dust-status').waitFor({ state: 'hidden', timeout: 15_000 });
+
     await page.getByTestId('switch-ignore-prov-dust').click();
     await waitForPage('Page 1 of 3');
     const restoredAfterHideDustCount = await page.getByTestId('prov-count').textContent();
@@ -697,10 +738,6 @@ async function main() {
         !(await page.getByTestId('prov-dust-status').isVisible().catch(() => false)),
       `turning Hide dust off restores ${restoredAfterHideDustCount} on page 1 of 3`,
     );
-    await page.evaluate(async (outpoints) => {
-      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
-      await dustCrud.unmarkDustOutpoints(outpoints.map(({ txid, vout }) => `${txid}:${vout}`));
-    }, PAGE_BOUNDARY_DUST_OUTPOINTS);
 
     // Date filtering from page 3 must reset to the first page of the
     // filtered result, not leave the prior page-3 rows mounted. The A long
