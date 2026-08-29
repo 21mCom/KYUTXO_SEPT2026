@@ -6,6 +6,7 @@ description: How to launch and drive the electron-builder asar in this environme
 ## Launch recipe
 - Upstream Electron (≥~39) binaries crash with "Floating point exception" here regardless of libraries; run the electron-builder `app.asar` under the nix `electron` (29.x) instead, with `--remote-debugging-port`, then drive with playwright-core `connectOverCDP`.
 - Do NOT use the nix `xvfb-run` wrapper: its bundled xorg-server **1.20** Xvfb segfaults the whole session instantly (even `electron --version` under it exits 139, with zero output). Launch a modern nix xorg-server **21.x** `Xvfb :99` directly and set `DISPLAY` on the electron process. The segfault also appears on normal SIGTERM teardown, so judge success by CDP coming up, not by exit code.
+- Do not enumerate and sort all of `/nix/store` with Node `fs.readdirSync` to locate Electron/Xvfb; the store mount can block for minutes. Prefer explicit env overrides, then a narrow shell glob with a timeout.
 - A repeatable guard exists: `scripts/check-packaged-electron-browser.mjs` (release gate, Step 4 of `scripts/electron-build.sh`; `KYUTXO_PACKAGED_SKIP_BUILD=1` reuses release/linux-unpacked). Package the asar for it via `electron-builder --dir --linux -c.npmRebuild=false` (npmRebuild would target electron 39 ABI and needs network).
 - Background processes die at the tool-call boundary: launch + drive in ONE shell command.
 - A `pkill -f 'pattern'` whose pattern appears in the same command line kills the shell itself (exit -1 with no output). Keep pkill in a separate command or bracket the pattern.

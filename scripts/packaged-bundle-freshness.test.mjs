@@ -306,6 +306,7 @@ const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGED_CHECK_SCRIPTS = [
   'check-wrong-password-packaged.mjs',
   'check-packaged-electron-browser.mjs',
+  'check-packaged-electrum-cancel-browser.mjs',
   'check-packaged-native-engine.mjs',
 ];
 

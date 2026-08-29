@@ -3321,6 +3321,17 @@ isValidation = true
     isValidation = true
 
     [[workflows.workflow]]
+    name = "packaged-electrum-cancel-browser-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "node scripts/check-packaged-electrum-cancel-browser.mjs"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+
+    [[workflows.workflow]]
     name = "vocab-combobox-duplicate-select-browser-check"
     author = "agent"
 
