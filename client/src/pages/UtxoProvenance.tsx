@@ -22,6 +22,7 @@ import {
   ANY_DATE_RANGE_FILTER,
   DateRangeFilter,
   dateRangeFilterToUnixRange,
+  isDateRangeFilterActive,
   type DateRangeFilterValue,
 } from "@/components/DateRangeFilter";
 import { useToast } from "@/hooks/use-toast";
@@ -576,6 +577,7 @@ export default function UtxoProvenancePage() {
                           isOpen={isOpen}
                           onToggle={() => toggleExpanded(r.utxo.id)}
                           onOpenHop={setOpenHop}
+                          dateFilterActive={isDateRangeFilterActive(dateRange)}
                         />
                       );
                     })}
@@ -606,12 +608,14 @@ function FragmentRow({
   isOpen,
   onToggle,
   onOpenHop,
+  dateFilterActive,
 }: {
   result: UtxoProvenanceResult;
   label: string | undefined;
   isOpen: boolean;
   onToggle: () => void;
   onOpenHop: (hop: ProvenanceHop) => void;
+  dateFilterActive: boolean;
 }) {
   const r = result;
   return (
@@ -659,6 +663,11 @@ function FragmentRow({
                   <span className="text-xs text-muted-foreground">No transaction details on record for this output.</span>
                 )}
               </div>
+              {dateFilterActive && (
+                <p className="text-xs italic text-muted-foreground" data-testid={`prov-ancestor-unscoped-note-${r.utxo.txid.slice(0, 8)}-${r.utxo.vout}`}>
+                  Ancestor spend history above shows the full trail and is not limited by the selected date range.
+                </p>
+              )}
             </div>
           </TableCell>
         </TableRow>
