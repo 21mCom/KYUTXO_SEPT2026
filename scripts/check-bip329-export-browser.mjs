@@ -40,6 +40,23 @@ const TX_BLOCK_DATE = '2024-02-10';
 const OUTPUT_BLOCK_DATE = '2024-03-10';
 const DATE_FILTER_FROM = '2024-02-01';
 const DATE_FILTER_TO = '2024-02-28';
+const EXACT_DATE = '2024-04-15';
+const EXACT_ADDR_BEFORE = 'bc1qbip329exactbeforeaddressxxxxxxxx';
+const EXACT_ADDR_START = 'bc1qbip329exactstartaddressxxxxxxxxx';
+const EXACT_ADDR_END = 'bc1qbip329exactendaddressxxxxxxxxxxx';
+const EXACT_ADDR_AFTER = 'bc1qbip329exactafteraddressxxxxxxxxxx';
+const EXACT_ADDR_BEFORE_LABEL = 'BIP-329 exact address before';
+const EXACT_ADDR_START_LABEL = 'BIP-329 exact address at start';
+const EXACT_ADDR_END_LABEL = 'BIP-329 exact address at end';
+const EXACT_ADDR_AFTER_LABEL = 'BIP-329 exact address after';
+const EXACT_TX_BEFORE = 'c'.repeat(64);
+const EXACT_TX_START = 'd'.repeat(64);
+const EXACT_TX_END = 'e'.repeat(64);
+const EXACT_TX_AFTER = 'f'.repeat(64);
+const EXACT_TX_BEFORE_LABEL = 'BIP-329 exact tx before';
+const EXACT_TX_START_LABEL = 'BIP-329 exact tx at start';
+const EXACT_TX_END_LABEL = 'BIP-329 exact tx at end';
+const EXACT_TX_AFTER_LABEL = 'BIP-329 exact tx after';
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -403,6 +420,138 @@ async function main() {
     await page.getByTestId('button-bip329-clear-filters').click();
     await waitForMatchCount(page, 3);
     steps.push({ name: 'clear filters restores the unfiltered count', passed: true });
+
+    // ── Exact-date boundaries use the local calendar day inclusively ─────────
+    // Add a separate fixture set after the earlier assertions so the existing
+    // filter checks remain isolated from these boundary rows. Address records
+    // use updatedAt (milliseconds); transaction records use their separately
+    // stored blockTime (Unix seconds). Each kind has rows immediately before,
+    // at both inclusive boundaries, and immediately after the target day.
+    await page.evaluate(
+      async ({
+        exactDate,
+        addresses,
+        transactions,
+      }) => {
+        const recordCrud = await import('/src/lib/data/record-crud.ts');
+        const txCrud = await import('/src/lib/data/transaction-crud.ts');
+        const localMillis = (date, time) => new Date(`${date}T${time}`).getTime();
+        const exactDay = [
+          localMillis(exactDate, '00:00:00.000'),
+          localMillis(exactDate, '23:59:59.999'),
+        ];
+        for (const address of addresses) {
+          await recordCrud.createRecord({
+            type: 'address',
+            inputString: address.ref,
+            label: address.label,
+            createdAt: address.updatedAt,
+            updatedAt: address.updatedAt,
+          });
+        }
+        for (const transaction of transactions) {
+          await recordCrud.createRecord({
+            type: 'transaction',
+            inputString: transaction.txid,
+            label: transaction.label,
+            createdAt: localMillis(exactDate, '12:00:00.000'),
+            updatedAt: localMillis(exactDate, '12:00:00.000'),
+          });
+          await txCrud.addTransaction({
+            txid: transaction.txid,
+            blockHeight: transaction.blockHeight,
+            blockTime: transaction.blockTime,
+            fee: 0,
+            feeRate: 0,
+            syncedAt: Date.now(),
+          });
+        }
+        if (exactDay[0] >= exactDay[1]) {
+          throw new Error('Exact-date fixture boundaries must be ordered');
+        }
+      },
+      {
+        exactDate: EXACT_DATE,
+        addresses: [
+          {
+            ref: EXACT_ADDR_BEFORE,
+            label: EXACT_ADDR_BEFORE_LABEL,
+            updatedAt: new Date(`${EXACT_DATE}T00:00:00.000`).getTime() - 1,
+          },
+          {
+            ref: EXACT_ADDR_START,
+            label: EXACT_ADDR_START_LABEL,
+            updatedAt: new Date(`${EXACT_DATE}T00:00:00.000`).getTime(),
+          },
+          {
+            ref: EXACT_ADDR_END,
+            label: EXACT_ADDR_END_LABEL,
+            updatedAt: new Date(`${EXACT_DATE}T23:59:59.999`).getTime(),
+          },
+          {
+            ref: EXACT_ADDR_AFTER,
+            label: EXACT_ADDR_AFTER_LABEL,
+            updatedAt: new Date(`${EXACT_DATE}T23:59:59.999`).getTime() + 1,
+          },
+        ],
+        transactions: [
+          {
+            txid: EXACT_TX_BEFORE,
+            label: EXACT_TX_BEFORE_LABEL,
+            blockHeight: 800010,
+            blockTime: Math.floor(new Date(`${EXACT_DATE}T00:00:00.000`).getTime() / 1000) - 1,
+          },
+          {
+            txid: EXACT_TX_START,
+            label: EXACT_TX_START_LABEL,
+            blockHeight: 800011,
+            blockTime: Math.floor(new Date(`${EXACT_DATE}T00:00:00.000`).getTime() / 1000),
+          },
+          {
+            txid: EXACT_TX_END,
+            label: EXACT_TX_END_LABEL,
+            blockHeight: 800012,
+            blockTime: Math.floor(new Date(`${EXACT_DATE}T23:59:59.999`).getTime() / 1000),
+          },
+          {
+            txid: EXACT_TX_AFTER,
+            label: EXACT_TX_AFTER_LABEL,
+            blockHeight: 800013,
+            blockTime: Math.floor(new Date(`${EXACT_DATE}T23:59:59.999`).getTime() / 1000) + 1,
+          },
+        ],
+      }
+    );
+    steps.push({ name: 'seeded local exact-date boundary address and transaction fixtures', passed: true });
+
+    // Reload once so the page's live queries see the boundary fixture writes
+    // and the date controls start from a clean, unfiltered state.
+    await page.reload({ waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000, label: 'bip329-export-browser' });
+    const exactExportButton = page.getByTestId('button-export-bip329');
+    await exactExportButton.waitFor({ state: 'visible', timeout: 30_000 });
+    await waitForMatchCount(page, 11);
+
+    const exactToggle = page.getByTestId('checkbox-bip329-date-range-exact');
+    await exactToggle.check();
+    if (!(await exactToggle.isChecked())) {
+      throw new Error('Exact date checkbox did not become checked');
+    }
+    await page.getByTestId('input-bip329-date-range-date').fill(EXACT_DATE);
+    await waitForMatchCount(page, 4);
+
+    const exactExpectedLines = [
+      { type: 'addr', ref: EXACT_ADDR_START, label: EXACT_ADDR_START_LABEL },
+      { type: 'addr', ref: EXACT_ADDR_END, label: EXACT_ADDR_END_LABEL },
+      { type: 'tx', ref: EXACT_TX_START, label: EXACT_TX_START_LABEL },
+      { type: 'tx', ref: EXACT_TX_END, label: EXACT_TX_END_LABEL },
+    ];
+    assertExactLines(
+      await downloadJsonl(page, exactExportButton),
+      exactExpectedLines,
+      'exact-date'
+    );
+    steps.push({ name: 'exact-date count and download include only inclusive same-day boundaries', passed: true });
 
     console.log('\n[bip329-export-browser] all steps passed:');
     for (const s of steps) console.log(`  ✓ ${s.name}`);
