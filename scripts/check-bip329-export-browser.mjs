@@ -99,6 +99,26 @@ async function pickSelectOption(page, triggerTestId, optionName) {
   await page.getByRole('option', { name: optionName, exact: true }).click();
 }
 
+function parseJsonl(content) {
+  return content
+    .split('\n')
+    .filter((l) => l.trim())
+    .map((l) => JSON.parse(l));
+}
+
+async function downloadJsonl(page, exportButton) {
+  const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+  await exportButton.click();
+  const download = await downloadPromise;
+  return parseJsonl(await readFile(await download.path(), 'utf8'));
+}
+
+function assertExactLines(actual, expected, filterName) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${filterName} export wrong: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
 async function main() {
   const exe = resolveChromium();
   console.log(`[bip329-export-browser] chromium: ${exe}`);
@@ -196,27 +216,16 @@ async function main() {
     steps.push({ name: `downloaded ${suggested}`, passed: true });
 
     // ── Verify JSONL content round-trips the seeded labels ──────────────────
-    const lines = content
-      .split('\n')
-      .filter((l) => l.trim())
-      .map((l) => JSON.parse(l));
-
-    const byRef = new Map(lines.map((l) => [l.ref, l]));
-    const addrLine = byRef.get(ADDR);
-    if (!addrLine || addrLine.type !== 'addr' || addrLine.label !== ADDR_LABEL) {
-      throw new Error(`addr line wrong or missing: ${JSON.stringify(addrLine)}`);
-    }
-    const txLine = byRef.get(TXID);
-    if (!txLine || txLine.type !== 'tx' || txLine.label !== TX_LABEL) {
-      throw new Error(`tx line wrong or missing: ${JSON.stringify(txLine)}`);
-    }
-    const outLine = byRef.get(OUTPOINT);
-    if (!outLine || outLine.type !== 'output' || outLine.label !== OUTPUT_LABEL || outLine.spendable !== 'false') {
-      throw new Error(`output line wrong or missing: ${JSON.stringify(outLine)}`);
-    }
+    const lines = parseJsonl(content);
+    const expectedAllLines = [
+      { type: 'addr', ref: ADDR, label: ADDR_LABEL },
+      { type: 'tx', ref: TXID, label: TX_LABEL },
+      { type: 'output', ref: OUTPOINT, label: OUTPUT_LABEL, spendable: 'false' },
+    ];
+    assertExactLines(lines, expectedAllLines, 'unfiltered');
     steps.push({ name: 'exported JSONL contains addr/tx/output labels (spendable round-trips)', passed: true });
 
-    // ── Filter controls: live match count tracks every dimension ────────────
+    // ── Filtered exports: every file must match its live count exactly ──────
     await waitForMatchCount(page, 3);
     steps.push({ name: 'live match count starts at 3 (unfiltered)', passed: true });
 
@@ -225,6 +234,12 @@ async function main() {
     if (await page.getByTestId('checkbox-bip329-utxo-only').count() !== 0) {
       throw new Error('UTXO refs only checkbox should be hidden for the address kind');
     }
+    assertExactLines(
+      await downloadJsonl(page, exportButton),
+      [expectedAllLines[0]],
+      'addresses'
+    );
+    steps.push({ name: 'Addresses download has exactly its 1 counted label', passed: true });
 
     await pickSelectOption(page, 'select-bip329-type', 'Transactions');
     await waitForMatchCount(page, 1);
@@ -233,12 +248,24 @@ async function main() {
     if (await utxoOnly.isChecked()) {
       throw new Error('UTXO refs only checkbox should start unchecked');
     }
+    assertExactLines(
+      await downloadJsonl(page, exportButton),
+      [expectedAllLines[1]],
+      'transactions'
+    );
+    steps.push({ name: 'Transactions download has exactly its 1 counted label', passed: true });
 
     await utxoOnly.check();
     await waitForMatchCount(page, 1);
     if (!(await utxoOnly.isChecked())) {
       throw new Error('UTXO refs only checkbox did not become checked');
     }
+    assertExactLines(
+      await downloadJsonl(page, exportButton),
+      [expectedAllLines[2]],
+      'transactions plus UTXO refs only'
+    );
+    steps.push({ name: 'Transactions plus UTXO refs only download has exactly its 1 counted label', passed: true });
 
     await utxoOnly.uncheck();
     await waitForMatchCount(page, 1);
@@ -251,9 +278,25 @@ async function main() {
     if (await page.getByTestId('checkbox-bip329-utxo-only').count() !== 0) {
       throw new Error('UTXO refs only checkbox should be hidden for the other kind');
     }
+    // "Other" records have no BIP-329 representation, so a zero-count export
+    // intentionally shows the existing no-labels toast instead of downloading
+    // an empty JSONL file.
+    const otherDownloadPromise = page.waitForEvent('download', { timeout: 1_000 }).catch(() => null);
+    await exportButton.click();
+    if (await otherDownloadPromise) {
+      throw new Error('Other export must not download a file when its live count is 0');
+    }
+    await page.getByText('No Labels To Export', { exact: true }).waitFor({ state: 'visible', timeout: 5_000 });
+    steps.push({ name: 'Other has 0 counted labels and downloads no empty file', passed: true });
 
     await pickSelectOption(page, 'select-bip329-type', 'All');
     await waitForMatchCount(page, 3);
+    assertExactLines(
+      await downloadJsonl(page, exportButton),
+      expectedAllLines,
+      'all'
+    );
+    steps.push({ name: 'All download has exactly its 3 counted labels', passed: true });
     steps.push({ name: 'type filter covers address / transaction / UTXO-only / other / all', passed: true });
 
     await pickSelectOption(page, 'select-bip329-tag', TAG);
@@ -273,17 +316,8 @@ async function main() {
     steps.push({ name: 'search filter narrows the count (debounced)', passed: true });
 
     // ── Filtered export downloads only the matching lines ───────────────────
-    const filteredDownloadPromise = page.waitForEvent('download', { timeout: 30_000 });
-    await exportButton.click();
-    const filteredDownload = await filteredDownloadPromise;
-    const filteredContent = await readFile(await filteredDownload.path(), 'utf8');
-    const filteredLines = filteredContent
-      .split('\n')
-      .filter((l) => l.trim())
-      .map((l) => JSON.parse(l));
-    if (filteredLines.length !== 1 || filteredLines[0].ref !== OUTPOINT || filteredLines[0].label !== OUTPUT_LABEL) {
-      throw new Error(`filtered export wrong: ${JSON.stringify(filteredLines)}`);
-    }
+    const filteredLines = await downloadJsonl(page, exportButton);
+    assertExactLines(filteredLines, [expectedAllLines[2]], 'search-filtered');
     steps.push({ name: 'filtered export downloads only the matching label', passed: true });
 
     // ── Clear filters restores the full set ─────────────────────────────────
