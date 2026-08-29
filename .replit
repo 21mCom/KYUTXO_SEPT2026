@@ -143,6 +143,10 @@ args = "transactions-entity-filter-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "transactions-utxos-filter-controls-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "crud-guards"
 
 [[workflows.workflow.tasks]]
@@ -1754,6 +1758,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-transactions-entity-filter-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "transactions-utxos-filter-controls-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-transactions-utxos-filter-controls-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
