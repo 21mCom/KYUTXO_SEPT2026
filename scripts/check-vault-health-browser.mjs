@@ -66,6 +66,7 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
+import { unlockIfNeeded } from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -239,12 +240,7 @@ async function main() {
 
     // ── Create the vault ────────────────────────────────────────────────
     await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
-    const pwInput = page.getByTestId('input-password');
-    await pwInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await pwInput.fill(SETUP_PASSWORD);
-    await page.getByTestId('input-confirm-password').fill(SETUP_PASSWORD);
-    await page.getByTestId('button-submit').click();
-    await pwInput.waitFor({ state: 'detached', timeout: 30_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD);
     await page.getByTestId('text-page-title').waitFor({ state: 'visible', timeout: 30_000 });
 
     // Let the automatic first check (against the still-empty vault) settle
