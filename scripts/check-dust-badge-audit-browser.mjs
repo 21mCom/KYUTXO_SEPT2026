@@ -329,6 +329,68 @@ async function main() {
       detail: `button-unmark-dust-${recordId} visible after click; dustFlags=${flagsForDownstreamChecks} (expected 2)`,
     });
 
+    // ── Rescan: toolbar counts must follow the new scan, not old flags ────────
+    // Lowering the threshold excludes the 800-sat output while leaving the
+    // 700-sat output as a currently matching, already-flagged dust output.
+    // Both flags remain in storage, so this specifically catches a toolbar
+    // that counts stale flags instead of the latest scan's outputs.
+    const thresholdInput = page.getByTestId('input-dust-threshold');
+    await thresholdInput.fill('750');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="text-results-summary"]')?.textContent?.includes('750'),
+      undefined,
+      { timeout: 30_000 },
+    );
+    const markAllAfterThresholdRescan = await markAllBtn.isVisible().catch(() => false);
+    const unmarkAllAfterThresholdRescan = await unmarkAllBtn
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(async () => (await unmarkAllBtn.textContent()) ?? '')
+      .catch(() => '');
+    const staleFlagsAfterThresholdRescan = await page
+      .getByTestId('text-stale-flags-summary')
+      .waitFor({ state: 'visible', timeout: 30_000 })
+      .then(async () => (await page.getByTestId('text-stale-flags-summary').textContent()) ?? '')
+      .catch(() => '');
+    const output0ActionsAfterThresholdRescan = await page
+      .locator(
+        `[data-testid="button-mark-output-${recordId}-${DUST_TXID}-${DUST_VOUT}"], [data-testid="button-unmark-output-${recordId}-${DUST_TXID}-${DUST_VOUT}"]`,
+      )
+      .count();
+    const output1UnmarkAfterThresholdRescan = await page
+      .getByTestId(`button-unmark-output-${recordId}-${DUST_TXID}-${SECOND_DUST_VOUT}`)
+      .isVisible()
+      .catch(() => false);
+    const flagsAfterThresholdRescan = await page.evaluate(async () => {
+      const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
+      return (await dustCrud.getAllDustFlags()).length;
+    });
+    steps.push({
+      name: 'Threshold rescan refreshed toolbar counts to current flagged outputs',
+      passed:
+        !markAllAfterThresholdRescan &&
+        /Unmark all\s*\(1\)/i.test(unmarkAllAfterThresholdRescan) &&
+        /1\s*dust flag/i.test(staleFlagsAfterThresholdRescan) &&
+        output0ActionsAfterThresholdRescan === 0 &&
+        output1UnmarkAfterThresholdRescan &&
+        flagsAfterThresholdRescan === 2,
+      detail: `summary=750 sats markAllVisible=${markAllAfterThresholdRescan} unmarkAll="${unmarkAllAfterThresholdRescan.trim()}" stale="${staleFlagsAfterThresholdRescan.trim()}" excludedOutput0Actions=${output0ActionsAfterThresholdRescan} output1UnmarkVisible=${output1UnmarkAfterThresholdRescan} storedDustFlags=${flagsAfterThresholdRescan} (expected current toolbar count 1, stale flag retained in storage)`,
+    });
+
+    // Restore the original threshold so the existing badge and audit checks
+    // continue to exercise both seeded outputs after this rescan assertion.
+    await thresholdInput.fill('1000');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="text-results-summary"]')?.textContent?.includes('1,000'),
+      undefined,
+      { timeout: 30_000 },
+    );
+    const unmarkAllAfterThresholdRestore = await unmarkAllBtn.textContent();
+    steps.push({
+      name: 'Restoring the threshold brought both flagged outputs back into the toolbar',
+      passed: /Unmark all\s*\(2\)/i.test(unmarkAllAfterThresholdRestore ?? ''),
+      detail: `unmarkAll="${(unmarkAllAfterThresholdRestore ?? '').trim()}" (expected 2)`,
+    });
+
     // ── UTXOs page: group-level "2 dust" badge + per-UTXO "Dust" badge ──────
     await page.goto(`${BASE_URL}utxos`, { waitUntil: 'load', timeout: 60_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000, label: 'dust-badge-audit-browser' });
