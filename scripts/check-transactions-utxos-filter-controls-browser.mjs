@@ -37,6 +37,9 @@
 //      directions, and exercises the single "Clear all filters" button
 //      (whose badge counts each SELECTED VALUE per entity dimension — a
 //      different, easy-to-regress semantic from the Transactions page).
+//   5. Applies distinct filters on both pages, then uses browser Back and
+//      Forward to confirm history restores each route with only its own
+//      controls/filter state and that the restored controls remain usable.
 //
 // Everything runs offline against IndexedDB — no network request leaves the
 // machine. Usage: node scripts/check-transactions-utxos-filter-controls-browser.mjs
@@ -160,7 +163,9 @@ async function clickEl(page, testId) {
  * wedges below).
  */
 async function pickComboboxValue(page, testId, value) {
-  await page.getByTestId(testId).click();
+  const trigger = page.getByTestId(testId);
+  await trigger.waitFor({ state: 'visible' });
+  await trigger.dispatchEvent('click');
   const option = page.getByRole('option', { name: value, exact: true });
   await option.waitFor({ state: 'visible' });
   await option.dispatchEvent('click');
@@ -198,6 +203,19 @@ async function setInputValue(page, testId, value) {
 
 async function navigateInApp(page, linkTestId, expectedPath) {
   await clickEl(page, linkTestId);
+  await page.waitForFunction(
+    (path) => window.location.pathname === path,
+    expectedPath,
+    { timeout: 15_000 },
+  );
+}
+
+async function navigateHistory(page, direction, expectedPath) {
+  if (direction === 'back') {
+    await page.goBack({ timeout: 15_000 }).catch(() => null);
+  } else {
+    await page.goForward({ timeout: 15_000 }).catch(() => null);
+  }
   await page.waitForFunction(
     (path) => window.location.pathname === path,
     expectedPath,
@@ -653,6 +671,77 @@ async function main() {
       detail: linkedEntityControlTestIds
         .map((testId, index) => `${testId}=${transactionControlsAfterTransition[index]}`)
         .join(' '),
+    });
+
+    // ── browser history navigation ─────────────────────────────────────────
+    // Apply different filters before using the browser history controls. The
+    // pages intentionally reset list filters on a route remount, so the
+    // Back/Forward assertions below ensure a restored route does not inherit
+    // the other page's state (and that its own controls are mounted again).
+    await pickComboboxValue(page, 'select-entity-wallet', 'Alpha');
+    await closePopover(page);
+    const transactionHistoryFilter = await waitForText(page, totalTransactionsText, N_ALPHA);
+    steps.push({
+      name: '[History] Transactions wallet=Alpha filter is active before navigation',
+      passed: transactionHistoryFilter.ok,
+      detail: `total="${transactionHistoryFilter.text}" expected=${N_ALPHA}`,
+    });
+
+    await navigateInApp(page, 'link-utxos', '/utxos');
+    await page.getByTestId('text-utxo-count').waitFor({ state: 'visible', timeout: 15_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 1_000 });
+    await pickComboboxValue(page, 'select-owner', 'Bob');
+    await closePopover(page);
+    const utxoHistoryFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
+    steps.push({
+      name: '[History] UTXOs owner=Bob filter is active before navigation',
+      passed: utxoHistoryFilter.ok,
+      detail: `text="${utxoHistoryFilter.text}" expected="1 / ${N_BETA}"`,
+    });
+
+    await navigateHistory(page, 'back', '/transactions');
+    await page.getByTestId('text-total-transactions').waitFor({ state: 'visible', timeout: 15_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 1_000 });
+    const transactionsAfterBack = await waitForText(page, totalTransactionsText, N_ALPHA + N_BETA);
+    await openAdvancedFilters(page);
+    const transactionControlsAfterBack = await Promise.all(
+      linkedEntityControlTestIds.map((testId) => page.getByTestId(testId).count()),
+    );
+    await closePopover(page);
+    steps.push({
+      name: '[History] browser Back restores Transactions without inheriting the UTXOs filter',
+      passed: transactionsAfterBack.ok && transactionControlsAfterBack.every((count) => count === 1),
+      detail: `total="${transactionsAfterBack.text}" expected=${N_ALPHA + N_BETA} ` +
+        linkedEntityControlTestIds
+          .map((testId, index) => `${testId}=${transactionControlsAfterBack[index]}`)
+          .join(' '),
+    });
+
+    await navigateHistory(page, 'forward', '/utxos');
+    await page.getByTestId('text-utxo-count').waitFor({ state: 'visible', timeout: 15_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 1_000 });
+    const utxosAfterForward = await waitForText(page, utxoCountText, '2 / 23');
+    await openAdvancedFilters(page);
+    const linkedControlsAfterForward = await Promise.all(
+      linkedEntityControlTestIds.map((testId) => page.getByTestId(testId).count()),
+    );
+    await closePopover(page);
+    steps.push({
+      name: '[History] browser Forward restores UTXOs without inheriting the Transactions filter',
+      passed: utxosAfterForward.ok && linkedControlsAfterForward.every((count) => count === 0),
+      detail: `text="${utxosAfterForward.text}" expected="2 / 23" ` +
+        linkedEntityControlTestIds
+          .map((testId, index) => `${testId}=${linkedControlsAfterForward[index]}`)
+          .join(' '),
+    });
+
+    await pickComboboxValue(page, 'select-owner', 'Bob');
+    await closePopover(page);
+    const utxoAfterForwardFilter = await waitForText(page, utxoCountText, `1 / ${N_BETA}`);
+    steps.push({
+      name: '[History] UTXOs owner filter remains usable after browser Forward',
+      passed: utxoAfterForwardFilter.ok,
+      detail: `text="${utxoAfterForwardFilter.text}" expected="1 / ${N_BETA}"`,
     });
   } finally {
     await browser.close();
