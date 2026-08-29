@@ -647,11 +647,16 @@ async function main() {
       `All wallets restores ${longRestoredAllCount} on page 1 of 3`,
     );
 
-    // Hide dust from page 3 after the user has navigated there. One additional
-    // page-2 row makes the exclusion cross the 200-row boundary: 206 rows
-    // become 199, so the control must reset to page 1 of 2 rather than leave
-    // the old page-3 slice mounted. The six C rows are exactly the original
-    // final page; the A row proves the filtered page-2 slice is also rebuilt.
+    // Enable Hide dust before navigating to page 3, then mark rows from that
+    // later page through the live dust CRUD path. The exclusion crosses the
+    // 200-row boundary: 206 rows become 199, so the control must clamp to
+    // page 2 of 2 and replace the old page-3 slice without a toggle change.
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 2 of 3');
+    await page.getByTestId('prov-next').click();
+    await waitForPage('Page 3 of 3');
+    await page.getByTestId('switch-ignore-prov-dust').click();
+    await waitForPage('Page 1 of 3');
     await page.getByTestId('prov-next').click();
     await waitForPage('Page 2 of 3');
     await page.getByTestId('prov-next').click();
@@ -660,23 +665,23 @@ async function main() {
       const dustCrud = await import('/src/lib/data/dust-flags-crud.ts');
       await dustCrud.markOutpointsAsDust(outpoints);
     }, PAGE_BOUNDARY_DUST_OUTPOINTS);
-    await page.getByTestId('switch-ignore-prov-dust').click();
-    await waitForPage('Page 1 of 2');
+    await page.getByText('199 UTXOs', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
+    await waitForPage('Page 2 of 2');
     const hiddenBoundaryDustCount = await page.getByTestId('prov-count').textContent();
-    const boundaryDustRowsOnPageOne = await Promise.all(
+    const boundaryDustRowsAfterMark = await Promise.all(
       PAGE_BOUNDARY_DUST_OUTPOINTS.map(({ txid, vout }) => rowVisible(txid, vout)),
     );
     record(
-      'long-list-hide-dust-pagination-reset',
+      'long-list-live-mark-dust-pagination',
       hiddenBoundaryDustCount?.startsWith('199 ') &&
-        await rowVisible(LONG_A_FIRST) &&
-        boundaryDustRowsOnPageOne.every((visible) => !visible) &&
-        (await page.getByTestId('prov-dust-status').textContent()) === 'Hiding 7 flagged dust UTXOs',
-      `Hide dust resets page 3 to page 1 of 2 with ${hiddenBoundaryDustCount}; no flagged row remains mounted`,
+        await rowVisible(LONG_C_FIRST) &&
+        !(await rowVisible(LONG_A_FIRST)) &&
+        boundaryDustRowsAfterMark.every((visible) => !visible) &&
+        (await page.getByTestId('prov-dust-status').textContent()) === 'Hiding 7 flagged dust UTXOs' &&
+        (await page.getByTestId('switch-ignore-prov-dust').getAttribute('data-state')) === 'checked',
+      `live dust marking clamps page 3 to page 2 of 2 with ${hiddenBoundaryDustCount}; rebuilt slice has C rows, no flagged row remains mounted, and Hide dust stays on`,
     );
 
-    await page.getByTestId('prov-next').click();
-    await waitForPage('Page 2 of 2');
     const boundaryDustRowsOnPageTwo = await Promise.all(
       PAGE_BOUNDARY_DUST_OUTPOINTS.map(({ txid, vout }) => rowVisible(txid, vout)),
     );
@@ -697,6 +702,8 @@ async function main() {
       await dustCrud.unmarkDustOutpoints(outpoints.map(({ txid, vout }) => `${txid}:${vout}`));
     }, LIVE_UNFLAG_BOUNDARY_DUST_OUTPOINTS);
     await page.getByText('201 UTXOs', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
+    await waitForPage('Page 3 of 3');
+    await page.getByTestId('prov-prev').click();
     await waitForPage('Page 2 of 3');
     const liveUnflagRowOnPageTwo = await rowVisible(LIVE_UNFLAG_BOUNDARY_DUST_OUTPOINTS[0].txid, LIVE_UNFLAG_BOUNDARY_DUST_OUTPOINTS[0].vout);
     await page.getByTestId('prov-next').click();
