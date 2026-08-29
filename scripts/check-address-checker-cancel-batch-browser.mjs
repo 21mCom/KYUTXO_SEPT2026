@@ -15,16 +15,18 @@
 // further batches.
 //
 // A browser tab cannot open raw TCP, so window.electronAPI is shimmed with a
-// deterministic Electrum mock: electrumBatchGetHistory hangs (slow server)
-// until electrumCancel arrives with the same cancelId, at which point it
-// rejects — exactly the main-process contract. Every batch/cancel IPC call is
-// recorded in-page so the Node side can assert:
+// deterministic Electrum mock: the active scenario makes either
+// electrumBatchGetHistory or electrumBatchGetUtxos hang (slow server) until
+// electrumCancel arrives with the same cancelId, at which point it rejects —
+// exactly the main-process contract. Every batch/cancel IPC call is recorded
+// in-page so the Node side can assert:
 //   (a) the in-flight batch call carried a cancelId,
 //   (b) Cancel fired electrumCancel with THAT cancelId,
 //   (c) no further batch IPC calls are issued after Cancel (count flat over a
 //       settle window, with 2 more batches' worth of addresses still queued),
 //   (d) the UI leaves the running state promptly, and
-//   (e) a new run works afterwards (fresh batch call with a fresh cancelId).
+//   (e) a new run works afterwards (fresh batch call with a fresh cancelId),
+//   (f) the balances batch is also cancellable while it is in flight.
 //
 // NOTE for reviewers: the consumer under test is
 // client/src/pages/AddressChecker.tsx (route /address-checker, handleCancel /
@@ -100,19 +102,20 @@ async function waitForServer(url, timeoutMs) {
 }
 
 // window.electronAPI shim installed before every page load. Models a pooled
-// Electrum connection against a SLOW server: batch history calls hang until
-// electrumCancel arrives with their cancelId, then reject (the main-process
-// cancellation contract). All batch/cancel calls are recorded in
+// Electrum connection against a SLOW server. The first run hangs history;
+// the second run switches to a fast-history/hanging-balances scenario so both
+// cancellation groups are exercised. All batch/cancel calls are recorded in
 // window.__batchCalls / window.__cancelCalls for the Node side to assert on.
 const SHIM = `
 (() => {
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
   const BATCH_HANG_MS = ${BATCH_HANG_MS};
+  window.__batchScenario = 'history';
   window.__batchCalls = []; // { method, cancelId, count, at }
   window.__cancelCalls = []; // { cancelId, at }
   // cancelId -> reject fn for the hanging batch promise.
   const pending = new Map();
-  const hangingBatch = (method, args) => {
+  const recordBatch = (method, args) => {
     const cancelId = args && args.cancelId;
     window.__batchCalls.push({
       method,
@@ -120,6 +123,10 @@ const SHIM = `
       count: (args && args.addresses && args.addresses.length) || 0,
       at: Date.now(),
     });
+    return cancelId;
+  };
+  const hangingBatch = (method, args) => {
+    const cancelId = recordBatch(method, args);
     return new Promise((resolve, reject) => {
       if (cancelId) pending.set(cancelId, reject);
       // Slow-server fallback: settle eventually so a failed check can't hang
@@ -129,6 +136,13 @@ const SHIM = `
         resolve({ success: false, error: 'shim: slow server timed out' });
       }, BATCH_HANG_MS);
     });
+  };
+  const quickHistoryBatch = (args) => {
+    recordBatch('electrumBatchGetHistory', args);
+    // A successful empty result is enough to advance the checker to its
+    // companion balances batch; remaining rows are handled only after the
+    // prefetch phase, which is cancelled before that can happen.
+    return delay(25).then(() => ({ success: true, results: [] }));
   };
   const base = {
     isElectron: true,
@@ -142,7 +156,9 @@ const SHIM = `
       }
       return { success: true };
     },
-    electrumBatchGetHistory: (args) => hangingBatch('electrumBatchGetHistory', args),
+    electrumBatchGetHistory: (args) => window.__batchScenario === 'balances'
+      ? quickHistoryBatch(args)
+      : hangingBatch('electrumBatchGetHistory', args),
     electrumBatchGetUtxos: (args) => hangingBatch('electrumBatchGetUtxos', args),
     // Per-address fallbacks also hang-record: if the checker ever fell back to
     // per-address Electrum traffic after Cancel, the flat-count assert catches
@@ -247,8 +263,8 @@ async function main() {
     await textarea.waitFor({ state: 'visible', timeout: 30_000 });
     await textarea.fill(addresses.join('\n'));
 
-    // Start the check: the batch prefetch phase dispatches batch #1, which
-    // hangs against the shim's slow server.
+    // Start the first scenario: the batch prefetch phase dispatches history
+    // batch #1, which hangs against the shim's slow server.
     await page.getByTestId('button-run-check').click();
     const cancelBtn = page.getByTestId('button-cancel-check');
     await cancelBtn.waitFor({ state: 'visible', timeout: 15_000 });
@@ -315,22 +331,87 @@ async function main() {
       `atCancel=${callsAtCancel} +0.5s=${callsAfterGrace} +3s=${callsSettled} (uncancelled run = ${(N / ELECTRUM_BATCH_SIZE) * 2} batch calls)`,
     );
 
-    // A new run must work after Cancel: fresh batch call with a FRESH cancelId.
+    // A new run must work after Cancel: switch the shim so history resolves
+    // quickly and the companion balances batch becomes the in-flight call.
+    await page.evaluate(() => {
+      window.__batchScenario = 'balances';
+    });
+    const callsBeforeBalancesRun = callsSettled;
     await page.getByTestId('button-run-check').click();
-    const rerunStart = Date.now();
-    let rerunCalls = [];
-    while ((rerunCalls = await batchCalls()).length <= callsSettled && Date.now() - rerunStart < 15_000) {
+    await page.getByTestId('button-cancel-check').waitFor({ state: 'visible', timeout: 15_000 });
+    const balancesRunStart = Date.now();
+    let balancesRunCalls = [];
+    while (
+      (balancesRunCalls = await batchCalls()).length <= callsBeforeBalancesRun + 1 &&
+      Date.now() - balancesRunStart < 15_000
+    ) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    const newCall = rerunCalls[callsSettled];
-    step('run works again after Cancel (new batch IPC call dispatched)', rerunCalls.length > callsSettled, `calls=${rerunCalls.length}`);
+    const balancesHistoryCall = balancesRunCalls[callsBeforeBalancesRun];
+    const balancesCall = balancesRunCalls[callsBeforeBalancesRun + 1];
     step(
-      'new run uses a fresh cancelId (old group not reused)',
-      !!newCall?.cancelId && newCall.cancelId !== firstCall?.cancelId,
-      `new=${newCall?.cancelId}`,
+      'run works again after Cancel (fresh history batch dispatched)',
+      balancesHistoryCall?.method === 'electrumBatchGetHistory',
+      `method=${balancesHistoryCall?.method} calls=${balancesRunCalls.length}`,
     );
-    // Leave the tab quiet: cancel the re-run too.
-    await page.getByTestId('button-cancel-check').click().catch(() => {});
+    step(
+      'new run uses a fresh history cancelId',
+      !!balancesHistoryCall?.cancelId && balancesHistoryCall.cancelId !== firstCall?.cancelId,
+      `old=${firstCall?.cancelId} new=${balancesHistoryCall?.cancelId}`,
+    );
+    step(
+      'balances batch is in flight after history resolves',
+      balancesCall?.method === 'electrumBatchGetUtxos' && balancesCall?.count === ELECTRUM_BATCH_SIZE,
+      `method=${balancesCall?.method} count=${balancesCall?.count}`,
+    );
+    step(
+      'in-flight balances batch carries a cancelId (bu- group)',
+      typeof balancesCall?.cancelId === 'string' && balancesCall.cancelId.startsWith('bu-'),
+      `cancelId=${balancesCall?.cancelId}`,
+    );
+
+    // ── Cancel while balances batch is in flight ────────────────────────
+    const balancesCallsAtCancel = (await batchCalls()).length;
+    const balancesCancelStartedAt = Date.now();
+    await page.getByTestId('button-cancel-check').click();
+
+    let balancesCancels = [];
+    while (
+      (balancesCancels = await cancelCalls()).length < 2 &&
+      Date.now() - balancesCancelStartedAt < 10_000
+    ) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const balancesCancelLatency = Date.now() - balancesCancelStartedAt;
+    step(
+      'electrumCancel fired for the in-flight balances batch',
+      balancesCancels.some((c) => c.cancelId === balancesCall?.cancelId),
+      `sent=${JSON.stringify(balancesCancels.map((c) => c.cancelId))} expected=${balancesCall?.cancelId}`,
+    );
+    step(
+      'balances cancel reached the bridge promptly (< 3 s)',
+      balancesCancelLatency < 3000,
+      `${balancesCancelLatency}ms`,
+    );
+
+    await page.getByTestId('button-run-check').waitFor({ state: 'visible', timeout: 10_000 });
+    const balancesCancelStillVisible = await page.getByTestId('button-cancel-check').isVisible().catch(() => false);
+    step(
+      'balances cancellation leaves the running state',
+      !balancesCancelStillVisible,
+    );
+
+    // With two more chunks still queued, an uncancelled balances phase would
+    // dispatch another history/UTXO pair. The count must remain flat.
+    await new Promise((r) => setTimeout(r, 500));
+    const balancesCallsAfterGrace = (await batchCalls()).length;
+    await new Promise((r) => setTimeout(r, 2500));
+    const balancesCallsSettled = (await batchCalls()).length;
+    step(
+      'no further batch IPC calls after balances Cancel (count stays flat)',
+      balancesCallsSettled === balancesCallsAfterGrace && balancesCallsAfterGrace === balancesCallsAtCancel,
+      `atCancel=${balancesCallsAtCancel} +0.5s=${balancesCallsAfterGrace} +3s=${balancesCallsSettled}`,
+    );
   } finally {
     await browser.close().catch(() => {});
     if (devProc) {
