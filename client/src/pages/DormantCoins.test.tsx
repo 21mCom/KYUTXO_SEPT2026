@@ -85,6 +85,8 @@ const U_CO = "bc1qpagedormantcospendccccccccccccccccc";
 const TX_FUND = "ab".repeat(32);
 const TX_CO_FUND = "cd".repeat(32);
 const TX_COSPEND = "ef".repeat(32);
+const UNIT_TOGGLE_OWN = "bc1qunittoggledormantaaaaaaaaaaaaaaaaaaa";
+const TX_UNIT_TOGGLE = "12".repeat(32);
 
 // The engine computes "now" from the real clock, so fixtures are dated
 // relative to the REAL now (5y/6y old) to stay deterministically dormant
@@ -110,6 +112,35 @@ async function seedRelativeToRealNow() {
   ]);
 }
 
+async function seedUnitToggleRelativeToRealNow() {
+  const realNow = Math.floor(Date.now() / 1000);
+  await createRecord({
+    type: "address",
+    inputString: UNIT_TOGGLE_OWN,
+    label: "Unit toggle fixture",
+    addressImportance: "manual",
+  });
+  await addTransaction({
+    txid: TX_UNIT_TOGGLE,
+    blockHeight: 700_020,
+    blockTime: realNow - Math.floor(5 * YEAR),
+    fee: 500,
+    feeRate: 2,
+    syncedAt: Date.now(),
+  });
+  await bulkAddParticipants([
+    { txid: TX_UNIT_TOGGLE, role: "output", address: UNIT_TOGGLE_OWN, amount: 600, vout: 0 },
+    {
+      txid: TX_UNIT_TOGGLE,
+      role: "input",
+      address: "bc1qunitogglefunder00000000000000000000",
+      amount: 700,
+      prevTxid: "00".repeat(32),
+      prevVout: 0,
+    },
+  ]);
+}
+
 describe("DormantCoins page", () => {
   beforeEach(async () => {
     toastSpy.mockClear();
@@ -131,6 +162,79 @@ describe("DormantCoins page", () => {
     expect(screen.getByTestId("switch-hide-dust").getAttribute("data-state")).toBe("checked");
     expect(screen.getByTestId("alert-local-data-caveat").textContent).toContain("Local data only");
     expect(screen.getByTestId("button-run-scan")).toBeTruthy();
+  });
+
+  it("converts both BTC controls independently without cross-field drift", async () => {
+    await seedUnitToggleRelativeToRealNow();
+    renderWithProviders(<DormantCoins />);
+
+    fireEvent.click(screen.getByTestId("button-toggle-unit"));
+    expect(screen.getByTestId("button-toggle-unit").textContent).toBe("BTC");
+    expect(screen.getByTestId("input-min-amount").getAttribute("value")).toBe(
+      "0.00010000",
+    );
+    expect(screen.getByTestId("input-dust-threshold").getAttribute("value")).toBe(
+      "0.00001000",
+    );
+
+    // 500 sats minimum and 550 sats dust cutoff are independent values. The
+    // 600-sat dormant output should survive both filters.
+    fireEvent.change(screen.getByTestId("input-min-amount"), {
+      target: { value: "0.00000500" },
+    });
+    expect(screen.getByTestId("input-min-amount").getAttribute("value")).toBe(
+      "0.00000500",
+    );
+    expect(screen.getByTestId("input-dust-threshold").getAttribute("value")).toBe(
+      "0.00001000",
+    );
+
+    fireEvent.change(screen.getByTestId("input-dust-threshold"), {
+      target: { value: "0.00000550" },
+    });
+    expect(screen.getByTestId("input-min-amount").getAttribute("value")).toBe(
+      "0.00000500",
+    );
+    expect(screen.getByTestId("input-dust-threshold").getAttribute("value")).toBe(
+      "0.00000550",
+    );
+
+    fireEvent.click(screen.getByTestId("button-run-scan"));
+    await waitFor(() => expect(screen.getByTestId("text-summary-rows").textContent).toBe("1"));
+    expect(screen.getByTestId("text-summary-total-sats").textContent).toBe("600 sats");
+    await waitFor(() =>
+      expect(screen.getByTestId(`row-dormant-${TX_UNIT_TOGGLE.slice(0, 12)}-0`)).toBeTruthy(),
+    );
+
+    // Changing only the minimum removes the output while leaving the dust
+    // cutoff intact, proving the first BTC field resolved to its own sats
+    // state.
+    fireEvent.change(screen.getByTestId("input-min-amount"), {
+      target: { value: "0.00000700" },
+    });
+    expect(screen.getByTestId("input-dust-threshold").getAttribute("value")).toBe(
+      "0.00000550",
+    );
+    fireEvent.click(screen.getByTestId("button-run-scan"));
+    await waitFor(() => expect(screen.getByTestId("text-summary-rows").textContent).toBe("0"));
+
+    // Restore the minimum, then change only the dust cutoff. The same 600-sat
+    // output is now excluded, proving the second field also resolves
+    // independently.
+    fireEvent.change(screen.getByTestId("input-min-amount"), {
+      target: { value: "0.00000500" },
+    });
+    fireEvent.change(screen.getByTestId("input-dust-threshold"), {
+      target: { value: "0.00000650" },
+    });
+    expect(screen.getByTestId("input-min-amount").getAttribute("value")).toBe(
+      "0.00000500",
+    );
+    expect(screen.getByTestId("input-dust-threshold").getAttribute("value")).toBe(
+      "0.00000650",
+    );
+    fireEvent.click(screen.getByTestId("button-run-scan"));
+    await waitFor(() => expect(screen.getByTestId("text-summary-rows").textContent).toBe("0"));
   });
 
   it("runs a scan and renders summary, rows and clue groups", async () => {

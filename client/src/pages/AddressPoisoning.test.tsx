@@ -260,4 +260,30 @@ describe("AddressPoisoning page", () => {
     fireEvent.click(await screen.findByTestId("button-run-scan"));
     await screen.findByTestId("state-empty", {}, { timeout: 10000 });
   });
+
+  it("converts a BTC threshold before using it in the poisoning scan", async () => {
+    await seed();
+    renderWithProviders(<AddressPoisoning />);
+
+    fireEvent.click(screen.getByTestId("button-toggle-unit"));
+    expect(screen.getByTestId("button-toggle-unit").textContent).toBe("BTC");
+    expect(screen.getByTestId("input-dust-threshold").getAttribute("value")).toBe(
+      "0.00001000",
+    );
+
+    // 0.00000550 BTC is 550 sats, so the seeded 546-sat poisoning output
+    // should still be detected. A display-only toggle would pass a tiny BTC
+    // decimal to the scanner and incorrectly return no result.
+    fireEvent.change(screen.getByTestId("input-dust-threshold"), {
+      target: { value: "0.00000550" },
+    });
+    expect(screen.getByTestId("input-dust-threshold").getAttribute("value")).toBe(
+      "0.00000550",
+    );
+
+    fireEvent.click(screen.getByTestId("button-run-scan"));
+    const summary = await screen.findByTestId("text-summary", {}, { timeout: 10000 });
+    expect(summary.textContent).toContain("1");
+    expect(screen.getByTestId(`row-suspect-${LOOKALIKE}`)).toBeTruthy();
+  });
 });
