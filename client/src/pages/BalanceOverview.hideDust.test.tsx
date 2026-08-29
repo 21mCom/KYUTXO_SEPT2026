@@ -147,6 +147,32 @@ afterEach(() => {
 });
 
 describe("BalanceOverview · Hide dust toggle", () => {
+  it("keeps the exact balance and excluded amount when switching between BTC and sats", async () => {
+    await renderReady();
+
+    expect(screen.getByTestId("button-toggle-unit").textContent).toBe("BTC");
+    expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00100000 BTC");
+
+    fireEvent.click(screen.getByTestId("switch-hide-dust"));
+    await waitFor(() =>
+      expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00098500 BTC"),
+    );
+
+    // The unit toggle is display-only: the dust adjustment remains exactly
+    // 1,500 sats rather than being recalculated from a rounded BTC value.
+    fireEvent.click(screen.getByTestId("button-toggle-unit"));
+    expect(screen.getByTestId("button-toggle-unit").textContent).toBe("sats");
+    expect(screen.getByTestId("text-total-balance").textContent).toContain("98,500 sats");
+    expect(screen.getByTestId(`text-group-balance-${GROUP_NAME}`).textContent).toContain(
+      "98,500 sats",
+    );
+    expect(screen.getByTestId("badge-dust-hidden").textContent).toContain("1,500 sats");
+
+    // Switching back must recover the same canonical sats value.
+    fireEvent.click(screen.getByTestId("button-toggle-unit"));
+    expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00098500 BTC");
+  });
+
   it("subtracts unspent dust from the total, group, and address rows when enabled", async () => {
     await renderReady();
     expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00100000");
