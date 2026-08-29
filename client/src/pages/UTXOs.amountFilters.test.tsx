@@ -8,6 +8,7 @@
 import "fake-indexeddb/auto";
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { format } from "date-fns";
 
 // jsdom has no layout: render every row instead of a measured virtual window.
 vi.mock("@tanstack/react-virtual", () => ({
@@ -74,6 +75,66 @@ const TXID_547 = "b".repeat(64);
 const TXID_550 = "c".repeat(64);
 const TXID_SHARED_MATCH = "d".repeat(64);
 const TXID_SHARED_UNRELATED = "e".repeat(64);
+const DATE_FILTER_ADDR = "bc1qdatefilteraddress000000000000000000000";
+const TXID_DATE_EARLY = "f".repeat(64);
+const TXID_DATE_MATCH = "1".repeat(64);
+const TXID_DATE_LATE = "2".repeat(64);
+
+function localNoonOnDay(day: number): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), day, 12, 0, 0, 0);
+}
+
+function unixSeconds(date: Date): number {
+  return Math.floor(date.getTime() / 1000);
+}
+
+async function seedDateFilterOutputs() {
+  const earlyDate = localNoonOnDay(5);
+  const matchDate = localNoonOnDay(15);
+  const lateDate = localNoonOnDay(25);
+
+  await createRecord({
+    type: "address",
+    inputString: DATE_FILTER_ADDR,
+    label: "Shared date filter address",
+    tags: [],
+    categories: [],
+  });
+  await bulkAddTransactions([
+    {
+      txid: TXID_DATE_EARLY,
+      blockHeight: 800_001,
+      blockTime: unixSeconds(earlyDate),
+      fee: 100,
+      feeRate: 1,
+      syncedAt: Date.now(),
+    },
+    {
+      txid: TXID_DATE_MATCH,
+      blockHeight: 800_002,
+      blockTime: unixSeconds(matchDate),
+      fee: 100,
+      feeRate: 1,
+      syncedAt: Date.now(),
+    },
+    {
+      txid: TXID_DATE_LATE,
+      blockHeight: 800_003,
+      blockTime: unixSeconds(lateDate),
+      fee: 100,
+      feeRate: 1,
+      syncedAt: Date.now(),
+    },
+  ]);
+  await bulkAddParticipants([
+    { txid: TXID_DATE_EARLY, role: "output", address: DATE_FILTER_ADDR, amount: 700, vout: 0 },
+    { txid: TXID_DATE_MATCH, role: "output", address: DATE_FILTER_ADDR, amount: 800, vout: 0 },
+    { txid: TXID_DATE_LATE, role: "output", address: DATE_FILTER_ADDR, amount: 900, vout: 0 },
+  ]);
+
+  return { earlyDate, matchDate, lateDate };
+}
 
 async function seed() {
   await Promise.all(
@@ -122,6 +183,56 @@ async function openAmountExact() {
   const exactTab = await screen.findByTestId("tab-amount-exact");
   fireEvent.mouseDown(exactTab, { button: 0 });
   await screen.findByTestId("input-amount-exact");
+}
+
+async function openDateExact() {
+  fireEvent.click(await screen.findByTestId("button-advanced-filters"));
+  const exactTab = await screen.findByTestId("tab-date-exact");
+  fireEvent.mouseDown(exactTab, { button: 0 });
+  await screen.findByTestId("button-date-exact");
+}
+
+async function openDateRange() {
+  fireEvent.click(await screen.findByTestId("button-advanced-filters"));
+  const rangeTab = await screen.findByTestId("tab-date-range");
+  fireEvent.mouseDown(rangeTab, { button: 0 });
+  await screen.findByTestId("button-date-start");
+}
+
+async function selectCalendarDate(buttonTestId: string, date: Date) {
+  fireEvent.click(await screen.findByTestId(buttonTestId));
+  const dateButton = await waitFor(() => {
+    const button = Array.from(document.querySelectorAll<HTMLButtonElement>('button[name="day"]')).find((candidate) => {
+      const timestamp = candidate.getAttribute("data-time-value");
+      if (timestamp) {
+        const candidateDate = new Date(Number(timestamp));
+        return (
+          candidateDate.getFullYear() === date.getFullYear() &&
+          candidateDate.getMonth() === date.getMonth() &&
+          candidateDate.getDate() === date.getDate()
+        );
+      }
+      const label = candidate.getAttribute("aria-label") ?? "";
+      const matchesLabel = (
+        label.includes(date.toLocaleString("en-US", { month: "long" })) &&
+        label.includes(String(date.getDate())) &&
+        label.includes(String(date.getFullYear()))
+      );
+      const matchesVisibleDay = (
+        candidate.textContent?.trim() === String(date.getDate()) &&
+        !candidate.classList.contains("day-outside")
+      );
+      return matchesLabel || matchesVisibleDay;
+    });
+    if (!button) {
+      throw new Error(`Could not find calendar date ${date.toISOString()}`);
+    }
+    return button;
+  });
+  fireEvent.click(dateButton);
+  await waitFor(() => {
+    expect(screen.getByTestId(buttonTestId).textContent).toContain(format(date, "MMM d, yyyy"));
+  });
 }
 
 describe("UTXOs page BTC/sats amount filters", () => {
@@ -273,5 +384,60 @@ describe("UTXOs page BTC/sats amount filters", () => {
     fireEvent.click(screen.getByTestId("button-toggle-unit"));
     expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00000600 BTC");
     expect(screen.getByTestId("text-utxo-count").textContent).toBe("1 / 1");
+  });
+
+  it("keeps unrelated same-address outputs out of exact-date rows and aggregates", async () => {
+    const { earlyDate, matchDate, lateDate } = await seedDateFilterOutputs();
+
+    renderWithProviders(<UTXOs />);
+    await waitFor(
+      () => expect(screen.getByTestId("text-utxo-count").textContent).toBe("4 / 6"),
+      { timeout: 10000 },
+    );
+
+    await openDateExact();
+    await selectCalendarDate("button-date-exact", matchDate);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-utxo-count").textContent).toBe("1 / 1");
+      expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00000800 BTC");
+    });
+    const groupRow = screen.getByTestId(`row-address-${DATE_FILTER_ADDR.slice(0, 8)}`);
+    expect(groupRow.textContent).toContain(format(matchDate, "MMM d, yyyy"));
+    expect(groupRow.textContent).not.toContain(format(earlyDate, "MMM d, yyyy"));
+    expect(groupRow.textContent).not.toContain(format(lateDate, "MMM d, yyyy"));
+
+    fireEvent.click(groupRow);
+    expect(screen.getByTestId(`row-utxo-${TXID_DATE_MATCH}:0`)).toBeTruthy();
+    expect(screen.queryByTestId(`row-utxo-${TXID_DATE_EARLY}:0`)).toBeNull();
+    expect(screen.queryByTestId(`row-utxo-${TXID_DATE_LATE}:0`)).toBeNull();
+  });
+
+  it("keeps unrelated same-address outputs out of range-date rows and aggregates", async () => {
+    const { earlyDate, matchDate, lateDate } = await seedDateFilterOutputs();
+
+    renderWithProviders(<UTXOs />);
+    await waitFor(
+      () => expect(screen.getByTestId("text-utxo-count").textContent).toBe("4 / 6"),
+      { timeout: 10000 },
+    );
+
+    await openDateRange();
+    await selectCalendarDate("button-date-start", localNoonOnDay(12));
+    await selectCalendarDate("button-date-end", localNoonOnDay(18));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-utxo-count").textContent).toBe("1 / 1");
+      expect(screen.getByTestId("text-total-balance").textContent).toContain("0.00000800 BTC");
+    });
+    const groupRow = screen.getByTestId(`row-address-${DATE_FILTER_ADDR.slice(0, 8)}`);
+    expect(groupRow.textContent).toContain(format(matchDate, "MMM d, yyyy"));
+    expect(groupRow.textContent).not.toContain(format(earlyDate, "MMM d, yyyy"));
+    expect(groupRow.textContent).not.toContain(format(lateDate, "MMM d, yyyy"));
+
+    fireEvent.click(groupRow);
+    expect(screen.getByTestId(`row-utxo-${TXID_DATE_MATCH}:0`)).toBeTruthy();
+    expect(screen.queryByTestId(`row-utxo-${TXID_DATE_EARLY}:0`)).toBeNull();
+    expect(screen.queryByTestId(`row-utxo-${TXID_DATE_LATE}:0`)).toBeNull();
   });
 });
