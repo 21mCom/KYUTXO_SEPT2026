@@ -622,6 +622,7 @@ async function main() {
     await page.waitForFunction(
       () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
         '11 records will be exported.',
+      undefined,
       { timeout: 30_000 }
     );
 
@@ -635,6 +636,7 @@ async function main() {
     await page.waitForFunction(
       () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
         '1 record will be exported.',
+      undefined,
       { timeout: 30_000 }
     );
     await csvSearch.fill(OUTPUT_LABEL);
@@ -657,6 +659,7 @@ async function main() {
     await page.waitForFunction(
       () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
         '11 records will be exported.',
+      undefined,
       { timeout: 30_000 }
     );
 
@@ -669,6 +672,7 @@ async function main() {
     await page.waitForFunction(
       () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
         '4 records will be exported.',
+      undefined,
       { timeout: 30_000 }
     );
 
@@ -685,6 +689,61 @@ async function main() {
     ];
     assertExactCsvRows(csvDownload.rows, csvExpectedRows, 'exact-date');
     steps.push({ name: 'CSV exact-date count and download include only inclusive same-day boundaries', passed: true });
+
+    // ── Large CSV exports expose batched progress before downloading ─────────
+    // Add one row beyond the exporter's 2,000-row batch size. The first
+    // progress update must therefore report exactly one complete batch before
+    // the download is ready, proving the UI is receiving the existing callback
+    // rather than only changing the button label.
+    await page.evaluate(async () => {
+      const recordCrud = await import('/src/lib/data/record-crud.ts');
+      const now = Date.now();
+      await recordCrud.bulkCreateRecords(
+        Array.from({ length: 2_001 }, (_, index) => ({
+          type: 'address',
+          inputString: `bc1qcsvprogress${String(index).padStart(4, '0')}address`,
+          createdAt: now,
+          updatedAt: now,
+        })),
+        { skipVocabularySync: true },
+      );
+    });
+    // Reload so the CSV live count observes the dynamically imported bulk
+    // records, just as the other browser-seeded fixtures do below.
+    await page.reload({ waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 8_000, label: 'bip329-export-browser' });
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
+        '2012 records will be exported.',
+      undefined,
+      { timeout: 30_000 },
+    );
+
+    const progressCsvExportButton = page.getByTestId('button-export-csv');
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 10 });
+    try {
+      const progressDownloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+      await progressCsvExportButton.click();
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="text-csv-export-progress"]')?.textContent?.trim() ===
+          'Scanned 2,000 records · Exported 2,000 rows',
+        undefined,
+        { timeout: 30_000 },
+      );
+      if (!(await progressCsvExportButton.isDisabled())) {
+        throw new Error('CSV export button should stay disabled while progress is visible');
+      }
+      await progressDownloadPromise;
+      await page.waitForFunction(
+        () => !document.querySelector('[data-testid="text-csv-export-progress"]'),
+        undefined,
+        { timeout: 5_000 },
+      );
+    } finally {
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => {});
+    }
+    steps.push({ name: 'large CSV export shows first-batch scanned/exported progress and clears it after download', passed: true });
 
     // ── Filtered CSV preserves commas, quotes, and line breaks ─────────────
     // Seed this fixture after the other CSV assertions so it cannot alter their
@@ -719,6 +778,7 @@ async function main() {
     await page.waitForFunction(
       () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
         '1 record will be exported.',
+      undefined,
       { timeout: 30_000 }
     );
 
@@ -767,6 +827,7 @@ async function main() {
     await page.waitForFunction(
       () => document.querySelector('[data-testid="text-csv-match-count"]')?.textContent?.trim() ===
         '0 records will be exported.',
+      undefined,
       { timeout: 30_000 }
     );
 

@@ -237,6 +237,10 @@ export default function ExportPage() {
   // filters above, but scoped to the spreadsheet (CSV) export — the two
   // sections filter independently.
   const [exportingCsv, setExportingCsv] = useState(false);
+  const [csvExportProgress, setCsvExportProgress] = useState<{
+    scanned: number;
+    exported: number;
+  } | null>(null);
   const [csvSearch, setCsvSearch] = useState("");
   const [debouncedCsvSearch] = useDebouncedValue(csvSearch, 300);
   const [csvKindFilter, setCsvKindFilter] = useState<ExportKindOption>("all");
@@ -713,6 +717,7 @@ export default function ExportPage() {
   // export, filtered through the shared predicate.
   const handleExportCsv = async () => {
     setExportingCsv(true);
+    setCsvExportProgress({ scanned: 0, exported: 0 });
     try {
       // Build the predicate from the IMMEDIATE control values, not csvFilter:
       // csvFilter's search is debounced (300ms) for the live count, so a user
@@ -733,7 +738,12 @@ export default function ExportPage() {
         csvWalletFilter !== "all" ||
         isDateRangeFilterActive(csvDateRange);
 
-      const { parts, rowCount } = await exportRecordsCsvParts({ filter: exportFilter });
+      const { parts, rowCount } = await exportRecordsCsvParts({
+        filter: exportFilter,
+        onProgress: (scanned, exported) => {
+          setCsvExportProgress({ scanned, exported });
+        },
+      });
 
       if (rowCount === 0) {
         toast({
@@ -762,6 +772,7 @@ export default function ExportPage() {
       });
     } finally {
       setExportingCsv(false);
+      setCsvExportProgress(null);
     }
   };
 
@@ -1251,6 +1262,17 @@ export default function ExportPage() {
               <Download className="h-4 w-4 mr-2" />
               {exportingCsv ? "Exporting CSV..." : "Export Records (CSV)"}
             </Button>
+            {exportingCsv && csvExportProgress && (
+              <p
+                className="text-sm text-muted-foreground text-center"
+                data-testid="text-csv-export-progress"
+                role="status"
+                aria-live="polite"
+              >
+                Scanned {csvExportProgress.scanned.toLocaleString()} records ·{" "}
+                Exported {csvExportProgress.exported.toLocaleString()} rows
+              </p>
+            )}
           </CardContent>
         </Card>
 
