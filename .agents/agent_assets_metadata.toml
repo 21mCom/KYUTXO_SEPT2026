@@ -7,6 +7,7 @@ uri = "file://screenshots/utxo-provenance-overview.png"
 type = "image"
 title = "UTXO Provenance — overview with expanded hop trail"
 description = "Demo vault with 11 unspent UTXOs: stats cards, filters, hop-depth column, pattern badges, and the deep wallet-reorg row expanded showing 5 dated hops with the hover tooltip."
+logical_id = "02b02d00-ee72-4639-a422-7812498e7620"
 
 [[outputs]]
 id = "pKUvQ0sa5I53B062mci8S"
@@ -14,6 +15,7 @@ uri = "file://screenshots/utxo-provenance-hop-dialog.png"
 type = "image"
 title = "UTXO Provenance — hop detail popup"
 description = "Clicking a hop chip opens the transaction detail dialog: date, block, fee, net through wallet, and full input/output sides with owned badges."
+logical_id = "d4bf431d-5219-454d-9e3b-b9ec76e3afac"
 
 [[outputs]]
 id = "0aoq5cG2ANnYpzA2SqcId"
@@ -21,3 +23,4 @@ uri = "file://client/public/downloads/utxo-provenance-wallet-dust.png"
 type = "image"
 title = "UTXO Provenance — wallet and dust controls"
 description = "Fresh populated screenshot showing the wallet selector, Ignore flagged dust toggle, and scoped UTXO results."
+logical_id = "7e83e6a4-1ace-492d-95aa-accbb07c0df8"
