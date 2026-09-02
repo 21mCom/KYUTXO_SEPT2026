@@ -29,6 +29,7 @@ const SCAN_EXTS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs']);
 // Regex: matches the literal-assignment form  KYUTXO_APP_VERSION = "..."
 // This intentionally does NOT flag usages like  `v${KYUTXO_APP_VERSION}`.
 const VERSION_LITERAL_RE = /KYUTXO_APP_VERSION\s*=\s*["']\d+\.\d+\.\d+/;
+const VITE_CONFIGS = ['vite.config.ts', 'vite.config.electron.ts'];
 
 function walkDir(dir, files = []) {
   if (!fs.existsSync(dir)) return files;
@@ -58,10 +59,22 @@ for (const dir of SCAN_DIRS) {
   }
 }
 
+for (const configName of VITE_CONFIGS) {
+  const configPath = path.join(ROOT, configName);
+  const content = fs.readFileSync(configPath, 'utf8');
+  if (
+    !content.includes('__APP_VERSION__: JSON.stringify(pkgVersion)') ||
+    !content.includes('require("./package.json")')
+  ) {
+    violations.push(
+      `  ${configName}: must inject __APP_VERSION__ from package.json so every renderer build has the version constant`,
+    );
+  }
+}
+
 if (violations.length > 0) {
-  console.error('[check-version-literal] Hardcoded KYUTXO_APP_VERSION literal found.');
-  console.error('  Derive the version from package.json instead:');
-  console.error('  import { version } from "../../../package.json";');
+  console.error('[check-version-literal] Version source-of-truth violation found.');
+  console.error('  Derive version constants from package.json in every build target.');
   console.error('');
   console.error('Violations:');
   for (const v of violations) {

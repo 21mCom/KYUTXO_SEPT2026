@@ -1,9 +1,19 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const { version: pkgVersion } = require("./package.json") as { version: string };
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    // Keep the packaged renderer aligned with the normal Vite build. Without
+    // this replacement, the bare compile-time identifier throws before React
+    // mounts and Electron displays a blank window.
+    __APP_VERSION__: JSON.stringify(pkgVersion),
+  },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
