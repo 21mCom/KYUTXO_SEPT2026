@@ -11,9 +11,9 @@
 //
 // This check builds the real electron-builder output, launches it under the
 // nix Electron runtime with Xvfb + CDP on Linux (recipe:
-// .agents/memory/packaged-electron-verify.md), or launches the unpacked
-// shipping executable with CDP on Windows, and asserts in the live packaged
-// renderer:
+// .agents/memory/packaged-electron-verify.md), or launches the generated
+// Windows portable release wrapper from a disposable directory, and asserts
+// in the live packaged renderer:
 //   1. The renderer actually renders (vault-setup form visible) — proves the
 //      /assets remap works, since the app JS/CSS only load through it.
 //   2. The CSP <meta> tag is present in the served document and carries the
@@ -59,6 +59,7 @@ await acquireBrowserCheckLock();
 const ROOT = repoRootFromModuleUrl(import.meta.url);
 const IS_WINDOWS = process.platform === 'win32';
 const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
+const RELEASE_DIR = path.join(ROOT, 'release');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9223);
@@ -116,6 +117,36 @@ function buildAsar() {
   }
 }
 
+function findPortableArtifact() {
+  let version;
+  try {
+    version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+  } catch (err) {
+    throw new Error(`${TAG} could not read package version for portable artifact: ${err.message}`);
+  }
+
+  const expectedName = `KYUTXO-${version}-Portable.exe`;
+  const expectedPath = path.join(RELEASE_DIR, expectedName);
+  if (fs.existsSync(expectedPath) && fs.statSync(expectedPath).size > 0) {
+    return expectedPath;
+  }
+
+  let candidates = [];
+  try {
+    candidates = fs
+      .readdirSync(RELEASE_DIR)
+      .filter((name) => /^KYUTXO-.+-Portable\.exe$/i.test(name))
+      .map((name) => path.join(RELEASE_DIR, name));
+  } catch {
+    /* report the actionable expected path below */
+  }
+  const found = candidates.map((candidate) => path.basename(candidate)).join(', ') || 'none';
+  throw new Error(
+    `${TAG} generated portable artifact is missing or empty: ${expectedPath}; ` +
+      `portable candidates found: ${found}`,
+  );
+}
+
 async function waitForCdp(timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -130,18 +161,66 @@ async function waitForCdp(timeoutMs) {
   return false;
 }
 
+function killWindowsProcessTree(child, { force }) {
+  if (!child?.pid) return;
+  // The portable wrapper launches a second Electron process while extracting.
+  // Killing only the wrapper can leave that child holding the temporary
+  // profile/files open, so use taskkill's tree mode on Windows.
+  const args = ['/PID', String(child.pid), '/T'];
+  if (force) args.push('/F');
+  const result = spawnSync('taskkill', args, {
+    cwd: ROOT,
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  console.log(
+    `${TAG} taskkill portable process tree (${force ? 'forced' : 'graceful'}) exit=${result.status}`,
+  );
+}
+
+async function stopPackagedProcess(child) {
+  if (!child?.pid) return;
+  if (IS_WINDOWS) {
+    // Address the whole tree before the ExecWait wrapper can be orphaned.
+    // First request normal termination, then force any extraction/app process
+    // that still holds files open.
+    killWindowsProcessTree(child, { force: false });
+    await sleep(2000);
+    killWindowsProcessTree(child, { force: true });
+    return;
+  }
+  try {
+    child.kill('SIGTERM');
+  } catch {
+    /* already gone */
+  }
+  await sleep(2000);
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 async function main() {
   buildAsar();
 
   let electronBin = null;
   let xvfbBin = null;
+  let portableArtifact = null;
   if (IS_WINDOWS) {
     if (!fs.existsSync(PACKAGED_EXECUTABLE)) {
       throw new Error(
         `${TAG} packaged Windows executable is missing: ${PACKAGED_EXECUTABLE}`,
       );
     }
-    console.log(`${TAG} shipping executable: ${PACKAGED_EXECUTABLE}`);
+    portableArtifact = findPortableArtifact();
+    console.log(`${TAG} unpacked executable (native-engine companion): ${PACKAGED_EXECUTABLE}`);
+    console.log(`${TAG} generated portable artifact: ${portableArtifact}`);
   } else {
     ({ electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG }));
     console.log(`${TAG} electron: ${electronBin}`);
@@ -151,8 +230,10 @@ async function main() {
   // Fresh, isolated profile: Replit points XDG_CONFIG_HOME etc. at the
   // workspace, which would persist vault state across "fresh" runs.
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-check-'));
-  const userDataDir = path.join(tmpHome, 'user-data');
-  fs.mkdirSync(userDataDir, { recursive: true });
+  const portableLaunchDir = path.join(tmpHome, 'portable-launch');
+  const tempDir = path.join(tmpHome, 'temp');
+  fs.mkdirSync(portableLaunchDir, { recursive: true });
+  fs.mkdirSync(tempDir, { recursive: true });
   // A portable executable can inherit this variable from a runner. Do not
   // allow an inherited portable directory to defeat the isolated profile.
   const { PORTABLE_EXECUTABLE_DIR: _portableExecutableDir, ...inheritedEnv } = process.env;
@@ -166,11 +247,14 @@ async function main() {
     NODE_ENV: 'production',
   };
   if (IS_WINDOWS) {
-    // Electron's --user-data-dir is authoritative, while these keep any
-    // Windows profile fallbacks inside the same disposable directory.
+    // The portable wrapper sets PORTABLE_EXECUTABLE_DIR to the directory
+    // containing the launched copy below. Keep every Windows fallback and the
+    // wrapper's extraction temp files inside the same disposable directory.
     env.USERPROFILE = tmpHome;
     env.APPDATA = path.join(tmpHome, 'AppData', 'Roaming');
     env.LOCALAPPDATA = path.join(tmpHome, 'AppData', 'Local');
+    env.TEMP = tempDir;
+    env.TMP = tempDir;
   }
 
   let xvfb = null;
@@ -192,37 +276,47 @@ async function main() {
   );
   const launchArgs = IS_WINDOWS
     ? [
-        `--user-data-dir=${userDataDir}`,
         '--disable-gpu',
         `--remote-debugging-port=${CDP_PORT}`,
       ]
     : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`];
-  const child = spawn(
-    IS_WINDOWS ? PACKAGED_EXECUTABLE : electronBin,
-    launchArgs,
-    {
-      cwd: tmpHome,
-      env: IS_WINDOWS ? env : { ...env, DISPLAY },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: !IS_WINDOWS,
-    },
-  );
-  child.stdout.on('data', (d) => process.stdout.write(`${TAG}[app] ${d}`));
-  child.stderr.on('data', (d) => process.stdout.write(`${TAG}[app-err] ${d}`));
+  let child = null;
   let appExited = false;
   let appLaunchError = null;
-  child.on('error', (err) => {
-    appLaunchError = String(err?.stack || err);
-    console.log(`${TAG}[startup-error] ${appLaunchError}`);
-  });
-  child.on('exit', (code, sig) => {
-    appExited = true;
-    console.log(`${TAG} app process exited (code=${code} sig=${sig})`);
-  });
-
   const steps = [];
   let browser = null;
   try {
+    let launchExecutable = PACKAGED_EXECUTABLE;
+    if (IS_WINDOWS) {
+      // Do not launch win-unpacked here: the downloadable release is the
+      // self-extracting portable wrapper. Copying the exact generated artifact
+      // into the disposable folder makes the wrapper select that folder for
+      // PORTABLE_EXECUTABLE_DIR and prevents test data from reaching release/.
+      launchExecutable = path.join(portableLaunchDir, path.basename(portableArtifact));
+      fs.copyFileSync(portableArtifact, launchExecutable);
+      console.log(`${TAG} portable launch copy: ${launchExecutable}`);
+    }
+    child = spawn(
+      IS_WINDOWS ? launchExecutable : electronBin,
+      launchArgs,
+      {
+        cwd: IS_WINDOWS ? portableLaunchDir : tmpHome,
+        env: IS_WINDOWS ? env : { ...env, DISPLAY },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: !IS_WINDOWS,
+      },
+    );
+    child.stdout.on('data', (d) => process.stdout.write(`${TAG}[app] ${d}`));
+    child.stderr.on('data', (d) => process.stdout.write(`${TAG}[app-err] ${d}`));
+    child.on('error', (err) => {
+      appLaunchError = String(err?.stack || err);
+      console.log(`${TAG}[startup-error] ${appLaunchError}`);
+    });
+    child.on('exit', (code, sig) => {
+      appExited = true;
+      console.log(`${TAG} app process exited (code=${code} sig=${sig})`);
+    });
+
     if (!(await waitForCdp(90_000))) {
       throw new Error(
         `${TAG} CDP endpoint never came up on port ${CDP_PORT}` +
@@ -372,37 +466,7 @@ async function main() {
     });
   } finally {
     if (browser) await browser.close().catch(() => {});
-    if (IS_WINDOWS) {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* already gone */
-      }
-    } else {
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        try {
-          child.kill('SIGTERM');
-        } catch {
-          /* already gone */
-        }
-      }
-    }
-    await sleep(2000);
-    if (IS_WINDOWS) {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* already gone */
-      }
-    } else {
-      try {
-        process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        /* already gone */
-      }
-    }
+    await stopPackagedProcess(child);
     if (xvfb) {
       try {
         process.kill(-xvfb.pid, 'SIGTERM');
@@ -414,7 +478,18 @@ async function main() {
         }
       }
     }
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    try {
+      fs.rmSync(tmpHome, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 250,
+      });
+      console.log(`${TAG} removed disposable portable/profile directory`);
+    } catch (err) {
+      console.error(`${TAG}[cleanup-error] could not remove disposable directory: ${err.stack || err}`);
+      throw err;
+    }
   }
 
   console.log(`\n${TAG} Results:`);

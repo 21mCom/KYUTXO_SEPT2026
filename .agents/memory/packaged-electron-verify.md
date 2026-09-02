@@ -20,3 +20,10 @@ description: How to launch and drive the electron-builder asar in this environme
 
 ## Native save dialog
 - The Electron backup sink opens a native GTK "Save File" dialog (invisible to CDP). Accept it with `xdotool windowfocus --sync <win> ; key Return` on the fixed Xvfb display (no WM → `windowactivate` is a no-op). The file saves relative to the Electron process **cwd** (defaultPath is a bare filename), not $HOME.
+
+## Windows portable release gate
+The Windows renderer release gate must launch the generated `*-Portable.exe` wrapper, not only the sibling `win-unpacked` executable. Copy the exact package-version artifact into a disposable directory before launching it, and place `TEMP`, `TMP`, and Windows profile fallbacks under the same root.
+
+**Why:** electron-builder's portable wrapper sets `PORTABLE_EXECUTABLE_DIR` to its own directory and extracts through the Windows temp directory. Launching it in `release/` writes portable test state there, while killing only the wrapper can orphan the extracted Electron child and leave files locked.
+
+**How to apply:** keep the unpacked executable for ABI checks, but use the wrapper for renderer startup. Stop its full Windows process tree with `taskkill /T` (then `/F`) before retrying recursive removal of the disposable root.

@@ -126,7 +126,7 @@ test('reports an actionable error when discovery times out or finds nothing', ()
   );
 });
 
-test('the packaged browser gate launches the shipping Windows renderer with isolated state', () => {
+test('the packaged browser gate launches the generated Windows portable renderer with isolated state', () => {
   const source = fs.readFileSync(
     path.join(SCRIPTS_DIR, 'check-packaged-electron-browser.mjs'),
     'utf8',
@@ -139,7 +139,11 @@ test('the packaged browser gate launches the shipping Windows renderer with isol
   assert.match(source, /process\.platform === 'win32'/);
   assert.match(source, /path\.join\(ROOT, 'release', IS_WINDOWS \? 'win-unpacked' : 'linux-unpacked'\)/);
   assert.match(source, /IS_WINDOWS \? 'KYUTXO\.exe' : 'kyutxo'/);
-  assert.match(source, /`--user-data-dir=\$\{userDataDir\}`/);
+  assert.match(source, /KYUTXO-\.\+-Portable\\\.exe/);
+  assert.match(source, /fs\.copyFileSync\(portableArtifact, launchExecutable\)/);
+  assert.match(source, /portableLaunchDir/);
+  assert.match(source, /taskkill.*args\.push\('\/F'\)/s);
+  assert.match(source, /maxRetries: 10/);
   assert.match(source, /renderer-console-\$\{msg\.type\(\)\}/);
   assert.match(source, /\[renderer-pageerror\]/);
   assert.match(source, /\[startup-error\]/);
@@ -147,4 +151,5 @@ test('the packaged browser gate launches the shipping Windows renderer with isol
     workflow,
     /- name: Verify packaged Windows renderer is visible\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-electron-browser\.mjs/,
   );
+  assert.match(workflow, /generated Portable\.exe release asset/);
 });
