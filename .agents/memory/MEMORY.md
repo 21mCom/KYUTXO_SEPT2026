@@ -136,3 +136,4 @@
 - [Export date filter uses blockTime](export-date-filter-blocktime.md) — tx/UTXO export rows scope date filters by the transaction's blockTime (batched txid lookup), never updatedAt/createdAt; address/other kinds keep the old fallback.
 - [React DayPicker test selection](react-day-picker-jsdom-selection.md) — target button[name=day], reject day-outside, verify the trigger date; nested browser popovers must fully detach before reopening.
 - [Windows Electron runtime compatibility](windows-electron-runtime-compatibility.md) — Electron 43 blanked the packaged renderer; keep the proven Electron line plus hardened extractor until Windows renderer launch is release-gated.
+- [Renderer build constant parity](renderer-build-constant-parity.md) — every Vite target must inject shared compile-time constants; one missing define can blank only the packaged renderer.
