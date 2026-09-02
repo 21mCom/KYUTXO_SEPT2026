@@ -9,9 +9,11 @@
 // IGNORES CSP response headers on file:// documents). Any of the following can
 // silently regress: a Vite output-layout change, a handler edit, a CSP edit.
 //
-// This check builds the real electron-builder asar, launches it under the nix
-// Electron runtime with Xvfb + CDP (recipe: .agents/memory/packaged-electron-verify.md),
-// and asserts in the live packaged renderer:
+// This check builds the real electron-builder output, launches it under the
+// nix Electron runtime with Xvfb + CDP on Linux (recipe:
+// .agents/memory/packaged-electron-verify.md), or launches the unpacked
+// shipping executable with CDP on Windows, and asserts in the live packaged
+// renderer:
 //   1. The renderer actually renders (vault-setup form visible) — proves the
 //      /assets remap works, since the app JS/CSS only load through it.
 //   2. The CSP <meta> tag is present in the served document and carries the
@@ -26,9 +28,9 @@
 //     Builds everything (npm run build + native engine + electron-builder --dir),
 //     then launches and asserts. Takes several minutes.
 //   KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-electron-browser.mjs
-//     Reuses an existing release/linux-unpacked/resources/app.asar (fails if absent).
+//     Reuses an existing release/<platform>-unpacked output (fails if absent).
 //
-// Requirements (all present in this Replit environment):
+// Linux requirements (all present in this Replit environment):
 //   - a nix Electron 29.x store path (upstream Electron >=~39 binaries crash
 //     with "Floating point exception" here) — override via KYUTXO_ELECTRON_BIN
 //   - a nix xorg-server store path providing Xvfb — override via KYUTXO_XVFB_BIN.
@@ -55,7 +57,10 @@ await acquireBrowserCheckLock();
 // Windows-safe (fileURLToPath): `new URL(...).pathname` is `/D:/...` on win32
 // and path.resolve mangles it — see repoRootFromModuleUrl.
 const ROOT = repoRootFromModuleUrl(import.meta.url);
-const ASAR = path.join(ROOT, 'release', 'linux-unpacked', 'resources', 'app.asar');
+const IS_WINDOWS = process.platform === 'win32';
+const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
+const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
+const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9223);
 const TAG = '[packaged-electron]';
 
@@ -103,7 +108,7 @@ function buildAsar() {
     '--config',
     'electron-builder.json',
     '--dir',
-    '--linux',
+    IS_WINDOWS ? '--win' : '--linux',
     '-c.npmRebuild=false',
   ]);
   if (!fs.existsSync(ASAR)) {
@@ -128,15 +133,31 @@ async function waitForCdp(timeoutMs) {
 async function main() {
   buildAsar();
 
-  const { electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG });
-  console.log(`${TAG} electron: ${electronBin}`);
-  console.log(`${TAG} Xvfb: ${xvfbBin}`);
+  let electronBin = null;
+  let xvfbBin = null;
+  if (IS_WINDOWS) {
+    if (!fs.existsSync(PACKAGED_EXECUTABLE)) {
+      throw new Error(
+        `${TAG} packaged Windows executable is missing: ${PACKAGED_EXECUTABLE}`,
+      );
+    }
+    console.log(`${TAG} shipping executable: ${PACKAGED_EXECUTABLE}`);
+  } else {
+    ({ electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG }));
+    console.log(`${TAG} electron: ${electronBin}`);
+    console.log(`${TAG} Xvfb: ${xvfbBin}`);
+  }
 
   // Fresh, isolated profile: Replit points XDG_CONFIG_HOME etc. at the
   // workspace, which would persist vault state across "fresh" runs.
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-check-'));
+  const userDataDir = path.join(tmpHome, 'user-data');
+  fs.mkdirSync(userDataDir, { recursive: true });
+  // A portable executable can inherit this variable from a runner. Do not
+  // allow an inherited portable directory to defeat the isolated profile.
+  const { PORTABLE_EXECUTABLE_DIR: _portableExecutableDir, ...inheritedEnv } = process.env;
   const env = {
-    ...process.env,
+    ...inheritedEnv,
     HOME: tmpHome,
     XDG_CONFIG_HOME: path.join(tmpHome, '.config'),
     XDG_CACHE_HOME: path.join(tmpHome, '.cache'),
@@ -144,31 +165,56 @@ async function main() {
     XDG_STATE_HOME: path.join(tmpHome, '.local', 'state'),
     NODE_ENV: 'production',
   };
+  if (IS_WINDOWS) {
+    // Electron's --user-data-dir is authoritative, while these keep any
+    // Windows profile fallbacks inside the same disposable directory.
+    env.USERPROFILE = tmpHome;
+    env.APPDATA = path.join(tmpHome, 'AppData', 'Roaming');
+    env.LOCALAPPDATA = path.join(tmpHome, 'AppData', 'Local');
+  }
 
+  let xvfb = null;
   const DISPLAY = process.env.KYUTXO_PACKAGED_DISPLAY || ':99';
-  console.log(`${TAG} starting Xvfb on ${DISPLAY}...`);
-  const xvfb = spawn(xvfbBin, [DISPLAY, '-screen', '0', '1280x800x24'], {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
-  });
-  xvfb.stderr.on('data', (d) => process.stdout.write(`${TAG}[xvfb] ${d}`));
-  await sleep(2000);
-
-  console.log(`${TAG} launching packaged app on ${DISPLAY} (CDP port ${CDP_PORT})...`);
-  const child = spawn(
-    electronBin,
-    [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`],
-    {
-      cwd: tmpHome,
-      env: { ...env, DISPLAY },
+  if (!IS_WINDOWS) {
+    console.log(`${TAG} starting Xvfb on ${DISPLAY}...`);
+    xvfb = spawn(xvfbBin, [DISPLAY, '-screen', '0', '1280x800x24'], {
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
+    });
+    xvfb.stderr.on('data', (d) => process.stdout.write(`${TAG}[xvfb] ${d}`));
+    await sleep(2000);
+  }
+
+  console.log(
+    `${TAG} launching packaged app${IS_WINDOWS ? '' : ` on ${DISPLAY}`} ` +
+      `(CDP port ${CDP_PORT})...`,
+  );
+  const launchArgs = IS_WINDOWS
+    ? [
+        `--user-data-dir=${userDataDir}`,
+        '--disable-gpu',
+        `--remote-debugging-port=${CDP_PORT}`,
+      ]
+    : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`];
+  const child = spawn(
+    IS_WINDOWS ? PACKAGED_EXECUTABLE : electronBin,
+    launchArgs,
+    {
+      cwd: tmpHome,
+      env: IS_WINDOWS ? env : { ...env, DISPLAY },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: !IS_WINDOWS,
     },
   );
   child.stdout.on('data', (d) => process.stdout.write(`${TAG}[app] ${d}`));
   child.stderr.on('data', (d) => process.stdout.write(`${TAG}[app-err] ${d}`));
   let appExited = false;
+  let appLaunchError = null;
+  child.on('error', (err) => {
+    appLaunchError = String(err?.stack || err);
+    console.log(`${TAG}[startup-error] ${appLaunchError}`);
+  });
   child.on('exit', (code, sig) => {
     appExited = true;
     console.log(`${TAG} app process exited (code=${code} sig=${sig})`);
@@ -180,7 +226,8 @@ async function main() {
     if (!(await waitForCdp(90_000))) {
       throw new Error(
         `${TAG} CDP endpoint never came up on port ${CDP_PORT}` +
-          (appExited ? ' (the app process already exited — launch crash?)' : ''),
+          (appExited ? ' (the app process already exited — launch crash?)' : '') +
+          (appLaunchError ? `: ${appLaunchError}` : ''),
       );
     }
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
@@ -198,6 +245,21 @@ async function main() {
     }
     if (!page) throw new Error(`${TAG} no file:// renderer page appeared within 60s.`);
     console.log(`${TAG} renderer page: ${page.url()}`);
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' || msg.type() === 'warning') {
+        console.log(`${TAG}[renderer-console-${msg.type()}] ${msg.text().slice(0, 500)}`);
+      }
+    });
+    page.on('pageerror', (err) => {
+      console.log(`${TAG}[renderer-pageerror] ${String(err?.stack || err).slice(0, 500)}`);
+    });
+    page.on('requestfailed', (request) => {
+      console.log(
+        `${TAG}[renderer-request-failed] ${request.method()} ${request.url().slice(0, 300)} ` +
+          `— ${request.failure()?.errorText || 'unknown error'}`,
+      );
+    });
+    page.on('crash', () => console.log(`${TAG}[renderer-crashed] renderer process crashed`));
 
     // ── 1. Renderer renders (proves the /assets file-protocol remap works) ──
     // A fresh profile shows the Create Vault form; the app JS only executes if
@@ -310,28 +372,46 @@ async function main() {
     });
   } finally {
     if (browser) await browser.close().catch(() => {});
-    try {
-      process.kill(-child.pid, 'SIGTERM');
-    } catch {
+    if (IS_WINDOWS) {
       try {
         child.kill('SIGTERM');
       } catch {
         /* already gone */
       }
+    } else {
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          /* already gone */
+        }
+      }
     }
     await sleep(2000);
-    try {
-      process.kill(-child.pid, 'SIGKILL');
-    } catch {
-      /* already gone */
-    }
-    try {
-      process.kill(-xvfb.pid, 'SIGTERM');
-    } catch {
+    if (IS_WINDOWS) {
       try {
-        xvfb.kill('SIGTERM');
+        child.kill('SIGKILL');
       } catch {
         /* already gone */
+      }
+    } else {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+    if (xvfb) {
+      try {
+        process.kill(-xvfb.pid, 'SIGTERM');
+      } catch {
+        try {
+          xvfb.kill('SIGTERM');
+        } catch {
+          /* already gone */
+        }
       }
     }
     fs.rmSync(tmpHome, { recursive: true, force: true });

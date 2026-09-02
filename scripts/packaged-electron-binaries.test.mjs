@@ -12,6 +12,7 @@ import {
 } from './packaged-electron-binaries.mjs';
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.dirname(SCRIPTS_DIR);
 const PACKAGED_BROWSER_CHECKS = [
   'check-packaged-electron-browser.mjs',
   'check-wrong-password-packaged.mjs',
@@ -122,5 +123,28 @@ test('reports an actionable error when discovery times out or finds nothing', ()
       exec: () => '',
     }),
     /could not find Xvfb .*Set KYUTXO_XVFB_BIN to override/,
+  );
+});
+
+test('the packaged browser gate launches the shipping Windows renderer with isolated state', () => {
+  const source = fs.readFileSync(
+    path.join(SCRIPTS_DIR, 'check-packaged-electron-browser.mjs'),
+    'utf8',
+  );
+  const workflow = fs.readFileSync(
+    path.join(ROOT, '.github', 'workflows', 'build.yml'),
+    'utf8',
+  );
+
+  assert.match(source, /process\.platform === 'win32'/);
+  assert.match(source, /path\.join\(ROOT, 'release', IS_WINDOWS \? 'win-unpacked' : 'linux-unpacked'\)/);
+  assert.match(source, /IS_WINDOWS \? 'KYUTXO\.exe' : 'kyutxo'/);
+  assert.match(source, /`--user-data-dir=\$\{userDataDir\}`/);
+  assert.match(source, /renderer-console-\$\{msg\.type\(\)\}/);
+  assert.match(source, /\[renderer-pageerror\]/);
+  assert.match(source, /\[startup-error\]/);
+  assert.match(
+    workflow,
+    /- name: Verify packaged Windows renderer is visible\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-electron-browser\.mjs/,
   );
 });

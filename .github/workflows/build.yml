@@ -91,6 +91,15 @@ jobs:
           KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON: '1'
         run: node scripts/check-packaged-native-engine.mjs
 
+      # RELEASE GATE: launch the exact unpacked Windows executable produced
+      # above, with a disposable user-data directory, and drive its real
+      # renderer over CDP. This catches a packaged Electron runtime that
+      # starts successfully but leaves the shipping window blank.
+      - name: Verify packaged Windows renderer is visible
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-electron-browser.mjs
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
