@@ -23,10 +23,12 @@
 // BROWSER_CHECK_LOCK_DIR (useful for tests).
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const LOCK_DIR =
-  process.env.BROWSER_CHECK_LOCK_DIR || '/tmp/kyutxo-browser-check.lock';
+  process.env.BROWSER_CHECK_LOCK_DIR ||
+  path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'kyutxo-browser-check.lock');
 const OWNER_FILE = 'owner.json';
 const POLL_MS = 2000;
 // A single check normally finishes in well under 5 minutes; if we have been
@@ -128,6 +130,10 @@ export async function acquireBrowserCheckLock(
 ) {
   const start = Date.now();
   let announcedWait = false;
+  // os.tmpdir() can point at a runner-specific directory that has not been
+  // created yet (for example D:\tmp on GitHub's Windows runner). Creating only
+  // the parent keeps the lock-directory mkdir below atomic.
+  fs.mkdirSync(path.dirname(LOCK_DIR), { recursive: true });
   for (;;) {
     try {
       fs.mkdirSync(LOCK_DIR);

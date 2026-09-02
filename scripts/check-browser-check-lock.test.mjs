@@ -169,6 +169,31 @@ test('the real scripts directory currently passes the guard', () => {
   assert.equal(res.status, 0, res.stderr);
 });
 
+test('creates a missing parent directory before acquiring the lock', () => {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'browser-check-lock-missing-parent-'),
+  );
+  const lockDir = path.join(root, 'missing', 'nested', 'lock');
+  try {
+    assert.equal(fs.existsSync(path.dirname(lockDir)), false);
+    const res = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', acquireCommand('missing-parent-check')],
+      {
+        env: { ...process.env, BROWSER_CHECK_LOCK_DIR: lockDir },
+        encoding: 'utf8',
+        timeout: 5000,
+      },
+    );
+
+    assert.equal(res.status, 0, `${res.stderr}\n${res.stdout}`);
+    assert.match(res.stdout, /ACQUIRED/);
+    assert.equal(fs.existsSync(path.dirname(lockDir)), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('reaps a lock whose recorded owner process has died', () => {
   const { root, lockDir } = createLockDir('dead-owner');
   try {
