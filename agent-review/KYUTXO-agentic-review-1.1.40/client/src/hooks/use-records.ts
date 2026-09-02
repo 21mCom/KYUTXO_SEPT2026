@@ -1,0 +1,398 @@
+import { useLiveQuery } from 'dexie-react-hooks';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { type Record, type RecordOriginType } from '@/lib/database';
+import { uploadAttachment, deleteAttachment } from '@/lib/attachments';
+import { 
+  createRecord as facadeCreateRecord,
+  updateRecord as facadeUpdateRecord,
+  deleteRecord as facadeDeleteRecord,
+  createRecordOrigin,
+} from '@/lib/dataFacade';
+import {
+  getRecentRecordsByUpdatedAt,
+  getRecordsPageByUpdatedAt,
+  getRecordsPageByUpdatedAtFiltered,
+  bulkGetRecords,
+  countRecords,
+  countRecordsByImportanceTiers,
+  countRecordsByTypeAndImportanceTiers,
+  getRecord,
+  getRecordsByInputStrings,
+  findRecordByInputString,
+  searchRecordsByQuery,
+  getRecordsByTypeFiltered,
+  getRecentRecordsFiltered,
+} from '@/lib/data/record-crud';
+import { evaluateEngineFreshness } from '@/lib/engine/engine-freshness';
+import { engineGetRecordPageByUpdatedAt } from '@/lib/engine/engine-client';
+import { useDbChangeSignal } from '@/hooks/use-db-change-signal';
+
+const RECORDS_TABLES = ['records'];
+const DEBOUNCE_MS = 500;
+
+const DEFAULT_RECORDS_LIMIT = 5000;
+
+export function useRecords(options?: { limit?: number }) {
+  const recordLimit = options?.limit ?? DEFAULT_RECORDS_LIMIT;
+  const [records, setRecords] = useState<Record[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const loadVersionRef = useRef(0);
+  const dbChangeSignal = useDbChangeSignal(RECORDS_TABLES, DEBOUNCE_MS);
+
+  const loadRecords = useCallback(async () => {
+    const version = ++loadVersionRef.current;
+    setIsLoading(true);
+    try {
+      const rawRecords = await getRecentRecordsByUpdatedAt(recordLimit);
+      if (loadVersionRef.current !== version) return;
+      setRecords(rawRecords);
+    } catch (error) {
+      console.error('Failed to load records:', error);
+      if (loadVersionRef.current === version) {
+        setRecords([]);
+      }
+    } finally {
+      if (loadVersionRef.current === version) {
+        setIsLoading(false);
+      }
+    }
+  }, [recordLimit]);
+
+  useEffect(() => {
+    loadRecords();
+  }, [loadRecords, dbChangeSignal]);
+
+  return {
+    records,
+    isLoading,
+    reload: loadRecords,
+  };
+}
+
+const BLOCKCHAIN_DISCOVERED_TIERS: string[] = ['blockchain-discovered', 'pending-review'];
+
+/**
+ * Page read for the Dashboard's record list (updatedAt DESC). The native engine
+ * does the ordered page + blockchain-tier exclusion in SQLite, then we hydrate
+ * the full records from Dexie by primary key — so the returned objects are
+ * identical to the Dexie fallback. This replaces ONLY the page read: the slow
+ * path was Dexie's per-row JS `.filter()` cursor over the updatedAt index, which
+ * on a large vault can walk millions of blockchain-discovered rows to fill one
+ * page of non-blockchain rows. Counts stay on Dexie (indexed `.count()`, fast).
+ * Falls back to the exact Dexie page read when the engine is unavailable/stale.
+ */
+async function fetchFilteredRecordPage(
+  includeBD: boolean,
+  offset: number,
+  limit: number,
+): Promise<Record[]> {
+  try {
+    const decision = await evaluateEngineFreshness('records');
+    if (decision.useEngine) {
+      const rows = await engineGetRecordPageByUpdatedAt({
+        includeBlockchainDiscovered: includeBD,
+        offset,
+        limit,
+      });
+      const ids = rows.map((r) => r.id);
+      return (await bulkGetRecords(ids)).filter((r): r is Record => !!r);
+    }
+  } catch (error) {
+    console.warn('[useFilteredRecords] engine page read failed; falling back to Dexie', error);
+  }
+
+  if (includeBD) {
+    return getRecordsPageByUpdatedAt(offset, limit);
+  }
+  const excludeBlockchain = (r: Record) =>
+    r.addressImportance !== 'blockchain-discovered' &&
+    r.addressImportance !== 'pending-review';
+  return getRecordsPageByUpdatedAtFiltered(offset, limit, excludeBlockchain);
+}
+
+export function useFilteredRecords(
+  includeBlockchainDiscovered: boolean,
+  options?: { offset?: number; limit?: number }
+) {
+  const [records, setRecords] = useState<Record[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [blockchainDiscoveredCount, setBlockchainDiscoveredCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const loadVersionRef = useRef(0);
+  const dbChangeSignal = useDbChangeSignal(RECORDS_TABLES, DEBOUNCE_MS);
+
+  const offset = options?.offset;
+  const limit = options?.limit;
+
+  const loadRecords = useCallback(async (includeBD: boolean, pgOffset?: number, pgLimit?: number) => {
+    const version = ++loadVersionRef.current;
+    setIsLoading(true);
+    try {
+      let rawRecords: Record[];
+      let total: number;
+
+      const effectiveLimit = pgLimit ?? DEFAULT_RECORDS_LIMIT;
+      const effectiveOffset = pgOffset ?? 0;
+
+      if (includeBD) {
+        total = await countRecords();
+      } else {
+        const blockchainCount = await countRecordsByImportanceTiers([
+          'blockchain-discovered',
+          'pending-review',
+        ]);
+        total = (await countRecords()) - blockchainCount;
+      }
+      if (loadVersionRef.current !== version) return;
+
+      rawRecords = await fetchFilteredRecordPage(includeBD, effectiveOffset, effectiveLimit);
+
+      if (loadVersionRef.current !== version) return;
+      setTotalCount(total);
+
+      const bdCount = await countRecordsByTypeAndImportanceTiers(
+        'address',
+        BLOCKCHAIN_DISCOVERED_TIERS as ('blockchain-discovered' | 'pending-review')[],
+      );
+      if (loadVersionRef.current !== version) return;
+      setBlockchainDiscoveredCount(bdCount);
+
+      setRecords(rawRecords);
+    } catch (error) {
+      console.error('Failed to load filtered records:', error);
+      if (loadVersionRef.current === version) {
+        setRecords([]);
+      }
+    } finally {
+      if (loadVersionRef.current === version) {
+        setIsLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRecords(includeBlockchainDiscovered, offset, limit);
+  }, [includeBlockchainDiscovered, offset, limit, loadRecords, dbChangeSignal]);
+
+  return {
+    records,
+    isLoading,
+    blockchainDiscoveredCount,
+    totalCount,
+    reload: () => loadRecords(includeBlockchainDiscovered, offset, limit),
+  };
+}
+
+export function useRecord(id: number | undefined) {
+  const [record, setRecord] = useState<Record | undefined>();
+  
+  const rawRecord = useLiveQuery(
+    () => id ? getRecord(id) : undefined,
+    [id]
+  );
+  
+  useEffect(() => {
+    setRecord(rawRecord);
+  }, [rawRecord]);
+  
+  return {
+    record,
+    isLoading: rawRecord === undefined && id !== undefined,
+  };
+}
+
+export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>) {
+  let addressImportance = data.addressImportance;
+  if (!addressImportance) {
+    if (data.type === 'transaction' || data.type === 'other') {
+      addressImportance = 'manual';
+    } else if ((data.syncDepth !== undefined && data.syncDepth > 0) || 
+               data.source === 'blockchain-sync') {
+      addressImportance = 'blockchain-discovered';
+    } else if (data.source?.startsWith('walletImport-')) {
+      addressImportance = 'wallet-import';
+    } else if (data.source === 'xpub-import' || data.xpub || data.derivationPath) {
+      addressImportance = 'xpub-derived';
+    } else {
+      addressImportance = 'manual';
+    }
+  }
+  
+  const recordWithDefaults = {
+    ...data,
+    addressImportance,
+    syncDepth: data.syncDepth ?? 0,
+    maxSyncedDepth: data.maxSyncedDepth ?? -1,
+  };
+  
+  const recordId = await facadeCreateRecord(recordWithDefaults) as number;
+  
+  let originType: RecordOriginType = 'manual';
+  
+  if (data.source === 'blockchain-sync' || data.addressImportance === 'blockchain-discovered') {
+    originType = 'blockchain-sync';
+  } else if (data.source?.startsWith('walletImport-') || data.addressImportance === 'wallet-import') {
+    originType = 'wallet-sync';
+  } else if (data.addressImportance === 'xpub-derived' || data.xpub || data.derivationPath) {
+    originType = 'xpub-derived';
+  } else if (data.source?.includes('bulk') || data.source?.includes('import')) {
+    originType = 'bulk-import';
+  }
+  
+  try {
+    await createRecordOrigin({
+      recordId,
+      originType,
+      source: data.source || 'Manual entry',
+      label: data.label,
+      notes: data.notes,
+      owner: data.owner,
+      walletName: data.walletName,
+      seedName: data.seedName,
+      walletSoftware: data.walletSoftware,
+      tags: data.tags,
+      categories: data.categories,
+    });
+  } catch (originError) {
+    console.error('[createRecord] Failed to create RecordOrigin:', originError);
+  }
+  
+  return recordId;
+}
+
+export async function createRecordWithAttachments(
+  data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>,
+  files: File[],
+  onProgress?: (current: number, total: number) => void
+): Promise<{ recordId: number; uploadedCount: number; failedCount: number }> {
+  const recordId = await createRecord(data) as number;
+
+  if (files.length === 0) {
+    return { recordId, uploadedCount: 0, failedCount: 0 };
+  }
+
+  const uploadedAttachmentIds: number[] = [];
+  let failedCount = 0;
+
+  try {
+    for (let i = 0; i < files.length; i++) {
+      onProgress?.(i + 1, files.length);
+      
+      try {
+        const result = await uploadAttachment(recordId, files[i], data.inputString);
+        uploadedAttachmentIds.push(result.id);
+      } catch (error) {
+        console.error(`Failed to upload file ${files[i].name}:`, error);
+        failedCount++;
+      }
+    }
+
+    if (failedCount === files.length && files.length > 0) {
+      for (const attachmentId of uploadedAttachmentIds) {
+        try {
+          await deleteAttachment(attachmentId);
+        } catch (e) {
+          console.error('Rollback attachment delete failed:', e);
+        }
+      }
+      await facadeDeleteRecord(recordId);
+      throw new Error('All file uploads failed. Record was not created.');
+    }
+
+    return { 
+      recordId, 
+      uploadedCount: uploadedAttachmentIds.length, 
+      failedCount 
+    };
+  } catch (error) {
+    if (uploadedAttachmentIds.length > 0) {
+      for (const attachmentId of uploadedAttachmentIds) {
+        try {
+          await deleteAttachment(attachmentId);
+        } catch (e) {
+          console.error('Rollback attachment delete failed:', e);
+        }
+      }
+    }
+    await facadeDeleteRecord(recordId);
+    throw error;
+  }
+}
+
+export async function updateRecord(id: number, data: Partial<Record>) {
+  return facadeUpdateRecord(id, data);
+}
+
+export async function deleteRecord(id: number) {
+  return facadeDeleteRecord(id);
+}
+
+export async function lookupRecordsByInputStrings(inputStrings: string[]): Promise<Map<string, Record>> {
+  const result = new Map<string, Record>();
+  if (inputStrings.length === 0) return result;
+
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const s of inputStrings) {
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(trimmed);
+    }
+  }
+
+  const CHUNK_SIZE = 500;
+  const allRecords: Record[] = [];
+  for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
+    const chunk = unique.slice(i, i + CHUNK_SIZE);
+    const records = await getRecordsByInputStrings(chunk);
+    allRecords.push(...records);
+  }
+
+  for (const r of allRecords) {
+    if (r.inputString) {
+      result.set(r.inputString.trim().toLowerCase(), r);
+    }
+  }
+
+  const unmatchedEntries = unique.filter(s => !result.has(s.toLowerCase()));
+  for (const s of unmatchedEntries) {
+    try {
+      const match = await findRecordByInputString(s);
+      if (match && match.inputString) {
+        result.set(match.inputString.trim().toLowerCase(), match);
+      }
+    } catch {
+      // equalsIgnoreCase fallback
+    }
+  }
+
+  return result;
+}
+
+export async function searchRecords(query: string) {
+  return searchRecordsByQuery(query, 200);
+}
+
+export async function filterRecords(filters: {
+  type?: 'address' | 'transaction' | 'other' | 'all';
+  tags?: string[];
+  categories?: string[];
+}) {
+  const hasTagFilter = filters.tags && filters.tags.length > 0;
+  const hasCategoryFilter = filters.categories && filters.categories.length > 0;
+  
+  const additionalFilter = (r: Record) => {
+    if (hasTagFilter && !filters.tags!.some(tag => r.tags.includes(tag))) return false;
+    if (hasCategoryFilter && !filters.categories!.some(cat => r.categories.includes(cat))) return false;
+    return true;
+  };
+
+  if (filters.type && filters.type !== 'all') {
+    return getRecordsByTypeFiltered(filters.type, additionalFilter, 500);
+  }
+
+  return getRecentRecordsFiltered(additionalFilter, 500);
+}

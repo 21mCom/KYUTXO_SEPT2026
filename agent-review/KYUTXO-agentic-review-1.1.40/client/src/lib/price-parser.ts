@@ -1,0 +1,373 @@
+import type { PriceData } from './database';
+
+export type PriceDataSource = 'investing' | 'unknown';
+
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  
+  result.push(current.trim());
+  return result;
+}
+
+export interface ParseResult {
+  success: boolean;
+  data: Omit<PriceData, 'id' | 'importedAt'>[];
+  source: PriceDataSource;
+  errors: string[];
+  skipped: number;
+}
+
+interface DetectedFormat {
+  source: PriceDataSource;
+  hasHeader: boolean;
+  headerRows: number;
+  delimiter: string;
+  dateColumn: number;
+  dateFormat: 'YYYY-MM-DD' | 'MM/DD/YYYY' | 'DD/MM/YYYY' | 'MMM DD, YYYY' | 'unix';
+  closeColumn: number;
+  openColumn?: number;
+  highColumn?: number;
+  lowColumn?: number;
+  volumeColumn?: number;
+}
+
+function parseNumber(value: string): number | undefined {
+  if (!value || value.trim() === '' || value === '-') return undefined;
+  const cleaned = value.replace(/[$,]/g, '').trim();
+  if (cleaned.endsWith('K')) {
+    return parseFloat(cleaned.slice(0, -1)) * 1000;
+  }
+  if (cleaned.endsWith('M')) {
+    return parseFloat(cleaned.slice(0, -1)) * 1000000;
+  }
+  if (cleaned.endsWith('B')) {
+    return parseFloat(cleaned.slice(0, -1)) * 1000000000;
+  }
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? undefined : num;
+}
+
+const MONTH_MAP: Record<string, string> = {
+  'jan': '01', 'january': '01',
+  'feb': '02', 'february': '02',
+  'mar': '03', 'march': '03',
+  'apr': '04', 'april': '04',
+  'may': '05',
+  'jun': '06', 'june': '06',
+  'jul': '07', 'july': '07',
+  'aug': '08', 'august': '08',
+  'sep': '09', 'september': '09',
+  'oct': '10', 'october': '10',
+  'nov': '11', 'november': '11',
+  'dec': '12', 'december': '12',
+};
+
+function parseDate(value: string, format: DetectedFormat['dateFormat']): string | null {
+  const trimmed = value.trim();
+  
+  if (format === 'YYYY-MM-DD') {
+    const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  }
+  
+  if (format === 'MM/DD/YYYY') {
+    const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (match) {
+      const month = match[1].padStart(2, '0');
+      const day = match[2].padStart(2, '0');
+      return `${match[3]}-${month}-${day}`;
+    }
+  }
+  
+  if (format === 'DD/MM/YYYY') {
+    const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (match) {
+      const day = match[1].padStart(2, '0');
+      const month = match[2].padStart(2, '0');
+      return `${match[3]}-${month}-${day}`;
+    }
+  }
+  
+  // Handle "MMM DD, YYYY" format like "Sep 17, 2024" or "September 17, 2024"
+  if (format === 'MMM DD, YYYY') {
+    // Match patterns like "Sep 17, 2024" or "September 17, 2024"
+    const match = trimmed.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+    if (match) {
+      const monthName = match[1].toLowerCase();
+      const month = MONTH_MAP[monthName];
+      if (month) {
+        const day = match[2].padStart(2, '0');
+        return `${match[3]}-${month}-${day}`;
+      }
+    }
+    // Also try "DD MMM YYYY" format like "17 Sep 2024"
+    const altMatch = trimmed.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+    if (altMatch) {
+      const day = altMatch[1].padStart(2, '0');
+      const monthName = altMatch[2].toLowerCase();
+      const month = MONTH_MAP[monthName];
+      if (month) {
+        return `${altMatch[3]}-${month}-${day}`;
+      }
+    }
+  }
+  
+  if (format === 'unix') {
+    // Handle scientific notation like "1.76424E+12"
+    let ts: number;
+    if (trimmed.toLowerCase().includes('e')) {
+      ts = parseFloat(trimmed);
+    } else {
+      ts = parseInt(trimmed, 10);
+    }
+    if (!isNaN(ts)) {
+      // If timestamp is in milliseconds (> 1 trillion), use directly
+      // Otherwise multiply by 1000 to convert seconds to milliseconds
+      const date = new Date(ts > 1e12 ? ts : ts * 1000);
+      if (!isNaN(date.getTime())) {
+        return date.toISOString().split('T')[0];
+      }
+    }
+  }
+  
+  // Last resort: try to parse with JavaScript Date
+  const jsDate = new Date(trimmed);
+  if (!isNaN(jsDate.getTime()) && jsDate.getFullYear() > 1990 && jsDate.getFullYear() < 2100) {
+    return jsDate.toISOString().split('T')[0];
+  }
+  
+  return null;
+}
+
+function detectFormat(lines: string[]): DetectedFormat | null {
+  if (lines.length < 2) return null;
+  
+  const firstLine = lines[0].toLowerCase();
+  
+  // Investing.com format - "Date,Price,Open,High,Low,Vol.,Change %"
+  // Date format is "Sep 17, 2024" (MMM DD, YYYY)
+  // Handle quoted headers and various variations
+  const cleanHeader = firstLine.replace(/"/g, '').toLowerCase();
+  if (cleanHeader.includes('date') && (cleanHeader.includes('change') || cleanHeader.includes('vol'))) {
+    const cols = parseCSVLine(firstLine).map(c => c.toLowerCase().trim());
+    const dateCol = cols.findIndex(c => c === 'date');
+    const priceCol = cols.findIndex(c => c === 'price' || c === 'close');
+    
+    if (dateCol !== -1 && priceCol !== -1) {
+      return {
+        source: 'investing',
+        hasHeader: true,
+        headerRows: 1,
+        delimiter: ',',
+        dateColumn: dateCol,
+        dateFormat: 'MMM DD, YYYY',
+        closeColumn: priceCol,
+        openColumn: cols.findIndex(c => c === 'open'),
+        highColumn: cols.findIndex(c => c === 'high'),
+        lowColumn: cols.findIndex(c => c === 'low'),
+        volumeColumn: cols.findIndex(c => c.includes('vol')),
+      };
+    }
+  }
+  
+  // Generic CSV detection - try to auto-detect columns
+  const delimiter = firstLine.includes('\t') ? '\t' : ',';
+  const cols = delimiter === ',' 
+    ? parseCSVLine(firstLine).map(c => c.toLowerCase().trim())
+    : firstLine.split(delimiter).map(c => c.toLowerCase().trim());
+  
+  let dateColumn = cols.findIndex(c => c.includes('date') || c.includes('time'));
+  let closeColumn = cols.findIndex(c => c === 'close' || c === 'price');
+  
+  if (dateColumn === -1) dateColumn = 0;
+  if (closeColumn === -1) closeColumn = 1;
+  
+  // Detect date format from first data row
+  const dataLine = lines[1];
+  const dataCols = delimiter === ',' ? parseCSVLine(dataLine) : dataLine.split(delimiter);
+  const dateValue = dataCols[dateColumn]?.trim() || '';
+  
+  let dateFormat: DetectedFormat['dateFormat'] = 'YYYY-MM-DD';
+  if (dateValue.match(/^\d{1,2}\/\d{1,2}\/\d{4}/)) {
+    // Check if first part is > 12 (must be DD/MM)
+    const firstPart = parseInt(dateValue.split('/')[0], 10);
+    dateFormat = firstPart > 12 ? 'DD/MM/YYYY' : 'MM/DD/YYYY';
+  } else if (dateValue.match(/^\d{10,13}$/) || dateValue.match(/^\d+\.?\d*[eE][+\-]?\d+$/)) {
+    // Matches Unix timestamps or scientific notation like "1.76424E+12"
+    dateFormat = 'unix';
+  } else if (dateValue.match(/^[A-Za-z]+\s+\d{1,2},?\s+\d{4}/)) {
+    // Matches "Sep 17, 2024" or "September 17 2024"
+    dateFormat = 'MMM DD, YYYY';
+  } else if (dateValue.match(/^\d{1,2}\s+[A-Za-z]+\s+\d{4}/)) {
+    // Matches "17 Sep 2024"
+    dateFormat = 'MMM DD, YYYY';
+  }
+  
+  return {
+    source: 'unknown',
+    hasHeader: true,
+    headerRows: 1,
+    delimiter,
+    dateColumn,
+    dateFormat,
+    closeColumn,
+    openColumn: cols.findIndex(c => c === 'open'),
+    highColumn: cols.findIndex(c => c === 'high'),
+    lowColumn: cols.findIndex(c => c === 'low'),
+    volumeColumn: cols.findIndex(c => c.includes('volume') || c.includes('vol')),
+  };
+}
+
+function isMetadataRow(line: string): boolean {
+  const lower = line.toLowerCase().trim();
+  return (
+    lower.startsWith('downloaddata') ||
+    lower.startsWith('https://') ||
+    lower.startsWith('http://') ||
+    lower.startsWith('note:') ||
+    lower.startsWith('source:') ||
+    lower.includes('cryptodatadownload') ||
+    lower.startsWith('#') ||
+    lower === '' ||
+    !line.includes(',')
+  );
+}
+
+export function parsePriceCSV(
+  csvContent: string,
+  asset: string = 'BTC',
+  currency: string = 'USD'
+): ParseResult {
+  const rawLines = csvContent.split(/\r?\n/);
+  
+  const lines = rawLines.filter(line => {
+    const trimmed = line.trim();
+    return trimmed && !isMetadataRow(trimmed);
+  });
+  
+  if (lines.length === 0) {
+    return { success: false, data: [], source: 'unknown', errors: ['Empty file or no valid data rows found'], skipped: 0 };
+  }
+  
+  const format = detectFormat(rawLines.filter(l => l.trim()));
+  if (!format) {
+    const headerPreview = rawLines[0]?.substring(0, 100) || 'empty';
+    return { 
+      success: false, 
+      data: [], 
+      source: 'unknown', 
+      errors: [`Could not detect file format. Header: "${headerPreview}"`], 
+      skipped: 0 
+    };
+  }
+  
+  const data: Omit<PriceData, 'id' | 'importedAt'>[] = [];
+  const errors: string[] = [];
+  let skipped = 0;
+  
+  const dataLines = rawLines.slice(format.headerRows);
+  
+  for (let i = 0; i < dataLines.length; i++) {
+    const line = dataLines[i].trim();
+    if (!line) continue;
+    
+    if (isMetadataRow(line)) {
+      skipped++;
+      continue;
+    }
+    
+    const cols = format.delimiter === ',' ? parseCSVLine(line) : line.split(format.delimiter);
+    
+    const dateStr = cols[format.dateColumn]?.trim();
+    if (!dateStr) {
+      skipped++;
+      continue;
+    }
+    
+    const date = parseDate(dateStr, format.dateFormat);
+    if (!date) {
+      if (errors.length < 5) {
+        errors.push(`Row ${i + format.headerRows + 1}: Invalid date format "${dateStr.substring(0, 30)}"`);
+      }
+      skipped++;
+      continue;
+    }
+    
+    const close = parseNumber(cols[format.closeColumn]);
+    if (close === undefined || close <= 0) {
+      if (errors.length < 5) {
+        errors.push(`Row ${i + format.headerRows + 1}: Invalid or missing close price`);
+      }
+      skipped++;
+      continue;
+    }
+    
+    const pricePoint: Omit<PriceData, 'id' | 'importedAt'> = {
+      date,
+      currency,
+      asset,
+      close,
+      source: format.source,
+    };
+    
+    if (format.openColumn !== undefined && format.openColumn >= 0) {
+      pricePoint.open = parseNumber(cols[format.openColumn]);
+    }
+    if (format.highColumn !== undefined && format.highColumn >= 0) {
+      pricePoint.high = parseNumber(cols[format.highColumn]);
+    }
+    if (format.lowColumn !== undefined && format.lowColumn >= 0) {
+      pricePoint.low = parseNumber(cols[format.lowColumn]);
+    }
+    if (format.volumeColumn !== undefined && format.volumeColumn >= 0) {
+      pricePoint.volume = parseNumber(cols[format.volumeColumn]);
+    }
+    
+    data.push(pricePoint);
+  }
+  
+  // Always sort by date ascending for consistent ordering
+  data.sort((a, b) => a.date.localeCompare(b.date));
+  
+  // Add summary error if many rows were skipped
+  if (skipped > 10 && errors.length > 0) {
+    errors.push(`...and ${skipped - errors.length} more rows skipped`);
+  }
+  
+  return {
+    success: data.length > 0,
+    data,
+    source: format.source,
+    errors: errors.slice(0, 10),
+    skipped,
+  };
+}
+
+export function getSourceDisplayName(source: PriceDataSource): string {
+  switch (source) {
+    case 'investing': return 'Investing.com';
+    default: return 'Unknown';
+  }
+}
+
+export const DATA_SOURCE_URL = 'https://www.investing.com/crypto/bitcoin/historical-data';

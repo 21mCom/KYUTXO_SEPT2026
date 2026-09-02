@@ -1,0 +1,611 @@
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Play,
+  Square,
+  Trash2,
+  X,
+  XCircle,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import {
+  stripLegacyMarkers,
+  type StripMarkersProgress,
+  type StripMarkersResult,
+  type StripMarkersTableResult,
+} from "@/lib/legacy-decrypt";
+
+type StripPhase = "idle" | "running" | "done" | "cancelled" | "error";
+
+interface StripState {
+  phase: StripPhase;
+  progress: StripMarkersProgress | null;
+  result: StripMarkersResult | null;
+  errorMessage?: string;
+}
+
+const initialState: StripState = {
+  phase: "idle",
+  progress: null,
+  result: null,
+};
+
+const PERSISTED_RESULT_KEY = "kyutxo:stripMarkers:lastResult";
+
+interface PersistedStripResult {
+  result: StripMarkersResult;
+  timestamp: number;
+}
+
+function loadPersistedResult(): PersistedStripResult | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PERSISTED_RESULT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedStripResult;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.timestamp !== "number" ||
+      !parsed.result ||
+      !Array.isArray(parsed.result.tableResults)
+    ) {
+      return null;
+    }
+    // Older persisted results predate the safe-strip change and have no
+    // skipped-unsafe counts. Normalize them to 0 so the rest of the UI can
+    // treat the field as always present.
+    parsed.result.totalSkippedUnsafe = parsed.result.totalSkippedUnsafe ?? 0;
+    for (const t of parsed.result.tableResults) {
+      t.rowsSkippedUnsafe = t.rowsSkippedUnsafe ?? 0;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedResult(result: StripMarkersResult): PersistedStripResult | null {
+  if (typeof window === "undefined") return null;
+  const payload: PersistedStripResult = { result, timestamp: Date.now() };
+  try {
+    window.localStorage.setItem(PERSISTED_RESULT_KEY, JSON.stringify(payload));
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function clearPersistedResult(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(PERSISTED_RESULT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function formatTimestamp(ts: number): string {
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return new Date(ts).toISOString();
+  }
+}
+
+interface StripMarkersPanelProps {
+  disabled?: boolean;
+  onRunningChange?: (running: boolean) => void;
+}
+
+export interface StripMarkersPanelHandle {
+  runStrip: () => void;
+}
+
+const StripMarkersPanel = forwardRef<StripMarkersPanelHandle, StripMarkersPanelProps>(function StripMarkersPanel(
+  { disabled = false, onRunningChange },
+  ref,
+) {
+  const [state, setState] = useState<StripState>(initialState);
+  const [persisted, setPersisted] = useState<PersistedStripResult | null>(null);
+  const [persistedExpanded, setPersistedExpanded] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setPersisted(loadPersistedResult());
+  }, []);
+
+  const runStrip = useCallback(async () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    setState({ phase: "running", progress: null, result: null });
+
+    try {
+      const result = await stripLegacyMarkers(
+        (progress) => {
+          setState((prev) => ({ ...prev, progress }));
+        },
+        ctrl.signal,
+      );
+
+      if (ctrl.signal.aborted) {
+        setState((prev) => ({
+          ...prev,
+          phase: "cancelled",
+          result,
+        }));
+      } else {
+        setState({ phase: "done", progress: null, result });
+        const saved = savePersistedResult(result);
+        if (saved) setPersisted(saved);
+      }
+    } catch (err) {
+      if (!ctrl.signal.aborted) {
+        console.error("[StripMarkersPanel] Strip failed:", err);
+        setState((prev) => ({
+          ...prev,
+          phase: "error",
+          errorMessage: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    } finally {
+      abortRef.current = null;
+    }
+  }, []);
+
+  const cancelStrip = useCallback(() => {
+    abortRef.current?.abort();
+    setState((prev) => ({ ...prev, phase: "cancelled" }));
+  }, []);
+
+  useImperativeHandle(ref, () => ({ runStrip }), [runStrip]);
+
+  const isRunning = state.phase === "running";
+  const isDone = state.phase === "done" || state.phase === "cancelled" || state.phase === "error";
+  const showPersisted = !isRunning && !isDone && persisted !== null;
+
+  const handleClearPersisted = useCallback(() => {
+    clearPersistedResult();
+    setPersisted(null);
+    setPersistedExpanded(false);
+  }, []);
+
+  useEffect(() => {
+    onRunningChange?.(isRunning);
+  }, [isRunning, onRunningChange]);
+
+  const progressPct =
+    state.progress && state.progress.tableCount > 0
+      ? ((state.progress.tableIndex + 1) / state.progress.tableCount) * 100
+      : 0;
+
+  return (
+    <Card data-testid="card-strip-markers">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Trash2 className="h-4 w-4" />
+              Strip Stale Markers
+            </CardTitle>
+            <CardDescription>
+              Remove leftover legacy marker fields (
+              <code className="text-xs">_legacyEncryptedPayload</code>,{" "}
+              <code className="text-xs">isEncrypted</code>,{" "}
+              <code className="text-xs">encryptedPayload</code>) from every
+              table. All sensitive values are already plaintext — this only
+              deletes the stale housekeeping keys.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {!isRunning ? (
+            <Button
+              onClick={runStrip}
+              disabled={disabled}
+              data-testid="button-strip-markers"
+            >
+              <Play className="h-4 w-4 mr-2" />
+              Strip stale markers
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              onClick={cancelStrip}
+              data-testid="button-cancel-strip"
+            >
+              <Square className="h-4 w-4 mr-2" />
+              Cancel
+            </Button>
+          )}
+          {isRunning && (
+            <span className="text-sm text-muted-foreground flex items-center gap-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {state.progress
+                ? `${state.progress.phase === "verify" ? "Verifying" : "Processing"} ${state.progress.tableName} (${state.progress.tableIndex + 1} / ${state.progress.tableCount})…`
+                : "Starting…"}
+            </span>
+          )}
+        </div>
+
+        {isRunning && state.progress && (
+          <div className="space-y-1" data-testid="progress-strip">
+            <div className="flex items-center justify-between text-xs text-muted-foreground gap-2 flex-wrap">
+              <span>
+                Table {state.progress.tableIndex + 1} /{" "}
+                {state.progress.tableCount}: {state.progress.tableName}
+              </span>
+              <span>{state.progress.rowsCleaned} rows cleaned so far</span>
+            </div>
+            <Progress value={progressPct} />
+          </div>
+        )}
+
+        {showPersisted && persisted && (
+          <PersistedResultSummary
+            persisted={persisted}
+            expanded={persistedExpanded}
+            onToggle={() => setPersistedExpanded((v) => !v)}
+            onClear={handleClearPersisted}
+          />
+        )}
+
+        {isDone && state.result && (
+          <StripResultBanner phase={state.phase} result={state.result} errorMessage={state.errorMessage} />
+        )}
+
+        {isDone && state.result && (state.result.totalSkippedUnsafe ?? 0) > 0 && (
+          <SkippedUnsafeWarning count={state.result.totalSkippedUnsafe ?? 0} />
+        )}
+
+        {isDone && state.result && state.result.tableResults.length > 0 && (
+          <div className="space-y-1" data-testid="section-strip-table-results">
+            <div className="text-sm font-medium">Per-table summary</div>
+            <div className="grid gap-1 text-xs">
+              {state.result.tableResults
+                .filter((t) => t.rowsBefore > 0)
+                .map((t) => (
+                  <TableResultRow
+                    key={t.tableName}
+                    result={t}
+                  />
+                ))}
+              {state.result.tableResults.every((t) => t.rowsBefore === 0) && (
+                <div className="text-muted-foreground italic" data-testid="text-no-markers-found">
+                  No stale marker fields were found in any table.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+});
+
+export default StripMarkersPanel;
+
+function PersistedResultSummary({
+  persisted,
+  expanded,
+  onToggle,
+  onClear,
+}: {
+  persisted: PersistedStripResult;
+  expanded: boolean;
+  onToggle: () => void;
+  onClear: () => void;
+}) {
+  const { result, timestamp } = persisted;
+  const hasErrors = result.tableErrors.length > 0;
+  const hasVerificationErrors = result.verificationErrors.length > 0;
+  const skipped = result.totalSkippedUnsafe ?? 0;
+  const verifiedClean = result.totalRemaining === 0 && !hasVerificationErrors && !hasErrors;
+  const StatusIcon = !verifiedClean ? XCircle : skipped > 0 ? AlertTriangle : CheckCircle2;
+  const statusIconClass = !verifiedClean
+    ? "text-destructive"
+    : skipped > 0
+    ? "text-yellow-600 dark:text-yellow-400"
+    : "text-green-600 dark:text-green-400";
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+
+  return (
+    <div
+      className="rounded-md border p-3 space-y-2"
+      data-testid="section-strip-last-run"
+    >
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex items-center gap-2 text-sm font-medium hover-elevate rounded-md px-1 -mx-1 py-0.5"
+          data-testid="button-toggle-last-run"
+        >
+          <Chevron className="h-4 w-4 text-muted-foreground" />
+          <StatusIcon className={`h-4 w-4 ${statusIconClass}`} />
+          <span>Last run</span>
+          <span
+            className="text-xs text-muted-foreground font-normal"
+            data-testid="text-last-run-timestamp"
+          >
+            {formatTimestamp(timestamp)}
+          </span>
+        </button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onClear}
+          data-testid="button-clear-last-run"
+        >
+          <X className="h-4 w-4 mr-1" />
+          Clear result
+        </Button>
+      </div>
+
+      <div className="text-xs text-muted-foreground" data-testid="text-last-run-summary">
+        {result.totalBefore === 0
+          ? "No stale markers were found."
+          : `${result.totalCleaned} of ${result.totalBefore} row${result.totalBefore === 1 ? "" : "s"} cleaned${
+              result.totalRemaining > 0 ? ` — ${result.totalRemaining} remaining` : ""
+            }${skipped > 0 ? ` — ${skipped} kept (locked)` : ""}${
+              hasVerificationErrors ? " — verification incomplete" : ""
+            }${hasErrors ? " — with errors" : ""}`}
+      </div>
+
+      {skipped > 0 && <SkippedUnsafeWarning count={skipped} />}
+
+      {expanded && (
+        <div className="space-y-2 pt-1">
+          {result.tableResults.filter((t) => t.rowsBefore > 0).length > 0 ? (
+            <div className="grid gap-1 text-xs">
+              {result.tableResults
+                .filter((t) => t.rowsBefore > 0)
+                .map((t) => (
+                  <TableResultRow key={t.tableName} result={t} />
+                ))}
+            </div>
+          ) : (
+            <div className="text-xs text-muted-foreground italic">
+              No stale marker fields were found in any table.
+            </div>
+          )}
+          {(hasErrors || hasVerificationErrors) && (
+            <ul className="space-y-0.5 text-xs text-destructive list-disc list-inside">
+              {result.tableErrors.map((e, i) => (
+                <li key={i}>{e}</li>
+              ))}
+              {result.verificationErrors.map((e, i) => (
+                <li key={`v-${i}`}>{e}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TableResultRow({ result }: { result: StripMarkersTableResult }) {
+  const skipped = result.rowsSkippedUnsafe ?? 0;
+  const allClean = result.rowsRemaining === 0 && skipped === 0;
+  const safeKey = result.tableName.replace(/\s+/g, "-");
+  return (
+    <div
+      className="flex items-center justify-between gap-2 rounded-md border p-2 flex-wrap"
+      data-testid={`strip-result-${safeKey}`}
+    >
+      <span>{result.tableName}</span>
+      <span className="font-mono text-muted-foreground flex items-center gap-2">
+        {result.rowsBefore} before → {result.rowsCleaned} cleaned
+        {allClean ? (
+          <CheckCircle2 className="h-3 w-3 text-green-600 dark:text-green-400" data-testid={`icon-clean-${safeKey}`} />
+        ) : (
+          <>
+            {result.rowsRemaining > 0 && (
+              <span className="text-destructive">({result.rowsRemaining} remaining)</span>
+            )}
+            {skipped > 0 && (
+              <span
+                className="text-yellow-700 dark:text-yellow-400"
+                data-testid={`text-skipped-${safeKey}`}
+              >
+                ({skipped} locked, kept)
+              </span>
+            )}
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function StripResultBanner({
+  phase,
+  result,
+  errorMessage,
+}: {
+  phase: StripPhase;
+  result: StripMarkersResult;
+  errorMessage?: string;
+}) {
+  if (phase === "error") {
+    return (
+      <div
+        className="rounded-md border border-destructive/40 bg-destructive/10 p-3 flex items-start gap-2"
+        data-testid="strip-verdict-error"
+      >
+        <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+        <div className="text-sm">
+          <div className="font-medium text-destructive">Strip failed</div>
+          <div className="text-muted-foreground">{errorMessage ?? "Unknown error"}</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "cancelled") {
+    return (
+      <div
+        className="rounded-md border p-3 flex items-start gap-2"
+        data-testid="strip-verdict-cancelled"
+      >
+        <XCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+        <div className="text-sm">
+          <div className="font-medium">Cancelled</div>
+          <div className="text-muted-foreground">
+            {result.totalCleaned > 0
+              ? `${result.totalCleaned} row${result.totalCleaned === 1 ? "" : "s"} were cleaned before cancellation.`
+              : "No rows were cleaned before cancellation."}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const hasErrors = result.tableErrors.length > 0;
+  const hasVerificationErrors = result.verificationErrors.length > 0;
+  const skipped = result.totalSkippedUnsafe ?? 0;
+  const verifiedClean = result.totalRemaining === 0 && !hasVerificationErrors;
+
+  if (result.totalBefore === 0) {
+    const anyIssue = hasErrors || hasVerificationErrors;
+    return (
+      <div
+        className={`rounded-md border p-3 flex items-start gap-2 ${
+          anyIssue
+            ? "border-destructive/40 bg-destructive/10"
+            : "border-green-500/40 bg-green-500/10"
+        }`}
+        data-testid="strip-verdict-clean"
+      >
+        {anyIssue ? (
+          <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+        ) : (
+          <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 mt-0.5 shrink-0" />
+        )}
+        <div className="text-sm">
+          <div className={`font-medium ${anyIssue ? "text-destructive" : "text-green-700 dark:text-green-300"}`}>
+            {hasErrors
+              ? "Completed with errors — no rows cleaned"
+              : hasVerificationErrors
+              ? "No markers found — verification incomplete"
+              : "No stale markers found"}
+          </div>
+          <div className="text-muted-foreground">
+            {hasErrors
+              ? "Errors prevented some tables from being processed."
+              : hasVerificationErrors
+              ? "Verification could not confirm all tables are clean — some reads failed."
+              : "Every table was already free of legacy marker fields."}
+          </div>
+          {anyIssue && (
+            <ul className="mt-1 space-y-0.5 text-xs text-destructive list-disc list-inside">
+              {result.tableErrors.map((e, i) => (
+                <li key={i}>{e}</li>
+              ))}
+              {result.verificationErrors.map((e, i) => (
+                <li key={`v-${i}`}>{e}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const verdictColor = !verifiedClean
+    ? "border-destructive/40 bg-destructive/10"
+    : hasErrors || skipped > 0
+    ? "border-yellow-500/40 bg-yellow-500/10"
+    : "border-green-500/40 bg-green-500/10";
+
+  const iconColor = !verifiedClean
+    ? "text-destructive"
+    : hasErrors || skipped > 0
+    ? "text-yellow-600 dark:text-yellow-400"
+    : "text-green-600 dark:text-green-400";
+
+  const titleColor = !verifiedClean
+    ? "text-destructive"
+    : hasErrors || skipped > 0
+    ? "text-yellow-700 dark:text-yellow-300"
+    : "text-green-700 dark:text-green-300";
+
+  return (
+    <div
+      className={`rounded-md border p-3 flex items-start gap-2 ${verdictColor}`}
+      data-testid="strip-verdict-done"
+    >
+      {verifiedClean ? (
+        <CheckCircle2 className={`h-4 w-4 mt-0.5 shrink-0 ${iconColor}`} />
+      ) : (
+        <XCircle className={`h-4 w-4 mt-0.5 shrink-0 ${iconColor}`} />
+      )}
+      <div className="text-sm">
+        <div className={`font-medium ${titleColor}`}>
+          {result.totalCleaned} of {result.totalBefore} row{result.totalBefore === 1 ? "" : "s"} cleaned
+          {!verifiedClean && result.totalRemaining > 0 && ` — ${result.totalRemaining} remaining`}
+          {verifiedClean && skipped > 0 && ` — ${skipped} kept (locked)`}
+          {hasVerificationErrors && " — verification incomplete"}
+          {verifiedClean && hasErrors && " — with errors"}
+        </div>
+        <div className="text-muted-foreground">
+          {hasVerificationErrors
+            ? "Verification could not complete for all tables — the remaining count may be inaccurate."
+            : result.totalRemaining > 0
+            ? `Verification found ${result.totalRemaining} row${result.totalRemaining === 1 ? "" : "s"} still carrying stale markers.`
+            : hasErrors
+            ? `Stale markers removed where possible. ${result.tableErrors.length} table error${result.tableErrors.length === 1 ? "" : "s"} occurred.`
+            : skipped > 0
+            ? `Every safe row was cleaned. ${skipped} locked row${skipped === 1 ? "" : "s"} were intentionally kept — see the warning below.`
+            : "Verification confirmed: all stale legacy marker fields have been removed."}
+        </div>
+        {(hasErrors || hasVerificationErrors) && (
+          <ul className="mt-1 space-y-0.5 text-xs text-destructive list-disc list-inside">
+            {result.tableErrors.map((e, i) => (
+              <li key={i}>{e}</li>
+            ))}
+            {result.verificationErrors.map((e, i) => (
+              <li key={`v-${i}`}>{e}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SkippedUnsafeWarning({ count }: { count: number }) {
+  return (
+    <div
+      className="rounded-md border border-yellow-500/40 bg-yellow-500/10 p-3 flex items-start gap-2"
+      data-testid="strip-skipped-unsafe-warning"
+    >
+      <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
+      <div className="text-sm">
+        <div className="font-medium text-yellow-700 dark:text-yellow-300">
+          {count.toLocaleString()} locked row{count === 1 ? "" : "s"} were kept to protect your data
+        </div>
+        <div className="text-muted-foreground">
+          These rows still hold encrypted data that has not been unlocked yet, so their markers were
+          left in place — removing them would permanently delete the only copy of that data. Open
+          Settings → "Restore Locked Data", enter your vault password to unlock them first, then run
+          this cleanup again.
+        </div>
+      </div>
+    </div>
+  );
+}

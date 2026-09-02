@@ -1,0 +1,8 @@
+Bundle: KYUTXO-agentic-review-1.1.40
+Source revision: 58c1f85ca7c8ca301e30ac32973b2e9703b38fe1
+Origin main at bundle time: 62a764479442d36e3f887b0d144c8c584f34e8a4
+Working tree status at bundle time:
+ M .replit
+?? agent-review/
+Created: 2026-09-02
+Secret policy: no credentials, tokens, private keys, certificates, vaults, backups, attachments, generated binaries, or dependency directories included.

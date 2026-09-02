@@ -1,0 +1,57 @@
+{
+  "appId": "com.kyutxo.app",
+  "productName": "KYUTXO",
+  "directories": {
+    "output": "release"
+  },
+  "asar": true,
+  "npmRebuild": true,
+  "asarUnpack": [
+    "**/node_modules/better-sqlite3/**",
+    "**/*.node"
+  ],
+  "compression": "maximum",
+  "files": [
+    "dist/**/*",
+    "electron/**/*",
+    "client/public/**/*",
+    "package.json",
+    "!**/*.map",
+    "!**/node_modules/**/*.md",
+    "!**/node_modules/**/*.ts",
+    "!**/node_modules/**/test/**",
+    "!**/node_modules/**/tests/**",
+    "!**/node_modules/**/.github/**",
+    "!**/node_modules/**/docs/**"
+  ],
+  "extraMetadata": {
+    "main": "electron/main.cjs",
+    "name": "kyutxo",
+    "description": "Secure Bitcoin metadata manager",
+    "author": "KYUTXO"
+  },
+  "extraResources": [
+    {
+      "from": "client/public",
+      "to": "public"
+    }
+  ],
+  "win": {
+    "target": ["portable"],
+    "icon": "client/public/icon.png",
+    "artifactName": "${productName}-${version}-Portable.${ext}"
+  },
+  "portable": {
+    "artifactName": "${productName}-${version}-Portable.${ext}"
+  },
+  "mac": {
+    "target": ["dmg", "zip"],
+    "icon": "client/public/icon.png",
+    "category": "public.app-category.finance"
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "icon": "client/public/icon.png",
+    "category": "Finance"
+  }
+}

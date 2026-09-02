@@ -1,0 +1,193 @@
+// Streaming backup format (v3).
+//
+// A v3 backup is a ZIP laid out so it can be both WRITTEN and READ without ever
+// holding the whole vault in memory:
+//
+//   backup.json                          <- small manifest (this module's types)
+//   tables/records.ndjson                <- one JSON batch (array) per line
+//   tables/blockchainTransactions.ndjson
+//   tables/transactionParticipants.ndjson
+//   tables/attachments.ndjson            <- attachment METADATA rows
+//   tables/addressSyncState.ndjson
+//   attachments/<relPath>                <- attachment file bytes, one entry each
+//
+// The five large tables are streamed line-by-line; every other (small) table is
+// carried inline inside the manifest. Entry order matters for restore: the
+// manifest is first, then records (which assigns the old->new id map), then the
+// record-dependent tables, so a single forward pass can relink everything.
+//
+// Encryption: AES-GCM per line/blob (never the whole vault as one string), key
+// derived from the password with PBKDF2 (see ../crypto). The PBKDF2 iteration
+// count is recorded in the manifest (kdfIterations); backups written before the
+// KDF strengthening carry no such field and are always legacy (100k). Each
+// encrypted NDJSON line is the base64 envelope returned by encrypt(); base64
+// contains no newline so it is a safe single line. The inline tables are
+// encrypted as one string.
+
+import { encrypt, decrypt, LEGACY_PBKDF2_ITERATIONS, type KdfParams } from "@/lib/crypto";
+
+export const BACKUP_FORMAT_VERSION = 3;
+export const MANIFEST_FILENAME = "backup.json";
+export const TABLES_DIR = "tables";
+export const ATTACHMENTS_DIR = "attachments";
+
+// Validates the password before any destructive restore work: decrypting this
+// must yield the sentinel, otherwise the supplied password is wrong.
+export const CHECK_SENTINEL = "KYUTXO-BACKUP-V3";
+
+// The large tables streamed as NDJSON (one batch per line), in restore order.
+// records MUST come first so its old->new id map exists before dependents load.
+// utxoLineage, custodySegments and lineageSnapshots carry no recordId, so they
+// relink by txid/vout / their own unique id and can stream after the
+// record-dependent tables (order among them is free).
+export const STREAMED_TABLES = [
+  "records",
+  "attachments",
+  "transactionParticipants",
+  "addressSyncState",
+  "blockchainTransactions",
+  "utxoLineage",
+  "custodySegments",
+  "lineageSnapshots",
+] as const;
+export type StreamedTable = (typeof STREAMED_TABLES)[number];
+
+export interface BackupCounts {
+  records: number;
+  blockchainTransactions: number;
+  transactionParticipants: number;
+  attachments: number;
+  addressSyncState: number;
+  utxoLineage: number;
+  custodySegments: number;
+  lineageSnapshots: number;
+  attachmentFiles: number;
+}
+
+export interface BackupManifest {
+  formatVersion: number; // 3
+  app: string; // "KYUTXO"
+  appVersion: string;
+  exportDate: string;
+  encrypted: boolean;
+  salt?: string; // base64, present iff encrypted
+  // PBKDF2 iterations the backup key was derived with (strengthening-era
+  // backups). Absent on backups written before the KDF strengthening — always
+  // legacy (100k). Superseded by `kdf` when present. See getBackupKdfParams.
+  kdfIterations?: number;
+  // Full KDF record (algorithm + parameters) the backup key was derived with.
+  // Written by Argon2id-era exports; takes precedence over kdfIterations.
+  kdf?: KdfParams;
+  check?: string; // encrypt(CHECK_SENTINEL), present iff encrypted
+  counts: BackupCounts;
+  // Total bytes of all attachment FILES (summed from attachment metadata
+  // `size`). Attachment files are stored UNCOMPRESSED in the ZIP, so this is the
+  // exact number of bytes a restore writes to disk — used by the restore
+  // pre-flight as a precise disk-space estimate. Absent in pre-v3.1 backups,
+  // where callers fall back to the backup file's own size.
+  totalAttachmentBytes?: number;
+  streamedTables: string[];
+  // Compact backup marker (additive; no format-version bump — older readers
+  // simply ignore it). When true, the export omitted blockchain-discovered records
+  // with no user-added metadata plus the discovery-only history beneath them
+  // (their addressSyncState rows, and transactions/participants/utxoLineage/
+  // custodySegments rows in which no kept record participates). `counts` above
+  // are the FILTERED counts — they match the rows actually in the archive, so
+  // restore progress and size estimates stay consistent. Restore rebuilds
+  // discovered shells for participant rows whose record was dropped (see
+  // restore.ts) and tells the user to re-run deep discovery.
+  compact?: boolean;
+  // Rows omitted per table by the compact export (informational, for UI copy).
+  compactDropped?: {
+    records: number;
+    blockchainTransactions: number;
+    transactionParticipants: number;
+    addressSyncState: number;
+    utxoLineage: number;
+    custodySegments: number;
+  };
+  // Small tables. Plaintext backups use `inline`; encrypted backups use
+  // `inlineEnc` (a single base64 envelope of JSON.stringify(inline)).
+  inline?: Record<string, unknown>;
+  inlineEnc?: string;
+}
+
+export function ndjsonPath(table: StreamedTable): string {
+  return `${TABLES_DIR}/${table}.ndjson`;
+}
+
+export function isStreamedTablePath(name: string): StreamedTable | null {
+  for (const t of STREAMED_TABLES) {
+    if (name === ndjsonPath(t)) return t;
+  }
+  return null;
+}
+
+// Is this a v3 manifest (as opposed to a legacy single-object backup, which has
+// a `.data` field and no formatVersion)?
+export function isV3Manifest(obj: unknown): obj is BackupManifest {
+  return (
+    !!obj &&
+    typeof obj === "object" &&
+    (obj as BackupManifest).formatVersion === BACKUP_FORMAT_VERSION
+  );
+}
+
+// Iteration count the backup's encryption key was derived with. Manifests
+// written before the KDF strengthening carry no kdfIterations field and are
+// always legacy (100k). PBKDF2-era resolution only — prefer getBackupKdfParams.
+export function getBackupKdfIterations(manifest: BackupManifest): number {
+  return manifest.kdfIterations ?? LEGACY_PBKDF2_ITERATIONS;
+}
+
+// KDF parameters the backup's encryption key was derived with. Precedence:
+// explicit `kdf` record (Argon2id era) > `kdfIterations` (PBKDF2 strengthening
+// era) > legacy PBKDF2 100k (pre-strengthening manifests record nothing).
+export function getBackupKdfParams(manifest: BackupManifest): KdfParams {
+  if (manifest.kdf) return manifest.kdf;
+  return {
+    algorithm: "pbkdf2-sha256",
+    iterations: getBackupKdfIterations(manifest),
+  };
+}
+
+// ---- per-line / inline serialization -------------------------------------
+
+export async function serializeBatchLine(
+  rows: unknown[],
+  key: CryptoKey | null,
+): Promise<string> {
+  const json = JSON.stringify(rows);
+  if (!key) return json + "\n";
+  return (await encrypt(json, key)) + "\n";
+}
+
+export async function parseBatchLine(
+  line: string,
+  key: CryptoKey | null,
+): Promise<unknown[]> {
+  const trimmed = line.trim();
+  if (!trimmed) return [];
+  if (!key) return JSON.parse(trimmed) as unknown[];
+  const json = await decrypt(trimmed, key);
+  return JSON.parse(json) as unknown[];
+}
+
+export async function serializeInline(
+  obj: Record<string, unknown>,
+  key: CryptoKey | null,
+): Promise<{ inline?: Record<string, unknown>; inlineEnc?: string }> {
+  if (!key) return { inline: obj };
+  return { inlineEnc: await encrypt(JSON.stringify(obj), key) };
+}
+
+export async function parseInline(
+  manifest: BackupManifest,
+  key: CryptoKey | null,
+): Promise<Record<string, unknown>> {
+  if (manifest.inlineEnc != null) {
+    if (!key) throw new Error("Encrypted backup requires a password");
+    return JSON.parse(await decrypt(manifest.inlineEnc, key)) as Record<string, unknown>;
+  }
+  return (manifest.inline as Record<string, unknown>) ?? {};
+}
