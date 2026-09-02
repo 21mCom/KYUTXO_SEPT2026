@@ -115,6 +115,22 @@ function createWindow() {
     mainWindow.show();
   });
 
+  // Keep packaged-startup diagnostics path-free and payload-free. These
+  // lifecycle markers remain safe for release logs while distinguishing a
+  // document-load failure from renderer JavaScript that never mounts React.
+  mainWindow.webContents.on('dom-ready', () => {
+    console.log('[KYUTXO] Packaged renderer DOM ready');
+  });
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('[KYUTXO] Packaged renderer document loaded');
+  });
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode) => {
+    console.log(`[KYUTXO] Packaged renderer load failed (code=${errorCode})`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.log(`[KYUTXO] Packaged renderer exited (${details.reason})`);
+  });
+
   if (isDev) {
     mainWindow.loadURL('http://localhost:5000');
     mainWindow.webContents.openDevTools();

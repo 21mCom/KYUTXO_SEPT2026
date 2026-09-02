@@ -215,6 +215,29 @@ function attachPageDiagnostics(page) {
   page.on('crash', () => console.log(`${TAG}[renderer-crashed] renderer process crashed`));
 }
 
+async function collectRendererDiagnostics(page) {
+  return page
+    .evaluate(() => ({
+      readyState: document.readyState,
+      rootChildCount: document.getElementById('root')?.childElementCount ?? -1,
+      bodyText: document.body?.innerText.slice(0, 300) ?? '<no body>',
+      scripts: Array.from(document.scripts).map((script) => ({
+        src: script.src ? new URL(script.src).pathname.split('/').pop() : '<inline>',
+        type: script.type || '<classic>',
+      })),
+      resources: performance.getEntriesByType('resource').map((entry) => {
+        const resource = /** @type {PerformanceResourceTiming} */ (entry);
+        return {
+          name: new URL(resource.name).pathname.split('/').pop(),
+          initiatorType: resource.initiatorType,
+          duration: Math.round(resource.duration),
+          transferSize: resource.transferSize,
+        };
+      }),
+    }))
+    .catch((err) => ({ evaluationError: String(err?.message || err) }));
+}
+
 function countRegularFiles(rootDir) {
   if (!fs.existsSync(rootDir)) return 0;
   let count = 0;
@@ -426,10 +449,10 @@ async function main() {
       rendered = true;
         renderDetail = 'vault-setup password field visible';
     } catch (err) {
-      const bodyText = await page
-        .evaluate(() => (document.body ? document.body.innerText.slice(0, 300) : '<no body>'))
-        .catch(() => '<evaluate failed>');
-      renderDetail = `vault-setup password field never appeared; body text: ${JSON.stringify(bodyText)}`;
+      const diagnostics = await collectRendererDiagnostics(page);
+      renderDetail =
+        `vault-setup password field never appeared; diagnostics: ` +
+        JSON.stringify(diagnostics);
     }
     steps.push({
       name: 'packaged renderer renders (no blank window; /assets remap works)',
