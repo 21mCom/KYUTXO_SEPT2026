@@ -91,6 +91,22 @@ export async function waitForLoginScreenVisible(page, { timeoutMs = DEFAULT_APPE
 }
 
 /**
+ * Waits for an existing vault's lock screen. Unlike a fresh-vault check, an
+ * existing vault must not render the password confirmation field.
+ */
+export async function waitForExistingVaultLoginScreen(
+  page,
+  { timeoutMs = DEFAULT_APPEAR_TIMEOUT_MS } = {},
+) {
+  await waitForLoginScreenVisible(page, { timeoutMs });
+  const setupConfirmation = page.getByTestId('input-confirm-password');
+  if (await setupConfirmation.isVisible()) {
+    throw new Error('existing vault login screen still shows the setup confirmation field');
+  }
+  return true;
+}
+
+/**
  * Instant (non-waiting) check for whether the LoginScreen's password field is
  * currently visible. Use this inside a polling loop that needs to distinguish
  * "already unlocked" from "showing the lock screen right now" on every tick —

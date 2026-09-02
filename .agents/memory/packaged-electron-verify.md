@@ -26,4 +26,4 @@ The Windows renderer release gate must launch the generated `*-Portable.exe` wra
 
 **Why:** electron-builder's portable wrapper sets `PORTABLE_EXECUTABLE_DIR` to its own directory and extracts through the Windows temp directory. Launching it in `release/` writes portable test state there, while killing only the wrapper can orphan the extracted Electron child and leave files locked.
 
-**How to apply:** keep the unpacked executable for ABI checks, but use the wrapper for renderer startup. Stop its full Windows process tree with `taskkill /T` (then `/F`) before retrying recursive removal of the disposable root.
+**How to apply:** keep the unpacked executable for ABI checks, but use the wrapper for renderer startup. For persistence coverage, create a vault, stop its full Windows process tree with `taskkill /T` (then `/F`), verify non-empty `KYUTXO_Data` beside the copied wrapper, and relaunch that same wrapper before cleanup.

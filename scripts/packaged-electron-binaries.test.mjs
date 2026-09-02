@@ -144,12 +144,16 @@ test('the packaged browser gate launches the generated Windows portable renderer
   assert.match(source, /portableLaunchDir/);
   assert.match(source, /taskkill.*args\.push\('\/F'\)/s);
   assert.match(source, /maxRetries: 10/);
+  assert.match(source, /PORTABLE_CHECK_PASSWORD/);
+  assert.match(source, /countRegularFiles\(portableDataDir\)/);
+  assert.match(source, /waitForExistingVaultLoginScreen/);
+  assert.match(source, /relaunching the same portable wrapper/);
   assert.match(source, /renderer-console-\$\{msg\.type\(\)\}/);
   assert.match(source, /\[renderer-pageerror\]/);
   assert.match(source, /\[startup-error\]/);
   assert.match(
     workflow,
-    /- name: Verify packaged Windows renderer is visible\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-electron-browser\.mjs/,
+    /- name: Verify packaged Windows renderer and portable restart persistence\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-electron-browser\.mjs/,
   );
   assert.match(workflow, /generated Portable\.exe release asset/);
 });

@@ -92,10 +92,11 @@ jobs:
         run: node scripts/check-packaged-native-engine.mjs
 
       # RELEASE GATE: launch the exact generated Portable.exe release asset
-      # from a disposable directory and drive its real renderer over CDP.
-      # This catches wrapper/extraction regressions and packaged Electron
-      # runtimes that start successfully but leave the shipping window blank.
-      - name: Verify packaged Windows renderer is visible
+      # from a disposable directory, create a vault, stop the full process
+      # tree, relaunch the same wrapper, and drive both renderer sessions over
+      # CDP. This catches wrapper/extraction regressions, portable data being
+      # written to the runner profile, and packaged Electron blank windows.
+      - name: Verify packaged Windows renderer and portable restart persistence
         env:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
         run: node scripts/check-packaged-electron-browser.mjs

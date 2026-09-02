@@ -44,7 +44,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { waitForLoginScreenVisible } from './browser-check-utils.mjs';
+import {
+  waitForExistingVaultLoginScreen,
+  waitForLoginScreenVisible,
+  unlockIfNeeded,
+} from './browser-check-utils.mjs';
 import {
   assertPackagedBundleFresh,
   assertPackagedAsarFresh,
@@ -64,6 +68,7 @@ const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9223);
 const TAG = '[packaged-electron]';
+const PORTABLE_CHECK_PASSWORD = 'portable-check-password';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -159,6 +164,82 @@ async function waitForCdp(timeoutMs) {
     await sleep(1000);
   }
   return false;
+}
+
+async function waitForCdpDown(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
+      if (res.ok) {
+        await sleep(250);
+        continue;
+      }
+    } catch {
+      return true;
+    }
+    await sleep(250);
+  }
+  return false;
+}
+
+async function waitForRendererPage(browser, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const ctx of browser.contexts()) {
+      for (const p of ctx.pages()) {
+        if (p.url().startsWith('file://')) return p;
+      }
+    }
+    await sleep(1000);
+  }
+  throw new Error(`${TAG} no file:// renderer page appeared within ${timeoutMs}ms.`);
+}
+
+function attachPageDiagnostics(page) {
+  console.log(`${TAG} renderer page: ${page.url()}`);
+  page.on('console', (msg) => {
+    if (msg.type() === 'error' || msg.type() === 'warning') {
+      console.log(`${TAG}[renderer-console-${msg.type()}] ${msg.text().slice(0, 500)}`);
+    }
+  });
+  page.on('pageerror', (err) => {
+    console.log(`${TAG}[renderer-pageerror] ${String(err?.stack || err).slice(0, 500)}`);
+  });
+  page.on('requestfailed', (request) => {
+    console.log(
+      `${TAG}[renderer-request-failed] ${request.method()} ${request.url().slice(0, 300)} ` +
+        `— ${request.failure()?.errorText || 'unknown error'}`,
+    );
+  });
+  page.on('crash', () => console.log(`${TAG}[renderer-crashed] renderer process crashed`));
+}
+
+function countRegularFiles(rootDir) {
+  if (!fs.existsSync(rootDir)) return 0;
+  let count = 0;
+  const visit = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(entryPath);
+      } else if (entry.isFile()) {
+        count += 1;
+      }
+    }
+  };
+  visit(rootDir);
+  return count;
+}
+
+function isPathWithin(rootDir, candidatePath) {
+  const relative = path.relative(rootDir, candidatePath);
+  return (
+    relative.length > 0 &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
 }
 
 function killWindowsProcessTree(child, { force }) {
@@ -296,26 +377,32 @@ async function main() {
       fs.copyFileSync(portableArtifact, launchExecutable);
       console.log(`${TAG} portable launch copy: ${launchExecutable}`);
     }
-    child = spawn(
-      IS_WINDOWS ? launchExecutable : electronBin,
-      launchArgs,
-      {
-        cwd: IS_WINDOWS ? portableLaunchDir : tmpHome,
-        env: IS_WINDOWS ? env : { ...env, DISPLAY },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: !IS_WINDOWS,
-      },
-    );
-    child.stdout.on('data', (d) => process.stdout.write(`${TAG}[app] ${d}`));
-    child.stderr.on('data', (d) => process.stdout.write(`${TAG}[app-err] ${d}`));
-    child.on('error', (err) => {
-      appLaunchError = String(err?.stack || err);
-      console.log(`${TAG}[startup-error] ${appLaunchError}`);
-    });
-    child.on('exit', (code, sig) => {
-      appExited = true;
-      console.log(`${TAG} app process exited (code=${code} sig=${sig})`);
-    });
+    const launchPackagedProcess = () => {
+      appExited = false;
+      appLaunchError = null;
+      child = spawn(
+        IS_WINDOWS ? launchExecutable : electronBin,
+        launchArgs,
+        {
+          cwd: IS_WINDOWS ? portableLaunchDir : tmpHome,
+          env: IS_WINDOWS ? env : { ...env, DISPLAY },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: !IS_WINDOWS,
+        },
+      );
+      child.stdout.on('data', (d) => process.stdout.write(`${TAG}[app] ${d}`));
+      child.stderr.on('data', (d) => process.stdout.write(`${TAG}[app-err] ${d}`));
+      child.on('error', (err) => {
+        appLaunchError = String(err?.stack || err);
+        console.log(`${TAG}[startup-error] ${appLaunchError}`);
+      });
+      child.on('exit', (code, sig) => {
+        appExited = true;
+        console.log(`${TAG} app process exited (code=${code} sig=${sig})`);
+      });
+    };
+
+    launchPackagedProcess();
 
     if (!(await waitForCdp(90_000))) {
       throw new Error(
@@ -326,34 +413,8 @@ async function main() {
     }
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
 
-    // Find the file:// renderer page (retry: window may still be creating).
-    let page = null;
-    const deadline = Date.now() + 60_000;
-    while (!page && Date.now() < deadline) {
-      for (const ctx of browser.contexts()) {
-        for (const p of ctx.pages()) {
-          if (p.url().startsWith('file://')) page = p;
-        }
-      }
-      if (!page) await sleep(1000);
-    }
-    if (!page) throw new Error(`${TAG} no file:// renderer page appeared within 60s.`);
-    console.log(`${TAG} renderer page: ${page.url()}`);
-    page.on('console', (msg) => {
-      if (msg.type() === 'error' || msg.type() === 'warning') {
-        console.log(`${TAG}[renderer-console-${msg.type()}] ${msg.text().slice(0, 500)}`);
-      }
-    });
-    page.on('pageerror', (err) => {
-      console.log(`${TAG}[renderer-pageerror] ${String(err?.stack || err).slice(0, 500)}`);
-    });
-    page.on('requestfailed', (request) => {
-      console.log(
-        `${TAG}[renderer-request-failed] ${request.method()} ${request.url().slice(0, 300)} ` +
-          `— ${request.failure()?.errorText || 'unknown error'}`,
-      );
-    });
-    page.on('crash', () => console.log(`${TAG}[renderer-crashed] renderer process crashed`));
+    let page = await waitForRendererPage(browser);
+    attachPageDiagnostics(page);
 
     // ── 1. Renderer renders (proves the /assets file-protocol remap works) ──
     // A fresh profile shows the Create Vault form; the app JS only executes if
@@ -464,6 +525,85 @@ async function main() {
       passed: wasm.ok,
       detail: wasm.ok ? 'trivial module compiled' : `compile failed: ${wasm.message}`,
     });
+
+    if (IS_WINDOWS) {
+      // Creating the vault before shutdown makes this a real persistence check,
+      // rather than another fresh-wrapper startup check.
+      const created = await unlockIfNeeded(page, PORTABLE_CHECK_PASSWORD, {
+        appearTimeoutMs: 60_000,
+        submitTimeoutMs: 60_000,
+        label: 'portable-restart',
+      });
+      steps.push({
+        name: 'portable wrapper creates a small vault',
+        passed: created,
+        detail: created ? 'vault setup completed' : 'vault setup form was not available',
+      });
+      if (!created) {
+        throw new Error(`${TAG} portable vault setup did not run on the fresh launch.`);
+      }
+
+      await browser.close().catch(() => {});
+      browser = null;
+      await stopPackagedProcess(child);
+      child = null;
+      if (!(await waitForCdpDown(30_000))) {
+        throw new Error(`${TAG} first portable app process still owns CDP port ${CDP_PORT}.`);
+      }
+
+      const portableDataDir = path.join(portableLaunchDir, 'KYUTXO_Data');
+      const portableDataFiles = countRegularFiles(portableDataDir);
+      const portableDataIsIsolated =
+        fs.existsSync(portableDataDir) &&
+        portableDataFiles > 0 &&
+        isPathWithin(portableLaunchDir, portableDataDir) &&
+        isPathWithin(tmpHome, portableDataDir);
+      steps.push({
+        name: 'portable vault data is written under the disposable executable directory',
+        passed: portableDataIsIsolated,
+        detail: `${portableDataDir} contains ${portableDataFiles} regular file(s)`,
+      });
+      if (!portableDataIsIsolated) {
+        throw new Error(
+          `${TAG} portable data was not found under the disposable launch directory ` +
+            `(${portableDataDir}; files=${portableDataFiles}).`,
+        );
+      }
+
+      // Launch the exact same copied wrapper again from the same directory.
+      // PORTABLE_EXECUTABLE_DIR is derived by the wrapper, so this proves the
+      // second process resolves the same beside-the-executable data location.
+      console.log(`${TAG} relaunching the same portable wrapper: ${launchExecutable}`);
+      launchPackagedProcess();
+      if (!(await waitForCdp(90_000))) {
+        throw new Error(
+          `${TAG} CDP endpoint never came up after portable restart on port ${CDP_PORT}` +
+            (appExited ? ' (the app process already exited — launch crash?)' : '') +
+            (appLaunchError ? `: ${appLaunchError}` : ''),
+        );
+      }
+      browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+      page = await waitForRendererPage(browser);
+      attachPageDiagnostics(page);
+
+      let existingVaultLogin = false;
+      let existingVaultDetail = '';
+      try {
+        await waitForExistingVaultLoginScreen(page, { timeoutMs: 60_000 });
+        existingVaultLogin = true;
+        existingVaultDetail = 'password field visible; setup confirmation field absent';
+      } catch (err) {
+        existingVaultDetail = String(err?.message || err);
+      }
+      steps.push({
+        name: 'portable vault survives restart (login shown without create-vault confirmation)',
+        passed: existingVaultLogin,
+        detail: existingVaultDetail,
+      });
+      if (!existingVaultLogin) {
+        throw new Error(`${TAG} portable restart did not show the existing-vault login screen.`);
+      }
+    }
   } finally {
     if (browser) await browser.close().catch(() => {});
     await stopPackagedProcess(child);
@@ -485,6 +625,9 @@ async function main() {
         maxRetries: 10,
         retryDelay: 250,
       });
+      if (fs.existsSync(tmpHome)) {
+        throw new Error(`${TAG} disposable directory still exists after cleanup: ${tmpHome}`);
+      }
       console.log(`${TAG} removed disposable portable/profile directory`);
     } catch (err) {
       console.error(`${TAG}[cleanup-error] could not remove disposable directory: ${err.stack || err}`);

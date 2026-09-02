@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   dismissMigrationOverlayIfPresent,
   unlockIfNeeded,
+  waitForExistingVaultLoginScreen,
 } from './browser-check-utils.mjs';
 
 function timeoutError(message = 'locator timed out') {
@@ -29,7 +30,10 @@ function makePage({
     fill: async (value) => calls.push(['password.fill', value]),
   };
   const confirm = {
-    isVisible: async () => setup,
+    isVisible: async () => {
+      calls.push(['confirm.isVisible']);
+      return setup;
+    },
     fill: async (value) => calls.push(['confirm.fill', value]),
   };
   const submit = {
@@ -78,7 +82,14 @@ describe('browser-check unlock helper', () => {
     );
     assert.deepEqual(
       page.calls.map(([name]) => name),
-      ['password.waitFor', 'password.fill', 'confirm.fill', 'submit.click', 'password.waitFor'],
+      [
+        'password.waitFor',
+        'confirm.isVisible',
+        'password.fill',
+        'confirm.fill',
+        'submit.click',
+        'password.waitFor',
+      ],
     );
     assert.equal(page.calls[0][1].state, 'visible');
   });
@@ -95,7 +106,27 @@ describe('browser-check unlock helper', () => {
     );
     assert.deepEqual(
       page.calls.map(([name]) => name),
-      ['password.waitFor', 'password.fill', 'submit.click', 'password.waitFor'],
+      ['password.waitFor', 'confirm.isVisible', 'password.fill', 'submit.click', 'password.waitFor'],
+    );
+  });
+
+  it('recognizes an existing-vault login screen without a confirmation field', async () => {
+    const page = makePage();
+
+    assert.equal(await waitForExistingVaultLoginScreen(page, { timeoutMs: 1234 }), true);
+    assert.deepEqual(
+      page.calls.map(([name]) => name),
+      ['password.waitFor', 'confirm.isVisible'],
+    );
+    assert.equal(page.calls[0][1].timeout, 1234);
+  });
+
+  it('rejects a setup screen when checking for an existing vault', async () => {
+    const page = makePage({ setup: true });
+
+    await assert.rejects(
+      waitForExistingVaultLoginScreen(page),
+      /still shows the setup confirmation field/,
     );
   });
 
