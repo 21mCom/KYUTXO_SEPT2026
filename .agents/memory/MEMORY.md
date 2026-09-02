@@ -135,3 +135,4 @@
 - [Filter chips / Clear-All browser-check gotchas](filter-chips-clear-all-browser-check.md) — sidebar nav links live in collapsible groups (check visibility before clicking the header); debounced hasActiveFilters lags a Clear click, so wait for hidden, don't assert synchronously.
 - [Export date filter uses blockTime](export-date-filter-blocktime.md) — tx/UTXO export rows scope date filters by the transaction's blockTime (batched txid lookup), never updatedAt/createdAt; address/other kinds keep the old fallback.
 - [React DayPicker test selection](react-day-picker-jsdom-selection.md) — target button[name=day], reject day-outside, verify the trigger date; nested browser popovers must fully detach before reopening.
+- [Windows Electron runtime compatibility](windows-electron-runtime-compatibility.md) — Electron 43 blanked the packaged renderer; keep the proven Electron line plus hardened extractor until Windows renderer launch is release-gated.
