@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
-import type { VaultHealthSnapshot } from "@/lib/vault-health";
+import { BACKUP_CAPACITY_SAFETY_MARGIN_BYTES, type VaultHealthSnapshot } from "@/lib/vault-health";
 
 const { runHealthCheck } = vi.hoisted(() => ({ runHealthCheck: vi.fn() }));
 
@@ -94,5 +94,28 @@ describe("VaultHealth", () => {
     expect(getByTestId("card-health-metadata").textContent).toContain("Needs attention");
     expect(getByTestId("card-health-conflicts").textContent).toContain("2");
     expect(getByTestId("card-health-conflicts").textContent).toContain("affected records");
+  });
+
+  it("shows free space and a headroom warning for a destination", async () => {
+    const estimated = 512 * 1024 * 1024;
+    runHealthCheck.mockResolvedValue(snapshot({
+      backup: {
+        ...snapshot().backup,
+        scheduledEnabled: true,
+        destinations: ["Removable backup"],
+        destinationAvailable: [true],
+        destinationFreeBytes: [estimated],
+        destinationCapacityWarning: [true],
+        estimatedNextFullBackupBytes: estimated - 1,
+        backupCapacityThresholdBytes: estimated + BACKUP_CAPACITY_SAFETY_MARGIN_BYTES,
+        verifiedCopyCounts: [2],
+        invalidCopyCounts: [0],
+      },
+    }));
+    const { getByTestId } = render(<VaultHealth />);
+    await waitFor(() => expect(getByTestId("text-health-verdict").textContent).toContain("needs attention"));
+    expect(getByTestId("backup-free-space-0").textContent).toContain("Free:");
+    expect(getByTestId("backup-capacity-warning-0").textContent).toContain("Low space");
+    expect(getByTestId("backup-capacity-warning").textContent).toContain("safety margin");
   });
 });

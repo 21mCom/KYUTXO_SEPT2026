@@ -10,9 +10,12 @@ import { getPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
 import { loadAuditSession } from "@/lib/data/privacy-audit-session-store";
 import { getRecordsAfterId } from "@/lib/data/record-crud";
 import { getRecordOriginsByRecordIds } from "@/lib/data/record-origins-crud";
+import { sumAttachmentSizes } from "@/lib/data/attachments-crud";
 import { getSettings } from "@/lib/data/settings-crud";
 import { getElectronAPISafe } from "@/lib/electron";
 import { isBackupDue, normalizeBackupSchedule } from "@/lib/backup/scheduled";
+import { estimateExportBytes } from "@/lib/backup/export";
+import { STREAMED_TABLES } from "@/lib/backup/format";
 
 export type VaultHealthStatus = "healthy" | "warning" | "problem";
 
@@ -60,8 +63,12 @@ export interface VaultHealthSnapshot {
     scheduledEnabled: boolean;
     destinations: string[];
     destinationAvailable: boolean[];
+    destinationFreeBytes?: Array<number | undefined>;
+    destinationCapacityWarning?: boolean[];
     verifiedCopyCounts: number[];
     invalidCopyCounts: number[];
+    estimatedNextFullBackupBytes?: number;
+    backupCapacityThresholdBytes?: number;
     destinationFailures: Array<{ at?: number; message?: string }>;
     overdue: boolean;
     lastVerifiedAt?: number;
@@ -87,6 +94,16 @@ export interface VaultHealthProgress {
   phase: string;
   processed?: number;
   total?: number;
+}
+
+// Leave room for vault growth and filesystem bookkeeping instead of waiting
+// until the next archive cannot be written. The scheduled runner still makes
+// the hard pre-flight decision before writing.
+export const BACKUP_CAPACITY_SAFETY_MARGIN_BYTES = 100 * 1024 * 1024;
+
+export function getBackupCapacityThreshold(estimatedBackupBytes: number): number {
+  const estimate = Number.isFinite(estimatedBackupBytes) ? Math.max(0, estimatedBackupBytes) : 0;
+  return estimate + BACKUP_CAPACITY_SAFETY_MARGIN_BYTES;
 }
 
 export class VaultHealthCancelledError extends Error {
@@ -174,7 +191,15 @@ export function getVaultHealthStatus(snapshot: VaultHealthSnapshot): VaultHealth
     snapshot.sync.stale > 0 ||
     !snapshot.privacy.hasRun ||
     snapshot.privacy.interrupted ||
-    snapshot.privacy.findings > 0
+    snapshot.privacy.findings > 0 ||
+    (
+      snapshot.backup.scheduledEnabled &&
+      (
+        snapshot.backup.overdue ||
+        snapshot.backup.destinationAvailable?.some((available) => !available) ||
+        snapshot.backup.destinationCapacityWarning?.some(Boolean)
+      )
+    )
   ) {
     return "warning";
   }
@@ -396,17 +421,40 @@ export async function runVaultHealthCheck(options: {
   }
   const backupSchedule = normalizeBackupSchedule(storedSettings?.backupSchedule);
   const backupApi = getElectronAPISafe();
+  let estimatedNextFullBackupBytes: number | undefined;
+  let backupCapacityThresholdBytes: number | undefined;
+  if (backupSchedule.enabled) {
+    try {
+      const rowCount = STREAMED_TABLES.reduce(
+        (total, table) => total + (tableCounts.find((entry) => entry.name === table)?.count ?? 0),
+        0,
+      );
+      const attachmentBytes = await sumAttachmentSizes();
+      estimatedNextFullBackupBytes = estimateExportBytes({ attachmentBytes, rowCount });
+      backupCapacityThresholdBytes = getBackupCapacityThreshold(estimatedNextFullBackupBytes);
+    } catch {
+      // A failed size estimate must not hide destination availability or turn
+      // a read-only health check into a failure.
+    }
+  }
   const destinationState = await Promise.all(
     backupSchedule.destinations.map(async (destination) => {
       try {
-        const listed = await backupApi?.listScheduledBackups?.(destination.token);
+        const [listed, space] = await Promise.all([
+          backupApi?.listScheduledBackups?.(destination.token),
+          backupApi?.getScheduledBackupDiskSpace?.(destination.token),
+        ]);
+        const freeBytes = space?.success && typeof space.freeBytes === "number" && Number.isFinite(space.freeBytes)
+          ? Math.max(0, space.freeBytes)
+          : undefined;
         return {
           available: listed?.success === true,
           count: listed?.success ? listed.files?.length ?? 0 : 0,
           invalid: listed?.success ? listed.invalidFiles?.length ?? 0 : 0,
+          freeBytes,
         };
       } catch {
-        return { available: false, count: 0, invalid: 0 };
+        return { available: false, count: 0, invalid: 0, freeBytes: undefined };
       }
     }),
   );
@@ -427,8 +475,16 @@ export async function runVaultHealthCheck(options: {
       scheduledEnabled: backupSchedule.enabled,
       destinations: backupSchedule.destinations.map((destination) => destination.path || destination.label),
       destinationAvailable: destinationState.map((state) => state.available),
+      destinationFreeBytes: destinationState.map((state) => state.freeBytes),
+      destinationCapacityWarning: destinationState.map((state) =>
+        state.available && state.freeBytes != null && backupCapacityThresholdBytes != null
+          ? state.freeBytes < backupCapacityThresholdBytes
+          : false,
+      ),
       verifiedCopyCounts: destinationState.map((state) => state.count),
       invalidCopyCounts: destinationState.map((state) => state.invalid),
+      estimatedNextFullBackupBytes,
+      backupCapacityThresholdBytes,
       destinationFailures: backupSchedule.destinations.map((destination) => ({
         at: backupSchedule.destinationStates?.[destination.token]?.lastFailureAt,
         message: backupSchedule.destinationStates?.[destination.token]?.lastFailureMessage,

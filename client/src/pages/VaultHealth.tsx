@@ -77,6 +77,8 @@ function BackupHealthCard({
   const backup = snapshot.backup;
   const destinations = backup.destinations ?? [];
   const destinationAvailable = backup.destinationAvailable ?? [];
+  const destinationFreeBytes = backup.destinationFreeBytes ?? [];
+  const destinationCapacityWarning = backup.destinationCapacityWarning ?? [];
   const verifiedCopyCounts = backup.verifiedCopyCounts ?? [];
   const invalidCopyCounts = backup.invalidCopyCounts ?? [];
   const destinationFailures = backup.destinationFailures ?? [];
@@ -86,7 +88,7 @@ function BackupHealthCard({
   );
   const status: VaultHealthStatus =
     !backup.canExport || failureIsCurrent ? "problem" :
-      backup.scheduledEnabled && (backup.overdue || unavailable) ? "warning" : "healthy";
+      backup.scheduledEnabled && (backup.overdue || unavailable || destinationCapacityWarning.some(Boolean)) ? "warning" : "healthy";
 
   const runDrill = async (file: File) => {
     setDrilling(true);
@@ -158,11 +160,28 @@ function BackupHealthCard({
                       ? `${verifiedCopyCounts[index] ?? 0} verified${invalidCopyCounts[index] ? ` · ${invalidCopyCounts[index]} invalid` : ""}`
                       : "Unavailable"}
                   </Badge>
+                   {destinationAvailable[index] && (
+                     <span className="text-xs text-muted-foreground" data-testid={`backup-free-space-${index}`}>
+                       Free: {formatBytes(destinationFreeBytes[index])}
+                     </span>
+                   )}
                    {destinationFailures[index]?.message && <span className="text-xs text-destructive">{destinationFailures[index].message}</span>}
+                   {destinationCapacityWarning[index] && (
+                     <span className="text-xs text-amber-700 dark:text-amber-400" data-testid={`backup-capacity-warning-${index}`}>
+                       Low space: {formatBytes(destinationFreeBytes[index])} free; {formatBytes(backup.backupCapacityThresholdBytes)} recommended
+                     </span>
+                   )}
                 </div>
               ))}
             </div>
             {backup.overdue && <p className="text-amber-700 dark:text-amber-400">The next verified backup is overdue and will be retried after unlock.</p>}
+            {destinationCapacityWarning.some(Boolean) && (
+              <p className="text-amber-700 dark:text-amber-400" data-testid="backup-capacity-warning">
+                Free space is below the next full backup estimate plus a {formatBytes(
+                  Math.max(0, (backup.backupCapacityThresholdBytes ?? 0) - (backup.estimatedNextFullBackupBytes ?? 0)),
+                )} safety margin. Free space up or replace the destination before the next backup is due.
+              </p>
+            )}
             {failureIsCurrent && <p className="text-destructive" data-testid="backup-durable-failure">Last failure: {backup.lastFailureMessage}</p>}
           </>
         ) : (

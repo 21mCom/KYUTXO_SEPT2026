@@ -88,4 +88,15 @@ describe("scheduled backup main-process boundary", () => {
     expect(listed.invalidFiles.map((file: { name: string }) => file.name)).toEqual([name]);
   });
 
+  it("probes capacity only through the opaque destination token", async () => {
+    const { ipc, token } = harness();
+    const checked = await ipc.invoke("scheduled-backup-disk-space", { destinationToken: token });
+    expect(checked.success).toBe(true);
+    expect(typeof checked.freeBytes).toBe("number");
+
+    const denied = await ipc.invoke("scheduled-backup-disk-space", { destinationToken: "not-a-token" });
+    expect(denied.success).toBe(false);
+    expect(denied.error).toBe("Backup destination is unavailable");
+  });
+
 });

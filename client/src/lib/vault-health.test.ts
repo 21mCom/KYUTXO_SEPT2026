@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { recordRows, syncRows, tableErrors, tables } = vi.hoisted(() => {
+const { recordRows, syncRows, tableErrors, tables, backupHarness } = vi.hoisted(() => {
   const rows: any[] = [];
   const errors = new Set<string>();
   return {
@@ -14,6 +14,11 @@ const { recordRows, syncRows, tableErrors, tables } = vi.hoisted(() => {
         return name === "records" ? rows.length : 0;
       }),
     })),
+    backupHarness: {
+      settings: undefined as any,
+      api: null as any,
+      attachmentBytes: 0,
+    },
   };
 });
 
@@ -27,6 +32,16 @@ vi.mock("@/lib/data/record-origins-crud", () => ({
 vi.mock("@/lib/data/address-sync-crud", () => ({
   getAddressSyncStateAfterId: vi.fn(async (afterId: number) => (afterId === 0 ? syncRows : [])),
 }));
+vi.mock("@/lib/data/attachments-crud", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/data/attachments-crud")>()),
+  sumAttachmentSizes: vi.fn(async () => backupHarness.attachmentBytes),
+}));
+vi.mock("@/lib/data/settings-crud", () => ({
+  getSettings: vi.fn(async () => backupHarness.settings),
+}));
+vi.mock("@/lib/electron", () => ({
+  getElectronAPISafe: vi.fn(() => backupHarness.api),
+}));
 vi.mock("@/lib/data/privacy-history-crud", () => ({
   getPrivacyAuditHistory: vi.fn(async () => []),
 }));
@@ -34,7 +49,13 @@ vi.mock("@/lib/data/privacy-audit-session-store", () => ({
   loadAuditSession: vi.fn(async () => undefined),
 }));
 
-import { getVaultHealthStatus, runVaultHealthCheck, type VaultHealthSnapshot } from "./vault-health";
+import {
+  getBackupCapacityThreshold,
+  getVaultHealthStatus,
+  runVaultHealthCheck,
+  BACKUP_CAPACITY_SAFETY_MARGIN_BYTES,
+  type VaultHealthSnapshot,
+} from "./vault-health";
 
 function snapshot(overrides: Partial<VaultHealthSnapshot> = {}): VaultHealthSnapshot {
   return {
@@ -63,6 +84,9 @@ describe("getVaultHealthStatus", () => {
     recordRows.splice(0);
     syncRows.splice(0);
     tableErrors.clear();
+    backupHarness.settings = undefined;
+    backupHarness.api = null;
+    backupHarness.attachmentBytes = 0;
   });
 
   it("reports a clean vault as healthy", () => {
@@ -83,6 +107,24 @@ describe("getVaultHealthStatus", () => {
       getVaultHealthStatus(snapshot({ privacy: { ...snapshot().privacy, criticalOrHigh: 1 } })),
     ).toBe("problem");
   });
+
+  it("treats low scheduled-backup capacity as a warning", () => {
+    expect(getVaultHealthStatus(snapshot({
+      backup: {
+        ...snapshot().backup,
+        scheduledEnabled: true,
+        overdue: false,
+        destinationCapacityWarning: [true],
+      },
+    }))).toBe("warning");
+  });
+});
+
+describe("backup capacity threshold", () => {
+  it("adds fixed safety headroom to the full-backup estimate", () => {
+    expect(getBackupCapacityThreshold(1234)).toBe(1234 + BACKUP_CAPACITY_SAFETY_MARGIN_BYTES);
+    expect(getBackupCapacityThreshold(Number.NaN)).toBe(BACKUP_CAPACITY_SAFETY_MARGIN_BYTES);
+  });
 });
 
 describe("runVaultHealthCheck", () => {
@@ -90,6 +132,55 @@ describe("runVaultHealthCheck", () => {
     recordRows.splice(0);
     syncRows.splice(0);
     tableErrors.clear();
+    backupHarness.settings = undefined;
+    backupHarness.api = null;
+    backupHarness.attachmentBytes = 0;
+  });
+
+  it("probes opaque destinations, warns early, and preserves missing-drive failures", async () => {
+    const availableToken = "a".repeat(32);
+    const missingToken = "b".repeat(32);
+    const listScheduledBackups = vi.fn(async (token: string) => token === availableToken
+      ? { success: true, files: [{ name: "backup.zip", sizeBytes: 1, modifiedAt: 1 }], invalidFiles: [] }
+      : { success: false, error: "Backup destination is unavailable" });
+    const getScheduledBackupDiskSpace = vi.fn(async (token: string) => token === availableToken
+      ? { success: true, freeBytes: 50 * 1024 * 1024 }
+      : { success: false, error: "Backup destination is unavailable" });
+    backupHarness.attachmentBytes = 10 * 1024 * 1024;
+    backupHarness.settings = {
+      backupSchedule: {
+        enabled: true,
+        destinations: [
+          { token: availableToken, label: "Available" },
+          { token: missingToken, label: "Missing" },
+        ],
+        cadenceDays: 7,
+        retentionCount: 5,
+        compact: true,
+        encrypted: true,
+        promptBehavior: "ask",
+        destinationStates: {
+          [missingToken]: { lastFailureAt: 123, lastFailureMessage: "Drive disconnected" },
+        },
+      },
+    };
+    backupHarness.api = { listScheduledBackups, getScheduledBackupDiskSpace };
+
+    const result = await runVaultHealthCheck();
+
+    expect(listScheduledBackups.mock.calls.map(([token]) => token)).toEqual([availableToken, missingToken]);
+    expect(getScheduledBackupDiskSpace.mock.calls.map(([token]) => token)).toEqual([availableToken, missingToken]);
+    expect(result.backup.destinationAvailable).toEqual([true, false]);
+    expect(result.backup.destinationFreeBytes).toEqual([50 * 1024 * 1024, undefined]);
+    expect(result.backup.destinationCapacityWarning).toEqual([true, false]);
+    expect(result.backup.estimatedNextFullBackupBytes).toBe(10 * 1024 * 1024);
+    expect(result.backup.backupCapacityThresholdBytes).toBe(
+      10 * 1024 * 1024 + BACKUP_CAPACITY_SAFETY_MARGIN_BYTES,
+    );
+    expect(result.backup.destinationFailures[1]).toEqual({
+      at: 123,
+      message: "Drive disconnected",
+    });
   });
 
   it("attributes an address-only sync checkpoint to its matching record", async () => {
