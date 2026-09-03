@@ -67,6 +67,8 @@ describe("native engine coin origins query", () => {
     expect(hot.outpoints).toHaveLength(1);
     expect(hot.outpoints[0].walletName).toBe("Hot");
     expect(hot.holdings[0]).toMatchObject({ lotId: "lot:a:0", sats: 990 });
+    expect(hot.lots.map((lot) => lot.lotId)).toEqual(["lot:a:0"]);
+    expect(getCoinOriginsPage(db, { walletName: "Hot" }).lotsTotal).toBe(1);
     db.close();
   });
 

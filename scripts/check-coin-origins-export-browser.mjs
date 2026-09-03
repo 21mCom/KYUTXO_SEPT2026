@@ -52,9 +52,9 @@ const BETA_UNKNOWN_LOT = `lot:${BETA_UNKNOWN_TX}:0`;
 const BETA_MIX_LOT = `lot:${BETA_MIX_ORIGIN_TX}:0`;
 
 const EXPECTED = {
-  entire: { total: 37_500, unknown: 14_000, lots: 6, holdings: 7, outpoints: 6, rows: 8 },
-  alpha: { total: 22_700, unknown: 8_900, lots: 6, holdings: 4, outpoints: 3, rows: 4 },
-  beta: { total: 14_800, unknown: 5_100, lots: 6, holdings: 4, outpoints: 3, rows: 4 },
+  entire: { total: 37_500, unknown: 14_000, acquisitionLots: 6, holdings: 7, outpoints: 6, rows: 8 },
+  alpha: { total: 22_700, unknown: 8_900, acquisitionLots: 3, holdings: 4, outpoints: 3, rows: 4 },
+  beta: { total: 14_800, unknown: 5_100, acquisitionLots: 3, holdings: 4, outpoints: 3, rows: 4 },
 };
 
 const EXPECTED_LOTS = new Set([
@@ -190,20 +190,20 @@ function numberFromText(text) {
 async function captureVisibleLedger(page, expected) {
   try {
     await page.waitForFunction(
-      ({ total, unknown, lots, holdings, outpoints }) => {
+      ({ total, unknown, acquisitionLots, holdings, outpoints }) => {
         const read = (testId) => document.querySelector(`[data-testid="${testId}"]`)?.textContent ?? '';
         const rows = document.querySelectorAll('tr[data-testid^="origin-holding-"]');
         const outputRows = document.querySelectorAll('tr[data-testid^="origin-outpoint-"]');
         return read('origin-total').replace(/[^\d]/g, '') === String(total) &&
           read('origin-unknown').replace(/[^\d]/g, '') === String(unknown) &&
-          read('origin-lots').replace(/[^\d]/g, '') === String(lots) &&
+          read('origin-lots').replace(/[^\d]/g, '') === String(acquisitionLots) &&
           rows.length === holdings &&
           outputRows.length === outpoints;
       },
       {
         total: expected.total,
         unknown: expected.unknown,
-        lots: expected.lots,
+        acquisitionLots: expected.acquisitionLots,
         holdings: expected.holdings,
         outpoints: expected.outpoints,
       },
@@ -215,7 +215,7 @@ async function captureVisibleLedger(page, expected) {
       return {
         total: read('origin-total'),
         unknown: read('origin-unknown'),
-        lots: read('origin-lots'),
+        acquisitionLots: read('origin-lots'),
         reconciled: read('origin-reconciled'),
         holdings: document.querySelectorAll('tr[data-testid^="origin-holding-"]').length,
         outpoints: document.querySelectorAll('tr[data-testid^="origin-outpoint-"]').length,
@@ -250,6 +250,7 @@ async function captureVisibleLedger(page, expected) {
     return {
       total: parseInteger(read('origin-total')),
       unknown: parseInteger(read('origin-unknown')),
+      acquisitionLots: parseInteger(read('origin-lots')),
       reconciled: read('origin-reconciled'),
       holdings,
       outpoints,
@@ -280,6 +281,16 @@ function compareCsvToVisible(parsedRows, visible, scopeLabel, expected) {
     prior.outpoints.add(outpoint);
     csvByLot.set(lotId, prior);
   }
+  const acquisitionLotIds = new Set(rows.map((row) => row[4]).filter((lotId) => lotId !== 'unknown'));
+  if (acquisitionLotIds.size !== expected.acquisitionLots) {
+    return `CSV acquisition-lot count ${acquisitionLotIds.size}, expected ${expected.acquisitionLots}`;
+  }
+  if (visible.acquisitionLots !== expected.acquisitionLots) {
+    return `visible acquisition-lot count ${visible.acquisitionLots}, expected ${expected.acquisitionLots}`;
+  }
+  if (!visible.holdings.some((holding) => holding.lotId === 'unknown')) {
+    return 'visible holdings missing synthetic unknown row';
+  }
   for (const holding of visible.holdings) {
     const csvHolding = csvByLot.get(holding.lotId);
     if (!csvHolding || csvHolding.sats !== holding.sats || csvHolding.outpoints.size !== holding.outpointCount) {
@@ -298,6 +309,18 @@ function compareCsvToVisible(parsedRows, visible, scopeLabel, expected) {
 async function selectWallet(page, walletName) {
   await page.getByTestId('coin-origin-wallet').click();
   await page.getByRole('option', { name: walletName, exact: true }).click();
+}
+
+async function completeNetworkOnboardingIfNeeded(page) {
+  const onboarding = page.getByTestId('network-onboarding-source');
+  const visible = await onboarding.waitFor({ state: 'visible', timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!visible) return;
+  await page.getByTestId('choice-network-public-direct').click();
+  await page.getByTestId('button-save-network-choice').click();
+  await page.getByTestId('network-onboarding-import').waitFor({ state: 'visible' });
+  await page.getByTestId('button-onboarding-finish').click();
 }
 
 async function main() {
@@ -343,6 +366,7 @@ async function main() {
 
     await page.goto(COIN_ORIGINS_URL, { waitUntil: 'load', timeout: 60_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
+    await completeNetworkOnboardingIfNeeded(page);
 
     const seeded = await page.evaluate(
       async ({
@@ -421,7 +445,15 @@ async function main() {
     );
     step('seeded two wallets with deterministic, unknown, and mixed outputs', Object.keys(seeded).length === 6);
 
-    await page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 30_000 });
+    // Remount after seeding so Coin Origins reads one fresh, stable DB snapshot.
+    await page.goto(COIN_ORIGINS_URL, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
+    try {
+      await page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 30_000 });
+    } catch (error) {
+      const body = (await page.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 500);
+      throw new Error(`Coin Origins did not remount at ${page.url()}; body="${body}"`, { cause: error });
+    }
 
     for (const [scope, walletName, expected] of [
       ['entire vault', undefined, EXPECTED.entire],
@@ -435,11 +467,13 @@ async function main() {
         `${scope} visible holdings and summary match seeded totals`,
         visible.total === expected.total &&
           visible.unknown === expected.unknown &&
+          visible.acquisitionLots === expected.acquisitionLots &&
           visible.reconciled === 'Yes' &&
           visible.holdings.reduce((sum, row) => sum + row.sats, 0) === expected.total &&
           visible.holdings.length === expected.holdings &&
+          visible.holdings.some((row) => row.lotId === 'unknown') &&
           visible.outpoints.length === expected.outpoints,
-        `total=${visible.total}, unknown=${visible.unknown}, lots=${visible.holdings.length}`,
+        `total=${visible.total}, unknown=${visible.unknown}, acquisitionLots=${visible.acquisitionLots}, holdings=${visible.holdings.length}`,
       );
 
       const [csvDownload] = await Promise.all([

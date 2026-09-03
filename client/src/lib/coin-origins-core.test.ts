@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateCoinOrigins, UNKNOWN_ORIGIN_ID } from "./coin-origins-core";
+import { calculateCoinOrigins, filterCoinOriginsByWallet, UNKNOWN_ORIGIN_ID } from "./coin-origins-core";
 
 const owned = [{ inputString: "owned", type: "address", addressImportance: "manual", walletName: "Cold" }];
 
@@ -165,5 +165,34 @@ describe("coin origins ledger", () => {
     expect(before.outpoints.map((o) => `${o.txid}:${o.vout}`)).toEqual(["a:0"]);
     expect(after.outpoints.map((o) => `${o.txid}:${o.vout}`)).toEqual(["b:0"]);
     expect(after.outpoints[0].allocations[0].lotId).toBe(before.outpoints[0].allocations[0].lotId);
+  });
+
+  it("scopes acquisition lots to current allocations without counting the synthetic unknown holding", () => {
+    const ledger = calculateCoinOrigins({
+      addresses: [
+        { inputString: "cold", type: "address", addressImportance: "manual", walletName: "Cold" },
+        { inputString: "hot", type: "address", addressImportance: "manual", walletName: "Hot" },
+      ],
+      transactions: [
+        { txid: "cold-acquisition", blockHeight: 1, blockTime: 100 },
+        { txid: "hot-acquisition", blockHeight: 2, blockTime: 200 },
+        { txid: "mixed", blockHeight: 3, blockTime: 300 },
+      ],
+      participants: [
+        { txid: "cold-acquisition", role: "output", address: "cold", amount: 100, vout: 0 },
+        { txid: "hot-acquisition", role: "output", address: "hot", amount: 200, vout: 0 },
+        { txid: "mixed", role: "input", address: "cold", amount: 100, prevTxid: "cold-acquisition", prevVout: 0 },
+        { txid: "mixed", role: "input", address: "", amount: 50, prevTxid: "missing", prevVout: 0 },
+        { txid: "mixed", role: "output", address: "cold", amount: 150, vout: 0 },
+      ],
+    });
+
+    const scoped = filterCoinOriginsByWallet(ledger, "Cold");
+
+    expect(ledger.lots).toHaveLength(2);
+    expect(scoped.lots.map((lot) => lot.lotId)).toEqual(["lot:cold-acquisition:0"]);
+    expect(scoped.holdings.map((holding) => holding.lotId)).toEqual(["lot:cold-acquisition:0", UNKNOWN_ORIGIN_ID]);
+    expect(scoped.holdings).toHaveLength(2);
+    expect(scoped.summary.currentSats).toBe(150);
   });
 });
