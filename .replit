@@ -3650,3 +3650,25 @@ args = "node scripts/check-transaction-inbox-saved-view-snooze-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "protected-vault-migration-gate-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/protected-vault-migration-gate.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-vault-migration-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-vault-migration.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true

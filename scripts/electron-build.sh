@@ -56,4 +56,11 @@ KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-native-engine.mjs \
   --arch "$TARGET_ARCH" \
   --require-electron
 
+# RELEASE GATE: prove protected-vault migration and restore failure recovery in
+# the same packaged application. This is intentionally fail-closed until the
+# protected main-process test bridge is present; a plaintext app must not pass
+# by returning a superficial success flag.
+echo "Step 6: Verifying protected-vault migration recovery..."
+KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-vault-migration.mjs
+
 echo "Build complete! Check the 'release' folder for distributable packages."

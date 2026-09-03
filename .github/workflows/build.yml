@@ -111,6 +111,14 @@ jobs:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
         run: node scripts/check-packaged-electron-browser.mjs
 
+      # RELEASE GATE: the exact packaged app must prove protected-store
+      # migration, crash recovery, tamper rejection, password re-wrap, and
+      # encrypted-backup recovery before the artifact can be uploaded.
+      - name: Verify protected-vault migration recovery
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-vault-migration.mjs
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

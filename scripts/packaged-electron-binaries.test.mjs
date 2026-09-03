@@ -17,6 +17,7 @@ const PACKAGED_BROWSER_CHECKS = [
   'check-packaged-electron-browser.mjs',
   'check-wrong-password-packaged.mjs',
   'check-packaged-electrum-cancel-browser.mjs',
+  'check-packaged-vault-migration.mjs',
 ];
 
 test('all packaged browser checks use the shared binary discovery module', () => {
