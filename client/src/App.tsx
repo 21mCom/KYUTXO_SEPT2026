@@ -48,6 +48,7 @@ import { ActivityPulseDot } from "@/components/ActivityPulseDot";
 import { EngineBootstrapper, EnginePreparingIndicator } from "@/components/EngineMaintenanceUI";
 import { GlobalCommandPalette } from "@/components/GlobalCommandPalette";
 import CoinOrigins from "@/pages/CoinOrigins";
+import TransactionInbox from "@/pages/TransactionInbox";
 
 const UIAssets = lazy(() => import("@/pages/UIAssets"));
 const IconsReference = lazy(() => import("@/pages/IconsReference"));
@@ -92,6 +93,7 @@ function AppRoutes() {
       <Route path="/price-import" component={PriceImport} />
       <Route path="/transaction-sync" component={TransactionSync} />
       <Route path="/transactions" component={Transactions} />
+      <Route path="/transaction-inbox" component={TransactionInbox} />
       <Route path="/utxos" component={UTXOs} />
       <Route path="/utxo-provenance" component={UtxoProvenance} />
       <Route path="/coin-origins" component={CoinOrigins} />

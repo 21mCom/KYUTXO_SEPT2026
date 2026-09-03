@@ -19,6 +19,7 @@ import {
   HeartPulse,
   Hourglass,
   Import,
+  Inbox,
   Key,
   KeyRound,
   LayoutDashboard,
@@ -55,6 +56,7 @@ export interface NavItem {
   icon: LucideIcon;
   /** Additional words users commonly type when looking for this destination. */
   aliases?: string[];
+  badge?: "transaction-inbox";
 }
 
 export interface NavGroup {
@@ -84,6 +86,7 @@ export const NAV_GROUPS: NavGroup[] = [
     defaultOpen: true,
     items: [
       { title: "Balance", url: "/balance", icon: Wallet, aliases: ["portfolio", "holdings", "funds"] },
+      { title: "Transaction Inbox", url: "/transaction-inbox", icon: Inbox, aliases: ["curation", "review transactions", "new transactions"], badge: "transaction-inbox" },
       { title: "Transactions", url: "/transactions", icon: LayoutList, aliases: ["tx", "txids", "transaction history"] },
       { title: "UTXOs", url: "/utxos", icon: Coins, aliases: ["coins", "outputs", "unspent outputs"] },
       { title: "UTXO Provenance", url: "/utxo-provenance", icon: Waypoints, aliases: ["coin provenance", "output history"] },

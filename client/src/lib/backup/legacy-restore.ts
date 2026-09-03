@@ -405,7 +405,12 @@ const ENRICH_ZERO_PLACEHOLDER_FIELDS = [
  * lock"), so the live row only counts as missing when undefined/null. Filled
  * from any defined backup number.
  */
-const ENRICH_NULLABLE_NUMERIC_FIELDS = ["nVersion", "nLockTime"] as const;
+const ENRICH_NULLABLE_NUMERIC_FIELDS = [
+  "nVersion",
+  "nLockTime",
+  "curationUpdatedAt",
+  "snoozedUntil",
+] as const;
 
 /**
  * Boolean fingerprint/flag fields. `false` is a real, known value, so the live
@@ -435,6 +440,13 @@ export function computeTransactionEnrichment(
   backup: Record<string, any>,
 ): Partial<CreateTransactionData> {
   const changes: Record<string, any> = {};
+
+  if (
+    (live.curationState === undefined || live.curationState === null) &&
+    ["new", "annotated", "ignored", "snoozed"].includes(backup.curationState)
+  ) {
+    changes.curationState = backup.curationState;
+  }
 
   for (const field of ENRICH_ZERO_PLACEHOLDER_FIELDS) {
     const liveVal = live[field];

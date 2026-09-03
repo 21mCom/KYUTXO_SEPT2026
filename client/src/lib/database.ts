@@ -4,7 +4,7 @@ import Dexie, { type Table } from 'dexie';
 export * from './db-types';
 
 // Value import: used at runtime to seed the default settings row.
-import { createDefaultSettings } from './db-types';
+import { createDefaultSettings, USER_CURATED_TIERS, type AddressImportance } from './db-types';
 import { reportDbUpgradeProgress } from './db-upgrade-progress';
 
 /**
@@ -17,7 +17,7 @@ import { reportDbUpgradeProgress } from './db-upgrade-progress';
  * KEEP IN SYNC when adding a new `this.version(N)` declaration — the
  * legacy-migration test asserts this matches the opened database.
  */
-export const CURRENT_SCHEMA_VERSION = 41;
+export const CURRENT_SCHEMA_VERSION = 42;
 
 // Import types needed for the class definition
 import type {
@@ -27,7 +27,7 @@ import type {
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
   PausedSyncState, SkippedAddress, AddressBlacklist, PartialExportBundle,
   TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag, SavedPsbt,
-  AdversaryScenario,
+      AdversaryScenario,
 } from './db-types';
 
 export class KYUTXODatabase extends Dexie {
@@ -143,6 +143,112 @@ export class KYUTXODatabase extends Dexie {
     // does not rewrite row data — so this upgrade transaction is fast
     // regardless of table size. Delta declaration — all other tables inherit
     // unchanged from v40.
+    // v42: durable transaction curation state. The fields are intentionally
+    // stored on blockchainTransactions so streamed backups, txid de-duplication
+    // and legacy restore preserve the state without a second large table.
+    this.version(42).stores({
+      blockchainTransactions: '++id, &txid, blockTime, curationState, [curationState+id]',
+      transactionParticipants: '++id, txid, role, address, recordId, [prevTxid+prevVout], [txid+role+vout]',
+    }).upgrade(async tx => {
+      // Fixed-size batches keep the one-time ownership/metadata backfill safe
+      // for multi-million-row vaults. No vault-wide txid/outpoint set is held.
+      const batchSize = 500;
+      let lastId = 0;
+      while (true) {
+        const rows = await tx.table('blockchainTransactions')
+          .where(':id').above(lastId).limit(batchSize).toArray();
+        if (rows.length === 0) break;
+        lastId = rows[rows.length - 1].id as number;
+        const txids = rows.map((row: globalThis.Record<string, unknown>) => String(row.txid));
+        const participants = await tx.table('transactionParticipants').where('txid').anyOf(txids).toArray();
+        const directRecordIds = participants
+          .map((participant: globalThis.Record<string, unknown>) => participant.recordId)
+          .filter((id: unknown): id is number => typeof id === 'number');
+        const directRecords = directRecordIds.length
+          ? await tx.table('records').bulkGet(directRecordIds)
+          : [];
+        const curatedIds = new Set<number>();
+        directRecords.forEach((record: globalThis.Record<string, unknown> | undefined, index: number) => {
+          if (!record || record.type !== 'address') return;
+          const importance = record.addressImportance;
+          if (importance === undefined || USER_CURATED_TIERS.includes(importance as AddressImportance)) {
+            curatedIds.add(directRecordIds[index]);
+          }
+        });
+        const ownedTxids = new Set<string>();
+        for (const participant of participants as Array<globalThis.Record<string, unknown>>) {
+          if (curatedIds.has(participant.recordId as number)) ownedTxids.add(String(participant.txid));
+        }
+          const prevouts: Array<[string, 'output', number]> = participants
+          .filter((participant: globalThis.Record<string, unknown>) =>
+            participant.role === 'input' &&
+            typeof participant.prevTxid === 'string' &&
+            typeof participant.prevVout === 'number')
+          .map((participant: globalThis.Record<string, unknown>) =>
+            [participant.prevTxid as string, 'output', participant.prevVout as number]);
+        if (prevouts.length > 0) {
+          const outputs = await tx.table('transactionParticipants')
+            .where('[txid+role+vout]').anyOf(prevouts).toArray();
+          const outputRecordIds = outputs
+            .map((output: globalThis.Record<string, unknown>) => output.recordId)
+            .filter((id: unknown): id is number => typeof id === 'number');
+          const outputRecords = outputRecordIds.length
+            ? await tx.table('records').bulkGet(outputRecordIds)
+            : [];
+          const curatedOutputIds = new Set<number>();
+          outputRecords.forEach((record: globalThis.Record<string, unknown> | undefined, index: number) => {
+            if (!record || record.type !== 'address') return;
+            const importance = record.addressImportance;
+            if (importance === undefined || USER_CURATED_TIERS.includes(importance as AddressImportance)) {
+              curatedOutputIds.add(outputRecordIds[index]);
+            }
+          });
+          const ownedPrevouts = new Set(outputs
+            .filter((output: globalThis.Record<string, unknown>) => curatedOutputIds.has(output.recordId as number))
+            .map((output: globalThis.Record<string, unknown>) => `${output.txid}:${output.vout}`));
+          for (const participant of participants as Array<globalThis.Record<string, unknown>>) {
+            if (ownedPrevouts.has(`${participant.prevTxid}:${participant.prevVout}`)) {
+              ownedTxids.add(String(participant.txid));
+            }
+          }
+        }
+        const txRecords = await tx.table('records').where('inputString').anyOf(txids).toArray();
+        const txRecordIds = txRecords
+          .map((record: globalThis.Record<string, unknown>) => record.id)
+          .filter((id: unknown): id is number => typeof id === 'number');
+        const attachedIds = new Set<number>();
+        if (txRecordIds.length > 0) {
+          const attachments = await tx.table('attachments').where('recordId').anyOf(txRecordIds).toArray();
+          attachments.forEach((attachment: globalThis.Record<string, unknown>) => {
+            if (typeof attachment.recordId === 'number') attachedIds.add(attachment.recordId);
+          });
+        }
+        const annotatedTxids = new Set<string>();
+        for (const record of txRecords as Array<globalThis.Record<string, unknown>>) {
+          const hasMetadata =
+            (typeof record.label === 'string' && record.label.trim() !== '') ||
+            (typeof record.notes === 'string' && record.notes.trim() !== '') ||
+            (Array.isArray(record.tags) && record.tags.length > 0) ||
+            (Array.isArray(record.categories) && record.categories.length > 0) ||
+            attachedIds.has(record.id as number) ||
+            ['owner', 'walletName', 'seedName', 'walletSoftware', 'privateKeyStatus',
+              'flowType', 'acquisitionMethod', 'dispositionType', 'costBasisUsd',
+              'counterpartyType', 'counterpartyName', 'customFields', 'conflictResolutions']
+              .some(key => record[key] !== undefined && record[key] !== null &&
+                (typeof record[key] !== 'string' || record[key].trim() !== ''));
+          if (hasMetadata) annotatedTxids.add(String(record.inputString));
+        }
+        for (const row of rows as Array<globalThis.Record<string, unknown>>) {
+          const rowTxid = String(row.txid);
+          if (row.curationState || !ownedTxids.has(rowTxid)) continue;
+          await tx.table('blockchainTransactions').update(row.id, {
+            curationState: annotatedTxids.has(rowTxid) ? 'annotated' : 'new',
+            curationUpdatedAt: Date.now(),
+          });
+        }
+      }
+    });
+
     this.version(41).stores({
       blockchainTransactions: '++id, &txid, blockTime',
       transactionParticipants: '++id, txid, role, address, recordId, [prevTxid+prevVout]',

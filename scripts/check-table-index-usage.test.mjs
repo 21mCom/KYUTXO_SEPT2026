@@ -47,8 +47,8 @@ const baseSrc = scannerSrc.replace(ROOT_NEEDLE, ROOT_REPLACEMENT);
 // task #2127's audit have been removed from all of these.
 const LIVE_SCHEMAS = {
   attachments: 'recordId, identifier',
-  blockchainTransactions: '&txid, blockTime',
-  transactionParticipants: 'txid, role, address, recordId, [prevTxid+prevVout]',
+  blockchainTransactions: '&txid, blockTime, curationState, [curationState+id]',
+  transactionParticipants: 'txid, role, address, recordId, [prevTxid+prevVout], [txid+role+vout]',
   addressSyncState: '&address, lastSyncedAt',
   derivationTemplates: '',
   utxoLineage: '[spentTxid+spentVout], [createdTxid+createdVout], spentAddress, createdAddress',

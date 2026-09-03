@@ -66,7 +66,7 @@ const DATABASE_TS = path.resolve(ROOT, 'client/src/lib/database.ts');
 const TABLE_CONFIGS = [
   {
     table: 'blockchainTransactions',
-    expectedTokens: ['txid', 'blockTime'],
+    expectedTokens: ['txid', 'blockTime', 'curationState', '[curationState+id]'],
     denylist: new Map([
       ['blockHeight', 'no `.where()`/`.orderBy()` caller; blockHeight is only ever read as an in-memory row property, never used to look up or range-scan blockchainTransactions itself (removed in schema v41)'],
       ['syncedAt', 'no `.where()`/`.orderBy()` caller anywhere on blockchainTransactions (removed in schema v41)'],
@@ -78,7 +78,7 @@ const TABLE_CONFIGS = [
   },
   {
     table: 'transactionParticipants',
-    expectedTokens: ['txid', 'role', 'address', 'recordId', '[prevTxid+prevVout]'],
+    expectedTokens: ['txid', 'role', 'address', 'recordId', '[prevTxid+prevVout]', '[txid+role+vout]'],
     denylist: new Map([
       ['[txid+role]', 'no `.where(\'[txid+role]\')` caller anywhere; every real query narrows via the plain `txid`, `role`, `address`, `recordId`, or `[prevTxid+prevVout]` index instead (removed in schema v41)'],
     ]),

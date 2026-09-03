@@ -248,7 +248,7 @@ export default function TransactionSync() {
         const filteredMsg = result.addressesFiltered > 0 ? ` ${result.addressesFiltered} unknown addresses filtered.` : '';
         toast({
           title: "Sync Complete",
-          description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses.${skippedMsg}${filteredMsg}`,
+          description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses and queued ${result.newlyQueuedTransactions} for review.${skippedMsg}${filteredMsg}`,
         });
       } else {
         toast({
@@ -455,7 +455,7 @@ export default function TransactionSync() {
       if (result.success) {
         toast({
           title: "Sync Complete",
-          description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses.`,
+          description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses and queued ${result.newlyQueuedTransactions} for review.`,
         });
       } else {
         toast({
@@ -506,7 +506,7 @@ export default function TransactionSync() {
       if (result.success) {
         toast({
           title: "Single Address Sync Complete",
-          description: `Found ${result.transactionsImported} new transactions.`,
+          description: `Found ${result.transactionsImported} new transactions and queued ${result.newlyQueuedTransactions} for review.`,
         });
       } else {
         toast({

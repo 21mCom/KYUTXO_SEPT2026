@@ -31,6 +31,7 @@ import {
   countAddressSyncState,
   getLatestAddressSyncState,
   getNodeSettings,
+  queueTransactionForReview,
 } from './dataFacade';
 import { recomputeAddressStats } from './data/address-stats';
 
@@ -80,6 +81,7 @@ export interface SyncResult {
   addressesSynced: number;
   transactionsImported: number;
   transactionsUpdated: number;
+  newlyQueuedTransactions: number;
   newAddressRecords: number;
   addressesSkipped: number;
   addressesFiltered: number;
@@ -93,6 +95,7 @@ export interface ResumeContext {
   previousResult: {                  // Stats from before pause
     transactionsImported: number;
     transactionsUpdated: number;
+    newlyQueuedTransactions: number;
     newAddressRecords: number;
     addressesSynced: number;
   };
@@ -403,6 +406,7 @@ export class TransactionSyncService {
       addressesSynced: 0,
       transactionsImported: 0,
       transactionsUpdated: 0,
+      newlyQueuedTransactions: 0,
       newAddressRecords: 0,
       addressesSkipped: 0,
       addressesFiltered: 0,
@@ -497,6 +501,7 @@ export class TransactionSyncService {
 
       result.transactionsImported = syncResult.imported;
       result.transactionsUpdated = syncResult.updated;
+      result.newlyQueuedTransactions = syncResult.queued;
       result.newAddressRecords = syncResult.newRecords;
       result.transactionsAlreadySynced = syncResult.skippedAlreadySynced;
       result.addressesSynced = 1;
@@ -602,6 +607,7 @@ export class TransactionSyncService {
       currentDepth,
       transactionsImported: result.transactionsImported,
       transactionsUpdated: result.transactionsUpdated,
+      newlyQueuedTransactions: result.newlyQueuedTransactions,
       newAddressRecords: result.newAddressRecords,
       addressesSynced: result.addressesSynced,
     };
@@ -631,6 +637,7 @@ export class TransactionSyncService {
         addressesSynced: 0,
         transactionsImported: 0,
         transactionsUpdated: 0,
+        newlyQueuedTransactions: 0,
         newAddressRecords: 0,
         addressesSkipped: 0,
         addressesFiltered: 0,
@@ -663,6 +670,7 @@ export class TransactionSyncService {
         previousResult: {
           transactionsImported: pausedState.transactionsImported,
           transactionsUpdated: pausedState.transactionsUpdated,
+          newlyQueuedTransactions: pausedState.newlyQueuedTransactions ?? 0,
           newAddressRecords: pausedState.newAddressRecords,
           addressesSynced: pausedState.addressesSynced,
         },
@@ -750,6 +758,7 @@ export class TransactionSyncService {
       addressesSynced: resumeContext?.previousResult?.addressesSynced ?? 0,
       transactionsImported: resumeContext?.previousResult?.transactionsImported ?? 0,
       transactionsUpdated: resumeContext?.previousResult?.transactionsUpdated ?? 0,
+      newlyQueuedTransactions: resumeContext?.previousResult?.newlyQueuedTransactions ?? 0,
       newAddressRecords: resumeContext?.previousResult?.newAddressRecords ?? 0,
       addressesSkipped: 0,
       addressesFiltered: 0,
@@ -989,6 +998,7 @@ export class TransactionSyncService {
               );
               result.transactionsImported += syncResult.imported;
               result.transactionsUpdated += syncResult.updated;
+              result.newlyQueuedTransactions += syncResult.queued;
               result.newAddressRecords += syncResult.newRecords;
               result.addressesSynced++;
               
@@ -1281,6 +1291,7 @@ export class TransactionSyncService {
             );
             result.transactionsImported += syncResult.imported;
             result.transactionsUpdated += syncResult.updated;
+            result.newlyQueuedTransactions += syncResult.queued;
             result.newAddressRecords += syncResult.newRecords;
             result.transactionsAlreadySynced += syncResult.skippedAlreadySynced;
             result.addressesSynced++;
@@ -1414,8 +1425,8 @@ export class TransactionSyncService {
     currentHeight: number,
     newAddressDepth: number = 1, // Depth for newly discovered addresses
     onTxProgress?: (processed: number, total: number) => void // Live per-transaction progress (single-address sync only)
-  ): Promise<{ imported: number; updated: number; newRecords: number; apiTxCount: number; skippedAlreadySynced: number; skippedUnconfirmed: number }> {
-    const stats = { imported: 0, updated: 0, newRecords: 0, apiTxCount: 0, skippedAlreadySynced: 0, skippedUnconfirmed: 0 };
+  ): Promise<{ imported: number; updated: number; queued: number; newRecords: number; apiTxCount: number; skippedAlreadySynced: number; skippedUnconfirmed: number }> {
+    const stats = { imported: 0, updated: 0, queued: 0, newRecords: 0, apiTxCount: 0, skippedAlreadySynced: 0, skippedUnconfirmed: 0 };
 
     const syncState = await getAddressSyncStateByAddress(address);
 
@@ -1462,6 +1473,10 @@ export class TransactionSyncService {
             stats.updated++;
           }
         }
+        if (await queueTransactionForReview(parsed.txid, { skipNotification: true })) {
+          stats.queued++;
+          this.deferNotification('blockchainTransactions');
+        }
         stats.skippedAlreadySynced++;
         continue;
       }
@@ -1473,6 +1488,10 @@ export class TransactionSyncService {
         // fingerprint fields if this row predates fingerprint capture.
         if (await this.backfillFingerprint(existingTx, parsed)) {
           this.statsTouchedAddresses.add(address);
+        }
+        if (await queueTransactionForReview(parsed.txid, { skipNotification: true })) {
+          stats.queued++;
+          this.deferNotification('blockchainTransactions');
         }
         stats.updated++;
         continue;
@@ -1568,6 +1587,10 @@ export class TransactionSyncService {
       // Encrypt and batch insert all participants for this transaction at once
       if (participantsBatch.length > 0) {
         await bulkAddParticipants(participantsBatch, { skipNotification: true });
+      }
+      if (await queueTransactionForReview(parsed.txid, { skipNotification: true })) {
+        stats.queued++;
+        this.deferNotification('blockchainTransactions');
       }
 
       txProcessed++;

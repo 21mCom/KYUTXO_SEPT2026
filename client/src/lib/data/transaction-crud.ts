@@ -1,9 +1,46 @@
-import { db, notifyDbChange, USER_CURATED_TIERS, type BlockchainTransaction, type TransactionParticipant } from '../database';
+import { db, notifyDbChange, USER_CURATED_TIERS, type BlockchainTransaction, type TransactionParticipant, type TransactionCurationState, type Record } from '../database';
+import { getAttachmentsByRecordId } from './attachments-crud';
+import { getRecordsByInputStrings } from './record-crud';
+import Dexie from 'dexie';
 
 export type CreateTransactionData = Omit<BlockchainTransaction, 'id'>;
 
 export interface TransactionWriteOptions {
   skipNotification?: boolean;
+}
+
+export interface TransactionCurationUpdateOptions extends TransactionWriteOptions {
+  snoozedUntil?: number;
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  if (value && typeof value === 'object') return Object.keys(value).length > 0;
+  return value !== undefined && value !== null;
+}
+
+/** Shared definition used by migration, sync backfill, and the inbox. */
+export function transactionRecordHasUserMetadata(record: Partial<Record>): boolean {
+  return [
+    record.label,
+    record.notes,
+    record.tags,
+    record.categories,
+    record.owner,
+    record.walletName,
+    record.seedName,
+    record.walletSoftware,
+    record.privateKeyStatus,
+    record.customFields,
+    record.flowType,
+    record.acquisitionMethod,
+    record.dispositionType,
+    record.costBasisUsd,
+    record.counterpartyType,
+    record.counterpartyName,
+    record.conflictResolutions,
+  ].some(hasMeaningfulValue);
 }
 
 export async function addTransaction(
@@ -29,6 +66,152 @@ export async function updateTransaction(
   if (!options?.skipNotification) {
     notifyDbChange('blockchainTransactions');
   }
+}
+
+/**
+ * Set the local review state without ever deleting the transaction. The
+ * txid-unique transaction row is the inbox identity, so repeat calls are
+ * idempotent and undo can restore the previous state exactly.
+ */
+export async function updateTransactionCuration(
+  txid: string,
+  state: TransactionCurationState,
+  options?: TransactionCurationUpdateOptions,
+): Promise<boolean> {
+  const tx = await getTransactionByTxid(txid);
+  if (!tx?.id) return false;
+  await updateTransaction(tx.id, {
+    curationState: state,
+    curationUpdatedAt: Date.now(),
+    snoozedUntil: state === 'snoozed' ? options?.snoozedUntil : undefined,
+  }, options);
+  return true;
+}
+
+export async function getTransactionCurationState(
+  txid: string,
+): Promise<Pick<BlockchainTransaction, 'curationState' | 'curationUpdatedAt' | 'snoozedUntil'> | undefined> {
+  const tx = await getTransactionByTxid(txid);
+  if (!tx) return undefined;
+  return {
+    curationState: tx.curationState,
+    curationUpdatedAt: tx.curationUpdatedAt,
+    snoozedUntil: tx.snoozedUntil,
+  };
+}
+
+/** Count actionable rows; future snoozes remain persisted but are not due. */
+export async function countActionableTransactionCurations(now = Date.now()): Promise<number> {
+  return db.blockchainTransactions
+    .where('curationState')
+    .anyOf(['new', 'snoozed'])
+    .filter(tx => tx.curationState === 'new' || (tx.snoozedUntil ?? 0) <= now)
+    .count();
+}
+
+export async function countTransactionCurations(
+  states?: TransactionCurationState[],
+): Promise<number> {
+  if (!states || states.length === 0) {
+    return db.blockchainTransactions.where('curationState').above('').count();
+  }
+  return db.blockchainTransactions
+    .where('curationState')
+    .anyOf(states)
+    .count();
+}
+
+/**
+ * Queue a transaction only when one of its participants belongs to a
+ * user-curated address. Unresolved Electrum inputs are attributed through
+ * their previous output, so deeper sync cannot miss spends with blank input
+ * addresses.
+ */
+export async function queueTransactionForReview(
+  txid: string,
+  options?: TransactionWriteOptions,
+): Promise<boolean> {
+  const tx = await getTransactionByTxid(txid);
+  if (!tx || tx.curationState) return false;
+
+  const participants = await db.transactionParticipants.where('txid').equals(txid).toArray();
+  const recordIds = participants
+    .map(p => p.recordId)
+    .filter((id): id is number => typeof id === 'number');
+  let owned = false;
+  if (recordIds.length > 0) {
+    const records = await db.records.bulkGet(recordIds);
+    owned = records.some(record =>
+      record?.type === 'address' &&
+      (!record.addressImportance || USER_CURATED_TIERS.includes(record.addressImportance)),
+    );
+  }
+
+  if (!owned) {
+    const prevouts = participants
+      .filter(p => p.role === 'input' && p.prevTxid && p.prevVout !== undefined)
+      .map(p => [p.prevTxid as string, p.prevVout as number] as [string, number]);
+    if (prevouts.length > 0) {
+      // Some isolated unit-test databases intentionally carry an older minimal
+      // schema. Production v42 always takes the batched compound-index path.
+      const hasOutputIndex = db.transactionParticipants.schema.indexes
+        .some(index => index.name === '[txid+role+vout]');
+      const outputs = hasOutputIndex
+        ? await db.transactionParticipants
+            .where('[txid+role+vout]')
+            .anyOf(prevouts.map(([prevTxid, prevVout]) => [prevTxid, 'output', prevVout]))
+            .toArray()
+        : (await Promise.all(prevouts.map(([prevTxid]) =>
+            db.transactionParticipants.where('txid').equals(prevTxid).toArray(),
+          ))).flat().filter(participant =>
+            participant.role === 'output' &&
+            prevouts.some(([prevTxid, prevVout]) =>
+              participant.txid === prevTxid && participant.vout === prevVout),
+          );
+      const outputIds = outputs
+        .map(p => p.recordId)
+        .filter((id): id is number => typeof id === 'number');
+      const records = await db.records.bulkGet(outputIds);
+      owned = records.some(record =>
+        record?.type === 'address' &&
+        (!record.addressImportance || USER_CURATED_TIERS.includes(record.addressImportance)),
+      );
+    }
+  }
+
+  if (!owned) return false;
+
+  const matchingRecords = (await getRecordsByInputStrings([txid]))
+    .filter(record => record.type === 'transaction');
+  let annotated = matchingRecords.some(transactionRecordHasUserMetadata);
+  if (!annotated) {
+    const attachmentGroups = await Promise.all(
+      matchingRecords
+        .filter(record => typeof record.id === 'number')
+        .map(record => getAttachmentsByRecordId(record.id as number)),
+    );
+    annotated = attachmentGroups.some(group => group.length > 0);
+  }
+  await updateTransaction(tx.id as number, {
+    curationState: annotated ? 'annotated' : 'new',
+    curationUpdatedAt: Date.now(),
+    snoozedUntil: undefined,
+  }, options);
+  return !annotated;
+}
+
+export async function getTransactionsByCurationState(
+  state: TransactionCurationState,
+  limit = 100,
+  beforeId?: number,
+): Promise<BlockchainTransaction[]> {
+  const upperId = beforeId ?? Dexie.maxKey;
+  return db.blockchainTransactions
+    .where('[curationState+id]')
+    .between([state, Dexie.minKey], [state, upperId], true, beforeId === undefined)
+    .reverse()
+    .limit(limit)
+    .toArray();
 }
 
 export async function bulkAddTransactions(

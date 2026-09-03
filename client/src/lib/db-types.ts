@@ -747,9 +747,14 @@ export interface BlockchainTransaction {
   hasMixedWitness?: boolean;
   // Whether any input in this transaction is a coinbase (block reward)
   hasCoinbaseInput?: boolean;
+  // Local review state. This deliberately lives on the transaction row so
+  // backups and transaction de-duplication carry it with the stable txid.
+  curationState?: TransactionCurationState;
+  curationUpdatedAt?: number;
+  snoozedUntil?: number;
 }
 
-// Transaction participant (input or output)
+export type TransactionCurationState = 'new' | 'annotated' | 'ignored' | 'snoozed';
 export interface TransactionParticipant {
   id?: number;
   txid: string;           // Foreign key to BlockchainTransaction
@@ -835,6 +840,7 @@ export interface PausedSyncState {
   // Cumulative stats from the paused sync
   transactionsImported: number;
   transactionsUpdated: number;
+  newlyQueuedTransactions?: number;
   newAddressRecords: number;
   addressesSynced: number;
 }

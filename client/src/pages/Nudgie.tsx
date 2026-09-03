@@ -19,6 +19,7 @@ import { updateRecord, createRecord, getRecord, captureMergeOrigin, getParticipa
 import {
   countTransactions,
   getTransactionsByTxids,
+  updateTransactionCuration,
 } from "@/lib/data/transaction-crud";
 import {
   getAddressRecordsByImportanceTiers,
@@ -392,7 +393,7 @@ export default function Nudgie() {
           checkAbort(signal);
           const batch = txidArray.slice(i, i + batchSize);
           const txs = await getTransactionsByTxids(batch);
-          results.push(...txs);
+          results.push(...txs.filter(tx => tx.curationState === 'new'));
           if (i + batchSize < txidArray.length) {
             await yieldToUI();
           }
@@ -619,6 +620,7 @@ export default function Nudgie() {
       }
 
       clearTxFormData(tx.txid);
+      await updateTransactionCuration(tx.txid, 'annotated');
 
       if (viewMode === 'focus') {
         setFocusIndex(prev => Math.max(0, Math.min(prev, transactionsWithContext.length - 2)));
@@ -665,6 +667,7 @@ export default function Nudgie() {
 
       toast({ title: "Saved", description: `Labeled as "${quickLabel}"` });
       clearTxFormData(tx.txid);
+      await updateTransactionCuration(tx.txid, 'annotated');
 
       if (viewMode === 'focus') {
         setFocusIndex(prev => Math.max(0, Math.min(prev, transactionsWithContext.length - 2)));

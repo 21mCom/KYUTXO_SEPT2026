@@ -140,3 +140,4 @@
 - [SOCKS URL parsing in browsers](socks-url-browser-parsing.md) — Chromium does not parse socks5:// as an authority URL; validate the scheme, then parse its authority through a known special scheme.
 - [Verified backup provenance](verified-backup-provenance.md) — checksum sidecars prove byte consistency, not app verification; rotation trusts only main-owned provenance bound to capability, name, size, and live digest.
 - [Origin-lot certainty propagation](origin-lot-certainty.md) — acquisition lot IDs do not imply known provenance; source certainty must follow allocations through every descendant and summary/export.
+- [Transaction curation state](transaction-curation-state.md) — keep review state on txid-unique rows; classify in fixed batches and page by state+id keyset.

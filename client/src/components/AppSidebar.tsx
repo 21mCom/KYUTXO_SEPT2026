@@ -15,11 +15,14 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Link, useLocation } from "wouter";
 import { useState, useEffect } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { countActionableTransactionCurations } from "@/lib/data/transaction-crud";
 import { ActivityMonitorPanel } from "@/components/ActivityMonitorPanel";
 import { DEV_TOOLS_GROUP, NAV_GROUPS, type NavGroup } from "@/config/navigation";
 
 export function AppSidebar() {
   const [location] = useLocation();
+  const inboxCount = useLiveQuery(() => countActionableTransactionCurations(), [], 0);
   
   const getInitialOpenState = () => {
     const state: Record<string, boolean> = {};
@@ -92,6 +95,11 @@ export function AppSidebar() {
                     <Link href={item.url}>
                       <item.icon className="h-4 w-4" />
                       <span>{item.title}</span>
+                      {item.badge === "transaction-inbox" && inboxCount > 0 && (
+                        <span className="ml-auto rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground" data-testid="badge-transaction-inbox-count">
+                          {inboxCount > 999 ? "999+" : inboxCount}
+                        </span>
+                      )}
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
