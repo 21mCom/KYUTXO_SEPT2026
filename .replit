@@ -1029,6 +1029,10 @@ args = "first-run-network-privacy"
 task = "workflow.run"
 args = "record-search-index-concurrency-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backup-schedule-concurrency-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3710,6 +3714,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/data/record-crud.globalSearch.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "backup-schedule-concurrency-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/backup/scheduled-settings.runtime.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
