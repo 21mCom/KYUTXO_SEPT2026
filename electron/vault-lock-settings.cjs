@@ -45,8 +45,107 @@ function validateVaultLockSettings(rawSettings) {
   };
 }
 
+function createVaultLockLifecycle({
+  powerMonitor,
+  lockRenderer,
+  logError = () => {},
+  pollMs = 5000,
+  setIntervalFn = setInterval,
+  clearIntervalFn = clearInterval,
+  logPowerEvent = () => {},
+}) {
+  let policy = null;
+  let idleLockTimer = null;
+  let idleLockSent = false;
+  let powerMonitorListeners = null;
+
+  function clearIdleLockTimer() {
+    if (idleLockTimer) {
+      clearIntervalFn(idleLockTimer);
+      idleLockTimer = null;
+    }
+  }
+
+  function applyPolicy(nextPolicy) {
+    policy = nextPolicy;
+    clearIdleLockTimer();
+    idleLockSent = false;
+
+    if (
+      policy.idleTimeoutSeconds <= 0 ||
+      typeof powerMonitor.getSystemIdleTime !== 'function'
+    ) {
+      return;
+    }
+
+    idleLockTimer = setIntervalFn(() => {
+      let idleSeconds;
+      try {
+        idleSeconds = powerMonitor.getSystemIdleTime();
+      } catch (error) {
+        logError(error);
+        return;
+      }
+
+      const isIdle = idleSeconds >= policy.idleTimeoutSeconds;
+      if (isIdle && !idleLockSent) {
+        idleLockSent = true;
+        lockRenderer('idle');
+      } else if (!isIdle) {
+        idleLockSent = false;
+      }
+    }, pollMs);
+    idleLockTimer.unref?.();
+  }
+
+  function shouldLock(eventName) {
+    const settingByEvent = {
+      suspend: 'lockOnSuspend',
+      resume: 'lockOnResume',
+      'lock-screen': 'lockOnScreenLock',
+    };
+    const setting = settingByEvent[eventName];
+    return setting ? policy?.[setting] === true : false;
+  }
+
+  function registerPowerMonitorListeners() {
+    if (powerMonitorListeners || typeof powerMonitor?.on !== 'function') return;
+
+    const events = ['suspend', 'resume', 'lock-screen'];
+    powerMonitorListeners = new Map();
+    for (const eventName of events) {
+      const listener = () => {
+        logPowerEvent(eventName);
+        if (shouldLock(eventName)) lockRenderer(eventName);
+      };
+      powerMonitorListeners.set(eventName, listener);
+      powerMonitor.on(eventName, listener);
+    }
+  }
+
+  function shutdown() {
+    clearIdleLockTimer();
+    idleLockSent = false;
+    policy = null;
+    if (powerMonitorListeners && typeof powerMonitor?.removeListener === 'function') {
+      for (const [eventName, listener] of powerMonitorListeners) {
+        powerMonitor.removeListener(eventName, listener);
+      }
+    }
+    powerMonitorListeners = null;
+  }
+
+  return {
+    applyPolicy,
+    registerPowerMonitorListeners,
+    shouldLock,
+    shutdown,
+  };
+}
+
 module.exports = {
   DEFAULT_IDLE_LOCK_TIMEOUT_SECONDS,
   parseIdleLockTimeoutEnv,
   validateVaultLockSettings,
+  createVaultLockLifecycle,
 };

@@ -19,6 +19,7 @@ const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.
 const {
   parseIdleLockTimeoutEnv,
   validateVaultLockSettings,
+  createVaultLockLifecycle,
 } = require('./vault-lock-settings.cjs');
 
 const {
@@ -58,9 +59,6 @@ const LOCK_ON_RESUME = process.env.KYUTXO_LOCK_ON_RESUME !== '0';
 const IDLE_LOCK_TIMEOUT_SECONDS = parseIdleLockTimeoutEnv(
   process.env.KYUTXO_IDLE_LOCK_SECONDS,
 );
-const IDLE_LOCK_POLL_MS = 5000;
-let idleLockTimer = null;
-let idleLockSent = false;
 let vaultLockSettings = {
   idleTimeoutSeconds: IDLE_LOCK_TIMEOUT_SECONDS,
   lockOnSuspend: LOCK_ON_SUSPEND,
@@ -74,38 +72,19 @@ function lockRenderer(reason) {
   }
 }
 
-function configureIdleLockTimer() {
-  if (idleLockTimer) {
-    clearInterval(idleLockTimer);
-    idleLockTimer = null;
-  }
-  idleLockSent = false;
-
-  if (
-    vaultLockSettings.idleTimeoutSeconds > 0 &&
-    typeof powerMonitor.getSystemIdleTime === 'function'
-  ) {
-    idleLockTimer = setInterval(() => {
-      let idleSeconds;
-      try {
-        idleSeconds = powerMonitor.getSystemIdleTime();
-      } catch (error) {
-        logMainError('[KYUTXO] Failed to read system idle time', error);
-        return;
-      }
-      const isIdle = idleSeconds >= vaultLockSettings.idleTimeoutSeconds;
-      if (isIdle && !idleLockSent) {
-        idleLockSent = true;
-        lockRenderer('idle');
-      } else if (!isIdle) {
-        idleLockSent = false;
-      }
-    }, IDLE_LOCK_POLL_MS);
-    // The timer is only a lifecycle observer and must not keep the app alive
-    // while Electron is shutting down.
-    idleLockTimer.unref?.();
-  }
-}
+const vaultLockLifecycle = createVaultLockLifecycle({
+  powerMonitor,
+  lockRenderer,
+  logError: (error) => logMainError('[KYUTXO] Failed to read system idle time', error),
+  logPowerEvent: (eventName) => {
+    const messages = {
+      suspend: '[KYUTXO] System suspending (going to sleep)',
+      resume: '[KYUTXO] System resumed from sleep',
+      'lock-screen': '[KYUTXO] Screen locked',
+    };
+    console.log(messages[eventName]);
+  },
+});
 
 // ============================================================================
 // PORTABLE MODE SETUP - Must happen BEFORE app.whenReady()
@@ -385,18 +364,26 @@ ipcMain.handle('tor-request', async (event, rawArgs) => {
 });
 
 ipcMain.handle('set-vault-lock-settings', async (event, rawSettings) => {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
-    return { success: false, error: 'Vault lock settings are not available to this renderer' };
-  }
+  try {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      return { success: false, error: 'Vault lock settings are not available to this renderer' };
+    }
 
-  const parsed = validateVaultLockSettings(rawSettings);
-  if (!parsed.ok) {
-    return { success: false, error: parsed.error };
-  }
+    const parsed = validateVaultLockSettings(rawSettings);
+    if (!parsed.ok) {
+      return { success: false, error: parsed.error };
+    }
 
-  vaultLockSettings = parsed.settings;
-  configureIdleLockTimer();
-  return { success: true };
+    vaultLockSettings = parsed.settings;
+    vaultLockLifecycle.applyPolicy(vaultLockSettings);
+    return { success: true };
+  } catch (error) {
+    logMainError('[KYUTXO] Failed to apply vault lock settings', error);
+    return {
+      success: false,
+      error: sanitizeIpcError(error, 'Failed to apply vault lock settings'),
+    };
+  }
 });
 
 ipcMain.handle('tor-status', async () => {
@@ -603,26 +590,8 @@ app.whenReady().then(() => {
   
   createWindow();
   
-  powerMonitor.on('suspend', () => {
-    console.log('[KYUTXO] System suspending (going to sleep)');
-    if (vaultLockSettings.lockOnSuspend) lockRenderer('suspend');
-  });
-  
-  powerMonitor.on('resume', () => {
-    console.log('[KYUTXO] System resumed from sleep');
-    if (vaultLockSettings.lockOnResume) lockRenderer('resume');
-  });
-  
-  powerMonitor.on('lock-screen', () => {
-    console.log('[KYUTXO] Screen locked');
-    if (vaultLockSettings.lockOnScreenLock) lockRenderer('lock-screen');
-  });
-  
-  powerMonitor.on('unlock-screen', () => {
-    console.log('[KYUTXO] Screen unlocked');
-  });
-
-  configureIdleLockTimer();
+  vaultLockLifecycle.registerPowerMonitorListeners();
+  vaultLockLifecycle.applyPolicy(vaultLockSettings);
 });
 
 app.on('window-all-closed', () => {
@@ -635,10 +604,7 @@ app.on('before-quit', () => {
   console.log('[Electrum Pool] Cleaning up connections before quit');
   stopKeepalive();
   stopEngineWorker();
-  if (idleLockTimer) {
-    clearInterval(idleLockTimer);
-    idleLockTimer = null;
-  }
+  vaultLockLifecycle.shutdown();
 });
 
 app.on('activate', () => {

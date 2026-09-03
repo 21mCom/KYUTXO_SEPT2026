@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 
 const root = path.resolve(import.meta.dirname, "..");
 const mainSource = readFileSync(path.join(root, "electron", "main.cjs"), "utf8");
+const vaultLockSource = readFileSync(
+  path.join(root, "electron", "vault-lock-settings.cjs"),
+  "utf8",
+);
 const preloadSource = readFileSync(path.join(root, "electron", "preload.cjs"), "utf8");
 const authSource = readFileSync(
   path.join(root, "client", "src", "contexts", "AuthContext.tsx"),
@@ -37,10 +41,9 @@ describe("packaged Electron privilege boundaries", () => {
   });
 
   it("signals controlled locks for suspend, resume, screen lock, and idle without reload", () => {
-    expect(mainSource).toMatch(/powerMonitor\.on\(['"]suspend['"][\s\S]*lockRenderer\(['"]suspend['"]\)/);
-    expect(mainSource).toMatch(/powerMonitor\.on\(['"]resume['"][\s\S]*lockRenderer\(['"]resume['"]\)/);
-    expect(mainSource).toMatch(/powerMonitor\.on\(['"]lock-screen['"][\s\S]*lockRenderer\(['"]lock-screen['"]\)/);
-    expect(mainSource).toMatch(/getSystemIdleTime\(\)[\s\S]*lockRenderer\(['"]idle['"]\)/);
+    expect(vaultLockSource).toMatch(/powerMonitor\.on\(/);
+    expect(vaultLockSource).toMatch(/shouldLock\(eventName\)[\s\S]*lockRenderer\(eventName\)/);
+    expect(vaultLockSource).toMatch(/getSystemIdleTime\(\)[\s\S]*lockRenderer\(['"]idle['"]\)/);
     expect(mainSource).not.toMatch(/mainWindow\.reload\(/);
     expect(preloadSource).toMatch(/ipcRenderer\.on\(['"]vault-lock['"]/);
     expect(preloadSource).toMatch(/removeListener\(['"]vault-lock['"]/);
@@ -55,5 +58,7 @@ describe("packaged Electron privilege boundaries", () => {
       /ipcMain\.handle\(['"]set-vault-lock-settings['"][\s\S]*validateVaultLockSettings\(rawSettings\)/,
     );
     expect(mainSource).toMatch(/event\.sender !== mainWindow\.webContents/);
+    expect(mainSource).toMatch(/vaultLockLifecycle\.applyPolicy\(vaultLockSettings\)/);
+    expect(mainSource).toMatch(/vaultLockLifecycle\.shutdown\(\)/);
   });
 });
