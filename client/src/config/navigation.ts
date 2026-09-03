@@ -87,6 +87,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { title: "Transactions", url: "/transactions", icon: LayoutList, aliases: ["tx", "txids", "transaction history"] },
       { title: "UTXOs", url: "/utxos", icon: Coins, aliases: ["coins", "outputs", "unspent outputs"] },
       { title: "UTXO Provenance", url: "/utxo-provenance", icon: Waypoints, aliases: ["coin provenance", "output history"] },
+      { title: "Coin Origins", url: "/coin-origins", icon: GitBranch, aliases: ["coin passport", "origin lots", "holdings by origin"] },
       { title: "Vaults", url: "/vaults", icon: Vault, aliases: ["wallet vaults", "manage vaults"] },
       { title: "Wallet Overview", url: "/wallet-overview", icon: LayoutList, aliases: ["wallets", "wallet summary"] },
       { title: "Bulk Editor", url: "/bulk-editor", icon: Layers, aliases: ["edit many", "bulk edit", "batch edit"] },

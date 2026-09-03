@@ -21,6 +21,15 @@
  *
  * Source-of-truth remains Dexie/IndexedDB. This engine is a derived read replica.
  */
+import {
+  calculateCoinOrigins,
+  filterCoinOriginsByWallet,
+  type CoinOriginAddress,
+  type CoinOriginParticipant,
+  type CoinOriginTransaction,
+  type CoinOriginsLedger,
+} from '../coin-origins-core';
+
 
 /**
  * Minimal database driver contract this engine runs against. Implemented by a
@@ -1595,6 +1604,49 @@ export function getVaultSummaries(db: EngineDb, opts: { search?: string } = {}):
       ORDER BY addressCount DESC, vaultName`,
     bind,
   );
+}
+
+/**
+ * Calculate the compositional origin ledger inside the native worker. The
+ * worker reads the already-mirrored rows in one bounded operation; the
+ * renderer's Dexie implementation uses the exact same pure calculator.
+ *
+ * This is intentionally a query, not a second persisted source of truth. The
+ * normal engine freshness gate still decides whether the renderer may use it.
+ */
+export function getCoinOrigins(
+  db: EngineDb,
+  opts: { walletName?: string } = {},
+): CoinOriginsLedger {
+  const records = selectRows<{
+    inputString: string;
+    type: string | null;
+    addressImportance: string | null;
+    walletName: string | null;
+    owner: string | null;
+    seedName: string | null;
+    label: string | null;
+  }>(
+    db,
+    `SELECT inputString, type, addressImportance, walletName, owner, seedName, label
+       FROM records
+      WHERE type = 'address' AND inputString IS NOT NULL AND inputString <> ''`,
+  );
+  const transactions = selectRows<CoinOriginTransaction>(
+    db,
+    'SELECT txid, blockHeight, blockTime, fee FROM blockchainTransactions',
+  );
+  const participants = selectRows<CoinOriginParticipant>(
+    db,
+    `SELECT id, txid, role, address, amount, vout, prevTxid, prevVout
+       FROM transactionParticipants`,
+  );
+  const input = {
+    transactions,
+    participants,
+    addresses: records as CoinOriginAddress[],
+  };
+  return filterCoinOriginsByWallet(calculateCoinOrigins(input), opts.walletName);
 }
 
 // ---------------------------------------------------------------------------

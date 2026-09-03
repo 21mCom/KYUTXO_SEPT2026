@@ -240,14 +240,374 @@ function openEngineDb(filename, opts = {}) {
   return wrapBetterSqlite3(raw);
 }
 
+// client/src/lib/coin-origins-core.ts
+var UNKNOWN_ORIGIN_ID = "unknown";
+var OWNED_TIERS = /* @__PURE__ */ new Set(["verified", "manual", "wallet-import", "xpub-derived"]);
+function int(value) {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isSafeInteger(n) && n > 0 ? n : 0;
+}
+function unix(value) {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isSafeInteger(n) && n > 0 ? n : 0;
+}
+function outpointKey(txid, vout) {
+  return `${txid}:${vout}`;
+}
+function lotId(txid, vout) {
+  return `lot:${txid}:${vout}`;
+}
+function sortedTransactions(transactions) {
+  return [...transactions].sort(
+    (a, b) => (unix(a.blockHeight) || Number.MAX_SAFE_INTEGER) - (unix(b.blockHeight) || Number.MAX_SAFE_INTEGER) || unix(a.blockTime) - unix(b.blockTime) || a.txid.localeCompare(b.txid)
+  );
+}
+function addToMap(target, key, sats) {
+  if (sats <= 0) return;
+  target.set(key, (target.get(key) ?? 0) + sats);
+}
+function mapTotal(map) {
+  let total = 0;
+  for (const sats of map.values()) total += sats;
+  return total;
+}
+function mapToAllocations(map) {
+  return [...map.entries()].filter(([, sats]) => sats > 0).sort(([a], [b]) => a.localeCompare(b)).map(([lotId2, sats]) => ({ lotId: lotId2, sats }));
+}
+function take(map, wanted) {
+  const result = /* @__PURE__ */ new Map();
+  let remaining = wanted;
+  for (const key of [...map.keys()].sort()) {
+    if (remaining <= 0) break;
+    const available = map.get(key) ?? 0;
+    const used = Math.min(available, remaining);
+    if (used > 0) {
+      addToMap(result, key, used);
+      map.set(key, available - used);
+      remaining -= used;
+    }
+  }
+  if (remaining > 0) addToMap(result, UNKNOWN_ORIGIN_ID, remaining);
+  return result;
+}
+function boundaryFor(map, lotBoundaries) {
+  let hasUnknown = false;
+  let hasKnown = false;
+  for (const [key, sats] of map) {
+    if (sats <= 0) continue;
+    const certainty = key === UNKNOWN_ORIGIN_ID ? "unknown" : lotBoundaries.get(key) ?? "unknown";
+    if (certainty === "mixed") {
+      hasKnown = true;
+      hasUnknown = true;
+    } else if (certainty === "unknown") {
+      hasUnknown = true;
+    } else {
+      hasKnown = true;
+    }
+  }
+  return hasUnknown && hasKnown ? "mixed" : hasUnknown ? "unknown" : "deterministic";
+}
+function cloneMap(map) {
+  return new Map(map);
+}
+function eventKind(inputCount, outputCount, ownedOutputSats, inputSats, boundary) {
+  if (boundary !== "deterministic") return "mixed";
+  if (inputCount === 0) return "acquisition";
+  if (inputCount > 1 && outputCount < inputCount) return "consolidation";
+  if (ownedOutputSats > 0 && ownedOutputSats < inputSats) return "partial-spend";
+  return "transfer";
+}
+function flattenAncestry(node, txOrder) {
+  const seen = /* @__PURE__ */ new Set();
+  const stack = [node];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (seen.has(current.txid)) continue;
+    seen.add(current.txid);
+    stack.push(...current.parents);
+  }
+  return [...seen].sort((a, b) => (txOrder.get(a) ?? Number.MAX_SAFE_INTEGER) - (txOrder.get(b) ?? Number.MAX_SAFE_INTEGER) || a.localeCompare(b));
+}
+function isOwned(record) {
+  return !!record && (record.addressImportance == null || OWNED_TIERS.has(record.addressImportance));
+}
+function calculateCoinOrigins(input) {
+  const addressByValue = /* @__PURE__ */ new Map();
+  for (const address of input.addresses) {
+    if (address.inputString && isOwned(address)) addressByValue.set(address.inputString, address);
+  }
+  const transactions = sortedTransactions(input.transactions);
+  const txOrder = new Map(transactions.map((tx2, index) => [tx2.txid, index]));
+  const txById = new Map(transactions.map((tx2) => [tx2.txid, tx2]));
+  const partsByTxid = /* @__PURE__ */ new Map();
+  for (const p of input.participants) {
+    const group = partsByTxid.get(p.txid) ?? { inputs: [], outputs: [] };
+    (p.role === "input" ? group.inputs : group.outputs).push(p);
+    partsByTxid.set(p.txid, group);
+  }
+  for (const group of partsByTxid.values()) {
+    group.inputs.sort((a, b) => (a.id ?? 0) - (b.id ?? 0) || (a.prevVout ?? -1) - (b.prevVout ?? -1));
+    group.outputs.sort((a, b) => (a.vout ?? Number.MAX_SAFE_INTEGER) - (b.vout ?? Number.MAX_SAFE_INTEGER) || (a.id ?? 0) - (b.id ?? 0));
+  }
+  const outputCompositions = /* @__PURE__ */ new Map();
+  const outputAncestry = /* @__PURE__ */ new Map();
+  const spent = /* @__PURE__ */ new Set();
+  const outpoints = [];
+  const lots = [];
+  const lotBoundaries = /* @__PURE__ */ new Map();
+  const disposals = [];
+  const hops = [];
+  let acquisitionSats = 0;
+  for (const p of input.participants) {
+    if (p.role === "input" && p.prevTxid && p.prevVout != null) spent.add(outpointKey(p.prevTxid, p.prevVout));
+  }
+  for (const tx2 of transactions) {
+    const group = partsByTxid.get(tx2.txid) ?? { inputs: [], outputs: [] };
+    const txOutputs = group.outputs;
+    const txInputSats = group.inputs.reduce((sum, p) => sum + int(p.amount), 0);
+    const txOutputSats = txOutputs.reduce((sum, p) => sum + int(p.amount), 0);
+    const pool = /* @__PURE__ */ new Map();
+    const inputComposition = /* @__PURE__ */ new Map();
+    let unknownInputSats = 0;
+    let knownInputSats = 0;
+    const alreadyConsumed = /* @__PURE__ */ new Set();
+    const ancestryParents = [];
+    const ancestrySeen = /* @__PURE__ */ new Set();
+    for (const p of group.inputs) {
+      const amount = int(p.amount);
+      const key = p.prevTxid && p.prevVout != null ? outpointKey(p.prevTxid, p.prevVout) : null;
+      const source = key ? outputCompositions.get(key) : void 0;
+      if (source && !alreadyConsumed.has(key)) {
+        alreadyConsumed.add(key);
+        const ancestor = outputAncestry.get(key);
+        if (ancestor && !ancestrySeen.has(ancestor)) {
+          ancestrySeen.add(ancestor);
+          ancestryParents.push(ancestor);
+        }
+        const sourceAmount = mapTotal(source);
+        const taken = take(cloneMap(source), Math.min(amount || sourceAmount, sourceAmount));
+        for (const [lot, sats] of taken) {
+          addToMap(pool, lot, sats);
+          addToMap(inputComposition, lot, sats);
+        }
+        const remainder = amount - mapTotal(taken);
+        if (remainder > 0) {
+          addToMap(pool, UNKNOWN_ORIGIN_ID, remainder);
+          addToMap(inputComposition, UNKNOWN_ORIGIN_ID, remainder);
+          unknownInputSats += remainder;
+        }
+        knownInputSats += mapTotal(taken);
+      } else {
+        addToMap(pool, UNKNOWN_ORIGIN_ID, amount);
+        addToMap(inputComposition, UNKNOWN_ORIGIN_ID, amount);
+        unknownInputSats += amount;
+      }
+    }
+    const declaredFee = int(tx2.fee);
+    const feeSats2 = txInputSats >= txOutputSats ? txInputSats - txOutputSats : 0;
+    const feeAllocation = take(pool, feeSats2);
+    if (feeSats2 > 0 && knownInputSats > 0) {
+      disposals.push({
+        txid: tx2.txid,
+        kind: "fee",
+        sats: feeSats2,
+        allocations: mapToAllocations(feeAllocation),
+        boundary: boundaryFor(feeAllocation, lotBoundaries)
+      });
+    }
+    let ownedOutputSats = 0;
+    for (const output of txOutputs) {
+      const amount = int(output.amount);
+      const address = output.address ?? "";
+      const record = addressByValue.get(address);
+      const owned = !!record;
+      const vout = output.vout == null ? 0 : Math.max(0, Math.trunc(output.vout));
+      let composition;
+      const startsCustody = owned && (group.inputs.length === 0 || knownInputSats === 0);
+      let acquisitionBoundary = null;
+      if (startsCustody) {
+        const id = lotId(tx2.txid, vout);
+        composition = /* @__PURE__ */ new Map([[id, amount]]);
+        acquisitionBoundary = group.inputs.length === 0 ? "deterministic" : "unknown";
+        const lot = {
+          lotId: id,
+          acquiredTxid: tx2.txid,
+          acquiredVout: vout,
+          acquiredAt: unix(tx2.blockTime),
+          acquiredSats: amount,
+          sourceBoundary: acquisitionBoundary,
+          address,
+          walletName: record?.walletName ?? null,
+          owner: record?.owner ?? null,
+          label: record?.label ?? null
+        };
+        lots.push(lot);
+        lotBoundaries.set(id, acquisitionBoundary);
+        acquisitionSats += amount;
+      } else {
+        composition = take(pool, amount);
+      }
+      const boundary = acquisitionBoundary ?? boundaryFor(composition, lotBoundaries);
+      const allocations = mapToAllocations(composition);
+      if (owned) {
+        ownedOutputSats += amount;
+        outputCompositions.set(outpointKey(tx2.txid, vout), composition);
+        const ancestryNode = { txid: tx2.txid, parents: ancestryParents };
+        outputAncestry.set(outpointKey(tx2.txid, vout), ancestryNode);
+        if (!spent.has(outpointKey(tx2.txid, vout))) {
+          outpoints.push({
+            txid: tx2.txid,
+            vout,
+            address,
+            amountSats: amount,
+            allocations,
+            hopTxids: flattenAncestry(ancestryNode, txOrder),
+            boundary,
+            walletName: record?.walletName ?? null,
+            owner: record?.owner ?? null
+          });
+        }
+      } else if (amount > 0 && knownInputSats > 0) {
+        disposals.push({
+          txid: tx2.txid,
+          vout,
+          kind: "external",
+          sats: amount,
+          allocations,
+          boundary: boundaryFor(composition, lotBoundaries)
+        });
+      }
+    }
+    const txBoundary = group.inputs.length === 0 ? "deterministic" : boundaryFor(inputComposition, lotBoundaries);
+    const residualSats = group.inputs.length === 0 ? 0 : txInputSats - txOutputSats - feeSats2;
+    hops.push({
+      txid: tx2.txid,
+      blockHeight: unix(tx2.blockHeight),
+      blockTime: unix(tx2.blockTime),
+      inputSats: txInputSats,
+      outputSats: txOutputSats,
+      // Keep declaredFee available in debugging by using it only when it is
+      // consistent; the reconciled fee is what the ledger displays.
+      feeSats: feeSats2 >= 0 ? feeSats2 : declaredFee,
+      inputCount: group.inputs.length,
+      outputCount: txOutputs.length,
+      kind: eventKind(group.inputs.length, txOutputs.length, ownedOutputSats, txInputSats, txBoundary),
+      boundary: txBoundary,
+      unknownInputSats,
+      ownedOutputSats,
+      reconciled: residualSats === 0,
+      residualSats
+    });
+  }
+  outpoints.sort((a, b) => a.txid.localeCompare(b.txid) || a.vout - b.vout);
+  const holdingMap = /* @__PURE__ */ new Map();
+  for (const output of outpoints) {
+    for (const allocation of output.allocations) {
+      const row = holdingMap.get(allocation.lotId) ?? { sats: 0, outpoints: 0, boundary: "deterministic" };
+      row.sats += allocation.sats;
+      row.outpoints += 1;
+      if (output.boundary === "mixed" || row.boundary === "mixed") row.boundary = "mixed";
+      else if (output.boundary === "unknown" || row.boundary === "unknown") row.boundary = "unknown";
+      holdingMap.set(allocation.lotId, row);
+    }
+  }
+  const lotById = new Map(lots.map((lot) => [lot.lotId, lot]));
+  const holdings = [...holdingMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, row]) => {
+    const lot = lotById.get(id);
+    return {
+      lotId: id,
+      label: id === UNKNOWN_ORIGIN_ID ? "Unknown origin" : lot?.label || `${lot?.acquiredTxid.slice(0, 10) ?? "Unknown"}:${lot?.acquiredVout ?? ""}`,
+      acquiredTxid: lot?.acquiredTxid,
+      acquiredVout: lot?.acquiredVout,
+      acquiredAt: lot?.acquiredAt,
+      sats: row.sats,
+      outpointCount: row.outpoints,
+      boundary: row.boundary
+    };
+  });
+  const currentSats = outpoints.reduce((sum, row) => sum + row.amountSats, 0);
+  const allocatedSats = outpoints.reduce((sum, row) => sum + row.allocations.reduce((s, a) => s + a.sats, 0), 0);
+  const unknownSats = outpoints.reduce(
+    (sum, row) => sum + row.allocations.reduce(
+      (allocationSum, allocation) => allocationSum + (allocation.lotId === UNKNOWN_ORIGIN_ID || (lotBoundaries.get(allocation.lotId) ?? "unknown") !== "deterministic" ? allocation.sats : 0),
+      0
+    ),
+    0
+  );
+  const disposedSats = disposals.filter((d) => d.kind === "external").reduce((sum, d) => sum + d.sats, 0);
+  const feeSats = disposals.filter((d) => d.kind === "fee").reduce((sum, d) => sum + d.sats, 0);
+  return {
+    version: 1,
+    outpoints,
+    lots,
+    disposals,
+    hops,
+    holdings,
+    summary: {
+      currentSats,
+      allocatedSats,
+      knownSats: allocatedSats - unknownSats,
+      unknownSats,
+      disposedSats,
+      feeSats,
+      acquisitionSats,
+      // For every currently-held output the allocation is exactly its output
+      // amount. Historical tx identities are separately reconciled per hop.
+      reconciled: hops.every((hop) => hop.reconciled) && outpoints.every((row) => row.amountSats === row.allocations.reduce((s, a) => s + a.sats, 0))
+    }
+  };
+}
+function filterCoinOriginsByWallet(ledger, walletName) {
+  if (!walletName) return ledger;
+  const keep = new Set(ledger.outpoints.filter((o) => o.walletName === walletName).map((o) => outpointKey(o.txid, o.vout)));
+  const outpoints = ledger.outpoints.filter((o) => keep.has(outpointKey(o.txid, o.vout)));
+  const holdingMap = /* @__PURE__ */ new Map();
+  for (const output of outpoints) for (const allocation of output.allocations) {
+    const row = holdingMap.get(allocation.lotId) ?? { sats: 0, count: 0, boundary: "deterministic" };
+    row.sats += allocation.sats;
+    row.count += 1;
+    row.boundary = row.boundary === "mixed" || output.boundary === "mixed" ? "mixed" : row.boundary === "unknown" || output.boundary === "unknown" ? "unknown" : "deterministic";
+    holdingMap.set(allocation.lotId, row);
+  }
+  const lotById = new Map(ledger.lots.map((l) => [l.lotId, l]));
+  const holdings = [...holdingMap.entries()].map(([id, row]) => {
+    const lot = lotById.get(id);
+    return { lotId: id, label: id === UNKNOWN_ORIGIN_ID ? "Unknown origin" : lot?.label || id, acquiredTxid: lot?.acquiredTxid, acquiredVout: lot?.acquiredVout, acquiredAt: lot?.acquiredAt, sats: row.sats, outpointCount: row.count, boundary: row.boundary };
+  }).sort((a, b) => a.lotId.localeCompare(b.lotId));
+  const currentSats = outpoints.reduce((s, o) => s + o.amountSats, 0);
+  const scopedLotBoundaries = new Map(ledger.lots.map((lot) => [lot.lotId, lot.sourceBoundary]));
+  const unknownSats = outpoints.reduce(
+    (sum, output) => sum + output.allocations.reduce(
+      (allocationSum, allocation) => allocationSum + (allocation.lotId === UNKNOWN_ORIGIN_ID || (scopedLotBoundaries.get(allocation.lotId) ?? "unknown") !== "deterministic" ? allocation.sats : 0),
+      0
+    ),
+    0
+  );
+  return {
+    ...ledger,
+    outpoints,
+    holdings,
+    summary: {
+      currentSats,
+      allocatedSats: currentSats,
+      knownSats: currentSats - unknownSats,
+      unknownSats,
+      disposedSats: 0,
+      feeSats: 0,
+      acquisitionSats: currentSats,
+      reconciled: ledger.hops.every((hop) => hop.reconciled) && outpoints.every((o) => o.amountSats === o.allocations.reduce((s, a) => s + a.sats, 0))
+    }
+  };
+}
+
 // client/src/lib/engine/engine-core.ts
 var MIRROR_TABLES = [
   "records",
   "blockchainTransactions",
   "transactionParticipants"
 ];
-var OWNED_TIERS = ["verified", "manual", "wallet-import", "xpub-derived"];
-var CURATED_ADDRESS_SQL = `(addressImportance IS NULL OR addressImportance IN (${OWNED_TIERS.map((t) => `'${t}'`).join(", ")}))`;
+var OWNED_TIERS2 = ["verified", "manual", "wallet-import", "xpub-derived"];
+var CURATED_ADDRESS_SQL = `(addressImportance IS NULL OR addressImportance IN (${OWNED_TIERS2.map((t) => `'${t}'`).join(", ")}))`;
 var PARAM_BATCH_SIZE = 800;
 var OWNED_UTXOS_TIERS_KEY = "owned_utxos_tiers";
 var OWNED_UTXOS_COUNT_KEY = "owned_utxos_count";
@@ -768,7 +1128,7 @@ function getAddressAggregates(db2, addresses) {
   }
   return out2;
 }
-var CURATED_RECORD_SQL = `r.type = 'address' AND r.addressImportance IN (${OWNED_TIERS.map((t) => `'${t}'`).join(", ")})`;
+var CURATED_RECORD_SQL = `r.type = 'address' AND r.addressImportance IN (${OWNED_TIERS2.map((t) => `'${t}'`).join(", ")})`;
 function participantRecordTxidSelect(predicate) {
   return `SELECT DISTINCT tp.txid FROM records r JOIN transactionParticipants tp ON tp.recordId = r.id WHERE ${predicate}`;
 }
@@ -1092,12 +1452,35 @@ function getVaultSummaries(db2, opts = {}) {
     bind
   );
 }
+function getCoinOrigins(db2, opts = {}) {
+  const records = selectRows(
+    db2,
+    `SELECT inputString, type, addressImportance, walletName, owner, seedName, label
+       FROM records
+      WHERE type = 'address' AND inputString IS NOT NULL AND inputString <> ''`
+  );
+  const transactions = selectRows(
+    db2,
+    "SELECT txid, blockHeight, blockTime, fee FROM blockchainTransactions"
+  );
+  const participants = selectRows(
+    db2,
+    `SELECT id, txid, role, address, amount, vout, prevTxid, prevVout
+       FROM transactionParticipants`
+  );
+  const input = {
+    transactions,
+    participants,
+    addresses: records
+  };
+  return filterCoinOriginsByWallet(calculateCoinOrigins(input), opts.walletName);
+}
 function ownedTierPlaceholders(tiers) {
-  const t = tiers.length ? tiers : OWNED_TIERS;
+  const t = tiers.length ? tiers : OWNED_TIERS2;
   return { sql: t.map(() => "?").join(","), bind: t };
 }
 function tiersSignature(tiers) {
-  return JSON.stringify([...tiers.length ? tiers : OWNED_TIERS].sort());
+  return JSON.stringify([...tiers.length ? tiers : OWNED_TIERS2].sort());
 }
 function buildLiveOwnedUtxosClause(tiers, asOfBlockTime) {
   const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
@@ -1139,12 +1522,12 @@ function ownedUtxosTableExists(db2) {
     "SELECT COUNT(*) AS v FROM sqlite_master WHERE type = 'table' AND name = 'ownedUtxos'"
   ) > 0;
 }
-function ownedUtxosReady(db2, tiers = OWNED_TIERS) {
+function ownedUtxosReady(db2, tiers = OWNED_TIERS2) {
   if (!ownedUtxosTableExists(db2)) return false;
   const built = getEngineMeta(db2, OWNED_UTXOS_TIERS_KEY);
   return built != null && built === tiersSignature(tiers);
 }
-function buildOwnedUtxos(db2, tiers = OWNED_TIERS) {
+function buildOwnedUtxos(db2, tiers = OWNED_TIERS2) {
   const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
   db2.exec("DROP TABLE IF EXISTS ownedUtxos;");
   db2.exec(`
@@ -1184,7 +1567,7 @@ function buildOwnedUtxos(db2, tiers = OWNED_TIERS) {
   return count;
 }
 function countOwnedUtxos(db2, opts = {}) {
-  const tiers = opts.tiers ?? OWNED_TIERS;
+  const tiers = opts.tiers ?? OWNED_TIERS2;
   if (opts.asOfBlockTime == null && ownedUtxosReady(db2, tiers)) {
     const cached = getEngineMeta(db2, OWNED_UTXOS_COUNT_KEY);
     if (cached != null) return Number(cached);
@@ -1203,7 +1586,7 @@ function countOwnedUtxos(db2, opts = {}) {
   );
 }
 function getOutpointCoverage(db2, opts = {}) {
-  const tiers = opts.tiers ?? OWNED_TIERS;
+  const tiers = opts.tiers ?? OWNED_TIERS2;
   const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
   const cteSql = `
     WITH ownedAddrs AS (
@@ -1271,7 +1654,7 @@ function getOutpointCoverage(db2, opts = {}) {
   };
 }
 function getOwnedUtxos(db2, opts) {
-  const tiers = opts.tiers ?? OWNED_TIERS;
+  const tiers = opts.tiers ?? OWNED_TIERS2;
   if (opts.asOfBlockTime == null && ownedUtxosReady(db2, tiers)) {
     const params2 = [];
     let cursor2 = "";
@@ -1413,12 +1796,12 @@ function heuristicOwnedUtxosTableExists(db2) {
     "SELECT COUNT(*) AS v FROM sqlite_master WHERE type = 'table' AND name = 'heuristicOwnedUtxos'"
   ) > 0;
 }
-function heuristicOwnedUtxosReady(db2, tiers = OWNED_TIERS) {
+function heuristicOwnedUtxosReady(db2, tiers = OWNED_TIERS2) {
   if (!heuristicOwnedUtxosTableExists(db2)) return false;
   const built = getEngineMeta(db2, HEURISTIC_UTXOS_TIERS_KEY);
   return built != null && built === tiersSignature(tiers);
 }
-function buildHeuristicOwnedUtxos(db2, tiers = OWNED_TIERS) {
+function buildHeuristicOwnedUtxos(db2, tiers = OWNED_TIERS2) {
   const { cteSql, params } = buildHeuristicCte(tiers);
   db2.exec("DROP TABLE IF EXISTS heuristicOwnedUtxos;");
   db2.exec(`
@@ -1443,7 +1826,7 @@ function buildHeuristicOwnedUtxos(db2, tiers = OWNED_TIERS) {
   return count;
 }
 function countHeuristicOwnedUtxos(db2, opts = {}) {
-  const tiers = opts.tiers ?? OWNED_TIERS;
+  const tiers = opts.tiers ?? OWNED_TIERS2;
   if (opts.asOfBlockTime == null && heuristicOwnedUtxosReady(db2, tiers)) {
     const cached = getEngineMeta(db2, HEURISTIC_UTXOS_COUNT_KEY);
     if (cached != null) return Number(cached);
@@ -1453,7 +1836,7 @@ function countHeuristicOwnedUtxos(db2, opts = {}) {
   return selectScalar(db2, `${cteSql} SELECT COUNT(*) AS v FROM heuristic_utxos`, params);
 }
 function getHeuristicOwnedUtxos(db2, opts) {
-  const tiers = opts.tiers ?? OWNED_TIERS;
+  const tiers = opts.tiers ?? OWNED_TIERS2;
   if (opts.asOfBlockTime == null && heuristicOwnedUtxosReady(db2, tiers)) {
     const params2 = [];
     let cursor2 = "";
@@ -1956,6 +2339,8 @@ function handleQuery(name, args) {
       return getWalletUsageSummaries(d);
     case "getVaultSummaries":
       return getVaultSummaries(d, args ?? {});
+    case "getCoinOrigins":
+      return getCoinOrigins(d, args ?? {});
     default:
       throw new Error(`Unknown query: ${name}`);
   }

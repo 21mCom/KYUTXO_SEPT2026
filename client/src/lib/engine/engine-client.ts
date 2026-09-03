@@ -54,6 +54,7 @@ import type {
   FinalizeProgress,
 } from '../../workers/engine-node-worker';
 import { withEngineTimeout } from './engine-timeout';
+import type { CoinOriginsLedger } from '../coin-origins-core';
 
 export type {
   RecordRow,
@@ -833,4 +834,12 @@ export async function engineGetVaultSummaries(
 ): Promise<VaultSummaryRow[]> {
   await ensureEngineInit();
   return unwrap<VaultSummaryRow[]>(getEngine().query('getVaultSummaries', opts));
+}
+
+/** Compositional origin ledger calculated in the native worker. */
+export async function engineGetCoinOrigins(
+  opts: { walletName?: string } = {},
+): Promise<CoinOriginsLedger> {
+  await ensureEngineInit();
+  return unwrap<CoinOriginsLedger>(getEngine().query('getCoinOrigins', opts));
 }

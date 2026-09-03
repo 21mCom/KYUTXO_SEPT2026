@@ -70,6 +70,7 @@ import {
   getBalanceGroupSummaries,
   getWalletUsageSummaries,
   getVaultSummaries,
+  getCoinOrigins,
   getDbFileStats,
   MIRROR_TABLES,
   type MirrorTable,
@@ -527,6 +528,8 @@ function handleQuery(name: string, args: unknown): unknown {
       return getWalletUsageSummaries(d);
     case 'getVaultSummaries':
       return getVaultSummaries(d, (args as { search?: string } | undefined) ?? {});
+    case 'getCoinOrigins':
+      return getCoinOrigins(d, (args as { walletName?: string } | undefined) ?? {});
     default:
       throw new Error(`Unknown query: ${name}`);
   }

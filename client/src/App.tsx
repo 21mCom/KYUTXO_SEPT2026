@@ -47,6 +47,7 @@ import { ActivityBusProvider } from "@/lib/activity-bus";
 import { ActivityPulseDot } from "@/components/ActivityPulseDot";
 import { EngineBootstrapper, EnginePreparingIndicator } from "@/components/EngineMaintenanceUI";
 import { GlobalCommandPalette } from "@/components/GlobalCommandPalette";
+import CoinOrigins from "@/pages/CoinOrigins";
 
 const UIAssets = lazy(() => import("@/pages/UIAssets"));
 const IconsReference = lazy(() => import("@/pages/IconsReference"));
@@ -93,6 +94,7 @@ function AppRoutes() {
       <Route path="/transactions" component={Transactions} />
       <Route path="/utxos" component={UTXOs} />
       <Route path="/utxo-provenance" component={UtxoProvenance} />
+      <Route path="/coin-origins" component={CoinOrigins} />
       <Route path="/nudgie" component={Nudgie} />
       <Route path="/lightning-speculator" component={LightningSpeculator} />
       <Route path="/provenance" component={Provenance} />

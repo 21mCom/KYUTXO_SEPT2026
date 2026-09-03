@@ -399,6 +399,20 @@ export function UtxoTableRow({
               Dust
             </Badge>
           )}
+          <Link
+            href={`/coin-origins?outpoint=${encodeURIComponent(`${utxo.txid}:${utxo.vout}`)}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              data-testid={`button-passport-${utxo.id}`}
+            >
+              <ShieldCheck className="mr-1 h-3 w-3" />
+              Passport
+            </Button>
+          </Link>
         </div>
       </TableCell>
       <TableCell className="text-sm text-muted-foreground">
