@@ -1,6 +1,6 @@
 ---
 name: Packaged Electron verification on Replit
-description: How to launch and drive the electron-builder asar in this environment; file:// CSP + routing gotchas
+description: How to launch and drive the electron-builder asar in this environment; custom-scheme, CSP, and routing gotchas
 ---
 
 ## Launch recipe
@@ -12,9 +12,9 @@ description: How to launch and drive the electron-builder asar in this environme
 - A `pkill -f 'pattern'` whose pattern appears in the same command line kills the shell itself (exit -1 with no output). Keep pkill in a separate command or bracket the pattern.
 - Replit sets `XDG_CONFIG_HOME` etc. to the workspace — export HOME **and** the XDG vars in the launch script or vault state persists across "fresh" runs in `workspace/.config/<app>`.
 
-## file:// renderer gotchas (durable)
-- Vite's absolute `/assets/...` URLs 404 under `file://`; the packaged app needs the `protocol.handle('file')` fallback in electron/main.cjs that remaps missing absolute paths into `dist/public`. **Why:** loadFile alone leaves a blank window.
-- Chromium IGNORES CSP delivered as a response header on `file://` documents — CSP must be injected as a `<meta>` tag into the served HTML (the file-protocol handler does this). `webRequest.onHeadersReceived` never applied to file:// at all.
+## Custom-scheme renderer gotchas (durable)
+- Packaged assets must use the privileged standard+secure `kyutxo-app://bundle` scheme and resolve only beneath `dist/public`; never restore a `file://` handler or OS-path fallback.
+- Keep CSP in a `<meta>` tag as the proven cross-version enforcement source, plus response headers. Packaged `connect-src` stays self-only so blockchain-provider traffic cannot bypass validated main-process IPC.
 - CDP/DevTools `Runtime.evaluate` bypasses CSP eval restrictions — probe enforcement with in-page mechanisms (inline `<script>` + securitypolicyviolation, Trusted Types sink assignment), never `eval()` from the driver. Note TT also blocks the probe's own `script.textContent` assignment — catch that as "enforced".
 - Packaged app routing is hash-based (`useAdaptiveLocation`): navigate via `location.hash = '#/path'`, not pushState.
 

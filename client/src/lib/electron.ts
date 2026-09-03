@@ -363,6 +363,7 @@ interface ElectronAPI {
   torRequest: (params: TorRequestParams) => Promise<TorRequestResult>;
   torStatus: () => Promise<TorStatusResult>;
   torUpdateSettings: (settings: TorUpdateSettingsParams) => Promise<{ success: boolean; error?: string }>;
+  onVaultLock?: (callback: (detail: { reason?: string }) => void) => () => void;
   // Electrum protocol operations
   electrumTest: (params: ElectrumTestParams) => Promise<ElectrumTestResult>;
   electrumGetHistory: (params: ElectrumHistoryParams) => Promise<ElectrumHistoryResult>;

@@ -23,11 +23,10 @@ echo "Step 3: Packaging with Electron..."
 npx electron-builder --config electron-builder.json
 
 # RELEASE GATE: launch the freshly packaged asar under Xvfb + CDP and prove
-# the renderer actually renders (no blank window), the CSP <meta> tag is
-# intact, inline scripts are blocked, Trusted Types are enforced, and wasm
-# compiles. Task 1781 shipped a blank window because Vite's absolute /assets
-# URLs 404'd under file:// — this catches any regression of the
-# protocol.handle('file') remap or the meta-tag CSP before release.
+# the renderer actually renders from the bundle-confined custom scheme, local
+# filesystem reads are refused, provider IPC and lock lifecycle work, the CSP
+# is intact, inline scripts are blocked, Trusted Types are enforced, and wasm
+# compiles.
 # (Reuses the dist/ output already built above; packages a --dir asar.)
 echo "Step 4: Verifying the packaged renderer (blank-window release gate)..."
 node scripts/check-packaged-electron-browser.mjs

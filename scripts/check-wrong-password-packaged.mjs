@@ -142,12 +142,12 @@ async function connectAndFindPage() {
   while (!page && Date.now() < deadline) {
     for (const ctx of browser.contexts()) {
       for (const p of ctx.pages()) {
-        if (p.url().startsWith('file://')) page = p;
+        if (p.url().startsWith('kyutxo-app://bundle/')) page = p;
       }
     }
     if (!page) await sleep(1000);
   }
-  if (!page) throw new Error(`${TAG} no file:// renderer page appeared within 60s.`);
+  if (!page) throw new Error(`${TAG} no kyutxo-app://bundle renderer page appeared within 60s.`);
   console.log(`${TAG} renderer page: ${page.url()}`);
   page.on('console', (msg) => {
     if (msg.type() === 'error' || msg.type() === 'warning') {

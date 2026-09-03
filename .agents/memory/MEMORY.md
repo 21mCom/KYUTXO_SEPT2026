@@ -99,7 +99,7 @@
 - [Tor proxy server-side trust](tor-proxy-server-side-trust.md) — allowlist + SOCKS URL live server-side via pushed settings; per-request trust params removed, never reintroduce; dedup cache drops allowlist on server restart.
 - [Streaming download fd cleanup](stream-download-fd-cleanup.md) — stream files to HTTP responses via pipeline (never .pipe); client aborts otherwise leak FileHandle fds; verify via /proc/self/fd.
 - [HTTP concurrency-limit tests](http-concurrency-limit-tests.md) — undici fetch pools ~10 conns/origin and hides server-side queue overflow; use node:http agent:false + slow-resolving upstream stubs.
-- [Packaged Electron verify on Replit](packaged-electron-verify.md) — nix electron 29 + xvfb + CDP recipe; file:// needs protocol.handle asset remap + meta-tag CSP (headers ignored); CDP eval bypasses CSP.
+- [Packaged Electron verify on Replit](packaged-electron-verify.md) — nix electron 29 + modern Xvfb + CDP; renderer uses bundle-confined kyutxo-app://; CDP eval bypasses CSP.
 - [Packaged Electron no local server](electron-packaged-no-local-server.md) — packaged app is file:// + IPC only (no Host header ever); only dev Electron hits localhost:5000; lockstep tests parse main.cjs.
 - [Electron error hygiene scope](electron-error-hygiene.md) — sanitization tasks cover main-process LOGS too, not just IPC payloads; redact host:port via opaque conn ids, log name+errno only; server JSON-RPC error text may pass through tagged.
 - [createdAt sort tie-breaks](created-at-sort-tiebreak.md) — "most recent row" sorts on Date.now() need an id tie-break; same-millisecond inserts sort arbitrarily and mis-de-dup.

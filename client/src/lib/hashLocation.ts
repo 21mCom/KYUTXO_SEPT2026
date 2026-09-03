@@ -2,7 +2,8 @@ import { useHashLocation } from 'wouter/use-hash-location';
 import { useBrowserLocation } from 'wouter/use-browser-location';
 
 export function isElectronFileMode(): boolean {
-  return typeof window !== 'undefined' && window.location.protocol === 'file:';
+  return typeof window !== 'undefined' &&
+    (window.location.protocol === 'file:' || window.location.protocol === 'kyutxo-app:');
 }
 
 const IS_FILE_PROTOCOL = isElectronFileMode();

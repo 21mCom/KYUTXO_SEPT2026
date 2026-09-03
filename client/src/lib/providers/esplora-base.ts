@@ -32,11 +32,14 @@ export abstract class EsploraProvider implements BlockchainProvider {
     
     this.lastRequestTime = Date.now();
     
-    if (this.useTor) {
+    // The packaged renderer never opens provider sockets directly. Every
+    // Electron Esplora request — built-in, local, onion, or custom public
+    // hostname — crosses the validated main-process proxy boundary.
+    if (isElectron()) {
       return this.torProxiedFetch(url, externalSignal);
     }
-    
-    if (isElectron() && isLocalOrPrivateUrl(url)) {
+
+    if (this.useTor || isLocalOrPrivateUrl(url)) {
       return this.torProxiedFetch(url, externalSignal);
     }
     

@@ -25,22 +25,69 @@ function isExternalOpenAllowed(rawUrl) {
   }
 }
 
-// In-window navigation is allowed only to file: URLs (the packaged app loads
-// from disk), plus the dev server origin when — and only when — the app is
-// running in development mode. Anything else — arbitrary https origins,
-// scriptable schemes, malformed input — is denied so a compromised page can't
-// navigate the app window to an attacker site. In the packaged app the dev
-// origin is NOT trusted: any local process could squat on port 5000.
+// The packaged renderer uses a standard, secure custom scheme. Keeping the
+// scheme name here gives the main process and the renderer's hash-router one
+// canonical value without importing Electron into browser code.
+const PACKAGED_APP_SCHEME = 'kyutxo-app';
+const PACKAGED_APP_ORIGIN = `${PACKAGED_APP_SCHEME}://bundle`;
+
+// In-window navigation is allowed only to the bundle-confined application
+// origin, plus the dev server origin when — and only when — the app is running
+// in development mode. Arbitrary file/http origins, scriptable schemes, and
+// malformed input are denied so a compromised page cannot navigate the app
+// window to an attacker-controlled document.
 const DEV_SERVER_ORIGIN = 'http://localhost:5000';
 
 function isNavigationAllowed(rawUrl, { isDev = false } = {}) {
   try {
     const parsed = new URL(rawUrl);
-    if (parsed.protocol === 'file:') return true;
+    if (
+      parsed.protocol === `${PACKAGED_APP_SCHEME}:` &&
+      parsed.hostname === 'bundle' &&
+      parsed.port === '' &&
+      parsed.username === '' &&
+      parsed.password === ''
+    ) {
+      return true;
+    }
     return isDev === true && parsed.origin === DEV_SERVER_ORIGIN;
   } catch {
     return false;
   }
+}
+
+function isQrWorkflowUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    if (
+      parsed.protocol !== `${PACKAGED_APP_SCHEME}:` ||
+      parsed.hostname !== 'bundle' ||
+      parsed.port !== '' ||
+      parsed.username !== '' ||
+      parsed.password !== ''
+    ) {
+      return false;
+    }
+    const route = decodeURIComponent(parsed.hash.replace(/^#/, '')).split(/[?#]/, 1)[0];
+    return route === '/scanner';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Electron reports media permission detail differently between its request
+ * and check callbacks. Grant only an explicit video-only request; ambiguous
+ * or mixed audio/video requests fail closed.
+ */
+function isCameraOnlyMediaPermission(permission, details) {
+  if (permission !== 'media' || !details || typeof details !== 'object') {
+    return false;
+  }
+  if (Array.isArray(details.mediaTypes)) {
+    return details.mediaTypes.length === 1 && details.mediaTypes[0] === 'video';
+  }
+  return details.mediaType === 'video';
 }
 
 // Escape a value for safe interpolation into HTML text content. Used by the
@@ -297,8 +344,12 @@ function validateElectrumIpc(schema, rawArgs) {
 module.exports = {
   EXTERNAL_OPEN_ALLOWED_HOSTS,
   isExternalOpenAllowed,
+  PACKAGED_APP_SCHEME,
+  PACKAGED_APP_ORIGIN,
   DEV_SERVER_ORIGIN,
   isNavigationAllowed,
+  isQrWorkflowUrl,
+  isCameraOnlyMediaPermission,
   escapeHtml,
   sanitizeIpcError,
   logMainError,

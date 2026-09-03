@@ -40,8 +40,8 @@ export function installLaunchTokenFetch(): void {
 
   const token = getLaunchToken();
   if (!token) {
-    // Packaged Electron loads the UI from file:// and talks to attachment/Tor
-    // backends over IPC instead of HTTP, so there is no token to attach.
+    // Packaged Electron loads the UI from its bundle-confined custom scheme and
+    // talks to attachment/Tor backends over IPC, so there is no token to attach.
     return;
   }
   win[INSTALLED_FLAG] = true;

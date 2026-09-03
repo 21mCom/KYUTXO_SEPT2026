@@ -1,27 +1,29 @@
 #!/usr/bin/env node
 // Packaged-desktop-app regression guard: the electron-builder asar must not
-// ship with a blank window again.
+// ship with a blank window or broad local-file privileges again.
 //
-// Task 1781 background: Vite emits absolute `/assets/...` URLs which 404 under
-// `file://`, so the packaged renderer never loaded (blank window). The fix is a
-// `protocol.handle('file')` fallback in electron/main.cjs that remaps missing
-// absolute paths into dist/public, plus CSP injected as a <meta> tag (Chromium
-// IGNORES CSP response headers on file:// documents). Any of the following can
-// silently regress: a Vite output-layout change, a handler edit, a CSP edit.
+// The renderer is served from kyutxo-app://bundle through a custom protocol
+// confined to dist/public inside app.asar. Any file:// fallback or broad path
+// remap would restore arbitrary readable-file access to compromised renderer
+// code, so this check probes that boundary in the live packaged application.
 //
 // This check builds the real electron-builder output, launches it under the
 // nix Electron runtime with Xvfb + CDP on Linux (recipe:
 // .agents/memory/packaged-electron-verify.md), or launches the generated
 // Windows portable release wrapper from a disposable directory, and asserts
 // in the live packaged renderer:
-//   1. The renderer actually renders (vault-setup form visible) — proves the
-//      /assets remap works, since the app JS/CSS only load through it.
+//   1. The renderer actually renders from kyutxo-app://bundle.
 //   2. The CSP <meta> tag is present in the served document and carries the
 //      security-critical directives (require-trusted-types-for, trusted-types
 //      allowlist, wasm-unsafe-eval, no unsafe-inline in script-src).
 //   3. Inline <script> injection is actually blocked in-page.
 //   4. Trusted Types enforcement is active (raw innerHTML assignment throws).
 //   5. WebAssembly compiles (the Argon2id KDF needs 'wasm-unsafe-eval').
+//   6. Arbitrary file paths are unreadable.
+//   7. A configured provider is reachable only through validated main IPC.
+//   8. Camera permission is denied outside the QR route.
+//   9. Production reload shortcuts are disabled.
+//  10. The idle lifecycle signal locks through AuthContext without reloading.
 //
 // Usage:
 //   node scripts/check-packaged-electron-browser.mjs
@@ -41,8 +43,10 @@
 import { chromium } from 'playwright-core';
 import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 import {
   waitForExistingVaultLoginScreen,
@@ -188,12 +192,12 @@ async function waitForRendererPage(browser, timeoutMs = 60_000) {
   while (Date.now() < deadline) {
     for (const ctx of browser.contexts()) {
       for (const p of ctx.pages()) {
-        if (p.url().startsWith('file://')) return p;
+        if (p.url().startsWith('kyutxo-app://bundle/')) return p;
       }
     }
     await sleep(1000);
   }
-  throw new Error(`${TAG} no file:// renderer page appeared within ${timeoutMs}ms.`);
+  throw new Error(`${TAG} no kyutxo-app://bundle renderer page appeared within ${timeoutMs}ms.`);
 }
 
 function attachPageDiagnostics(page) {
@@ -338,6 +342,25 @@ async function main() {
   const tempDir = path.join(tmpHome, 'temp');
   fs.mkdirSync(portableLaunchDir, { recursive: true });
   fs.mkdirSync(tempDir, { recursive: true });
+  const outsideSentinel = path.join(tmpHome, 'outside-bundle-secret.txt');
+  const outsideSentinelText = `outside-bundle-${process.pid}`;
+  fs.writeFileSync(outsideSentinel, outsideSentinelText, 'utf8');
+
+  const providerFixture = createServer((req, res) => {
+    if (req.url === '/api/blocks/tip/height') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('840000');
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('not found');
+  });
+  await new Promise((resolve, reject) => {
+    providerFixture.once('error', reject);
+    providerFixture.listen(0, '127.0.0.1', resolve);
+  });
+  const fixtureAddress = providerFixture.address();
+  const providerBaseUrl = `http://127.0.0.1:${fixtureAddress.port}/api`;
   // A portable executable can inherit this variable from a runner. Do not
   // allow an inherited portable directory to defeat the isolated profile.
   const { PORTABLE_EXECUTABLE_DIR: _portableExecutableDir, ...inheritedEnv } = process.env;
@@ -349,6 +372,8 @@ async function main() {
     XDG_DATA_HOME: path.join(tmpHome, '.local', 'share'),
     XDG_STATE_HOME: path.join(tmpHome, '.local', 'state'),
     NODE_ENV: 'production',
+    // Exercise the main→preload→AuthContext lock signal in this live gate.
+    KYUTXO_IDLE_LOCK_SECONDS: '2',
   };
   if (IS_WINDOWS) {
     // The portable wrapper sets PORTABLE_EXECUTABLE_DIR to the directory
@@ -439,9 +464,7 @@ async function main() {
     let page = await waitForRendererPage(browser);
     attachPageDiagnostics(page);
 
-    // ── 1. Renderer renders (proves the /assets file-protocol remap works) ──
-    // A fresh profile shows the Create Vault form; the app JS only executes if
-    // Vite's absolute /assets URLs were remapped into dist/public.
+    // ── 1. Renderer renders from the secure bundle scheme ───────────────────
     let rendered = false;
     let renderDetail = '';
     try {
@@ -455,15 +478,14 @@ async function main() {
         JSON.stringify(diagnostics);
     }
     steps.push({
-      name: 'packaged renderer renders (no blank window; /assets remap works)',
+      name: 'packaged renderer renders from kyutxo-app://bundle',
       passed: rendered,
       detail: renderDetail,
     });
     if (!rendered) throw new Error(`${TAG} renderer is blank — aborting remaining checks.`);
 
     // ── 2. CSP arrives as a <meta> tag with the critical directives ─────────
-    // Chromium ignores CSP response HEADERS on file:// documents, so the meta
-    // tag is the only delivery that counts.
+    // Keep meta delivery as the cross-version enforcement source.
     const csp = await page.evaluate(() => {
       const meta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
       return meta ? meta.getAttribute('content') || '' : null;
@@ -549,9 +571,185 @@ async function main() {
       detail: wasm.ok ? 'trivial module compiled' : `compile failed: ${wasm.message}`,
     });
 
+    // ── 6. Bundle scheme refuses arbitrary local filesystem reads ──────────
+    const boundaryProbe = await page.evaluate(
+      async ({ appUrl, fileUrl, secret }) => {
+        const read = async (url) => {
+          try {
+            const response = await fetch(url);
+            return { ok: response.ok, status: response.status, text: await response.text() };
+          } catch (error) {
+            return { ok: false, status: 0, text: String(error?.message || error) };
+          }
+        };
+        return {
+          appPath: await read(appUrl),
+          filePath: await read(fileUrl),
+          secret,
+        };
+      },
+      {
+        appUrl: `kyutxo-app://bundle/${encodeURIComponent(outsideSentinel)}`,
+        fileUrl: pathToFileURL(outsideSentinel).href,
+        secret: outsideSentinelText,
+      },
+    );
+    const filesystemRefused =
+      !boundaryProbe.appPath.text.includes(boundaryProbe.secret) &&
+      !boundaryProbe.filePath.text.includes(boundaryProbe.secret) &&
+      !boundaryProbe.filePath.ok;
+    steps.push({
+      name: 'packaged renderer cannot read arbitrary filesystem paths',
+      passed: filesystemRefused,
+      detail:
+        `custom-scheme status=${boundaryProbe.appPath.status}; ` +
+        `file fetch status=${boundaryProbe.filePath.status}`,
+    });
+
+    // ── 7. Validated main-process proxy reaches a configured local provider ─
+    const directProviderFetch = await page.evaluate(async (url) => {
+      try {
+        const response = await fetch(url);
+        return { reached: true, status: response.status };
+      } catch (error) {
+        return { reached: false, error: String(error?.message || error) };
+      }
+    }, `${providerBaseUrl}/blocks/tip/height`);
+    steps.push({
+      name: 'packaged CSP blocks direct renderer provider requests',
+      passed: directProviderFetch.reached === false,
+      detail: directProviderFetch.reached
+        ? `direct fetch unexpectedly returned ${directProviderFetch.status}`
+        : directProviderFetch.error,
+    });
+
+    const providerProbe = await page.evaluate(async (baseUrl) => {
+      const settings = await window.electronAPI.torUpdateSettings({
+        customProviderUrl: baseUrl,
+        trustedLocalHosts: ['127.0.0.1'],
+      });
+      const response = await window.electronAPI.torRequest({
+        url: `${baseUrl}/blocks/tip/height`,
+        method: 'GET',
+        timeout: 5000,
+      });
+      return { settings, response };
+    }, providerBaseUrl);
+    steps.push({
+      name: 'custom provider connectivity uses the validated main-process proxy',
+      passed:
+        providerProbe.settings.success === true &&
+        providerProbe.response.success === true &&
+        String(providerProbe.response.data) === '840000',
+      detail:
+        `settings=${providerProbe.settings.success}; request=${providerProbe.response.success}; ` +
+        `height=${String(providerProbe.response.data)}`,
+    });
+
+    // ── 8. Production permissions allow video only on the QR route ──────────
+    const mediaPermissions = await page.evaluate(async () => {
+      const attempt = async (constraints) => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          stream.getTracks().forEach((track) => track.stop());
+          return 'granted';
+        } catch (error) {
+          return String(error?.name || error?.message || error);
+        }
+      };
+      const outsideCamera = await attempt({ video: true });
+      window.location.hash = '#/scanner';
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const qrCamera = await attempt({ video: true });
+      const qrMicrophone = await attempt({ audio: true });
+      const qrMixed = await attempt({ audio: true, video: true });
+      window.location.hash = '#/';
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return { outsideCamera, qrCamera, qrMicrophone, qrMixed };
+    });
+    steps.push({
+      name: 'production media permissions allow camera only in the QR workflow',
+      passed:
+        mediaPermissions.outsideCamera === 'NotAllowedError' &&
+        mediaPermissions.qrCamera !== 'NotAllowedError' &&
+        mediaPermissions.qrMicrophone === 'NotAllowedError' &&
+        mediaPermissions.qrMixed === 'NotAllowedError',
+      detail: JSON.stringify(mediaPermissions),
+    });
+
+    // ── 9. Production reload shortcut is disabled ──────────────────────────
+    await page.evaluate(() => {
+      window.__packaged_reload_guard__ = 'still-here';
+    });
+    await page.keyboard.press(IS_WINDOWS ? 'Control+R' : 'Control+R');
+    await sleep(750);
+    const reloadGuard = await page.evaluate(() => window.__packaged_reload_guard__).catch(() => null);
+    steps.push({
+      name: 'production reload shortcut is unavailable',
+      passed: reloadGuard === 'still-here',
+      detail: `renderer marker=${String(reloadGuard)}`,
+    });
+
+    await page.evaluate(() => {
+      const source = document.createElement('textarea');
+      const target = document.createElement('textarea');
+      source.value = 'copy-paste-still-works';
+      document.body.append(source, target);
+      source.focus();
+      source.select();
+    });
+    await page.keyboard.press('Control+C');
+    await page.evaluate(() => {
+      const textareas = document.querySelectorAll('textarea');
+      textareas[textareas.length - 1]?.focus();
+    });
+    await page.keyboard.press('Control+V');
+    const pastedText = await page.evaluate(() => {
+      const textareas = document.querySelectorAll('textarea');
+      const value = textareas[textareas.length - 1]?.value || '';
+      textareas.forEach((node) => node.remove());
+      return value;
+    });
+    steps.push({
+      name: 'normal copy and paste shortcuts remain available',
+      passed: pastedText === 'copy-paste-still-works',
+      detail: `pasted=${JSON.stringify(pastedText)}`,
+    });
+
+    // ── 10. Idle lifecycle signal locks through AuthContext without reload ──
+    let idleNavigations = 0;
+    const countIdleNavigation = () => {
+      idleNavigations += 1;
+    };
+    page.on('framenavigated', countIdleNavigation);
+    await page.evaluate(() => {
+      window.__idle_document_guard__ = 'same-document';
+    });
+    const unlockedForIdleCheck = await unlockIfNeeded(page, PORTABLE_CHECK_PASSWORD, {
+      appearTimeoutMs: 60_000,
+      submitTimeoutMs: 60_000,
+      label: 'idle-lock',
+    });
+    let idleLocked = false;
+    let idleLockDetail = '';
+    try {
+      await waitForExistingVaultLoginScreen(page, { timeoutMs: 20_000 });
+      const documentGuard = await page.evaluate(() => window.__idle_document_guard__).catch(() => null);
+      idleLocked = documentGuard === 'same-document' && idleNavigations === 0;
+      idleLockDetail =
+        `login returned; marker=${String(documentGuard)}; navigations=${idleNavigations}`;
+    } catch (error) {
+      idleLockDetail = String(error?.message || error);
+    }
+    page.off('framenavigated', countIdleNavigation);
+    steps.push({
+      name: 'idle lifecycle event locks the vault without reloading the document',
+      passed: unlockedForIdleCheck && idleLocked,
+      detail: idleLockDetail,
+    });
+
     if (IS_WINDOWS) {
-      // Creating the vault before shutdown makes this a real persistence check,
-      // rather than another fresh-wrapper startup check.
+      // Unlocking the vault before shutdown makes this a real persistence check.
       const created = await unlockIfNeeded(page, PORTABLE_CHECK_PASSWORD, {
         appearTimeoutMs: 60_000,
         submitTimeoutMs: 60_000,
@@ -630,6 +828,7 @@ async function main() {
   } finally {
     if (browser) await browser.close().catch(() => {});
     await stopPackagedProcess(child);
+    await new Promise((resolve) => providerFixture.close(resolve));
     if (xvfb) {
       try {
         process.kill(-xvfb.pid, 'SIGTERM');

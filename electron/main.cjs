@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, ipcMain, session, powerMonitor, Menu } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, session, powerMonitor, Menu, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const url = require('url');
@@ -20,6 +20,9 @@ const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.
 const {
   isExternalOpenAllowed,
   isNavigationAllowed,
+  isQrWorkflowUrl,
+  isCameraOnlyMediaPermission,
+  PACKAGED_APP_SCHEME,
   escapeHtml,
   sanitizeIpcError,
   logMainError,
@@ -30,6 +33,39 @@ const {
 let mainWindow;
 
 const isDev = process.env.NODE_ENV === 'development';
+
+// Register the packaged scheme before app.ready. A standard, secure scheme
+// supports relative asset URLs while keeping the renderer off file://.
+if (!isDev) {
+  protocol.registerSchemesAsPrivileged([{
+    scheme: PACKAGED_APP_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  }]);
+}
+
+const LOCK_ON_SUSPEND = process.env.KYUTXO_LOCK_ON_SUSPEND !== '0';
+const LOCK_ON_SCREEN_LOCK = process.env.KYUTXO_LOCK_ON_SCREEN_LOCK !== '0';
+const LOCK_ON_RESUME = process.env.KYUTXO_LOCK_ON_RESUME !== '0';
+const IDLE_LOCK_TIMEOUT_SECONDS = (() => {
+  const value = Number(process.env.KYUTXO_IDLE_LOCK_SECONDS ?? 300);
+  return Number.isFinite(value) && value >= 0
+    ? Math.min(Math.floor(value), 24 * 60 * 60)
+    : 0;
+})();
+const IDLE_LOCK_POLL_MS = 5000;
+let idleLockTimer = null;
+let idleLockSent = false;
+
+function lockRenderer(reason) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('vault-lock', { reason });
+  }
+}
 
 // ============================================================================
 // PORTABLE MODE SETUP - Must happen BEFORE app.whenReady()
@@ -103,6 +139,8 @@ function createWindow() {
       sandbox: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
+      devTools: isDev,
+      spellcheck: false,
       preload: path.join(__dirname, 'preload.cjs'),
     },
     icon: path.join(__dirname, '../client/public/icon.png'),
@@ -135,10 +173,9 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5000');
     mainWindow.webContents.openDevTools();
   } else {
-    const indexPath = path.join(app.getAppPath(), 'dist', 'public', 'index.html');
     console.log('[KYUTXO] Loading packaged renderer');
 
-    mainWindow.loadFile(indexPath).catch((err) => {
+    mainWindow.loadURL(`${PACKAGED_APP_SCHEME}://bundle/index.html`).catch((err) => {
       // No absolute paths or raw error text in logs or the fallback page.
       logMainError('[KYUTXO] Failed to load packaged renderer', err);
       mainWindow.loadURL(`data:text/html,
@@ -183,6 +220,26 @@ function createWindow() {
     const contextMenu = Menu.buildFromTemplate(menuItems);
     contextMenu.popup();
   });
+
+  if (!isDev) {
+    // Block production reload/DevTools shortcuts without intercepting ordinary
+    // cut/copy/paste/select-all accelerators.
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return;
+      const key = String(input.key || '').toLowerCase();
+      const reloadShortcut =
+        key === 'f5' ||
+        ((input.control || input.meta) && key === 'r');
+      const devToolsShortcut =
+        key === 'f12' ||
+        ((input.control || input.meta) && input.shift && key === 'i') ||
+        ((input.control || input.meta) && input.alt && key === 'i');
+      if (reloadShortcut || devToolsShortcut) event.preventDefault();
+    });
+    mainWindow.webContents.on('devtools-opened', () => {
+      mainWindow.webContents.closeDevTools();
+    });
+  }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -353,11 +410,8 @@ ipcMain.handle('tor-status', async () => {
 // APP LIFECYCLE & SECURITY
 // ============================================================================
 
-// The Vite build emits absolute asset URLs ("/assets/..."). Under the packaged
-// app's file:// origin those resolve to the filesystem root and 404, leaving a
-// blank window. Serve any absolute path that does not exist on disk from the
-// packaged renderer directory (inside app.asar) instead. Traversal outside
-// that directory is refused.
+// The packaged renderer is served only from dist/public inside app.asar. No
+// request path is ever treated as an operating-system path.
 const RENDERER_MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm',
@@ -369,9 +423,8 @@ const RENDERER_MIME = {
 };
 
 // Single source of truth for the packaged app's CSP. Delivered BOTH via the
-// file-protocol handler below (the document response — required, because
-// webRequest.onHeadersReceived cannot inject headers into file:// responses)
-// and via onHeadersReceived for any http(s) resources.
+// custom-scheme handler below and via onHeadersReceived for any http(s)
+// resources.
 const PACKAGED_CSP = [
   "default-src 'self'",
   // 'wasm-unsafe-eval' permits WebAssembly compilation only (NOT JS
@@ -381,7 +434,8 @@ const PACKAGED_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
   "img-src 'self' data: blob:",
-  "connect-src 'self' https://mempool.space https://blockstream.info",
+  // Blockchain providers are IPC-only in packaged Electron.
+  "connect-src 'self'",
   // HTML-parsing sinks must go through the app's named Trusted Types
   // policy (client/src/lib/trusted-types.ts), so injected strings
   // can't reach innerHTML/document.write and hijack the window.
@@ -394,38 +448,46 @@ const PACKAGED_CSP = [
 
 function registerPackagedRendererProtocol() {
   const publicDir = path.join(app.getAppPath(), 'dist', 'public');
-  protocol.handle('file', async (request) => {
-    let pathname;
+  protocol.handle(PACKAGED_APP_SCHEME, async (request) => {
+    let parsed;
     try {
-      pathname = decodeURIComponent(new URL(request.url).pathname);
+      parsed = new URL(request.url);
     } catch {
       return new Response('Bad request', { status: 400 });
     }
-    // Windows pathnames arrive as "/C:/...".
-    if (process.platform === 'win32' && /^\/[A-Za-z]:[\\/]/.test(pathname)) {
-      pathname = pathname.slice(1);
+    if (parsed.hostname !== 'bundle') {
+      return new Response('Forbidden', { status: 403 });
     }
-    let resolved = path.normalize(pathname);
+
     try {
-      await fs.promises.access(resolved, fs.constants.R_OK);
-    } catch {
-      // Not a real file (e.g. "/assets/index-*.js") — remap into the packaged
-      // renderer dir, refusing anything that escapes it.
-      const candidate = path.normalize(path.join(publicDir, pathname.replace(/^[\\/]+/, '')));
-      if (candidate !== publicDir && !candidate.startsWith(publicDir + path.sep)) {
+      const pathname = decodeURIComponent(parsed.pathname);
+      const relativePath = pathname.replace(/^[/\\]+/, '');
+      if (
+        pathname.includes('\0') ||
+        /^[A-Za-z]:[\\/]/.test(relativePath) ||
+        relativePath.startsWith('\\\\')
+      ) {
         return new Response('Forbidden', { status: 403 });
       }
-      resolved = candidate;
-    }
-    try {
+
+      const resolved = path.resolve(publicDir, relativePath);
+      const relativeToBundle = path.relative(publicDir, resolved);
+      if (
+        !relativeToBundle ||
+        relativeToBundle === '..' ||
+        relativeToBundle.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relativeToBundle)
+      ) {
+        return new Response('Forbidden', { status: 403 });
+      }
+
       let data = await fs.promises.readFile(resolved);
       const ext = path.extname(resolved).toLowerCase();
       const type = RENDERER_MIME[ext] || 'application/octet-stream';
       const headers = { 'Content-Type': type };
       if (ext === '.html') {
-        // Chromium does not enforce CSP delivered as a response HEADER on
-        // file:// documents — it must arrive as a <meta> tag. Keep the header
-        // too (harmless, and http(s) resources get it via onHeadersReceived).
+        // Keep a meta-delivered policy as the enforcement source across the
+        // Electron versions supported by the desktop build.
         headers['Content-Security-Policy'] = PACKAGED_CSP;
         const html = data.toString('utf8');
         const metaTag = `<meta http-equiv="Content-Security-Policy" content="${PACKAGED_CSP}">`;
@@ -437,7 +499,10 @@ function registerPackagedRendererProtocol() {
         );
       }
       return new Response(data, { headers });
-    } catch {
+    } catch (error) {
+      if (error && error.code !== 'ENOENT') {
+        logMainError('[KYUTXO] Packaged renderer asset failed', error);
+      }
       return new Response('Not found', { status: 404 });
     }
   });
@@ -454,31 +519,65 @@ app.whenReady().then(() => {
         }
       });
     });
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      const cameraOnly =
+        isCameraOnlyMediaPermission(permission, details) &&
+        isQrWorkflowUrl(webContents.getURL());
+      callback(cameraOnly);
+    });
+    session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+      return isCameraOnlyMediaPermission(permission, details) &&
+        isQrWorkflowUrl(webContents?.getURL?.() || requestingOrigin);
+    });
+    // Keep native edit roles but omit reload and developer tooling.
+    Menu.setApplicationMenu(Menu.buildFromTemplate([
+      {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'selectAll' },
+        ],
+      },
+    ]));
   }
   
   createWindow();
   
   powerMonitor.on('suspend', () => {
     console.log('[KYUTXO] System suspending (going to sleep)');
+    if (LOCK_ON_SUSPEND) lockRenderer('suspend');
   });
   
   powerMonitor.on('resume', () => {
     console.log('[KYUTXO] System resumed from sleep');
-    setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        console.log('[KYUTXO] Reloading window after resume');
-        mainWindow.reload();
-      }
-    }, 1000);
+    if (LOCK_ON_RESUME) lockRenderer('resume');
   });
   
   powerMonitor.on('lock-screen', () => {
     console.log('[KYUTXO] Screen locked');
+    if (LOCK_ON_SCREEN_LOCK) lockRenderer('lock-screen');
   });
   
   powerMonitor.on('unlock-screen', () => {
     console.log('[KYUTXO] Screen unlocked');
   });
+
+  if (IDLE_LOCK_TIMEOUT_SECONDS > 0 && typeof powerMonitor.getSystemIdleTime === 'function') {
+    idleLockTimer = setInterval(() => {
+      const isIdle = powerMonitor.getSystemIdleTime() >= IDLE_LOCK_TIMEOUT_SECONDS;
+      if (isIdle && !idleLockSent) {
+        idleLockSent = true;
+        lockRenderer('idle');
+      } else if (!isIdle) {
+        idleLockSent = false;
+      }
+    }, IDLE_LOCK_POLL_MS);
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -491,6 +590,10 @@ app.on('before-quit', () => {
   console.log('[Electrum Pool] Cleaning up connections before quit');
   stopKeepalive();
   stopEngineWorker();
+  if (idleLockTimer) {
+    clearInterval(idleLockTimer);
+    idleLockTimer = null;
+  }
 });
 
 app.on('activate', () => {
@@ -502,7 +605,7 @@ app.on('activate', () => {
 app.on('web-contents-created', (event, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
     if (isExternalOpenAllowed(url)) {
-      require('electron').shell.openExternal(url);
+      shell.openExternal(url);
     }
     return { action: 'deny' };
   });

@@ -47,6 +47,7 @@ import { decryptLegacyAttachmentFiles, type FileDecryptProgress } from '@/lib/le
 import { getActivityBus } from '@/lib/activity-bus';
 import { toast } from '@/hooks/use-toast';
 import { db, CURRENT_SCHEMA_VERSION } from '@/lib/database';
+import { getElectronAPISafe } from '@/lib/electron';
 import {
   subscribeDbUpgradeProgress,
   clearDbUpgradeProgress,
@@ -647,6 +648,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLegacyMigrationResult(null);
     setFileDecryptProgress(null);
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = getElectronAPISafe()?.onVaultLock?.(() => {
+      // Lock by switching through the normal auth boundary. This preserves the
+      // current document and avoids resume-time reloads that can interrupt a
+      // write half-way through without its normal component cleanup.
+      logout();
+    });
+    return unsubscribe;
+  }, [logout]);
 
   return (
     <AuthContext.Provider

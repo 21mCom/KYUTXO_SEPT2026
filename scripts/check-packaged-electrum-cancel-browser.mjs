@@ -280,12 +280,12 @@ async function main() {
     while (!page && Date.now() < pageDeadline) {
       for (const context of browser.contexts()) {
         for (const candidate of context.pages()) {
-          if (candidate.url().startsWith('file://')) page = candidate;
+          if (candidate.url().startsWith('kyutxo-app://bundle/')) page = candidate;
         }
       }
       if (!page) await sleep(500);
     }
-    if (!page) throw new Error(`${TAG} no packaged file:// renderer appeared`);
+    if (!page) throw new Error(`${TAG} no packaged kyutxo-app://bundle renderer appeared`);
     await page.waitForFunction(() => Boolean(window.electronAPI), null, { timeout: 60_000 });
     step('packaged renderer exposes the Electrum preload bridge', true);
 

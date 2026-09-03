@@ -90,6 +90,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('tor-status'),
   torUpdateSettings: (settings) =>
     ipcRenderer.invoke('tor-update-settings', settings),
+
+  // Main-process lifecycle lock signal (suspend/resume, screen lock, idle).
+  // Returns an unsubscribe function so React can cleanly replace listeners.
+  onVaultLock: (callback) => {
+    const listener = (_event, detail) => callback(detail);
+    ipcRenderer.on('vault-lock', listener);
+    return () => ipcRenderer.removeListener('vault-lock', listener);
+  },
   
   // Electrum protocol operations
   electrumTest: (params) =>

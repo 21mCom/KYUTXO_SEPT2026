@@ -14,8 +14,12 @@ const requireCjs = createRequire(import.meta.url);
 const {
   EXTERNAL_OPEN_ALLOWED_HOSTS,
   isExternalOpenAllowed,
+  PACKAGED_APP_SCHEME,
+  PACKAGED_APP_ORIGIN,
   DEV_SERVER_ORIGIN,
   isNavigationAllowed,
+  isQrWorkflowUrl,
+  isCameraOnlyMediaPermission,
   escapeHtml,
   sanitizeIpcError,
   logMainError,
@@ -26,8 +30,12 @@ const {
 } = requireCjs("./security-utils.cjs") as {
   EXTERNAL_OPEN_ALLOWED_HOSTS: string[];
   isExternalOpenAllowed: (url: unknown) => boolean;
+  PACKAGED_APP_SCHEME: string;
+  PACKAGED_APP_ORIGIN: string;
   DEV_SERVER_ORIGIN: string;
   isNavigationAllowed: (url: unknown, opts?: { isDev?: boolean }) => boolean;
+  isQrWorkflowUrl: (url: unknown) => boolean;
+  isCameraOnlyMediaPermission: (permission: unknown, details: unknown) => boolean;
   escapeHtml: (value: unknown) => string;
   sanitizeIpcError: (error: unknown, fallback?: string) => string;
   logMainError: (context: string, error: unknown) => void;
@@ -96,13 +104,18 @@ describe("external-open allowlist", () => {
 });
 
 describe("will-navigate allowlist", () => {
+  it("pins the packaged application origin", () => {
+    expect(PACKAGED_APP_SCHEME).toBe("kyutxo-app");
+    expect(PACKAGED_APP_ORIGIN).toBe("kyutxo-app://bundle");
+  });
+
   it("pins the dev server origin", () => {
     expect(DEV_SERVER_ORIGIN).toBe("http://localhost:5000");
   });
 
-  const FILE_URLS = [
-    "file:///home/user/app/dist/public/index.html",
-    "file:///C:/app/dist/public/index.html",
+  const PACKAGED_URLS = [
+    "kyutxo-app://bundle/index.html",
+    "kyutxo-app://bundle/index.html#/records",
   ];
 
   const DEV_SERVER_URLS = [
@@ -111,12 +124,11 @@ describe("will-navigate allowlist", () => {
     "http://localhost:5000/some/route?query=1#hash",
   ];
 
-  it.each(FILE_URLS)(
-    "allows file: navigation in both modes: %s",
+  it.each(PACKAGED_URLS)(
+    "allows only the secure packaged application origin: %s",
     (url) => {
       expect(isNavigationAllowed(url, { isDev: true })).toBe(true);
       expect(isNavigationAllowed(url, { isDev: false })).toBe(true);
-      // default (no options) must behave like production
       expect(isNavigationAllowed(url)).toBe(true);
     },
   );
@@ -151,6 +163,13 @@ describe("will-navigate allowlist", () => {
     "http://localhost.evil.com:5000/",
     "http://127.0.0.1:5000/", // different host string → different origin
     "https://mempool.space/tx/abc", // allowlisted for external open, not navigation
+    // file access is never a packaged-renderer navigation surface
+    "file:///home/user/app/dist/public/index.html",
+    "file:///C:/app/dist/public/index.html",
+    // lookalike custom-scheme origins
+    "kyutxo-app://evil/index.html",
+    "kyutxo-app:///index.html",
+    "kyutxo-app+evil://bundle/index.html",
     // scriptable / dangerous schemes
     "javascript:alert(1)",
     "data:text/html,<script>alert(1)</script>",
@@ -171,6 +190,46 @@ describe("will-navigate allowlist", () => {
     expect(isNavigationAllowed(null)).toBe(false);
     expect(isNavigationAllowed(42)).toBe(false);
     expect(isNavigationAllowed({})).toBe(false);
+  });
+});
+
+describe("QR camera workflow URL", () => {
+  it.each([
+    "kyutxo-app://bundle/index.html#/scanner",
+    "kyutxo-app://bundle/index.html#/scanner?source=menu",
+  ])("accepts the packaged QR scanner route: %s", (url) => {
+    expect(isQrWorkflowUrl(url)).toBe(true);
+  });
+
+  it.each([
+    "kyutxo-app://bundle/index.html",
+    "kyutxo-app://bundle/index.html#/records",
+    "kyutxo-app://evil/index.html#/scanner",
+    "file:///tmp/index.html#/scanner",
+    "http://localhost:5000/scanner",
+    "not a url",
+  ])("rejects camera access outside the packaged QR scanner route: %s", (url) => {
+    expect(isQrWorkflowUrl(url)).toBe(false);
+  });
+});
+
+describe("camera-only media permission", () => {
+  it.each([
+    ["request callback", { mediaTypes: ["video"] }],
+    ["check callback", { mediaType: "video" }],
+  ])("accepts explicit video-only details from the %s", (_label, details) => {
+    expect(isCameraOnlyMediaPermission("media", details)).toBe(true);
+  });
+
+  it.each([
+    ["mixed microphone and camera", { mediaTypes: ["audio", "video"] }],
+    ["microphone only", { mediaTypes: ["audio"] }],
+    ["empty media list", { mediaTypes: [] }],
+    ["ambiguous details", {}],
+    ["microphone check", { mediaType: "audio" }],
+    ["wrong permission", { mediaTypes: ["video"] }, "geolocation"],
+  ])("rejects %s", (_label, details, permission = "media") => {
+    expect(isCameraOnlyMediaPermission(permission, details)).toBe(false);
   });
 });
 
