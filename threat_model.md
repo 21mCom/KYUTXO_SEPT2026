@@ -22,7 +22,7 @@ KYUTXO is an offline-first desktop application (Electron + React 18 / TypeScript
 - **Browser/Electron renderer ↔ Express API (loopback):** The Express server accepts only requests bearing the per-launch token. In desktop mode it binds `127.0.0.1`; on Replit it binds `0.0.0.0` (Replit container isolation is the outer boundary). DNS-rebinding protection (`rejectUnknownHosts`) defends against rebounded malicious pages reading the token from `<meta>` and replaying it.
 - **Express API ↔ filesystem (attachment storage):** `containedRealPath` + lexical path validation + `O_NOFOLLOW` prevent path traversal and planted-symlink attacks.
 - **Express API ↔ Tor/SSRF proxy:** Server-side URL allowlist (mempool.space, blockstream.info, check.torproject.org, user-configured custom provider) + separate settings token (loopback-only issuance) prevent the Tor relay from becoming an open SSRF relay.
-- **User ↔ UI lock:** A versioned password verifier in IndexedDB controls the in-app lock screen. The lock is an app access control, not at-rest encryption; vault records and attachment files remain plaintext on disk.
+- **User ↔ UI lock:** A versioned password verifier in IndexedDB controls the in-app lock screen. The lock is an app access control, not at-rest encryption; vault records and attachment files remain plaintext on disk. The proposed built-in protection design is documented in [at-rest-encryption-design.md](at-rest-encryption-design.md) and is not implemented.
 
 ## Scan Anchors
 
@@ -59,6 +59,8 @@ Attachment file writes go through `containedRealPath` containment, `O_NOFOLLOW` 
 Server error middleware strips 5xx detail in production. The request logger intentionally omits response bodies. Attachment download uses `application/octet-stream` content type, and filenames are set via `Content-Disposition` with proper RFC 5987 encoding and header-injection-safe sanitization.
 
 IndexedDB data and attachment files are stored as plaintext. The password only locks access through the app and does not encrypt this storage. The documented threat model therefore requires an OS-level encrypted disk or container (for example, VeraCrypt, BitLocker, FileVault, or LUKS) when at-rest protection is needed; this is an explicit design tradeoff for a desktop app that does not handle raw private keys.
+
+The design evaluation for replacing this tradeoff is complete, but implementation and verification are intentionally separate. The target is a SQLCipher primary database plus encrypted chunked attachment objects behind a main-process IPC boundary. Migration must preserve the plaintext source until a staged copy has passed counts, canonical row digests, attachment digests, reference checks, and an authenticated integrity check. No UI claim changes are permitted until the protected generation is active and the old live plaintext store has been removed. Filesystem deletion cannot guarantee forensic erasure of old SSD sectors, so the product must not promise that stronger property.
 
 **Required guarantees:**
 - Server MUST NOT log request/response bodies, filenames, or user data.

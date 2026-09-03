@@ -141,3 +141,4 @@
 - [Verified backup provenance](verified-backup-provenance.md) — checksum sidecars prove byte consistency, not app verification; rotation trusts only main-owned provenance bound to capability, name, size, and live digest.
 - [Origin-lot certainty propagation](origin-lot-certainty.md) — acquisition lot IDs do not imply known provenance; source certainty must follow allocations through every descendant and summary/export.
 - [Transaction curation state](transaction-curation-state.md) — keep review state on txid-unique rows; classify in fixed batches and page by state+id keyset.
+- [Protected vault storage](protected-vault-storage-design.md) — packaged Electron must replace plaintext IndexedDB and attachments before changing UI claims.

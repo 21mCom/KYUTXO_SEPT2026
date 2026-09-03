@@ -13,7 +13,7 @@ KYUTXO features an offline-first architecture built for cross-platform desktop d
 
 *   **UI/UX:** Responsive, offline-first interface with streamlined navigation.
 *   **Data Model:** Comprehensive records for tracking ownership, wallet names, and metadata.
-*   **Security:** Implements a password-based UI lock (hash check only); data is stored as plaintext in IndexedDB. Users requiring data-at-rest protection should utilize OS-level encrypted containers.
+*   **Security:** Implements a password-based UI lock (hash check only); the current primary data and attachments are stored as plaintext. Users requiring data-at-rest protection should utilize OS-level encrypted containers. The evaluated replacement design (SQLCipher primary store plus encrypted chunked attachments for packaged Electron) is documented in `at-rest-encryption-design.md`; it is not implemented and must not be represented as an enabled feature.
 *   **Performance:** Heavy pages (Transactions, Bulk Editor, Quick Tagger, UTXOs, Dusted) use DB-level filtering, indexed lookups (e.g. `inputStringLower` for O(1) case-insensitive record search), batched/iterative scanning, and virtual scrolling (@tanstack/react-virtual) instead of loading records into memory. Search is debounced; per-page pending opacity is configurable via `PAGE_SEARCH_PENDING_OPACITY` in `client/src/config/debounce.ts`.
 *   **Offline First & Portability:** Designed for full offline functionality and portable database storage.
 *   **Data Management:** Includes features for custom vocabulary management, duplicate detection and merging, and bulk address/descriptor/BIP-329 label importing.
