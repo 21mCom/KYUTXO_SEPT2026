@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Real-browser guard for the authenticated global command palette. It verifies
-// the Cmd/Ctrl-K shortcut, route aliases, local metadata search, canonical txid
-// lookup, hidden-tier exclusion, and keyboard selection against live IndexedDB.
+// the Cmd/Ctrl-K shortcut, route aliases, old local metadata search beyond the
+// bounded recent window, canonical txid lookup, hidden-tier exclusion, and
+// keyboard selection against live IndexedDB.
 
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
@@ -68,7 +69,7 @@ async function main() {
     await page.getByTestId('button-command-search').waitFor({ state: 'visible', timeout: 30_000 });
 
     const seeded = await page.evaluate(async ({ visibleTxid, hiddenTxid, needle }) => {
-      const { createRecord } = await import('/src/lib/data/record-crud.ts');
+      const { createRecord, bulkCreateRecords } = await import('/src/lib/data/record-crud.ts');
       const visibleId = await createRecord({
         type: 'transaction',
         inputString: visibleTxid,
@@ -78,6 +79,17 @@ async function main() {
         categories: [],
         addressImportance: 'manual',
       });
+      await bulkCreateRecords(
+        Array.from({ length: 2_050 }, (_, index) => ({
+          type: 'other',
+          inputString: `command-newer-row-${index}`,
+          label: `Newer command row ${index}`,
+          tags: [],
+          categories: [],
+          addressImportance: 'manual',
+        })),
+        { skipVocabularySync: true },
+      );
       const hiddenId = await createRecord({
         type: 'transaction',
         inputString: hiddenTxid,
@@ -128,7 +140,7 @@ async function main() {
     }
 
     console.log(
-      `[${LABEL}] PASSED: shortcut, alias navigation, keyboard selection, local metadata search, canonical txid lookup, and hidden-row exclusion work in Chromium.`,
+      `[${LABEL}] PASSED: shortcut, alias navigation, keyboard selection, old local metadata search beyond 2,000 newer rows, canonical txid lookup, and hidden-row exclusion work in Chromium.`,
     );
   } finally {
     await browser.close();

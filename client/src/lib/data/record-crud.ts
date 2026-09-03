@@ -6,6 +6,143 @@ import { canonicalizeRecordIdentifier } from '../bitcoin';
 import { getStaleTypeSpecificFields } from '../record-type-clears';
 import { getActivityBus } from '../activity-bus';
 import { type GroupBy, GROUP_EMPTY_KEY, addressMatchesGroup, type AddressBalanceRow } from '../balance-grouping';
+import {
+  beginRecordSearchIndexMutation,
+  beginRecordSearchIndexRebuild,
+  clearRecordSearchIndex,
+  completeRecordSearchIndexMutation,
+  getRecordSearchIndexState,
+  getRecordIdsFromSearchIndex,
+  persistRecordSearchIndexReadyState,
+  removeRecordsFromSearchIndex,
+  resetRecordSearchIndexForRebuild,
+  syncRecordSearchIndex,
+  syncRecordSearchIndexBatch,
+  type RecordSearchIndexFingerprint,
+} from './record-search-index';
+
+async function getRecordSearchIndexFingerprint(): Promise<RecordSearchIndexFingerprint> {
+  const [recordCount, newestById, newestByUpdatedAt] = await Promise.all([
+    db.records.count(),
+    db.records.orderBy('id').reverse().first(),
+    db.records.orderBy('updatedAt').reverse().first(),
+  ]);
+  return {
+    recordCount,
+    maxId: newestById?.id ?? 0,
+    maxUpdatedAt: newestByUpdatedAt?.updatedAt ?? 0,
+  };
+}
+
+async function safelySyncRecordSearchIndex(record: Record): Promise<void> {
+  try {
+    const current = record.id == null ? undefined : await db.records.get(record.id);
+    if (current) await syncRecordSearchIndex(current);
+    else if (record.id != null) await removeRecordsFromSearchIndex([record.id]);
+    await completeRecordSearchIndexMutation(await getRecordSearchIndexFingerprint());
+  } catch (error) {
+    // Records are authoritative. The persisted fingerprint makes the next
+    // search rebuild this derived index after an interrupted/failed update.
+    console.warn('[record-search-index] Record index update failed:', error);
+  }
+}
+
+async function safelySyncRecordSearchIndexBatch(records: Record[]): Promise<void> {
+  try {
+    const ids = records.map((record) => record.id).filter((id): id is number => id != null);
+    const current = (await db.records.bulkGet(ids)).filter((record): record is Record => !!record);
+    await syncRecordSearchIndexBatch(current);
+    await completeRecordSearchIndexMutation(await getRecordSearchIndexFingerprint());
+  } catch (error) {
+    console.warn('[record-search-index] Batch index update failed:', error);
+  }
+}
+
+async function safelyRemoveRecordsFromSearchIndex(ids: number[]): Promise<void> {
+  try {
+    await removeRecordsFromSearchIndex(ids);
+    await completeRecordSearchIndexMutation(await getRecordSearchIndexFingerprint());
+  } catch (error) {
+    console.warn('[record-search-index] Record index removal failed:', error);
+  }
+}
+
+let recordSearchIndexRebuild: Promise<void> | undefined;
+
+async function rebuildRecordSearchIndex(): Promise<void> {
+  if (recordSearchIndexRebuild) return recordSearchIndexRebuild;
+  recordSearchIndexRebuild = (async () => {
+    for (;;) {
+      const before = await getRecordSearchIndexFingerprint();
+      const generation = await beginRecordSearchIndexRebuild(before);
+      if (generation === undefined) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        continue;
+      }
+      await resetRecordSearchIndexForRebuild();
+
+      const BATCH = 500;
+      let lastId = 0;
+      for (;;) {
+        const records = await db.records.where('id').above(lastId).limit(BATCH).toArray();
+        if (records.length === 0) break;
+        lastId = records[records.length - 1].id ?? lastId;
+        const currentRecords = (
+          await db.records.bulkGet(
+            records.map((record) => record.id).filter((id): id is number => id != null),
+          )
+        ).filter((record): record is Record => !!record);
+        await syncRecordSearchIndexBatch(currentRecords);
+        if (records.length < BATCH) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      const ready = await persistRecordSearchIndexReadyState(
+        await getRecordSearchIndexFingerprint(),
+        generation,
+      );
+      if (ready) break;
+    }
+  })().finally(() => {
+    recordSearchIndexRebuild = undefined;
+  });
+  return recordSearchIndexRebuild;
+}
+
+async function ensureRecordSearchIndex(): Promise<void> {
+  if (recordSearchIndexRebuild) return recordSearchIndexRebuild;
+  const [state, fingerprint] = await Promise.all([
+    getRecordSearchIndexState(),
+    getRecordSearchIndexFingerprint(),
+  ]);
+  const current =
+    state?.version === 1 &&
+    state.status === 'ready' &&
+    state.recordCount === fingerprint.recordCount &&
+    state.maxId === fingerprint.maxId &&
+    state.maxUpdatedAt === fingerprint.maxUpdatedAt;
+  if (!current) await rebuildRecordSearchIndex();
+}
+
+export function warmRecordSearchIndex(): void {
+  void ensureRecordSearchIndex().catch((error) => {
+    console.warn('[record-search-index] Background rebuild failed:', error);
+  });
+}
+
+async function isRecordSearchIndexReady(): Promise<boolean> {
+  const [state, fingerprint] = await Promise.all([
+    getRecordSearchIndexState(),
+    getRecordSearchIndexFingerprint(),
+  ]);
+  return (
+    state?.version === 1 &&
+    state.status === 'ready' &&
+    state.recordCount === fingerprint.recordCount &&
+    state.maxId === fingerprint.maxId &&
+    state.maxUpdatedAt === fingerprint.maxUpdatedAt
+  );
+}
 
 /**
  * Drop the hover-metadata cache entry for `identifier` after a record write so a
@@ -160,7 +297,10 @@ export async function createRecord(
     });
   }
   
+  await beginRecordSearchIndexMutation();
   const id = await db.records.add(record);
+  record.id = id as number;
+  await safelySyncRecordSearchIndex(record);
 
   // Drop any cached "no record" hover-metadata entry for this identifier so a
   // visible AddressLink/TxidLink (e.g. a transaction counterparty rendered
@@ -208,9 +348,14 @@ export async function bulkCreateRecords(
       });
     } catch {}
 
+    await beginRecordSearchIndexMutation();
     const ids = await db.transaction('rw', db.records, async () => {
       return await db.records.bulkAdd(fullRecords, { allKeys: true });
     });
+    fullRecords.forEach((record, index) => {
+      record.id = ids[index] as number;
+    });
+    await safelySyncRecordSearchIndexBatch(fullRecords);
 
     if (!options?.skipVocabularySync) {
       const vocabularyValues = {
@@ -292,7 +437,9 @@ export async function updateRecord(
     });
   }
 
+  await beginRecordSearchIndexMutation();
   await db.records.put(updated);
+  await safelySyncRecordSearchIndex(updated);
 
   // Drop the hover-metadata cache so the orange FileText indicator / tooltip on
   // any visible AddressLink/TxidLink refreshes immediately instead of showing
@@ -431,9 +578,11 @@ export async function bulkUpdateRecords(
       }
     }
     
+    await beginRecordSearchIndexMutation();
     await db.transaction('rw', db.records, async () => {
       await db.records.bulkPut(recordsToSave);
     });
+    await safelySyncRecordSearchIndexBatch(recordsToSave);
     
     if (!options?.skipVocabularySync) {
       const vocabularyValues = {
@@ -569,7 +718,9 @@ export async function bulkDeleteRecords(
   if (ids.length === 0) return;
 
   const existing = await db.records.bulkGet(ids);
+  await beginRecordSearchIndexMutation();
   await db.records.bulkDelete(ids);
+  await safelyRemoveRecordsFromSearchIndex(ids);
 
   // Drop hover-metadata cache entries so any visible AddressLink/TxidLink for
   // a removed record clears immediately instead of lingering for the TTL.
@@ -612,7 +763,9 @@ export async function bulkDeleteRecordsWithArchiving(
   }
 
   await db.attachments.where('recordId').anyOf(ids).delete();
+  await beginRecordSearchIndexMutation();
   await db.records.bulkDelete(ids);
+  await safelyRemoveRecordsFromSearchIndex(ids);
 
   // Drop the hover-metadata cache for every deleted record so a visible
   // AddressLink/TxidLink's orange FileText indicator / tooltip clears
@@ -648,7 +801,9 @@ export async function deleteRecord(id: number, options?: DeleteRecordOptions): P
   }
 
   await deleteAttachmentsByRecordId(id, { skipNotification: true });
+  await beginRecordSearchIndexMutation();
   await db.records.delete(id);
+  await safelyRemoveRecordsFromSearchIndex([id]);
 
   // Drop the hover-metadata cache so a deleted record's orange FileText
   // indicator / tooltip on any visible AddressLink/TxidLink clears immediately
@@ -694,6 +849,11 @@ export interface ClearAllRecordsOptions {
 
 export async function clearAllRecords(options?: ClearAllRecordsOptions): Promise<void> {
   await db.records.clear();
+  try {
+    await clearRecordSearchIndex();
+  } catch (error) {
+    console.warn('[record-search-index] Clear failed:', error);
+  }
 
   // Wipe the entire hover-metadata cache so no orange FileText indicator /
   // tooltip lingers for up to the cache TTL after every record is gone.
@@ -1397,11 +1557,11 @@ function recordContainsLocalSearch(record: Record, query: string): boolean {
 /**
  * Bounded, entirely-local candidate search for the global command palette.
  *
- * High-value metadata fields use their existing indexes and prefix matching,
- * while notes/custom fields (which intentionally have no indexes) are searched
- * only inside a fixed newest-first window. The raw recent collection is stopped
- * BEFORE applying the residual predicate, so rare/no-match terms inspect at
- * most `recentScanLimit` rows rather than walking a million-row vault.
+ * High-value metadata fields use their existing indexes and prefix matching.
+ * Notes/custom fields use the device-local derived trigram index when it is
+ * ready; cold/stale indexes rebuild in the background while the current search
+ * keeps using the fixed newest-first window. Both posting reads and record
+ * hydration are capped before materialization.
  *
  * Visibility uses exclusion semantics instead of addressImportance.anyOf:
  * hidden discovery tiers are removed, while legacy rows with no tier remain
@@ -1448,6 +1608,23 @@ export async function searchVisibleRecordsBounded(
   ]);
   if (isCancelled()) return [];
   indexedGroups.flat().forEach(addIfVisibleMatch);
+
+  if (query.length >= 3 && await isRecordSearchIndexReady()) {
+    const metadataIds = await getRecordIdsFromSearchIndex(query);
+    const HYDRATE_BATCH = 250;
+    for (let offset = 0; offset < metadataIds.length; offset += HYDRATE_BATCH) {
+      const records = await db.records.bulkGet(metadataIds.slice(offset, offset + HYDRATE_BATCH));
+      records.forEach((record) => {
+        if (record) addIfVisibleMatch(record);
+      });
+      if (isCancelled()) return [];
+    }
+  } else if (query.length >= 3) {
+    // Cold/stale vaults keep the current bounded recent-window behavior while
+    // a single background rebuild makes older metadata available. Search
+    // never waits for a full-vault scan on an interactive keystroke.
+    warmRecordSearchIndex();
+  }
 
   let inspected = 0;
   await db.records

@@ -13,6 +13,7 @@ import { db } from "../database";
 import {
   getSettings,
   putSettings,
+  clearSettings,
   syncDesktopLockSettings,
   updateDesktopLockSettings,
 } from "./settings-crud";
@@ -35,7 +36,7 @@ const POLICY_B: DesktopLockSettings = {
 beforeEach(async () => {
   setVaultLockSettings.mockReset();
   setVaultLockSettings.mockResolvedValue({ success: true });
-  await db.settings.clear();
+  await clearSettings();
   await putSettings({ id: "default", desktopLockSettings: POLICY_A });
 });
 

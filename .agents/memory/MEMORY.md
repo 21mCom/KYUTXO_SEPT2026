@@ -143,3 +143,4 @@
 - [Transaction curation state](transaction-curation-state.md) — keep review state on txid-unique rows; classify in fixed batches and page by state+id keyset.
 - [Protected vault storage](protected-vault-storage-design.md) — packaged Electron must replace plaintext IndexedDB and attachments before changing UI claims.
 - [Desktop lock policy ordering](desktop-lock-policy-ordering.md) — startup sync and user saves share one queue; sync re-reads inside it, or stale policy can overwrite a newer save in Electron.
+- [Derived-index rebuild coordination](derived-index-rebuild-coordination.md) — rebuild readiness needs an atomic pending barrier plus generation CAS; fingerprints alone can certify stale derived data.

@@ -29,6 +29,10 @@ import type {
   TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag, SavedPsbt,
       AdversaryScenario,
 } from './db-types';
+import type {
+  RecordSearchIndexEntry,
+  RecordSearchIndexState,
+} from './data/record-search-index';
 
 export class KYUTXODatabase extends Dexie {
   // IMPORTANT: Do not call write methods (add, put, update, delete, bulkAdd,
@@ -94,6 +98,10 @@ export class KYUTXODatabase extends Dexie {
   // bulkPut, bulkDelete, modify, clear) on db.adversaryScenarios outside of
   // adversary-scenarios-crud.ts.
   adversaryScenarios!: Table<AdversaryScenario>;
+  // Device-local derived index for notes/custom-field command search. It is
+  // intentionally absent from backups and can be rebuilt from records.
+  recordSearchIndex!: Table<RecordSearchIndexEntry>;
+  recordSearchIndexState!: Table<RecordSearchIndexState>;
 
   constructor() {
     super('KYUTXODatabase');
@@ -261,6 +269,13 @@ export class KYUTXODatabase extends Dexie {
       attachments: '++id, recordId, identifier',
       evidence: '++id',
       derivationTemplates: '++id',
+    });
+
+    // v42: local-only trigram postings for old notes and custom-field matches.
+    // These tables are derived from records and are never part of backup data.
+    this.version(42).stores({
+      recordSearchIndex: '++id, &[gram+kind+recordId], gram, kind, recordId',
+      recordSearchIndexState: 'id',
     });
 
     // v40: drop four `records` indexes that no read path ever queries by —

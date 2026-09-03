@@ -29,6 +29,7 @@ vi.mock("@/lib/data/record-crud", () => ({
   repairAddressImportanceTiers: vi.fn(async () => ({ ok: true, fixed: 0, scanned: 0 })),
   detectSearchVisibilityIssues: vi.fn(async () => ({ tiersAffected: false, searchKeysAffected: false })),
   countRecords: vi.fn(async () => 0),
+  warmRecordSearchIndex: vi.fn(),
 }));
 vi.mock("@/lib/data/attachments-crud", () => ({ countAttachments: vi.fn(async () => 0) }));
 vi.mock("@/lib/data/evidence-crud", () => ({ countEvidenceAttachments: vi.fn(async () => 0) }));

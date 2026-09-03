@@ -38,6 +38,7 @@ import {
   repairCanonicalInputStrings,
   detectSearchVisibilityIssues,
   countRecords,
+  warmRecordSearchIndex,
 } from '@/lib/data/record-crud';
 import { countAttachments } from '@/lib/data/attachments-crud';
 import { countEvidenceAttachments } from '@/lib/data/evidence-crud';
@@ -549,6 +550,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void (async () => {
       await runSearchVisibilityRepair();
       await runCanonicalIdentifierRepair();
+      warmRecordSearchIndex();
     })();
   }, [runAttachmentPathMigration, runLegacyDecryptMigration, runInputStringLowerRepair, runSearchVisibilityRepair, runCanonicalIdentifierRepair]);
 
