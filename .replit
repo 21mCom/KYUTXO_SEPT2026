@@ -715,6 +715,10 @@ args = "records-search-visibility-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "record-search-index-recovery-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "behavior-hidden-matches-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2019,6 +2023,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-search-visibility-repair-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "record-search-index-recovery-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-record-search-index-recovery-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
