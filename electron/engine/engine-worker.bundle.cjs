@@ -561,6 +561,10 @@ function filterCoinOriginsByWallet(ledger, walletName) {
   if (!walletName) return ledger;
   const keep = new Set(ledger.outpoints.filter((o) => o.walletName === walletName).map((o) => outpointKey(o.txid, o.vout)));
   const outpoints = ledger.outpoints.filter((o) => keep.has(outpointKey(o.txid, o.vout)));
+  const scopedLotIds = new Set(
+    outpoints.flatMap((output) => output.allocations.map((allocation) => allocation.lotId)).filter((id) => id !== UNKNOWN_ORIGIN_ID)
+  );
+  const lots = ledger.lots.filter((lot) => scopedLotIds.has(lot.lotId));
   const holdingMap = /* @__PURE__ */ new Map();
   for (const output of outpoints) for (const allocation of output.allocations) {
     const row = holdingMap.get(allocation.lotId) ?? { sats: 0, count: 0, boundary: "deterministic" };
@@ -586,6 +590,7 @@ function filterCoinOriginsByWallet(ledger, walletName) {
   return {
     ...ledger,
     outpoints,
+    lots,
     holdings,
     summary: {
       currentSats,

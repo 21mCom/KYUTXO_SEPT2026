@@ -3750,3 +3750,14 @@ args = "npm run check && npx vitest run client/src/lib/network-privacy.test.ts c
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-network-privacy-activity-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-network-privacy-activity-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true

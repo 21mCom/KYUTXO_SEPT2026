@@ -70,4 +70,10 @@ KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-coin-passport-browser.m
 echo "Step 7: Verifying protected-vault migration recovery..."
 KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-vault-migration.mjs
 
+# RELEASE GATE: prove the device-local network activity log survives a real
+# packaged Electron process restart, keeps address/provider details out of its
+# rows, and clears independently of provider settings.
+echo "Step 8: Verifying packaged network activity restart persistence..."
+KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-network-privacy-activity-browser.mjs
+
 echo "Build complete! Check the 'release' folder for distributable packages."

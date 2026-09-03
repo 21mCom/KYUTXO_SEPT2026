@@ -127,6 +127,14 @@ jobs:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
         run: node scripts/check-packaged-vault-migration.mjs
 
+      # RELEASE GATE: the device-local network activity log must survive a
+      # full Portable.exe process restart without persisting addresses/provider
+      # URLs, and clearing it must leave the configured provider untouched.
+      - name: Verify packaged network activity restart persistence
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-network-privacy-activity-browser.mjs
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
