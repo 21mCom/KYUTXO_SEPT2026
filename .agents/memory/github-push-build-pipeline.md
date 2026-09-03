@@ -17,8 +17,17 @@ The GitHub remote (`origin`) builds the packaged Windows app via `.github/workfl
     push https://github.com/<owner>/<repo>.git main:main
   ```
   Verify first with the same credential-helper trick on `ls-remote refs/heads/main`, and check `git merge-base --is-ancestor <remoteSha> HEAD` before pushing (never force).
+- A token that can `ls-remote` may still lack Contents write access; treat a push-time 403 as authoritative and repair repository access in the managed secret rather than trying to work around it.
 
 **Why:** the callback's silent no-op cost a false "pushed" report once; ls-remote comparison caught it.
+
+## First push into an empty repository
+
+- The first push can register workflows before its push-triggered run appears. Wait at least two minutes and query runs by `head_sha` before manually dispatching; an early dispatch can overlap and be cancelled by the workflow concurrency group.
+
+**Why:** on an empty destination, the delayed push run appeared after a manual dispatch and cancelled that otherwise healthy dispatch.
+
+**How to apply:** after creating `main`, poll Actions by exact SHA before using `workflow_dispatch`; follow only the newest run selected by the concurrency policy.
 
 ## Token scope caveat
 
