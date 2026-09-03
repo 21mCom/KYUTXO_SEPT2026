@@ -76,10 +76,10 @@ describe("engine-client mappers", () => {
       expect(r.categories).toBe("[]");
     });
 
-    it("keeps an explicit inputStringLower over the derived lowercase", () => {
+    it("derives inputStringLower from the canonical input string", () => {
       const r = mapRecord({ id: 3, inputString: "MixedCase", inputStringLower: "explicit" });
       expect(r.inputString).toBe("MixedCase");
-      expect(r.inputStringLower).toBe("explicit");
+      expect(r.inputStringLower).toBe("mixedcase");
     });
   });
 

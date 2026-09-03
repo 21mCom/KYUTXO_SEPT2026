@@ -138,7 +138,7 @@ describe("PeelChainGraph copy-address badges", () => {
 
     fireEvent.click(getByTestId("button-graph-copy-payment-0"));
 
-    expect(writeText).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     // The full address is copied, not the truncated "bc1qpe…0000bb" label.
     expect(writeText).toHaveBeenCalledWith(PAYMENT_ADDR);
 
@@ -152,7 +152,7 @@ describe("PeelChainGraph copy-address badges", () => {
 
     fireEvent.click(getByTestId("button-graph-copy-change-0"));
 
-    expect(writeText).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenCalledWith(CHANGE_ADDR);
     expect((await findAllByText("Address copied")).length).toBeGreaterThan(0);
   });
@@ -165,16 +165,16 @@ describe("PeelChainGraph copy-address badges", () => {
     expect(paymentBadge.getAttribute("tabindex")).toBe("0");
 
     fireEvent.keyDown(paymentBadge, { key: "Enter" });
-    expect(writeText).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenLastCalledWith(PAYMENT_ADDR);
 
     fireEvent.keyDown(paymentBadge, { key: " " });
-    expect(writeText).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
     expect(writeText).toHaveBeenLastCalledWith(PAYMENT_ADDR);
 
     // Change badge is keyboard-operable too.
     fireEvent.keyDown(getByTestId("button-graph-copy-change-0"), { key: "Enter" });
-    expect(writeText).toHaveBeenCalledTimes(3);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(3));
     expect(writeText).toHaveBeenLastCalledWith(CHANGE_ADDR);
   });
 
@@ -183,7 +183,7 @@ describe("PeelChainGraph copy-address badges", () => {
     await waitForGraph(getByTestId);
 
     fireEvent.click(getByTestId("button-graph-copy-payment-0"));
-    expect(writeText).toHaveBeenCalledWith(PAYMENT_ADDR);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(PAYMENT_ADDR));
 
     // The copy click must not bubble to the payment node and open its record
     // preview — if it did, the panel would surface PAYMENT_LABEL.
@@ -220,7 +220,7 @@ describe("PeelChainGraph copy-address failure branch", () => {
     fireEvent.click(getByTestId("button-graph-copy-payment-0"));
 
     // The write was still attempted with the full address...
-    expect(writeText).toHaveBeenCalledWith(PAYMENT_ADDR);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(PAYMENT_ADDR));
     // ...but it rejected, so the destructive failure toast surfaces (and the
     // happy-path "Address copied" toast must NOT).
     expect((await findAllByText("Copy failed")).length).toBeGreaterThan(0);

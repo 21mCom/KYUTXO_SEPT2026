@@ -196,11 +196,22 @@ vi.mock("@/lib/database", async () => {
     USER_CURATED_TIERS: ['verified', 'manual', 'wallet-import', 'xpub-derived'],
     db: {
       records,
+      settings: { get: () => Promise.resolve(undefined) },
       blockchainTransactions: { where: () => ({ startsWithIgnoreCase: () => ({ limit: () => ({ toArray: () => Promise.resolve([]) }) }) }) },
       customFields: { toArray: () => mockDb.customFieldsToArray() },
     },
   };
 });
+
+vi.mock("@/hooks/use-behavior-tally", () => ({
+  useBehaviorTally: () => ({
+    counts: {},
+    computing: false,
+    progress: null,
+    cancel: vi.fn(),
+    restart: vi.fn(),
+  }),
+}));
 
 import Records from "./Records";
 

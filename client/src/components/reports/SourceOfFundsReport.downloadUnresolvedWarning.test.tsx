@@ -18,6 +18,9 @@
 //       "Unresolved Amounts: N" summary line;
 //   (2) when every amount resolves, neither of those appear.
 
+// renderWithProviders includes RecordPreviewProvider, which loads its custom
+// field definitions from Dexie when it mounts.
+import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { cleanup, fireEvent, act } from "@testing-library/react";
 

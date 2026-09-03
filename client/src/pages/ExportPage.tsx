@@ -50,6 +50,7 @@ import {
 import { useTags } from "@/hooks/use-tags";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { evaluateDiskSpace } from "@/lib/backup/restore";
 import {
@@ -162,7 +163,7 @@ export default function ExportPage() {
   // BIP-329 label export filters. Same vocabulary as the UTXOs page filters:
   // single-select type/tag/wallet dropdowns plus a free-text search.
   const [labelSearch, setLabelSearch] = useState("");
-  const [debouncedLabelSearch] = useDebouncedValue(labelSearch, 300);
+  const [debouncedLabelSearch] = useDebouncedValue(labelSearch, PAGE_DEBOUNCE.ExportPage);
   const [labelKindFilter, setLabelKindFilter] = useState<ExportKindOption>("all");
   const [labelUtxoOnly, setLabelUtxoOnly] = useState(false);
   const [labelDateRange, setLabelDateRange] = useState<DateRangeFilterValue>(ANY_DATE_RANGE_FILTER);
@@ -242,7 +243,7 @@ export default function ExportPage() {
     exported: number;
   } | null>(null);
   const [csvSearch, setCsvSearch] = useState("");
-  const [debouncedCsvSearch] = useDebouncedValue(csvSearch, 300);
+  const [debouncedCsvSearch] = useDebouncedValue(csvSearch, PAGE_DEBOUNCE.ExportPage);
   const [csvKindFilter, setCsvKindFilter] = useState<ExportKindOption>("all");
   const [csvUtxoOnly, setCsvUtxoOnly] = useState(false);
   const [csvDateRange, setCsvDateRange] = useState<DateRangeFilterValue>(ANY_DATE_RANGE_FILTER);

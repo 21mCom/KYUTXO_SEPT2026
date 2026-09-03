@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import "fake-indexeddb/auto";
 //
 // Large-wallet batching coverage for AnnualActivityReport's generate().
 //

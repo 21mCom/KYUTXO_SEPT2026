@@ -6,6 +6,8 @@ export type PageName =
   | 'WalletOverview'
   | 'AddressReuse'
   | 'Dashboard'
+  | 'ExportPage'
+  | 'adversary-scenarios-panel'
   | 'VaultManagement'
   | 'ConflictResolution';
 
@@ -24,6 +26,8 @@ export const PAGE_DEBOUNCE: Record<PageName, number> = {
   WalletOverview: DEBOUNCE_DELAY.MEDIUM,
   AddressReuse: DEBOUNCE_DELAY.MEDIUM,
   Dashboard: DEBOUNCE_DELAY.MEDIUM,
+  ExportPage: DEBOUNCE_DELAY.MEDIUM,
+  'adversary-scenarios-panel': DEBOUNCE_DELAY.MEDIUM,
 
   VaultManagement: DEBOUNCE_DELAY.SMALL,
   ConflictResolution: DEBOUNCE_DELAY.SMALL,
@@ -40,6 +44,8 @@ export const PAGE_SEARCH_PENDING_OPACITY: Record<PageName, string> = {
   WalletOverview: DEFAULT_SEARCH_PENDING_OPACITY,
   AddressReuse: DEFAULT_SEARCH_PENDING_OPACITY,
   Dashboard: DEFAULT_SEARCH_PENDING_OPACITY,
+  ExportPage: DEFAULT_SEARCH_PENDING_OPACITY,
+  'adversary-scenarios-panel': DEFAULT_SEARCH_PENDING_OPACITY,
 
   VaultManagement: 'opacity-70',
   ConflictResolution: 'opacity-70',

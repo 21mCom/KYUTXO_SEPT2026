@@ -69,6 +69,7 @@ vi.mock("jspdf", async (importOriginal) => {
 import ProofOfFundsDeclaration from "@/pages/ProofOfFundsDeclaration";
 
 beforeEach(async () => {
+  localStorage.clear();
   pdfTextLines.length = 0;
   pdfPageCount = 0;
 

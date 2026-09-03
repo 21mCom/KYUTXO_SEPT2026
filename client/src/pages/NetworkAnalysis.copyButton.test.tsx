@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 
 // NetworkAnalysis.tsx pulls in a heavy data/visualization surface at import
 // time. We only want to exercise the isolated CopyAddressButton, so stub the
@@ -28,13 +28,6 @@ const ADDRESS = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
 
 let writeText: ReturnType<typeof vi.fn>;
 
-// Flush pending promise microtasks (and the React state updates they trigger).
-async function flush() {
-  await act(async () => {
-    await Promise.resolve();
-  });
-}
-
 beforeEach(() => {
   writeText = vi.fn(() => Promise.resolve());
   Object.defineProperty(navigator, "clipboard", {
@@ -55,9 +48,8 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     render(<CopyAddressButton address={ADDRESS} />);
     fireEvent.click(screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`));
     // The guarded copy resolves the vault record (poisoning check) before
-    // writing, so the clipboard write lands on a later microtask.
-    await flush();
-    expect(writeText).toHaveBeenCalledTimes(1);
+    // writing, so wait for the asynchronous clipboard effect.
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
   });
 
@@ -69,7 +61,10 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     expect(btn.getAttribute("aria-label")).toBe("Copy address");
 
     fireEvent.click(btn);
-    await flush();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     expect(btn.getAttribute("aria-label")).toBe("Copied");
 
     act(() => {
@@ -91,8 +86,7 @@ describe("NetworkAnalysis CopyAddressButton", () => {
       </div>,
     );
     fireEvent.click(screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`));
-    await flush();
-    expect(writeText).toHaveBeenCalledWith(ADDRESS);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(ADDRESS));
     expect(parentClick).not.toHaveBeenCalled();
   });
 
@@ -106,13 +100,11 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     const btn = screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`);
 
     fireEvent.keyDown(btn, { key: "Enter" });
-    await flush();
-    expect(writeText).toHaveBeenCalledTimes(1);
-    expect(btn.getAttribute("aria-label")).toBe("Copied");
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(btn.getAttribute("aria-label")).toBe("Copied"));
 
     fireEvent.keyDown(btn, { key: " " });
-    await flush();
-    expect(writeText).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
 
     expect(parentKeyDown).not.toHaveBeenCalled();
   });
@@ -123,10 +115,9 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     const btn = screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`);
 
     fireEvent.click(btn);
-    await flush();
 
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
     expect(btn.getAttribute("aria-label")).toBe("Copy address");
-    expect(toastMock).toHaveBeenCalledTimes(1);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({ variant: "destructive" }),
     );
@@ -142,10 +133,9 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     const btn = screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`);
 
     fireEvent.click(btn);
-    await flush();
 
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
     expect(btn.getAttribute("aria-label")).toBe("Copy address");
-    expect(toastMock).toHaveBeenCalledTimes(1);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({ variant: "destructive" }),
     );

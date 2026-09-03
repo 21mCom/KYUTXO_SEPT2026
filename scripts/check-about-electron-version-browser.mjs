@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 import { dismissMigrationOverlayIfPresent, unlockIfNeeded } from './browser-check-utils.mjs';
+import { buildEngineBridgeInitScript } from './engine-bridge-mock.mjs';
 
 // Serialize real-Chromium checks: parallel runs share port 5000 + CPU/RAM
 // and crash each other. Hold the lock for the whole script lifetime.
@@ -54,31 +55,20 @@ const SETUP_PASSWORD = 'about-electron-version-check-123';
 
 // The mock electronVersion value — must start with "43." for the assertion.
 const MOCK_ELECTRON_VERSION = '43.4.0';
+const ENGINE_SHIM = buildEngineBridgeInitScript({
+  alwaysEnabled: true,
+  queryHandlers: '// This check does not serve engine queries.',
+});
 
 // window.electronAPI shim installed before every page load.
 // Models the Electron preload bridge with a known electronVersion.
 const SHIM = `
 (() => {
   window.electronAPI = {
+    ...window.electronAPI,
     isElectron: true,
     electronVersion: '${MOCK_ELECTRON_VERSION}',
     platform: 'linux',
-    // Stub all IPC channels so the app doesn't throw on init.
-    engine: {
-      init: async () => ({ ok: true }),
-      status: async () => ({ status: 'idle' }),
-      seedBegin: async () => ({ ok: true }),
-      seedBatch: async () => ({ ok: true }),
-      seedFinish: async () => ({ ok: true }),
-      query: async () => ({ rows: [] }),
-      benchmark: async () => ({ ok: true }),
-      reopen: async () => ({ ok: true }),
-      integrityCheck: async () => ({ ok: true }),
-      clear: async () => ({ ok: true }),
-      generateSynthetic: async () => ({ ok: true }),
-      dbInfo: async () => ({ ok: true }),
-      onFinalizeProgress: () => () => {},
-    },
     isPortableMode: async () => false,
     torStatus: async () => ({ running: false }),
     torTest: async () => ({ success: false }),
@@ -203,6 +193,7 @@ async function main() {
     {
       const context = await browser.newContext();
       // Install the electronAPI shim before every page load.
+      await context.addInitScript(ENGINE_SHIM);
       await context.addInitScript(SHIM);
       const page = await context.newPage();
 

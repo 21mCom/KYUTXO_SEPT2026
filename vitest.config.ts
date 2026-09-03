@@ -33,7 +33,10 @@ export default defineConfig({
     // Fails tests on hidden Dexie/database error noise (unhandled rejections,
     // DatabaseClosedError console output). Guarded by
     // scripts/check-db-noise-guard.js — do not remove without updating it.
-    setupFiles: ["client/src/test/failOnDbErrorNoise.ts"],
+    setupFiles: [
+      "client/src/test/setupDomEnvironment.ts",
+      "client/src/test/failOnDbErrorNoise.ts",
+    ],
     include: [
       "client/src/**/*.test.ts",
       "client/src/**/*.test.tsx",

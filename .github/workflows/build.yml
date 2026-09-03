@@ -1,14 +1,25 @@
-name: Build KYUTXO for Windows
+name: Validate and build KYUTXO for Windows
 
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish a GitHub release after the full suite and packaged checks pass
+        required: true
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   verify-desktop-package-matrix:
@@ -16,7 +27,12 @@ jobs:
 
   build-windows:
     needs: verify-desktop-package-matrix
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    if: >-
+      github.event_name != 'push' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      !contains(github.event.head_commit.message, '[skip ci]')
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     # Pinned to windows-2022: the newer windows-latest (windows-2025) image is not
     # detected by the @electron/node-gyp fork's Visual Studio finder, breaking the
     # native better-sqlite3 compile during both `npm ci` and the Electron rebuild.
@@ -34,12 +50,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v5.0.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -53,28 +69,46 @@ jobs:
       - name: Fail on high/critical npm audit findings
         run: node scripts/check-audit.js
 
-      - name: Keep protected-at-rest claims disabled until packaged verification exists
-        run: node scripts/check-protected-vault-claims.mjs
+      - name: Type-check
+        run: npm run check
 
-      - name: Set build version
-        if: github.event_name == 'push'
+      - name: Run fast test tier
+        run: npm run test:fast
+
+      - name: Run full required suite for releases
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        run: npm run test:full
+
+      - name: Read package version
         id: version
-        shell: bash
-        run: |
-          BASE_VERSION=$(node -p "require('./package.json').version")
-          MAJOR_MINOR=$(echo "$BASE_VERSION" | cut -d. -f1,2)
-          NEW_VERSION="${MAJOR_MINOR}.${{ github.run_number }}"
-          npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null
-          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Build version: $NEW_VERSION"
-
-      - name: Read current version (PR builds)
-        if: github.event_name != 'push'
-        id: current_version
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Bind release tag to the validated commit
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        shell: bash
+        run: |
+          PACKAGE_VERSION="${{ steps.version.outputs.version }}"
+          RELEASE_TAG="v$PACKAGE_VERSION"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && [ "$GITHUB_REF_NAME" != "$RELEASE_TAG" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PACKAGE_VERSION"
+            exit 1
+          fi
+          if ! git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "::error::Release tag $RELEASE_TAG must already exist"
+            exit 1
+          fi
+          TAG_COMMIT=$(git rev-list -n 1 "$RELEASE_TAG")
+          if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+            echo "::error::Release tag $RELEASE_TAG points to $TAG_COMMIT, not validated commit $GITHUB_SHA"
+            exit 1
+          fi
 
       - name: Build application for Electron
         run: npx vite build --config vite.config.electron.ts
@@ -95,11 +129,8 @@ jobs:
       - name: Verify packaged native read-engine under shipping Electron ABI
         env:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
-        run: >-
-          node scripts/check-packaged-native-engine.mjs
-          --platform win
-          --arch x64
-          --require-electron
+          KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON: '1'
+        run: node scripts/check-packaged-native-engine.mjs
 
       # RELEASE GATE: launch the exact generated Portable.exe release asset
       # from a disposable directory, create a vault, stop the full process
@@ -143,17 +174,45 @@ jobs:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
         run: node scripts/check-packaged-network-privacy-activity-browser.mjs
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: KYUTXO-${{ steps.version.outputs.version || steps.current_version.outputs.version }}-Portable
-          path: release/*.exe
+      - name: Generate SHA-256 checksums
+        run: npm run release:checksums
 
-      - name: Create GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+      - name: Upload executable and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: KYUTXO v${{ steps.version.outputs.version }}
-          files: release/*.exe
-          generate_release_notes: true
+          name: KYUTXO-${{ steps.version.outputs.version }}-Portable-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.exe.sha256
+
+  publish-release:
+    needs: build-windows
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download validated release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: KYUTXO-*-Portable-${{ github.run_id }}
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ needs.build-windows.outputs.version }}
+        run: |
+          mapfile -t EXES < <(find release-assets -maxdepth 1 -type f -name '*.exe' -print)
+          mapfile -t SUMS < <(find release-assets -maxdepth 1 -type f -name '*.exe.sha256' -print)
+          if [ "${#EXES[@]}" -eq 0 ] || [ "${#SUMS[@]}" -eq 0 ]; then
+            echo "::error::Validated executable or SHA-256 sidecar is missing"
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" "${EXES[@]}" "${SUMS[@]}" \
+            --verify-tag --generate-notes --title "KYUTXO $RELEASE_TAG"

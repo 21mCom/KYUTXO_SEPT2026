@@ -14,6 +14,9 @@
 // output). It asserts the rendered warning's "shown" count equals the number of
 // funding-source rows actually displayed (and never the larger selected count).
 
+// renderWithProviders includes RecordPreviewProvider, which loads its custom
+// field definitions from Dexie when it mounts.
+import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { cleanup, fireEvent, act } from "@testing-library/react";
 

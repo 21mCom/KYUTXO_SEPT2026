@@ -13,6 +13,9 @@
 //   (1) a non-blocking warning surfaces to the user;
 //   (2) the unresolved count in the notice is correct (2).
 
+// renderWithProviders includes RecordPreviewProvider, which loads its custom
+// field definitions from Dexie when it mounts.
+import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { cleanup, fireEvent, act } from "@testing-library/react";
 

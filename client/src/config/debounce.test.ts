@@ -93,7 +93,9 @@ describe("PAGE_DEBOUNCE coverage", () => {
     for (const file of pages) {
       const basename = path.basename(file, ".tsx");
       const src = readPageSource(file);
-      if (!src.includes(`PAGE_DEBOUNCE.${basename}`)) {
+      const dotAccess = `PAGE_DEBOUNCE.${basename}`;
+      const bracketAccess = `PAGE_DEBOUNCE["${basename}"]`;
+      if (!src.includes(dotAccess) && !src.includes(bracketAccess)) {
         wrongKey.push(
           `${file} should use PAGE_DEBOUNCE.${basename}`,
         );
@@ -166,7 +168,7 @@ describe("DEFAULT_SEARCH_PENDING_OPACITY", () => {
 });
 
 describe("PAGE_SEARCH_PENDING_OPACITY", () => {
-  it("contains exactly the 9 expected page entries", () => {
+  it("contains exactly the 11 expected page entries", () => {
     const expectedKeys: PageName[] = [
       "UTXOs",
       "Transactions",
@@ -175,12 +177,14 @@ describe("PAGE_SEARCH_PENDING_OPACITY", () => {
       "WalletOverview",
       "AddressReuse",
       "Dashboard",
+      "ExportPage",
+      "adversary-scenarios-panel",
       "VaultManagement",
       "ConflictResolution",
     ];
     const actualKeys = Object.keys(PAGE_SEARCH_PENDING_OPACITY).sort();
     expect(actualKeys).toEqual([...expectedKeys].sort());
-    expect(actualKeys).toHaveLength(9);
+    expect(actualKeys).toHaveLength(11);
   });
 
   it("has the same key set as PAGE_DEBOUNCE", () => {
@@ -216,6 +220,12 @@ describe("PAGE_SEARCH_PENDING_OPACITY", () => {
     expect(PAGE_SEARCH_PENDING_OPACITY.Dashboard).toBe(
       DEFAULT_SEARCH_PENDING_OPACITY,
     );
+    expect(PAGE_SEARCH_PENDING_OPACITY.ExportPage).toBe(
+      DEFAULT_SEARCH_PENDING_OPACITY,
+    );
+    expect(PAGE_SEARCH_PENDING_OPACITY["adversary-scenarios-panel"]).toBe(
+      DEFAULT_SEARCH_PENDING_OPACITY,
+    );
   });
 
   it("maps low-volume pages (VaultManagement, ConflictResolution) to opacity-70", () => {
@@ -233,6 +243,8 @@ describe("getSearchPendingOpacity", () => {
     ["WalletOverview", "opacity-60"],
     ["AddressReuse", "opacity-60"],
     ["Dashboard", "opacity-60"],
+    ["ExportPage", "opacity-60"],
+    ["adversary-scenarios-panel", "opacity-60"],
     ["VaultManagement", "opacity-70"],
     ["ConflictResolution", "opacity-70"],
   ])("returns the expected opacity class for page %s", (page, expected) => {

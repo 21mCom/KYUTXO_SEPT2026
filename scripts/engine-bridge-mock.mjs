@@ -46,15 +46,21 @@
  * @param {string} [opts.stateFields] extra state-object literal fields
  * @param {string} [opts.helpers] extra helper definitions
  * @param {string} opts.queryHandlers per-check `if (name === ...)` blocks
+ * @param {boolean} [opts.alwaysEnabled] install without the localStorage opt-in
  * @returns {string} script for `context.addInitScript(...)`
  */
-export function buildEngineBridgeInitScript({ stateFields = '', helpers = '', queryHandlers }) {
+export function buildEngineBridgeInitScript({
+  stateFields = '',
+  helpers = '',
+  queryHandlers,
+  alwaysEnabled = false,
+}) {
   if (typeof queryHandlers !== 'string' || queryHandlers.trim() === '') {
     throw new Error('buildEngineBridgeInitScript: queryHandlers is required');
   }
   return `(() => {
-  let enabled = false;
-  try { enabled = localStorage.getItem('__engineMockEnabled') === '1'; } catch {}
+  let enabled = ${alwaysEnabled ? 'true' : 'false'};
+  ${alwaysEnabled ? '' : "try { enabled = localStorage.getItem('__engineMockEnabled') === '1'; } catch {}"}
   if (!enabled) return;
 
   const state = { queryErrors: [], ${stateFields} };

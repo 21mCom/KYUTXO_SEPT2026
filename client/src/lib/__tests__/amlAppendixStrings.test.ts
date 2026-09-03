@@ -283,14 +283,14 @@ describe("on-screen preview nearest-entity line uses the shared builder", () => 
   // The Step 7 preview's "Nearest flagged entity: …" line used to be assembled
   // inline in JSX (formatHopLabel + raw name/category), so a wording change to
   // the template would silently change the live preview while the builder
-  // tests above kept passing. This test reads the page source and fails if the
-  // preview ever stops calling buildNearestEntityLine or reintroduces the
-  // inline "Nearest flagged entity:" template.
-  it("ProofOfFundsDeclaration.tsx renders the line via buildNearestEntityLine, never inline", async () => {
+  // tests above kept passing. This test reads the extracted AML card source and
+  // fails if the preview ever stops calling buildNearestEntityLine or
+  // reintroduces the inline "Nearest flagged entity:" template.
+  it("aml-risk-card.tsx renders the line via buildNearestEntityLine, never inline", async () => {
     const { readFileSync } = await import("node:fs");
     const { resolve } = await import("node:path");
     const source = readFileSync(
-      resolve(__dirname, "../../pages/ProofOfFundsDeclaration.tsx"),
+      resolve(__dirname, "../../pages/proof-of-funds/aml-risk-card.tsx"),
       "utf8",
     );
 

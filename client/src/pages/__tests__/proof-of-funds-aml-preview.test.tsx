@@ -33,7 +33,7 @@ const FLAGGED_ADDR = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
 let mockLookupEntities: (addrs: string[]) => Map<string, any> = () => new Map();
 let mockActiveSource: "bundled" | "imported" = "bundled";
 let mockActiveCount = 12_345;
-let mockGetParticipantsByAddresses: (addrs: string[]) => Promise<any[]> =
+let mockGetParticipantsByAddressesWithOutpointSpends: (addrs: string[]) => Promise<any[]> =
   async () => [];
 let mockGetParticipantsByTxids: (txids: string[]) => Promise<any[]> =
   async () => [];
@@ -50,6 +50,7 @@ vi.mock("jspdf", () => {
         getWidth: () => 210,
         getHeight: () => 297,
       },
+      getNumberOfPages: () => 1,
     };
     lastAutoTable = { finalY: 0 };
     setFontSize() {}
@@ -61,6 +62,7 @@ vi.mock("jspdf", () => {
     line() {}
     rect() {}
     addPage() {}
+    setPage() {}
     addImage() {}
     splitTextToSize(text: string) {
       return [text];
@@ -109,8 +111,8 @@ vi.mock("@/lib/data/record-queries", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/data/record-queries")>();
   return {
     ...actual,
-    getParticipantsByAddresses: (addrs: string[]) =>
-      mockGetParticipantsByAddresses(addrs),
+    getParticipantsByAddressesWithOutpointSpends: (addrs: string[]) =>
+      mockGetParticipantsByAddressesWithOutpointSpends(addrs),
   };
 });
 
@@ -147,7 +149,7 @@ function resetMocks() {
   mockLookupEntities = () => new Map();
   mockActiveSource = "bundled";
   mockActiveCount = 12_345;
-  mockGetParticipantsByAddresses = async () => [];
+  mockGetParticipantsByAddressesWithOutpointSpends = async () => [];
   mockGetParticipantsByTxids = async () => [];
   mockSettings = undefined;
 }
@@ -155,6 +157,9 @@ function resetMocks() {
 beforeEach(() => {
   pdfTextLines.length = 0;
   resetMocks();
+  // The AML toggle is now persisted as a declaration preference. Keep each
+  // fixture independent so every setup click consistently turns it on.
+  localStorage.clear();
   Object.assign(navigator, {
     clipboard: { writeText: vi.fn(async () => {}) },
   });
@@ -213,7 +218,7 @@ describe("ProofOfFundsDeclaration — on-screen AML preview matches the PDF", ()
     mockActiveSource = "bundled";
     mockActiveCount = 9_999;
     mockLookupEntities = () => new Map();
-    mockGetParticipantsByAddresses = async () => [];
+    mockGetParticipantsByAddressesWithOutpointSpends = async () => [];
 
     await setupComponentAndTurnAmlOn();
 
@@ -275,7 +280,7 @@ describe("ProofOfFundsDeclaration — on-screen AML preview matches the PDF", ()
       }
       return m;
     };
-    mockGetParticipantsByAddresses = async () => [];
+    mockGetParticipantsByAddressesWithOutpointSpends = async () => [];
 
     await setupComponentAndTurnAmlOn();
 
@@ -317,7 +322,7 @@ describe("ProofOfFundsDeclaration — on-screen AML preview matches the PDF", ()
       }
       return m;
     };
-    mockGetParticipantsByAddresses = async () => [
+    mockGetParticipantsByAddressesWithOutpointSpends = async () => [
       { txid: "tx1", address: DECLARED_ADDR },
     ];
     mockGetParticipantsByTxids = async () => [

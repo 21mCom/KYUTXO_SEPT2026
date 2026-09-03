@@ -49,6 +49,7 @@ const pdfTextLines: string[] = [];
 vi.mock("jspdf", () => {
   class FakeJsPDF {
     internal = {
+      getNumberOfPages: () => 1,
       pageSize: {
         getWidth: () => 210,
         getHeight: () => 297,
@@ -64,6 +65,7 @@ vi.mock("jspdf", () => {
     line() {}
     rect() {}
     addPage() {}
+    setPage() {}
     addImage() {}
     splitTextToSize(text: string) {
       return [text];
@@ -114,6 +116,8 @@ vi.mock("@/lib/data/record-queries", async (importOriginal) => {
     ...actual,
     getParticipantsByAddresses: (addrs: string[]) =>
       mockGetParticipantsByAddresses(addrs),
+    getParticipantsByAddressesWithOutpointSpends: (addrs: string[]) =>
+      mockGetParticipantsByAddresses(addrs),
   };
 });
 
@@ -149,6 +153,7 @@ function resetMocks() {
 
 beforeEach(() => {
   pdfTextLines.length = 0;
+  localStorage.clear();
   resetMocks();
   Object.assign(navigator, {
     clipboard: { writeText: vi.fn(async () => {}) },

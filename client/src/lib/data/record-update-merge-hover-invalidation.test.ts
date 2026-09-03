@@ -240,8 +240,8 @@ describe("duplicate merge -> hover cache invalidation", () => {
     // folds the loser's metadata into it via updateRecord, and deletes the loser
     // (dropped) via deleteRecord. Both links are visible; both must refresh —
     // the surviving one with the merged note, the dropped one to "no record".
-    const surviving = "bc1qcanonical";
-    const dropped = "bc1qVARIANT"; // near-duplicate (different casing)
+    const surviving = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
+    const dropped = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
     const survivingId = await seedRecord({
       inputString: surviving,
       inputStringLower: surviving.toLowerCase(),

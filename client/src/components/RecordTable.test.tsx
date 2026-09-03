@@ -54,6 +54,7 @@ vi.mock("@/lib/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
+      ...actual.db,
       attachments: {
         where: () => ({ anyOf: () => ({ toArray: () => mockAttachmentsToArray() }) }),
       },

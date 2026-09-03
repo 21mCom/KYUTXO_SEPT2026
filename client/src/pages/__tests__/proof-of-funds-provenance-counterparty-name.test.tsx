@@ -36,6 +36,7 @@ const autoTableCalls: { head: any; body: any }[] = [];
 vi.mock("jspdf", () => {
   class FakeJsPDF {
     internal = {
+      getNumberOfPages: () => 1,
       pageSize: {
         getWidth: () => 210,
         getHeight: () => 297,
@@ -52,6 +53,7 @@ vi.mock("jspdf", () => {
     rect() {}
     addPage() {}
     addImage() {}
+    setPage() {}
     splitTextToSize(text: string) {
       return [text];
     }
@@ -139,6 +141,7 @@ async function renderAndGeneratePdf() {
 
 describe("ProofOfFundsDeclaration — provenance appendix counterparty name precedence", () => {
   beforeEach(() => {
+    localStorage.clear();
     autoTableCalls.length = 0;
     mockAddressRecords = [];
     Object.assign(navigator, {

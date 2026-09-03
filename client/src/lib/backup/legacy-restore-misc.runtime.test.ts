@@ -362,6 +362,8 @@ describe("legacy restore: evidence", () => {
       evidenceAttachmentsAdded: 0,
       insertedEvidenceIds: [],
       insertedEvidenceAttachmentIds: [],
+      evidenceIdMap: new Map(),
+      evidenceAttachmentIdMap: new Map(),
     });
     expect(await getAllEvidence()).toHaveLength(0);
     expect(await getAllEvidenceAttachments()).toHaveLength(0);

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import "fake-indexeddb/auto";
 //
 // Step 6 backfill batching coverage for AnnualActivityReport's generate().
 //

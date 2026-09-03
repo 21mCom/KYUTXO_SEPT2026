@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 
 // BitcoinFlowVisualizer.tsx imports a large surface (IndexedDB-backed db,
 // data facade, page hooks, child components). We only need the isolated
@@ -50,13 +50,6 @@ function renderRow(onSelect = vi.fn()) {
 
 let writeText: ReturnType<typeof vi.fn>;
 
-// Flush pending promise microtasks (and the React state updates they trigger).
-async function flush() {
-  await act(async () => {
-    await Promise.resolve();
-  });
-}
-
 beforeEach(() => {
   writeText = vi.fn(() => Promise.resolve());
   Object.defineProperty(navigator, "clipboard", {
@@ -75,10 +68,10 @@ afterEach(() => {
 describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
   const copyTestId = `button-copy-finder-address-${ADDRESS.slice(-8)}`;
 
-  it("writes the correct address to the clipboard on click", () => {
+  it("writes the correct address to the clipboard on click", async () => {
     renderRow();
     fireEvent.click(screen.getByTestId(copyTestId));
-    expect(writeText).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
   });
 
@@ -90,7 +83,10 @@ describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
     expect(btn.getAttribute("aria-label")).toBe("Copy address");
 
     fireEvent.click(btn);
-    await flush();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     expect(btn.getAttribute("aria-label")).toBe("Copied");
 
     act(() => {
@@ -104,10 +100,10 @@ describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
     expect(btn.getAttribute("aria-label")).toBe("Copy address");
   });
 
-  it("does not trigger the parent row onSelect handler (stopPropagation)", () => {
+  it("does not trigger the parent row onSelect handler (stopPropagation)", async () => {
     const onSelect = renderRow();
     fireEvent.click(screen.getByTestId(copyTestId));
-    expect(writeText).toHaveBeenCalledWith(ADDRESS);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(ADDRESS));
     expect(onSelect).not.toHaveBeenCalled();
   });
 
@@ -122,12 +118,11 @@ describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
     const btn = screen.getByTestId(copyTestId);
 
     fireEvent.keyDown(btn, { key: "Enter" });
-    await flush();
-    expect(writeText).toHaveBeenCalledTimes(1);
-    expect(btn.getAttribute("aria-label")).toBe("Copied");
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(btn.getAttribute("aria-label")).toBe("Copied"));
 
     fireEvent.keyDown(btn, { key: " " });
-    expect(writeText).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
 
     expect(onSelect).not.toHaveBeenCalled();
   });
@@ -138,11 +133,10 @@ describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
     const btn = screen.getByTestId(copyTestId);
 
     fireEvent.click(btn);
-    await flush();
 
-    expect(btn.getAttribute("aria-label")).toBe("Copy address");
     expect(onSelect).not.toHaveBeenCalled();
-    expect(toastMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(btn.getAttribute("aria-label")).toBe("Copy address");
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({ variant: "destructive" }),
     );
@@ -158,11 +152,10 @@ describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
     const btn = screen.getByTestId(copyTestId);
 
     fireEvent.click(btn);
-    await flush();
 
-    expect(btn.getAttribute("aria-label")).toBe("Copy address");
     expect(onSelect).not.toHaveBeenCalled();
-    expect(toastMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    expect(btn.getAttribute("aria-label")).toBe("Copy address");
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({ variant: "destructive" }),
     );

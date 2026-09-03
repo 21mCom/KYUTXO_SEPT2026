@@ -73,11 +73,22 @@ vi.mock('../database', () => ({
     blockchainTransactions: {
       where: () => ({ anyOf: () => ({ toArray: () => Promise.resolve([...TX_RECORDS]) }) }),
     },
+    dustFlags: {
+      toArray: () => Promise.resolve([]),
+    },
   },
 }));
 
 vi.mock('../data/record-queries', () => ({
   getParticipantsByAddresses: vi.fn(() =>
+    Promise.resolve(
+      ALL_PARTICIPANTS.filter((p) => p.address === USER_ADDRESS),
+    ),
+  ),
+  // Privacy audits now use the outpoint-aware query so blank-address Electrum
+  // inputs are not missed. This fixture has no such extra rows, so return the
+  // same address-scoped participants while preserving the production call path.
+  getParticipantsByAddressesWithOutpointSpends: vi.fn(() =>
     Promise.resolve(
       ALL_PARTICIPANTS.filter((p) => p.address === USER_ADDRESS),
     ),

@@ -43,6 +43,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { renderSourceNote } from "@/lib/renderSourceNote";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
@@ -85,15 +87,6 @@ const EMPTY_FORM: ScenarioFormState = {
 
 // ─── Searchable multi-select pickers ─────────────────────────────────────────
 
-function useDebouncedValue(value: string, delayMs = 200): string {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delayMs);
-    return () => clearTimeout(t);
-  }, [value, delayMs]);
-  return debounced;
-}
-
 function AddressPicker({
   selected,
   onChange,
@@ -103,7 +96,10 @@ function AddressPicker({
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<string[]>([]);
-  const debounced = useDebouncedValue(query);
+  const [debounced] = useDebouncedValue(
+    query,
+    PAGE_DEBOUNCE["adversary-scenarios-panel"],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -196,7 +192,10 @@ function TxidPicker({
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<string[]>([]);
-  const debounced = useDebouncedValue(query);
+  const [debounced] = useDebouncedValue(
+    query,
+    PAGE_DEBOUNCE["adversary-scenarios-panel"],
+  );
 
   useEffect(() => {
     let cancelled = false;

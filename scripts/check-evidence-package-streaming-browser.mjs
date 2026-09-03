@@ -50,6 +50,7 @@ import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 import { unlockIfNeeded } from './browser-check-utils.mjs';
+import { buildEngineBridgeInitScript } from './engine-bridge-mock.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -63,6 +64,10 @@ const ATTACHMENT_SIZE = 20 * 1024 * 1024; // 20 MiB — under the 25 MiB per-fil
 const ATTACHMENT_COUNT = 4; // 80 MiB total — over the 75 MiB aggregate cap
 const TOTAL_SIZE = ATTACHMENT_SIZE * ATTACHMENT_COUNT;
 const AGGREGATE_CAP = 75 * 1024 * 1024;
+const ENGINE_SHIM = buildEngineBridgeInitScript({
+  alwaysEnabled: true,
+  queryHandlers: '// This check does not serve engine queries.',
+});
 
 // ── window shims (installed via addInitScript, run before any app code) ────
 
@@ -172,24 +177,10 @@ const ELECTRON_SHIM = `
   }
 
   window.electronAPI = {
+    ...window.electronAPI,
     isElectron: true,
     electronVersion: '43.4.0',
     platform: 'linux',
-    engine: {
-      init: async () => ({ ok: true }),
-      status: async () => ({ status: 'idle' }),
-      seedBegin: async () => ({ ok: true }),
-      seedBatch: async () => ({ ok: true }),
-      seedFinish: async () => ({ ok: true }),
-      query: async () => ({ rows: [] }),
-      benchmark: async () => ({ ok: true }),
-      reopen: async () => ({ ok: true }),
-      integrityCheck: async () => ({ ok: true }),
-      clear: async () => ({ ok: true }),
-      generateSynthetic: async () => ({ ok: true }),
-      dbInfo: async () => ({ ok: true }),
-      onFinalizeProgress: () => () => {},
-    },
     isPortableMode: async () => false,
     torStatus: async () => ({ running: false }),
     torTest: async () => ({ success: false }),
@@ -522,6 +513,7 @@ async function main() {
     console.log('\n[evidence-stream] === Context B: Electron streaming (preferred over File System Access) ===');
     {
       const context = await browser.newContext();
+      await context.addInitScript(ENGINE_SHIM);
       await context.addInitScript(ELECTRON_SHIM);
       const page = await context.newPage();
       page.on('pageerror', (e) => console.log(`[evidence-stream][page-error] ${e.message}`));

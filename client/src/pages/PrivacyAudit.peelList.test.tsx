@@ -279,10 +279,10 @@ describe("PeelChainView list mode address navigation", () => {
     expect(await findByText(PAYMENT_LABEL)).toBeTruthy();
   });
 
-  it("navigates to /records?search=<address> when the address has no record", async () => {
-    // No record seeded for any peel-chain address, so the click should fall
-    // through to navigation instead of opening the panel.
-    const { getByTestId, history } = renderViewWithHistory();
+  it("opens a prefilled metadata form when the address has no record", async () => {
+    // No record is seeded, so the shared AddressLink should open the create
+    // form for this exact identifier instead of navigating to an empty search.
+    const { getByTestId, findByTestId } = renderViewWithHistory();
     await waitForToggle(getByTestId);
 
     fireEvent.click(getByTestId("button-peel-view-list"));
@@ -293,10 +293,8 @@ describe("PeelChainView list mode address navigation", () => {
     const card0 = getByTestId("card-peel-step-0");
     fireEvent.click(within(card0).getByText(PAYMENT_ADDR));
 
-    const expectedPath = `/records?search=${encodeURIComponent(PAYMENT_ADDR)}`;
-    await waitFor(() => {
-      expect(history).toContain(expectedPath);
-    });
+    const input = (await findByTestId("input-address")) as HTMLInputElement;
+    expect(input.value).toBe(PAYMENT_ADDR);
   });
 });
 
@@ -362,10 +360,10 @@ describe("PeelChainView list mode transaction navigation", () => {
     expect(await findByText(TX_LABEL)).toBeTruthy();
   });
 
-  it("navigates to /records?search=<txid> when the hop txid has no record", async () => {
-    // No record seeded for any hop txid, so the click should fall through to
-    // navigation instead of opening the panel.
-    const { getByTestId, history } = renderViewWithHistory();
+  it("opens a prefilled metadata form when the hop txid has no record", async () => {
+    // No record is seeded, so the shared TxidLink should open the create form
+    // for this exact identifier instead of navigating to an empty search.
+    const { getByTestId, findByTestId } = renderViewWithHistory();
     await waitForToggle(getByTestId);
 
     fireEvent.click(getByTestId("button-peel-view-list"));
@@ -378,10 +376,8 @@ describe("PeelChainView list mode transaction navigation", () => {
       within(card0).getByTestId(`link-txid-${COINJOIN_TXID.slice(0, 8)}`),
     );
 
-    const expectedPath = `/records?search=${encodeURIComponent(COINJOIN_TXID)}`;
-    await waitFor(() => {
-      expect(history).toContain(expectedPath);
-    });
+    const input = (await findByTestId("input-address")) as HTMLInputElement;
+    expect(input.value).toBe(COINJOIN_TXID);
   });
 });
 

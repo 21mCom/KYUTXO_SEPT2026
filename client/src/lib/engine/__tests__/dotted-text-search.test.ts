@@ -12,8 +12,8 @@
 //   - the dot does NOT behave as a single-character wildcard on either path
 //     (a "v1.2" search must not match "v1x2"), and
 //   - both paths agree on ids for every dotted query (equivalence).
-// Tag search (Dexie-only surface: searchRecordsByQuery) is covered separately
-// since the engine's cross-field search does not include tags.
+// Tag search is covered through both the engine cross-field search and the
+// standalone Dexie searchRecordsByQuery surface.
 //
 // fake-indexeddb/auto backs the real Dexie engine; @/lib/database is mocked to
 // a throwaway TestDb, mirroring records-read-equivalence.test.ts.
@@ -182,7 +182,8 @@ function makeFilterFn(search: string) {
         record.inputString?.toLowerCase().includes(s) ||
         record.owner?.toLowerCase().includes(s) ||
         record.walletName?.toLowerCase().includes(s) ||
-        record.notes?.toLowerCase().includes(s),
+        record.notes?.toLowerCase().includes(s) ||
+        record.tags?.some((tag) => tag.toLowerCase().includes(s)),
     );
 }
 
@@ -209,7 +210,7 @@ describe("dotted text fields: search matches literally on both read paths", () =
     { field: "notes", search: "wallet.dat", expected: [7] },
     // A bare-dot search matches every record containing a dot anywhere — and
     // nothing else (proves "." is not a match-anything wildcard on the SQL path).
-    { field: "bare dot", search: ".", expected: [1, 3, 5, 7] },
+    { field: "bare dot", search: ".", expected: [1, 3, 5, 7, 8] },
   ];
 
   for (const { field, search, expected } of CASES) {

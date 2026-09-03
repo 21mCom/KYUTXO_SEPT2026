@@ -155,6 +155,16 @@ vi.mock("@/lib/database", async () => {
   };
 });
 
+vi.mock("@/hooks/use-behavior-tally", () => ({
+  useBehaviorTally: () => ({
+    counts: {},
+    computing: false,
+    progress: null,
+    cancel: vi.fn(),
+    restart: vi.fn(),
+  }),
+}));
+
 import Records from "./Records";
 
 beforeEach(() => {

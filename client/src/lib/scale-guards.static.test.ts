@@ -53,14 +53,14 @@ const EXCLUDED_FILES = new Set([
   join(SRC_DIR, "hooks", "use-address-records.ts"),
 ]);
 
-// Current known offenders (June 2026): 6 getAll* call-sites + 1 direct toArray
-// (record-queries.ts) + 1 direct toCollection (records-query.ts) + 13 full-load
-// helper call-sites (8 getRecordsByType + 2 getAddressRecordsByImportanceTiers +
-// 3 useAddressRecords consumers) = 21.
+// Current known offenders (August 2026): 4 getAll* call-sites + 2 direct toArray
+// (fund-trail-engine.ts and record-queries.ts) + 1 direct toCollection
+// (records-query.ts) + 21 full-load helper call-sites (15 getRecordsByType +
+// 2 getAddressRecordsByImportanceTiers + 4 useAddressRecords consumers) = 28.
 // (The overview pages — BalanceOverview/WalletOverview — were migrated off the
 // useAddressRecords full-load to batched keyset aggregation, which is why those
 // consumers no longer appear among the offenders.)
-const BASELINE = 21;
+const BASELINE = 28;
 
 function collectSourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {

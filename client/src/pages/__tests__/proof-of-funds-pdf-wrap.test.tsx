@@ -110,6 +110,7 @@ vi.mock("qrcode", () => ({
 describe("ProofOfFundsDeclaration — long identity values wrap inside the PDF page", () => {
   beforeEach(() => {
     pdfState.drawn.length = 0;
+    localStorage.clear();
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn(async () => {}) },
     });
@@ -222,6 +223,7 @@ describe("ProofOfFundsDeclaration — balances table & QR appendix keep long con
 
   beforeEach(() => {
     pdfState.drawn.length = 0;
+    localStorage.clear();
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn(async () => {}) },
     });
@@ -340,6 +342,7 @@ describe("ProofOfFundsDeclaration — balances table & QR appendix keep long con
 describe("ProofOfFundsDeclaration — QR toggle as last action still emits the appendix", () => {
   beforeEach(() => {
     pdfState.drawn.length = 0;
+    localStorage.clear();
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn(async () => {}) },
     });
