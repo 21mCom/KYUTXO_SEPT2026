@@ -68,6 +68,7 @@ let vaultLockSettings = {
 
 function lockRenderer(reason) {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[KYUTXO] Vault lock signal: ${reason}`);
     mainWindow.webContents.send('vault-lock', { reason });
   }
 }

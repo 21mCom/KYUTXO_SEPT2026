@@ -44,6 +44,7 @@ describe("packaged Electron privilege boundaries", () => {
     expect(vaultLockSource).toMatch(/powerMonitor\.on\(/);
     expect(vaultLockSource).toMatch(/shouldLock\(eventName\)[\s\S]*lockRenderer\(eventName\)/);
     expect(vaultLockSource).toMatch(/getSystemIdleTime\(\)[\s\S]*lockRenderer\(['"]idle['"]\)/);
+    expect(mainSource).toMatch(/Vault lock signal: \$\{reason\}/);
     expect(mainSource).not.toMatch(/mainWindow\.reload\(/);
     expect(preloadSource).toMatch(/ipcRenderer\.on\(['"]vault-lock['"]/);
     expect(preloadSource).toMatch(/removeListener\(['"]vault-lock['"]/);

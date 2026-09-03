@@ -52,8 +52,9 @@ jobs:
       - name: Verify target matrix and protected-claim gate
         shell: bash
         run: |
-          node --test scripts/packaged-targets.test.mjs scripts/check-protected-vault-claims.test.mjs
+          node --test scripts/packaged-targets.test.mjs scripts/check-protected-vault-claims.test.mjs scripts/check-packaged-vault-lock-native.test.mjs
           node scripts/check-protected-vault-claims.mjs
+          node scripts/check-packaged-freshness-guard.js
 
       - name: Build packaged renderer and native worker
         shell: bash
