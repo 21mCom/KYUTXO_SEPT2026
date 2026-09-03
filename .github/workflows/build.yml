@@ -111,6 +111,14 @@ jobs:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
         run: node scripts/check-packaged-electron-browser.mjs
 
+      # RELEASE GATE: seed an oversized consolidation through the real
+      # preload/main/native-worker path and prove all four Coin Passport windows
+      # are independent, bounded, and tied to the displayed mirror checkpoint.
+      - name: Verify oversized Coin Passport paging through packaged IPC
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-coin-passport-browser.mjs
+
       # RELEASE GATE: the exact packaged app must prove protected-store
       # migration, crash recovery, tamper rejection, password re-wrap, and
       # encrypted-backup recovery before the artifact can be uploaded.

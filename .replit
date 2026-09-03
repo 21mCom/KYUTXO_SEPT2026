@@ -1023,11 +1023,7 @@ args = "global-command-search-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "first-run-network-privacy"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "record-search-index-concurrency-node-check"
+args = "packaged-coin-passport-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -3642,17 +3638,6 @@ args = "node scripts/check-global-command-search-browser.mjs"
 isValidation = true
 
 [[workflows.workflow]]
-name = "first-run-network-privacy"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "npx vitest run client/src/lib/network-privacy.test.ts client/src/hooks/use-node-settings.test.tsx && node scripts/check-first-run-network-privacy-browser.mjs"
-
-[workflows.workflow.metadata]
-isValidation = true
-
-[[workflows.workflow]]
 name = "coin-passport-export-browser-check"
 author = "agent"
 
@@ -3692,6 +3677,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-packaged-vault-migration.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-coin-passport-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-coin-passport-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

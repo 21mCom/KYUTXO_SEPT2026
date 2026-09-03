@@ -17,6 +17,7 @@ const PACKAGED_BROWSER_CHECKS = [
   'check-packaged-electron-browser.mjs',
   'check-wrong-password-packaged.mjs',
   'check-packaged-electrum-cancel-browser.mjs',
+  'check-packaged-coin-passport-browser.mjs',
   'check-packaged-vault-migration.mjs',
 ];
 
@@ -157,4 +158,33 @@ test('the packaged browser gate launches the generated Windows portable renderer
     /- name: Verify packaged Windows renderer and portable restart persistence\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-electron-browser\.mjs/,
   );
   assert.match(workflow, /generated Portable\.exe release asset/);
+});
+
+test('the packaged Coin Passport gate is release-wired after the native worker check', () => {
+  const script = fs.readFileSync(
+    path.join(SCRIPTS_DIR, 'check-packaged-coin-passport-browser.mjs'),
+    'utf8',
+  );
+  const workflow = fs.readFileSync(
+    path.join(ROOT, '.github', 'workflows', 'build.yml'),
+    'utf8',
+  );
+  const buildScript = fs.readFileSync(path.join(SCRIPTS_DIR, 'electron-build.sh'), 'utf8');
+
+  assert.match(script, /engine\.query\('getCoinOriginsPage'/);
+  assert.match(script, /expectedCheckpointKey/);
+  assert.match(script, /IPC_PAGE_CAP = 250/);
+  assert.match(script, /findPortableArtifact\(\)/);
+  assert.match(script, /KYUTXO-.+-Portable\\\.exe/);
+  assert.match(script, /portable launch copy/);
+  assert.match(script, /portable artifact predates the validated app\.asar/);
+  assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
+  assert.match(
+    workflow,
+    /- name: Verify oversized Coin Passport paging through packaged IPC\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-coin-passport-browser\.mjs/,
+  );
+  assert.match(
+    buildScript,
+    /KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts\/check-packaged-coin-passport-browser\.mjs/,
+  );
 });
