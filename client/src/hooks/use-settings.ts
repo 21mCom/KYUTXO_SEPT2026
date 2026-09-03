@@ -1,5 +1,10 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Settings, type CustomField } from '@/lib/database';
+import {
+  db,
+  type Settings,
+  type CustomField,
+} from '@/lib/database';
+import { normalizeDesktopLockSettings } from '@/lib/desktop-lock-settings';
 import {
   getSettings as getStoredSettings,
   updateSettings as updateStoredSettings,
@@ -86,6 +91,7 @@ export function useSettings() {
     // deliberate "analysis only" choice and is preserved as-is.
     quantumTagLevels:
       sanitizeQuantumTagLevels(settings?.quantumTagLevels) ?? DEFAULT_QUANTUM_TAG_LEVELS,
+    desktopLockSettings: normalizeDesktopLockSettings(settings?.desktopLockSettings),
     isLoading: settings === undefined,
   };
 }

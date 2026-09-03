@@ -98,6 +98,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('vault-lock', listener);
     return () => ipcRenderer.removeListener('vault-lock', listener);
   },
+  // Only the four lifecycle policy values cross this boundary. The main
+  // process validates them and owns the actual power-monitor behavior.
+  setVaultLockSettings: (settings) =>
+    ipcRenderer.invoke('set-vault-lock-settings', settings),
   
   // Electrum protocol operations
   electrumTest: (params) =>

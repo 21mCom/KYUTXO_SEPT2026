@@ -61,6 +61,7 @@ import {
   bulkDeletePriceData,
 } from "@/lib/data/price-data-crud";
 import { getAllSettings, getSettings, updateSettings } from "@/lib/data/settings-crud";
+import { stripDesktopLockSettingsFromBackupRows } from "@/lib/desktop-lock-settings";
 import {
   getAllDustFlags,
   clearDustFlags,
@@ -383,7 +384,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     evidence,
     evidenceAttachments,
     priceData,
-    settings,
+    settings: stripDesktopLockSettingsFromBackupRows(settings),
     nodeSettings,
     dustFlags,
     savedPsbts,

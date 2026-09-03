@@ -48,6 +48,7 @@ import { getActivityBus } from '@/lib/activity-bus';
 import { toast } from '@/hooks/use-toast';
 import { db, CURRENT_SCHEMA_VERSION } from '@/lib/database';
 import { getElectronAPISafe } from '@/lib/electron';
+import { syncDesktopLockSettings } from '@/lib/data/settings-crud';
 import {
   subscribeDbUpgradeProgress,
   clearDbUpgradeProgress,
@@ -658,6 +659,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     return unsubscribe;
   }, [logout]);
+
+  // The main process starts with fail-safe deployment defaults. Once the vault
+  // is unlocked, re-apply this installation's persisted policy so lifecycle
+  // events use the user's choice without exposing Electron privileges to React.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void syncDesktopLockSettings().catch((error) => {
+      console.error('[VaultLock] Failed to apply saved desktop lock settings:', error);
+    });
+  }, [isAuthenticated]);
 
   return (
     <AuthContext.Provider

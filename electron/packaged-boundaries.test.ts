@@ -46,4 +46,14 @@ describe("packaged Electron privilege boundaries", () => {
     expect(preloadSource).toMatch(/removeListener\(['"]vault-lock['"]/);
     expect(authSource).toMatch(/onVaultLock\?\.\([\s\S]*logout\(\)/);
   });
+
+  it("accepts only a narrow validated vault-lock policy from the renderer", () => {
+    expect(preloadSource).toMatch(
+      /setVaultLockSettings:\s*\(settings\)\s*=>\s*ipcRenderer\.invoke\(['"]set-vault-lock-settings['"], settings\)/,
+    );
+    expect(mainSource).toMatch(
+      /ipcMain\.handle\(['"]set-vault-lock-settings['"][\s\S]*validateVaultLockSettings\(rawSettings\)/,
+    );
+    expect(mainSource).toMatch(/event\.sender !== mainWindow\.webContents/);
+  });
 });

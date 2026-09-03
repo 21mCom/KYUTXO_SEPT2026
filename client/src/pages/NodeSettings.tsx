@@ -51,13 +51,22 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useNodeSettings } from "@/hooks/use-node-settings";
+import { useSettings } from "@/hooks/use-settings";
+import {
+  updateDesktopLockSettings,
+} from "@/lib/data/settings-crud";
 import {
   canonicalizeTorProxyUrl,
   syncTorProxySettings,
   torProxySettingsFromNodeSettings,
 } from "@/lib/tor-proxy-settings-sync";
 import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
-import { NodeProviderType, NodeSettings as NodeSettingsType, DEFAULT_TRUSTED_LOCAL_HOSTS } from "@/lib/database";
+import {
+  NodeProviderType,
+  NodeSettings as NodeSettingsType,
+  DesktopLockSettings,
+  DEFAULT_TRUSTED_LOCAL_HOSTS,
+} from "@/lib/database";
 import { isLocalOrPrivateHostname } from "@/lib/providers/types";
 import { 
   testConnectionWithSettings, 
@@ -146,6 +155,7 @@ const PROVIDER_OPTIONS: { value: NodeProviderType; label: string; description: s
 
 export default function NodeSettings() {
   const { nodeSettings, updateSettings, resetToDefaults, isLoading } = useNodeSettings();
+  const { desktopLockSettings } = useSettings();
   const { toast } = useToast();
 
   usePageShortcuts("Node Settings", [
@@ -184,6 +194,9 @@ export default function NodeSettings() {
   const [isRevokingCertificate, setIsRevokingCertificate] = useState(false);
   
   const [pendingChanges, setPendingChanges] = useState<Partial<NodeSettingsType>>({});
+  const [pendingDesktopLockSettings, setPendingDesktopLockSettings] =
+    useState<Partial<DesktopLockSettings>>({});
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [newLocalHost, setNewLocalHost] = useState('');
   
   const currentSettings: NodeSettingsType = {
@@ -191,6 +204,10 @@ export default function NodeSettings() {
     ...pendingChanges,
     // Ensure trustedLocalHosts always has a value
     trustedLocalHosts: pendingChanges.trustedLocalHosts ?? nodeSettings.trustedLocalHosts ?? [...DEFAULT_TRUSTED_LOCAL_HOSTS],
+  };
+  const currentDesktopLockSettings: DesktopLockSettings = {
+    ...desktopLockSettings,
+    ...pendingDesktopLockSettings,
   };
   
   const hasCustomProvider = currentSettings.providerType === 'custom-electrs' || 
@@ -366,6 +383,7 @@ export default function NodeSettings() {
   };
   
   const handleSaveSettings = async () => {
+    if (isSavingSettings) return;
     if (hasCustomProvider && !currentSettings.customUrl?.trim()) {
       toast({
         title: "Missing URL",
@@ -374,7 +392,8 @@ export default function NodeSettings() {
       });
       return;
     }
-    
+
+    setIsSavingSettings(true);
     try {
       // Normalize electrumHost before saving - remove http:// prefix
       const settingsToSave = { ...pendingChanges };
@@ -396,8 +415,14 @@ export default function NodeSettings() {
           .replace(/\/+$/, '')
           .trim();
       }
-      await updateSettings(settingsToSave);
+      if (Object.keys(settingsToSave).length > 0) {
+        await updateSettings(settingsToSave);
+      }
+      if (Object.keys(pendingDesktopLockSettings).length > 0) {
+        await updateDesktopLockSettings(currentDesktopLockSettings);
+      }
       setPendingChanges({});
+      setPendingDesktopLockSettings({});
       toast({
         title: "Settings Saved",
         description: "Your node connection settings have been updated",
@@ -408,6 +433,8 @@ export default function NodeSettings() {
         description: "Failed to save settings",
         variant: "destructive",
       });
+    } finally {
+      setIsSavingSettings(false);
     }
   };
   
@@ -680,7 +707,9 @@ export default function NodeSettings() {
     }
   };
 
-  const hasPendingChanges = Object.keys(pendingChanges).length > 0;
+  const hasPendingChanges =
+    Object.keys(pendingChanges).length > 0 ||
+    Object.keys(pendingDesktopLockSettings).length > 0;
   
   return (
     <div className="h-full overflow-y-auto">
@@ -709,6 +738,126 @@ export default function NodeSettings() {
         </AlertTitle>
         <AlertDescription>{privacyInfo.description}</AlertDescription>
       </Alert>
+
+      {isElectron() && (
+        <Card data-testid="card-desktop-vault-lock">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Shield className="h-4 w-4" />
+              Desktop Vault Lock
+            </CardTitle>
+            <CardDescription>
+              Automatically lock the vault when you step away or the computer changes state.
+              These settings apply to this desktop installation only.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="space-y-2">
+              <Label htmlFor="idle-lock-timeout">Lock after inactivity</Label>
+              <Select
+                value={String(currentDesktopLockSettings.idleTimeoutSeconds)}
+                onValueChange={(value) => {
+                  setPendingDesktopLockSettings((previous) => ({
+                    ...previous,
+                    idleTimeoutSeconds: Number(value) as DesktopLockSettings["idleTimeoutSeconds"],
+                  }));
+                }}
+              >
+                <SelectTrigger id="idle-lock-timeout" data-testid="select-idle-lock-timeout">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="60">After 1 minute</SelectItem>
+                  <SelectItem value="300">After 5 minutes</SelectItem>
+                  <SelectItem value="900">After 15 minutes</SelectItem>
+                  <SelectItem value="1800">After 30 minutes</SelectItem>
+                  <SelectItem value="3600">After 1 hour</SelectItem>
+                  <SelectItem value="0">Never (not recommended)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                A shorter timeout is safer in shared or public spaces. The five-minute choice
+                is the secure default.
+              </p>
+            </div>
+
+            <Separator />
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label htmlFor="lock-on-suspend">Lock when the computer suspends</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Lock before sleep or hibernation.
+                  </p>
+                </div>
+                <Switch
+                  id="lock-on-suspend"
+                  checked={currentDesktopLockSettings.lockOnSuspend}
+                  onCheckedChange={(checked) =>
+                    setPendingDesktopLockSettings((previous) => ({
+                      ...previous,
+                      lockOnSuspend: checked,
+                    }))
+                  }
+                  data-testid="switch-lock-on-suspend"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label htmlFor="lock-on-resume">Lock when the computer resumes</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Require unlocking after sleep or hibernation.
+                  </p>
+                </div>
+                <Switch
+                  id="lock-on-resume"
+                  checked={currentDesktopLockSettings.lockOnResume}
+                  onCheckedChange={(checked) =>
+                    setPendingDesktopLockSettings((previous) => ({
+                      ...previous,
+                      lockOnResume: checked,
+                    }))
+                  }
+                  data-testid="switch-lock-on-resume"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label htmlFor="lock-on-screen-lock">Lock when the screen locks</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Keep the vault protected when your OS locks the display.
+                  </p>
+                </div>
+                <Switch
+                  id="lock-on-screen-lock"
+                  checked={currentDesktopLockSettings.lockOnScreenLock}
+                  onCheckedChange={(checked) =>
+                    setPendingDesktopLockSettings((previous) => ({
+                      ...previous,
+                      lockOnScreenLock: checked,
+                    }))
+                  }
+                  data-testid="switch-lock-on-screen-lock"
+                />
+              </div>
+            </div>
+
+            {!currentDesktopLockSettings.lockOnSuspend ||
+              !currentDesktopLockSettings.lockOnResume ||
+              !currentDesktopLockSettings.lockOnScreenLock ||
+              currentDesktopLockSettings.idleTimeoutSeconds === 0 ? (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  Some automatic lock protections are disabled. Your vault may remain open
+                  while you are away from the computer.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
       
       {/* Provider Selection */}
       <Card className={currentSettings.useElectrum ? 'opacity-60' : ''}>
@@ -1461,14 +1610,15 @@ export default function NodeSettings() {
       <div className="flex items-center gap-3">
         <Button
           onClick={handleSaveSettings}
-          disabled={!hasPendingChanges}
+          disabled={!hasPendingChanges || isSavingSettings}
           className="flex-1"
           data-testid="button-save-settings"
         >
-          Save Settings
+          {isSavingSettings ? "Saving..." : "Save Settings"}
         </Button>
         <Button
           onClick={handleReset}
+          disabled={isSavingSettings}
           variant="outline"
           data-testid="button-reset-settings"
         >

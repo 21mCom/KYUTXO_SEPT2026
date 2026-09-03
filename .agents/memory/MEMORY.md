@@ -142,3 +142,4 @@
 - [Origin-lot certainty propagation](origin-lot-certainty.md) — acquisition lot IDs do not imply known provenance; source certainty must follow allocations through every descendant and summary/export.
 - [Transaction curation state](transaction-curation-state.md) — keep review state on txid-unique rows; classify in fixed batches and page by state+id keyset.
 - [Protected vault storage](protected-vault-storage-design.md) — packaged Electron must replace plaintext IndexedDB and attachments before changing UI claims.
+- [Desktop lock policy ordering](desktop-lock-policy-ordering.md) — startup sync and user saves share one queue; sync re-reads inside it, or stale policy can overwrite a newer save in Electron.

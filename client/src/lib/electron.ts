@@ -11,6 +11,18 @@ export interface TorTestResult {
   testedProxies?: string[];
 }
 
+export interface DesktopLockSettings {
+  idleTimeoutSeconds: number;
+  lockOnSuspend: boolean;
+  lockOnResume: boolean;
+  lockOnScreenLock: boolean;
+}
+
+export interface DesktopLockSettingsResult {
+  success: boolean;
+  error?: string;
+}
+
 // Electrum protocol types
 // Every Electrum call accepts optional Tor routing: when `useTor` is set the
 // socket is opened through the configured SOCKS proxy (or an auto-detected
@@ -363,6 +375,7 @@ interface ElectronAPI {
   torRequest: (params: TorRequestParams) => Promise<TorRequestResult>;
   torStatus: () => Promise<TorStatusResult>;
   torUpdateSettings: (settings: TorUpdateSettingsParams) => Promise<{ success: boolean; error?: string }>;
+  setVaultLockSettings?: (settings: DesktopLockSettings) => Promise<DesktopLockSettingsResult>;
   onVaultLock?: (callback: (detail: { reason?: string }) => void) => () => void;
   // Electrum protocol operations
   electrumTest: (params: ElectrumTestParams) => Promise<ElectrumTestResult>;

@@ -16,6 +16,10 @@ const { registerFileHandlers } = require('./file-handlers.cjs');
 const { resolveDataDirs, ensureDirectories: ensureDataDirectories } = require('./paths.cjs');
 const { registerElectrumHandlers, stopKeepalive } = require('./electrum-client.cjs');
 const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.cjs');
+const {
+  parseIdleLockTimeoutEnv,
+  validateVaultLockSettings,
+} = require('./vault-lock-settings.cjs');
 
 const {
   isExternalOpenAllowed,
@@ -51,19 +55,55 @@ if (!isDev) {
 const LOCK_ON_SUSPEND = process.env.KYUTXO_LOCK_ON_SUSPEND !== '0';
 const LOCK_ON_SCREEN_LOCK = process.env.KYUTXO_LOCK_ON_SCREEN_LOCK !== '0';
 const LOCK_ON_RESUME = process.env.KYUTXO_LOCK_ON_RESUME !== '0';
-const IDLE_LOCK_TIMEOUT_SECONDS = (() => {
-  const value = Number(process.env.KYUTXO_IDLE_LOCK_SECONDS ?? 300);
-  return Number.isFinite(value) && value >= 0
-    ? Math.min(Math.floor(value), 24 * 60 * 60)
-    : 0;
-})();
+const IDLE_LOCK_TIMEOUT_SECONDS = parseIdleLockTimeoutEnv(
+  process.env.KYUTXO_IDLE_LOCK_SECONDS,
+);
 const IDLE_LOCK_POLL_MS = 5000;
 let idleLockTimer = null;
 let idleLockSent = false;
+let vaultLockSettings = {
+  idleTimeoutSeconds: IDLE_LOCK_TIMEOUT_SECONDS,
+  lockOnSuspend: LOCK_ON_SUSPEND,
+  lockOnResume: LOCK_ON_RESUME,
+  lockOnScreenLock: LOCK_ON_SCREEN_LOCK,
+};
 
 function lockRenderer(reason) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('vault-lock', { reason });
+  }
+}
+
+function configureIdleLockTimer() {
+  if (idleLockTimer) {
+    clearInterval(idleLockTimer);
+    idleLockTimer = null;
+  }
+  idleLockSent = false;
+
+  if (
+    vaultLockSettings.idleTimeoutSeconds > 0 &&
+    typeof powerMonitor.getSystemIdleTime === 'function'
+  ) {
+    idleLockTimer = setInterval(() => {
+      let idleSeconds;
+      try {
+        idleSeconds = powerMonitor.getSystemIdleTime();
+      } catch (error) {
+        logMainError('[KYUTXO] Failed to read system idle time', error);
+        return;
+      }
+      const isIdle = idleSeconds >= vaultLockSettings.idleTimeoutSeconds;
+      if (isIdle && !idleLockSent) {
+        idleLockSent = true;
+        lockRenderer('idle');
+      } else if (!isIdle) {
+        idleLockSent = false;
+      }
+    }, IDLE_LOCK_POLL_MS);
+    // The timer is only a lifecycle observer and must not keep the app alive
+    // while Electron is shutting down.
+    idleLockTimer.unref?.();
   }
 }
 
@@ -344,6 +384,21 @@ ipcMain.handle('tor-request', async (event, rawArgs) => {
   }
 });
 
+ipcMain.handle('set-vault-lock-settings', async (event, rawSettings) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    return { success: false, error: 'Vault lock settings are not available to this renderer' };
+  }
+
+  const parsed = validateVaultLockSettings(rawSettings);
+  if (!parsed.ok) {
+    return { success: false, error: parsed.error };
+  }
+
+  vaultLockSettings = parsed.settings;
+  configureIdleLockTimer();
+  return { success: true };
+});
+
 ipcMain.handle('tor-status', async () => {
   try {
     const proxiesToTest = [
@@ -550,34 +605,24 @@ app.whenReady().then(() => {
   
   powerMonitor.on('suspend', () => {
     console.log('[KYUTXO] System suspending (going to sleep)');
-    if (LOCK_ON_SUSPEND) lockRenderer('suspend');
+    if (vaultLockSettings.lockOnSuspend) lockRenderer('suspend');
   });
   
   powerMonitor.on('resume', () => {
     console.log('[KYUTXO] System resumed from sleep');
-    if (LOCK_ON_RESUME) lockRenderer('resume');
+    if (vaultLockSettings.lockOnResume) lockRenderer('resume');
   });
   
   powerMonitor.on('lock-screen', () => {
     console.log('[KYUTXO] Screen locked');
-    if (LOCK_ON_SCREEN_LOCK) lockRenderer('lock-screen');
+    if (vaultLockSettings.lockOnScreenLock) lockRenderer('lock-screen');
   });
   
   powerMonitor.on('unlock-screen', () => {
     console.log('[KYUTXO] Screen unlocked');
   });
 
-  if (IDLE_LOCK_TIMEOUT_SECONDS > 0 && typeof powerMonitor.getSystemIdleTime === 'function') {
-    idleLockTimer = setInterval(() => {
-      const isIdle = powerMonitor.getSystemIdleTime() >= IDLE_LOCK_TIMEOUT_SECONDS;
-      if (isIdle && !idleLockSent) {
-        idleLockSent = true;
-        lockRenderer('idle');
-      } else if (!isIdle) {
-        idleLockSent = false;
-      }
-    }, IDLE_LOCK_POLL_MS);
-  }
+  configureIdleLockTimer();
 });
 
 app.on('window-all-closed', () => {

@@ -1,7 +1,28 @@
-import { db, notifyDbChange, createDefaultSettings, type Settings } from '../database';
+import {
+  db,
+  notifyDbChange,
+  createDefaultSettings,
+  type Settings,
+} from '../database';
+import {
+  normalizeDesktopLockSettings,
+  type DesktopLockSettings,
+} from '../desktop-lock-settings';
+import { getElectronAPISafe } from '../electron';
 
 export interface SettingsWriteOptions {
   skipNotification?: boolean;
+}
+
+let desktopLockOperation: Promise<void> = Promise.resolve();
+
+function enqueueDesktopLockOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const queued = desktopLockOperation.then(operation, operation);
+  desktopLockOperation = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  return queued;
 }
 
 export async function getSettings(id: string = 'default'): Promise<Settings | undefined> {
@@ -77,4 +98,66 @@ export async function clearSettings(
   if (!options?.skipNotification) {
     notifyDbChange('settings');
   }
+}
+
+/**
+ * Push the persisted desktop-only policy into Electron's main process.
+ *
+ * The main process remains the authority for lifecycle events; the renderer
+ * only supplies this narrow, validated policy. Missing policies are left alone
+ * so deployment environment defaults remain effective on first launch.
+ */
+export async function syncDesktopLockSettings(): Promise<void> {
+  return enqueueDesktopLockOperation(async () => {
+    const api = getElectronAPISafe();
+    if (!api?.setVaultLockSettings) return;
+
+    // Read inside the queue so a save that ran first can never be overwritten
+    // by a startup sync carrying a stale pre-save snapshot.
+    const stored = await getSettings('default');
+    if (!stored?.desktopLockSettings) return;
+
+    const normalized = normalizeDesktopLockSettings(stored.desktopLockSettings);
+    const result = await api.setVaultLockSettings(normalized);
+    if (!result.success) {
+      throw new Error(result.error || 'The desktop vault lock policy was rejected');
+    }
+  });
+}
+
+/**
+ * Apply and persist a desktop lock policy. Applying through the main process
+ * first means an invalid value can never be committed as if it were active.
+ */
+export async function updateDesktopLockSettings(
+  settings: DesktopLockSettings,
+): Promise<void> {
+  return enqueueDesktopLockOperation(async () => {
+    const normalized = normalizeDesktopLockSettings(settings);
+    const api = getElectronAPISafe();
+    const stored = await ensureSettings('default');
+    const previousSettings = stored.desktopLockSettings;
+
+    await updateSettings('default', { desktopLockSettings: normalized });
+    if (!api?.setVaultLockSettings) return;
+
+    // Persist first so a quota/transaction failure cannot weaken the active
+    // main-process policy. If Electron rejects the value, restore the prior row.
+    try {
+      const result = await api.setVaultLockSettings(normalized);
+      if (!result.success) {
+        throw new Error(result.error || 'The desktop vault lock policy was rejected');
+      }
+    } catch (error) {
+      try {
+        await updateSettings('default', { desktopLockSettings: previousSettings });
+      } catch (rollbackError) {
+        throw new Error(
+          'The desktop vault lock policy was rejected and its saved setting could not be restored',
+          { cause: rollbackError },
+        );
+      }
+      throw error;
+    }
+  });
 }

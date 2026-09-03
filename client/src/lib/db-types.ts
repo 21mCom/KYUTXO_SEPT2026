@@ -406,6 +406,8 @@ export interface CustomField {
   createdAt: number;
 }
 
+export const DESKTOP_LOCK_TIMEOUT_OPTIONS = [0, 60, 300, 900, 1800, 3600] as const;
+
 export interface SavedInboxViewFilters {
   dateMode: 'any' | 'range' | 'exact';
   dateStart?: string;
@@ -552,6 +554,10 @@ export interface Settings {
   // Device-local scheduled backup policy. Destination paths intentionally stay
   // local to this installation and are not imported from backup files.
   backupSchedule?: BackupScheduleSettings;
+  // Device-local desktop vault lock policy. It is intentionally excluded from
+  // portable backup preferences because it describes this installation's
+  // physical security environment.
+  desktopLockSettings?: DesktopLockSettings;
 }
 
 export type BackupCadenceDays = 1 | 7 | 14 | 30 | 90;
@@ -1214,3 +1220,21 @@ export interface DerivationTemplate {
   createdAt: number;
   updatedAt: number;
 }
+
+export type DesktopLockTimeoutSeconds = typeof DESKTOP_LOCK_TIMEOUT_OPTIONS[number];
+
+export interface DesktopLockSettings {
+  /** Idle timeout in seconds. Zero disables idle locking. */
+  idleTimeoutSeconds: DesktopLockTimeoutSeconds;
+  lockOnSuspend: boolean;
+  lockOnResume: boolean;
+  lockOnScreenLock: boolean;
+}
+
+export const DEFAULT_DESKTOP_LOCK_SETTINGS: DesktopLockSettings = {
+  // Keep the default aligned with the main-process fail-safe policy.
+  idleTimeoutSeconds: 300,
+  lockOnSuspend: true,
+  lockOnResume: true,
+  lockOnScreenLock: true,
+};
