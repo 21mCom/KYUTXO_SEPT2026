@@ -16,3 +16,4 @@ export * from './paused-sync-crud';
 export * from './sync-protection-crud';
 export * from './partial-export-crud';
 export * from './privacy-history-crud';
+export * from './network-privacy-activity-crud';

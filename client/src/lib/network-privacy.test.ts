@@ -8,6 +8,12 @@ const crud = vi.hoisted(() => ({
 
 vi.mock('./data/node-settings-crud', () => crud);
 
+const activityCrud = vi.hoisted(() => ({
+  addNetworkPrivacyActivity: vi.fn().mockResolvedValue(1),
+}));
+
+vi.mock('./data/network-privacy-activity-crud', () => activityCrud);
+
 import {
   FIRST_SYNC_CONFIRMATION_REQUIRED_MESSAGE,
   NETWORK_BLOCKED_MESSAGE,
@@ -17,6 +23,7 @@ import {
   initializeFreshNetworkPrivacy,
   isFirstSyncConfirmationRequired,
   isNetworkAccessEnabled,
+  recordNetworkPrivacyActivity,
   setRuntimeNetworkSettings,
 } from './network-privacy';
 import type { NodeSettings } from './database';
@@ -33,6 +40,7 @@ const legacy: NodeSettings = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  activityCrud.addNetworkPrivacyActivity.mockResolvedValue(1);
   setRuntimeNetworkSettings(legacy);
 });
 
@@ -89,5 +97,40 @@ describe('network privacy policy', () => {
       networkAccessEnabled: false,
       networkOnboardingStage: 'source',
     }));
+  });
+
+  it('records only the derived provider class, action, time, and sanitized count', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(123_456);
+    recordNetworkPrivacyActivity({
+      action: 'address-check',
+      addressCount: 2.9,
+    }, {
+      ...legacy,
+      useTor: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(activityCrud.addNetworkPrivacyActivity).toHaveBeenCalledWith({
+        timestamp: 123_456,
+        providerClass: 'public-tor',
+        action: 'address-check',
+        addressCount: 2,
+      });
+    });
+  });
+
+  it('does not retain invalid address counts', async () => {
+    recordNetworkPrivacyActivity({
+      action: 'sync',
+      addressCount: Number.NaN,
+    }, legacy);
+
+    await vi.waitFor(() => {
+      expect(activityCrud.addNetworkPrivacyActivity).toHaveBeenCalledWith({
+        timestamp: expect.any(Number),
+        providerClass: 'public-direct',
+        action: 'sync',
+      });
+    });
   });
 });

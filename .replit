@@ -3724,3 +3724,14 @@ args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/bac
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "network-privacy-activity"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run check && npx vitest run client/src/lib/network-privacy.test.ts client/src/lib/data/network-privacy-activity-crud.test.ts client/src/lib/legacy-migration.test.ts && node scripts/check-network-privacy-activity-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true

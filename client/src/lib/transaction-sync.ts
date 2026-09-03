@@ -37,6 +37,7 @@ import { recomputeAddressStats } from './data/address-stats';
 import {
   assertFirstSyncConfirmed,
   assertNetworkAccessAllowed,
+  recordNetworkPrivacyActivity,
   setRuntimeNetworkSettings,
 } from './network-privacy';
 
@@ -146,13 +147,14 @@ async function loadAddressRecordsAtDepth(depth: number): Promise<Record[]> {
 
 
 export class TransactionSyncService {
-  private async prepareNetworkAction(): Promise<void> {
+  private async prepareNetworkAction(): Promise<NodeSettings | undefined> {
     const settings = await getNodeSettings('default');
-    if (!settings) return;
+    if (!settings) return undefined;
     setRuntimeNetworkSettings(settings);
     assertNetworkAccessAllowed(settings);
     assertFirstSyncConfirmed(settings);
     this.provider = createProviderFromSettings(settings);
+    return settings;
   }
 
   private provider: BlockchainProvider;
@@ -439,7 +441,8 @@ export class TransactionSyncService {
       this.onProgress = onProgress;
     }
 
-    await this.prepareNetworkAction();
+    const networkSettings = await this.prepareNetworkAction();
+    recordNetworkPrivacyActivity({ action: 'sync', addressCount: 1 }, networkSettings);
 
     this.resetProgress();
     this.cancelled = false;
@@ -761,7 +764,15 @@ export class TransactionSyncService {
 
   async syncWithDepth(options: SyncOptions, preloadedRecords?: Record[]): Promise<SyncResult> {
     const { sourceFilter, maxDepth, specificRecordIds, resumeContext } = options;
-    await this.prepareNetworkAction();
+    const networkSettings = await this.prepareNetworkAction();
+    let syncActivityRecorded = false;
+    let didReachTargetSelection = false;
+    const queriedRecordIds = new Set<number>();
+    const recordSyncActivity = (addressCount?: number) => {
+      if (syncActivityRecorded) return;
+      syncActivityRecorded = true;
+      recordNetworkPrivacyActivity({ action: 'sync', addressCount }, networkSettings);
+    };
     
     // Reset progress counters and cancellation flags at the start of each sync
     this.resetProgress();
@@ -802,6 +813,7 @@ export class TransactionSyncService {
       });
 
       const currentHeight = await this.cancellableCall(this.provider.getBlockHeight(), 30000);
+      didReachTargetSelection = true;
       // A tx in the tip block has 1 confirmation, so height <= tip - (MIN - 1) has >= MIN confs.
       const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS + 1;
       const syncRunTimestamp = Date.now();
@@ -978,6 +990,7 @@ export class TransactionSyncService {
             }
 
             // --- Sync Protection: Tx count threshold check ---
+            queriedRecordIds.add(record.id);
             const txCheck = await this.checkTxCountThreshold(address);
             if (txCheck.exceeded) {
               console.log(`[TransactionSync] Skipping high-volume address (${txCheck.count} txs > ${this.syncProtection.txCountThreshold} threshold): ${address}`);
@@ -1271,6 +1284,7 @@ export class TransactionSyncService {
           }
 
           // --- Sync Protection: Tx count threshold check ---
+          queriedRecordIds.add(record.id);
           const txCheck = await this.checkTxCountThreshold(address);
           if (txCheck.exceeded) {
             console.log(`[TransactionSync] Skipping high-volume address (${txCheck.count} txs > ${this.syncProtection.txCountThreshold} threshold): ${address}`);
@@ -1389,6 +1403,10 @@ export class TransactionSyncService {
         });
       }
     } finally {
+      // Emit exactly one summary after every depth and early-return path has
+      // finished. If the height request failed before target selection, do not
+      // invent an address count for a query that never started.
+      recordSyncActivity(didReachTargetSelection ? queriedRecordIds.size : undefined);
       this.pauseRequested = false;
       this.abortController = null;
       // Recompute cached stats for touched addresses from local data only.

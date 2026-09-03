@@ -17,7 +17,7 @@ import { reportDbUpgradeProgress } from './db-upgrade-progress';
  * KEEP IN SYNC when adding a new `this.version(N)` declaration — the
  * legacy-migration test asserts this matches the opened database.
  */
-export const CURRENT_SCHEMA_VERSION = 42;
+export const CURRENT_SCHEMA_VERSION = 43;
 
 // Import types needed for the class definition
 import type {
@@ -27,7 +27,7 @@ import type {
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
   PausedSyncState, SkippedAddress, AddressBlacklist, PartialExportBundle,
   TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag, SavedPsbt,
-      AdversaryScenario,
+      AdversaryScenario, NetworkPrivacyActivityEntry,
 } from './db-types';
 import type {
   RecordSearchIndexEntry,
@@ -98,6 +98,8 @@ export class KYUTXODatabase extends Dexie {
   // bulkPut, bulkDelete, modify, clear) on db.adversaryScenarios outside of
   // adversary-scenarios-crud.ts.
   adversaryScenarios!: Table<AdversaryScenario>;
+  // Device-local summary of network activity. Never included in backups.
+  networkPrivacyActivity!: Table<NetworkPrivacyActivityEntry>;
   // Device-local derived index for notes/custom-field command search. It is
   // intentionally absent from backups and can be rebuilt from records.
   recordSearchIndex!: Table<RecordSearchIndexEntry>;
@@ -154,6 +156,10 @@ export class KYUTXODatabase extends Dexie {
     // v42: durable transaction curation state. The fields are intentionally
     // stored on blockchainTransactions so streamed backups, txid de-duplication
     // and legacy restore preserve the state without a second large table.
+    this.version(43).stores({
+      networkPrivacyActivity: '++id, timestamp, providerClass, action',
+    });
+
     this.version(42).stores({
       blockchainTransactions: '++id, &txid, blockTime, curationState, [curationState+id]',
       transactionParticipants: '++id, txid, role, address, recordId, [prevTxid+prevVout], [txid+role+vout]',

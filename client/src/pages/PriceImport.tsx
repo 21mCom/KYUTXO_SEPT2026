@@ -35,6 +35,7 @@ import {
 } from "@/lib/data/price-data-crud";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { isNetworkAccessEnabled } from "@/lib/network-privacy";
+import { recordNetworkPrivacyActivity } from "@/lib/network-privacy";
 
 export default function PriceImport() {
   const [, navigate] = useLocation();
@@ -253,6 +254,10 @@ export default function PriceImport() {
                         title: "Network Offline",
                         description: "Use the header privacy control before opening a price-data provider.",
                       });
+                    } else {
+                      recordNetworkPrivacyActivity({
+                        action: 'price-source',
+                      }, nodeSettings);
                     }
                   }}
                   className={`flex items-center justify-between p-4 rounded-lg border transition-colors ${networkEnabled ? 'hover-elevate' : 'opacity-60 cursor-not-allowed'}`}

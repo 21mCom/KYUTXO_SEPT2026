@@ -24,6 +24,7 @@ import { ElectrumProvider } from './providers/electrum';
 import {
   assertFirstSyncConfirmed,
   assertNetworkAccessAllowed,
+  recordNetworkPrivacyActivity,
 } from './network-privacy';
 
 export type { BlockchainProvider, ApiTransaction, ParsedTransaction, TorStatus, TorTestResult };
@@ -146,6 +147,10 @@ export async function testConnectionWithSettings(settings: NodeSettings): Promis
 }> {
   try {
     const provider = createProviderFromSettings(settings);
+    // Provider tests are recorded only after the network policy allows the
+    // operation, so blocked attempts do not look like queries that happened.
+    assertNetworkAccessAllowed(settings);
+    recordNetworkPrivacyActivity({ action: 'provider-test' }, settings);
     const result = await provider.testConnection();
     
     // Include the tested URL for diagnostics (helps users verify their config)

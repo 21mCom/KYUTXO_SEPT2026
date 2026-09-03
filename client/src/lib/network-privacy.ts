@@ -7,6 +7,10 @@ import {
   putNodeSettings,
   updateNodeSettings,
 } from './data/node-settings-crud';
+import {
+  addNetworkPrivacyActivity,
+  type NetworkPrivacyActivityInput,
+} from './data/network-privacy-activity-crud';
 
 export const NETWORK_BLOCKED_MESSAGE =
   'Network access is offline. Use the privacy control in the header to enable it.';
@@ -105,6 +109,31 @@ export function getProviderClassDescription(settings: NodeSettings): string {
     case 'public-direct':
       return `${settings.providerType === 'blockstream' ? 'blockstream.info' : 'mempool.space'} directly`;
   }
+}
+
+/**
+ * Record only the category of a network action. The persisted entry contains
+ * no address, URL, transaction, or provider response. Logging is deliberately
+ * best-effort so a local storage problem can never block the requested action.
+ */
+export function recordNetworkPrivacyActivity(
+  activity: NetworkPrivacyActivityInput,
+  settings?: NodeSettings,
+): void {
+  const current = settings ?? runtimeSettings;
+  if (!current) return;
+  const addressCount =
+    typeof activity.addressCount === 'number' && Number.isFinite(activity.addressCount)
+      ? Math.max(0, Math.floor(activity.addressCount))
+      : undefined;
+  void addNetworkPrivacyActivity({
+    timestamp: Date.now(),
+    providerClass: deriveNetworkPrivacyMode(current),
+    action: activity.action,
+    ...(addressCount === undefined ? {} : { addressCount }),
+  }).catch(error => {
+    console.warn('[NetworkPrivacy] Could not save local activity entry:', error);
+  });
 }
 
 export async function initializeFreshNetworkPrivacy(): Promise<void> {

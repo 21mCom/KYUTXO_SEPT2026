@@ -828,6 +828,13 @@ export type NetworkPrivacyMode =
   | 'electrum'
   | 'public-tor'
   | 'public-direct';
+
+/** A device-local record of the kind of blockchain-related action performed. */
+export type NetworkPrivacyActivityType =
+  | 'sync'
+  | 'address-check'
+  | 'provider-test'
+  | 'price-source';
 export const DEFAULT_TRUSTED_LOCAL_HOSTS = [
   'localhost',
   '127.0.0.1',
@@ -1256,3 +1263,15 @@ export const DEFAULT_DESKTOP_LOCK_SETTINGS: DesktopLockSettings = {
   lockOnResume: true,
   lockOnScreenLock: true,
 };
+
+/**
+ * Intentionally contains no address, URL, transaction, or response data.
+ * This table is a local activity summary only and is not included in backups.
+ */
+export interface NetworkPrivacyActivityEntry {
+  id?: number;
+  timestamp: number;
+  providerClass: NetworkPrivacyMode;
+  action: NetworkPrivacyActivityType;
+  addressCount?: number;
+}

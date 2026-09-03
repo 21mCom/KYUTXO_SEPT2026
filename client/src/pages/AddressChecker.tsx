@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { createProviderFromSettings, type BlockchainProvider } from "@/lib/blockchain-api";
+import { recordNetworkPrivacyActivity } from "@/lib/network-privacy";
 import { validateAddress, formatBTC } from "@/lib/bitcoin";
 import type { AddressInfo, ApiTransaction } from "@/lib/providers/types";
 import { computeHistoryFromTxs } from "@/lib/providers/address-history";
@@ -492,6 +493,12 @@ export default function AddressChecker() {
     const validIndexes = parsed
       .map((r, i) => ({ r, i }))
       .filter(({ r }) => !r.isInvalid);
+    if (validIndexes.length > 0) {
+      recordNetworkPrivacyActivity({
+        action: 'address-check',
+        addressCount: validIndexes.length,
+      }, nodeSettings);
+    }
 
     // Row updates are buffered and flushed on a short interval so a huge run
     // re-renders the table a few times per second, not twice per address.
@@ -642,6 +649,10 @@ export default function AddressChecker() {
   const loadHistoryForIndexes = async (targets: { i: number; address: string }[]) => {
     const provider = providerRef.current;
     if (!provider || !provider.getAddressHistoryDates || targets.length === 0) return;
+    recordNetworkPrivacyActivity({
+      action: 'address-check',
+      addressCount: targets.length,
+    }, nodeSettings);
 
     historyCancelledRef.current = false;
     setIsHistoryRunning(true);

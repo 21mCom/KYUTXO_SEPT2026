@@ -145,6 +145,8 @@ describe("one-time migration path (legacy vault -> current schema)", () => {
       upgraded = new KYUTXODatabase();
       await upgraded.open();
       expect(upgraded.verno).toBe(CURRENT_SCHEMA_VERSION);
+      expect(upgraded.tables.map(table => table.name)).toContain("networkPrivacyActivity");
+      expect(await upgraded.networkPrivacyActivity.count()).toBe(0);
 
       // --- (b) v27: payloads moved, encryption flags gone ---------------------
       const records = await upgraded.records.toArray();
