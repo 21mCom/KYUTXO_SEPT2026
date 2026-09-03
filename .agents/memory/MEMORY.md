@@ -144,3 +144,4 @@
 - [Protected vault storage](protected-vault-storage-design.md) — packaged Electron must replace plaintext IndexedDB and attachments before changing UI claims.
 - [Desktop lock policy ordering](desktop-lock-policy-ordering.md) — startup sync and user saves share one queue; sync re-reads inside it, or stale policy can overwrite a newer save in Electron.
 - [Derived-index rebuild coordination](derived-index-rebuild-coordination.md) — rebuild readiness needs an atomic pending barrier plus generation CAS; fingerprints alone can certify stale derived data.
+- [Derived report checkpoints](derived-report-checkpoints.md) — key native report caches to full mirror fingerprints; page nested row payloads too; detail reads must require the visible checkpoint.

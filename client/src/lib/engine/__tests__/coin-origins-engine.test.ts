@@ -3,6 +3,8 @@ import { createInMemoryEngineDb } from "../better-sqlite3-adapter";
 import {
   createSchema,
   getCoinOrigins,
+  getCoinOriginsPage,
+  getEngineMeta,
   insertParticipants,
   insertRecords,
   insertTransactions,
@@ -91,6 +93,98 @@ describe("native engine coin origins query", () => {
     expect(ledger.outpoints[0].hopTxids).toHaveLength(size);
     expect(ledger.summary.reconciled).toBe(true);
     expect(db.selectScalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'coinOrigin%'")).toBe(0);
+    db.close();
+  });
+
+  it("windows broad multi-lot holdings and outpoints behind a fingerprint-keyed checkpoint", () => {
+    const db = createInMemoryEngineDb();
+    createSchema(db);
+    insertRecords(db, [record(1, "owned", "Broad")]);
+    const transactions: TransactionRow[] = [];
+    const participants: ParticipantRow[] = [];
+    const size = 1_000;
+    for (let i = 1; i <= size; i++) {
+      const txid = `acquire-${String(i).padStart(6, "0")}`;
+      transactions.push({ id: i, txid, blockHeight: i, blockTime: i, fee: 0, feeRate: 0, vsize: 100, hasOpReturn: 0 });
+      participants.push({ id: i, txid, role: "output", address: "owned", amount: i, vout: 0, prevTxid: null, prevVout: null, recordId: 1, scriptType: null });
+    }
+    insertTransactions(db, transactions);
+    insertParticipants(db, participants);
+
+    const first = getCoinOriginsPage(db, { limit: 10_000 });
+    expect(first.holdingsTotal).toBe(size);
+    expect(first.outpointsTotal).toBe(size);
+    expect(first.holdings).toHaveLength(250);
+    expect(first.outpoints).toHaveLength(250);
+    expect(first.outpoints.every((row) => row.allocations.length === 0 && row.hopTxids.length === 0)).toBe(true);
+    expect(first.holdingsHasMore).toBe(true);
+    expect(first.outpointsHasMore).toBe(true);
+    expect(getEngineMeta(db, "coin_origins_checkpoint_fingerprint")).toBe(first.checkpointKey);
+
+    const second = getCoinOriginsPage(db, { holdingsOffset: 250, outpointsOffset: 250, limit: 250 });
+    expect(second.checkpointKey).toBe(first.checkpointKey);
+    expect(second.holdings[0].lotId).not.toBe(first.holdings[0].lotId);
+    expect(second.outpoints[0].txid).not.toBe(first.outpoints[0].txid);
+
+    insertTransactions(db, [{ id: size + 1, txid: "later", blockHeight: size + 1, blockTime: size + 1, fee: 0, feeRate: 0, vsize: 100, hasOpReturn: 0 }]);
+    insertParticipants(db, [{ id: size + 1, txid: "later", role: "output", address: "owned", amount: 1, vout: 0, prevTxid: null, prevVout: null, recordId: 1, scriptType: null }]);
+    expect(() => getCoinOriginsPage(db, {
+      outpoint: "later:0",
+      expectedCheckpointKey: first.checkpointKey,
+    })).toThrow("checkpoint changed");
+    const rebuilt = getCoinOriginsPage(db, { limit: 1 });
+    expect(rebuilt.checkpointKey).not.toBe(first.checkpointKey);
+    expect(rebuilt.outpointsTotal).toBe(size + 1);
+
+    const detail = getCoinOriginsPage(db, { outpoint: "later:0" });
+    expect(detail.outpoints).toHaveLength(1);
+    expect(detail.outpoints[0].allocations).toHaveLength(1);
+    expect(detail.detail?.hops.map((hop) => hop.txid)).toEqual(["later"]);
+    db.close();
+  });
+
+  it("bounds a passport whose current outpoint consolidates hundreds of acquisition lots", () => {
+    const db = createInMemoryEngineDb();
+    createSchema(db);
+    insertRecords(db, [record(1, "owned", "Broad")]);
+    const lotCount = 300;
+    const transactions: TransactionRow[] = [];
+    const participants: ParticipantRow[] = [];
+    for (let i = 1; i <= lotCount; i++) {
+      const txid = `lot-${String(i).padStart(4, "0")}`;
+      transactions.push({ id: i, txid, blockHeight: i, blockTime: i, fee: 0, feeRate: 0, vsize: 100, hasOpReturn: 0 });
+      participants.push({ id: participants.length + 1, txid, role: "output", address: "owned", amount: 1, vout: 0, prevTxid: null, prevVout: null, recordId: 1, scriptType: null });
+    }
+    transactions.push({ id: lotCount + 1, txid: "consolidated", blockHeight: lotCount + 1, blockTime: lotCount + 1, fee: 0, feeRate: 0, vsize: 100, hasOpReturn: 0 });
+    for (let i = 1; i <= lotCount; i++) {
+      participants.push({
+        id: participants.length + 1,
+        txid: "consolidated",
+        role: "input",
+        address: "owned",
+        amount: 1,
+        vout: null,
+        prevTxid: `lot-${String(i).padStart(4, "0")}`,
+        prevVout: 0,
+        recordId: 1,
+        scriptType: null,
+      });
+    }
+    participants.push({ id: participants.length + 1, txid: "consolidated", role: "output", address: "owned", amount: lotCount, vout: 0, prevTxid: null, prevVout: null, recordId: 1, scriptType: null });
+    insertTransactions(db, transactions);
+    insertParticipants(db, participants);
+
+    const first = getCoinOriginsPage(db, { outpoint: "consolidated:0", limit: 100 });
+    expect(first.outpoints[0].allocations).toHaveLength(100);
+    expect(first.holdings).toHaveLength(100);
+    expect(first.detail).toMatchObject({
+      allocationsOffset: 0,
+      allocationsTotal: lotCount,
+      allocationsHasMore: true,
+    });
+    const last = getCoinOriginsPage(db, { outpoint: "consolidated:0", allocationsOffset: 200, limit: 100 });
+    expect(last.outpoints[0].allocations).toHaveLength(100);
+    expect(last.detail?.allocationsHasMore).toBe(false);
     db.close();
   });
 });

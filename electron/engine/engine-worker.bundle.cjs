@@ -613,6 +613,8 @@ var OWNED_UTXOS_TIERS_KEY = "owned_utxos_tiers";
 var OWNED_UTXOS_COUNT_KEY = "owned_utxos_count";
 var HEURISTIC_UTXOS_TIERS_KEY = "heuristic_utxos_tiers";
 var HEURISTIC_UTXOS_COUNT_KEY = "heuristic_utxos_count";
+var COIN_ORIGINS_CHECKPOINT_KEY = "coin_origins_checkpoint_fingerprint";
+var COIN_ORIGINS_PAGE_LIMIT = 250;
 function selectRows(db2, sql, bind = []) {
   return db2.selectRows(sql, bind);
 }
@@ -886,6 +888,16 @@ function getParticipantsFingerprint(db2) {
     maxId: Number(r?.maxId ?? 0),
     resolvedPrevoutCount: Number(resolved ?? 0)
   };
+}
+function getCoinOriginsFingerprint(db2) {
+  return {
+    records: getRecordsFingerprint(db2),
+    transactions: getTransactionsFingerprint(db2),
+    participants: getParticipantsFingerprint(db2)
+  };
+}
+function coinOriginsFingerprintKey(fingerprint) {
+  return JSON.stringify(fingerprint);
 }
 function insertRecords(db2, rows) {
   if (rows.length === 0) return;
@@ -1453,6 +1465,15 @@ function getVaultSummaries(db2, opts = {}) {
   );
 }
 function getCoinOrigins(db2, opts = {}) {
+  const ledger = getCoinOriginsCheckpoint(db2).ledger;
+  return filterCoinOriginsByWallet(ledger, opts.walletName);
+}
+var coinOriginsCheckpoints = /* @__PURE__ */ new WeakMap();
+function getCoinOriginsCheckpoint(db2) {
+  const fingerprint = getCoinOriginsFingerprint(db2);
+  const key = coinOriginsFingerprintKey(fingerprint);
+  const cached = coinOriginsCheckpoints.get(db2);
+  if (cached?.key === key) return cached;
   const records = selectRows(
     db2,
     `SELECT inputString, type, addressImportance, walletName, owner, seedName, label
@@ -1473,7 +1494,61 @@ function getCoinOrigins(db2, opts = {}) {
     participants,
     addresses: records
   };
-  return filterCoinOriginsByWallet(calculateCoinOrigins(input), opts.walletName);
+  const checkpoint = { fingerprint, key, ledger: calculateCoinOrigins(input) };
+  coinOriginsCheckpoints.set(db2, checkpoint);
+  setEngineMeta(db2, COIN_ORIGINS_CHECKPOINT_KEY, key);
+  return checkpoint;
+}
+function pageLimit(value) {
+  if (!Number.isFinite(value)) return 100;
+  return Math.min(COIN_ORIGINS_PAGE_LIMIT, Math.max(1, Math.trunc(value)));
+}
+function getCoinOriginsPage(db2, opts = {}) {
+  const checkpoint = getCoinOriginsCheckpoint(db2);
+  if (opts.expectedCheckpointKey && opts.expectedCheckpointKey !== checkpoint.key) {
+    throw new Error("Coin Origins checkpoint changed; reload the active window");
+  }
+  const ledger = filterCoinOriginsByWallet(checkpoint.ledger, opts.walletName);
+  const limit = pageLimit(opts.limit);
+  const holdingsOffset = Math.max(0, Math.trunc(opts.holdingsOffset ?? 0));
+  const outpointsOffset = Math.max(0, Math.trunc(opts.outpointsOffset ?? 0));
+  const allocationsOffset = Math.max(0, Math.trunc(opts.allocationsOffset ?? 0));
+  const hopsOffset = Math.max(0, Math.trunc(opts.hopsOffset ?? 0));
+  const detailOutpoint = opts.outpoint ? ledger.outpoints.find((row) => `${row.txid}:${row.vout}` === opts.outpoint) : void 0;
+  const detailAllocations = detailOutpoint?.allocations.slice(allocationsOffset, allocationsOffset + limit);
+  const detailHopTxids = detailOutpoint?.hopTxids.slice(hopsOffset, hopsOffset + limit);
+  const outpoints = detailOutpoint ? [{ ...detailOutpoint, allocations: detailAllocations, hopTxids: detailHopTxids }] : ledger.outpoints.slice(outpointsOffset, outpointsOffset + limit).map((row) => ({ ...row, allocations: [], hopTxids: [] }));
+  const detailLotIds = detailOutpoint ? new Set(detailAllocations.map((allocation) => allocation.lotId)) : void 0;
+  const holdings = detailLotIds ? ledger.holdings.filter((holding) => detailLotIds.has(holding.lotId)) : ledger.holdings.slice(holdingsOffset, holdingsOffset + limit);
+  const result = {
+    version: 1,
+    fingerprint: checkpoint.key,
+    checkpointKey: checkpoint.key,
+    holdings,
+    outpoints,
+    summary: ledger.summary,
+    holdingsOffset,
+    outpointsOffset,
+    holdingsTotal: ledger.holdings.length,
+    outpointsTotal: ledger.outpoints.length,
+    lotsTotal: ledger.lots.length,
+    holdingsHasMore: holdingsOffset + holdings.length < ledger.holdings.length,
+    outpointsHasMore: outpointsOffset + outpoints.length < ledger.outpoints.length
+  };
+  if (detailOutpoint) {
+    const hopIds = new Set(detailHopTxids);
+    result.detail = {
+      lots: ledger.lots.filter((lot) => detailLotIds.has(lot.lotId)),
+      hops: ledger.hops.filter((hop) => hopIds.has(hop.txid)),
+      allocationsOffset,
+      allocationsTotal: detailOutpoint.allocations.length,
+      allocationsHasMore: allocationsOffset + detailAllocations.length < detailOutpoint.allocations.length,
+      hopsOffset,
+      hopsTotal: detailOutpoint.hopTxids.length,
+      hopsHasMore: hopsOffset + detailHopTxids.length < detailOutpoint.hopTxids.length
+    };
+  }
+  return result;
 }
 function ownedTierPlaceholders(tiers) {
   const t = tiers.length ? tiers : OWNED_TIERS2;
@@ -2341,6 +2416,8 @@ function handleQuery(name, args) {
       return getVaultSummaries(d, args ?? {});
     case "getCoinOrigins":
       return getCoinOrigins(d, args ?? {});
+    case "getCoinOriginsPage":
+      return getCoinOriginsPage(d, args ?? {});
     default:
       throw new Error(`Unknown query: ${name}`);
   }

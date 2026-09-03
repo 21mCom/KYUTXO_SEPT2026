@@ -27,6 +27,7 @@ import {
   type CoinOriginAddress,
   type CoinOriginParticipant,
   type CoinOriginTransaction,
+  type CoinOriginsPage,
   type CoinOriginsLedger,
 } from '../coin-origins-core';
 
@@ -96,6 +97,11 @@ const OWNED_UTXOS_COUNT_KEY = 'owned_utxos_count';
 // collide and each is gated on its own tier signature.
 const HEURISTIC_UTXOS_TIERS_KEY = 'heuristic_utxos_tiers';
 const HEURISTIC_UTXOS_COUNT_KEY = 'heuristic_utxos_count';
+
+// This is a derived, in-memory checkpoint only. The persisted key is an
+// observability/rebuild marker; the mirror remains the source of all inputs.
+const COIN_ORIGINS_CHECKPOINT_KEY = 'coin_origins_checkpoint_fingerprint';
+const COIN_ORIGINS_PAGE_LIMIT = 250;
 
 // ---------------------------------------------------------------------------
 // Row shapes (mirror columns). The worker maps Dexie objects onto these.
@@ -656,6 +662,25 @@ export function getParticipantsFingerprint(db: EngineDb): ParticipantsFingerprin
     maxId: Number(r?.maxId ?? 0),
     resolvedPrevoutCount: Number(resolved ?? 0),
   };
+}
+
+export interface CoinOriginsFingerprint {
+  records: RecordsFingerprint;
+  transactions: TransactionsFingerprint;
+  participants: ParticipantsFingerprint;
+}
+
+/** The same three-table freshness inputs used by the allMirrors read gate. */
+export function getCoinOriginsFingerprint(db: EngineDb): CoinOriginsFingerprint {
+  return {
+    records: getRecordsFingerprint(db),
+    transactions: getTransactionsFingerprint(db),
+    participants: getParticipantsFingerprint(db),
+  };
+}
+
+function coinOriginsFingerprintKey(fingerprint: CoinOriginsFingerprint): string {
+  return JSON.stringify(fingerprint);
 }
 
 // ---------------------------------------------------------------------------
@@ -1618,6 +1643,27 @@ export function getCoinOrigins(
   db: EngineDb,
   opts: { walletName?: string } = {},
 ): CoinOriginsLedger {
+  const ledger = getCoinOriginsCheckpoint(db).ledger;
+  return filterCoinOriginsByWallet(ledger, opts.walletName);
+}
+
+interface CoinOriginsCheckpoint {
+  fingerprint: CoinOriginsFingerprint;
+  key: string;
+  ledger: CoinOriginsLedger;
+}
+
+// WeakMap keeps test databases isolated and bounds this to the lifetime of the
+// native database connection. A changed fingerprint always rebuilds the
+// checkpoint before any page is returned.
+const coinOriginsCheckpoints = new WeakMap<EngineDb, CoinOriginsCheckpoint>();
+
+function getCoinOriginsCheckpoint(db: EngineDb): CoinOriginsCheckpoint {
+  const fingerprint = getCoinOriginsFingerprint(db);
+  const key = coinOriginsFingerprintKey(fingerprint);
+  const cached = coinOriginsCheckpoints.get(db);
+  if (cached?.key === key) return cached;
+
   const records = selectRows<{
     inputString: string;
     type: string | null;
@@ -1646,7 +1692,96 @@ export function getCoinOrigins(
     participants,
     addresses: records as CoinOriginAddress[],
   };
-  return filterCoinOriginsByWallet(calculateCoinOrigins(input), opts.walletName);
+  const checkpoint = { fingerprint, key, ledger: calculateCoinOrigins(input) };
+  coinOriginsCheckpoints.set(db, checkpoint);
+  // This marker is deliberately not read as data. It makes a rebuild visible
+  // in the derived engine state and is always overwritten for a new snapshot.
+  setEngineMeta(db, COIN_ORIGINS_CHECKPOINT_KEY, key);
+  return checkpoint;
+}
+
+export interface CoinOriginsPageOptions {
+  walletName?: string;
+  holdingsOffset?: number;
+  outpointsOffset?: number;
+  allocationsOffset?: number;
+  hopsOffset?: number;
+  limit?: number;
+  /** Return one passport's ancestry instead of a normal outpoint window. */
+  outpoint?: string;
+  /** Refuse detail from a snapshot other than the displayed list checkpoint. */
+  expectedCheckpointKey?: string;
+}
+
+function pageLimit(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 100;
+  return Math.min(COIN_ORIGINS_PAGE_LIMIT, Math.max(1, Math.trunc(value!)));
+}
+
+/**
+ * Return bounded holdings/outpoint windows from a fingerprint-keyed derived
+ * checkpoint. The calculator still runs in the worker, but no broad result is
+ * serialized into the renderer. Passport ancestry is opt-in and scoped to one
+ * selected outpoint.
+ */
+export function getCoinOriginsPage(db: EngineDb, opts: CoinOriginsPageOptions = {}): CoinOriginsPage {
+  const checkpoint = getCoinOriginsCheckpoint(db);
+  if (opts.expectedCheckpointKey && opts.expectedCheckpointKey !== checkpoint.key) {
+    throw new Error('Coin Origins checkpoint changed; reload the active window');
+  }
+  const ledger = filterCoinOriginsByWallet(checkpoint.ledger, opts.walletName);
+  const limit = pageLimit(opts.limit);
+  const holdingsOffset = Math.max(0, Math.trunc(opts.holdingsOffset ?? 0));
+  const outpointsOffset = Math.max(0, Math.trunc(opts.outpointsOffset ?? 0));
+  const allocationsOffset = Math.max(0, Math.trunc(opts.allocationsOffset ?? 0));
+  const hopsOffset = Math.max(0, Math.trunc(opts.hopsOffset ?? 0));
+  const detailOutpoint = opts.outpoint
+    ? ledger.outpoints.find((row) => `${row.txid}:${row.vout}` === opts.outpoint)
+    : undefined;
+  const detailAllocations = detailOutpoint?.allocations.slice(allocationsOffset, allocationsOffset + limit);
+  const detailHopTxids = detailOutpoint?.hopTxids.slice(hopsOffset, hopsOffset + limit);
+  const outpoints = detailOutpoint
+    ? [{ ...detailOutpoint, allocations: detailAllocations!, hopTxids: detailHopTxids! }]
+    : ledger.outpoints
+      .slice(outpointsOffset, outpointsOffset + limit)
+      // List rows do not need composition or ancestry. Both can be very large
+      // for a broad consolidation, so they are fetched only by the detail read.
+      .map((row) => ({ ...row, allocations: [], hopTxids: [] }));
+  const detailLotIds = detailOutpoint
+    ? new Set(detailAllocations!.map((allocation) => allocation.lotId))
+    : undefined;
+  const holdings = detailLotIds
+    ? ledger.holdings.filter((holding) => detailLotIds.has(holding.lotId))
+    : ledger.holdings.slice(holdingsOffset, holdingsOffset + limit);
+  const result: CoinOriginsPage = {
+    version: 1,
+    fingerprint: checkpoint.key,
+    checkpointKey: checkpoint.key,
+    holdings,
+    outpoints,
+    summary: ledger.summary,
+    holdingsOffset,
+    outpointsOffset,
+    holdingsTotal: ledger.holdings.length,
+    outpointsTotal: ledger.outpoints.length,
+    lotsTotal: ledger.lots.length,
+    holdingsHasMore: holdingsOffset + holdings.length < ledger.holdings.length,
+    outpointsHasMore: outpointsOffset + outpoints.length < ledger.outpoints.length,
+  };
+  if (detailOutpoint) {
+    const hopIds = new Set(detailHopTxids);
+    result.detail = {
+      lots: ledger.lots.filter((lot) => detailLotIds!.has(lot.lotId)),
+      hops: ledger.hops.filter((hop) => hopIds.has(hop.txid)),
+      allocationsOffset,
+      allocationsTotal: detailOutpoint.allocations.length,
+      allocationsHasMore: allocationsOffset + detailAllocations!.length < detailOutpoint.allocations.length,
+      hopsOffset,
+      hopsTotal: detailOutpoint.hopTxids.length,
+      hopsHasMore: hopsOffset + detailHopTxids!.length < detailOutpoint.hopTxids.length,
+    };
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

@@ -44,6 +44,7 @@ import type {
   MirrorTable,
   DbFileStats,
   SyntheticSpec,
+  CoinOriginsPageOptions,
 } from './engine-core';
 // Type-only — fully erased at build, so the Node worker module (which imports
 // better-sqlite3) is never pulled into the renderer bundle.
@@ -54,7 +55,7 @@ import type {
   FinalizeProgress,
 } from '../../workers/engine-node-worker';
 import { withEngineTimeout } from './engine-timeout';
-import type { CoinOriginsLedger } from '../coin-origins-core';
+import type { CoinOriginsLedger, CoinOriginsPage } from '../coin-origins-core';
 
 export type {
   RecordRow,
@@ -83,6 +84,7 @@ export type {
   MirrorTable,
   DbFileStats,
   SyntheticSpec,
+  CoinOriginsPageOptions,
   EngineState,
   EngineSnapshot,
   BenchmarkRow,
@@ -842,4 +844,12 @@ export async function engineGetCoinOrigins(
 ): Promise<CoinOriginsLedger> {
   await ensureEngineInit();
   return unwrap<CoinOriginsLedger>(getEngine().query('getCoinOrigins', opts));
+}
+
+/** Fetch one bounded Coin Origins window from the native derived checkpoint. */
+export async function engineGetCoinOriginsPage(
+  opts: CoinOriginsPageOptions = {},
+): Promise<CoinOriginsPage> {
+  await ensureEngineInit();
+  return unwrap<CoinOriginsPage>(getEngine().query('getCoinOriginsPage', opts));
 }

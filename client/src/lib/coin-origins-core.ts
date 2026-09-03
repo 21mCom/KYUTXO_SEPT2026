@@ -131,6 +131,39 @@ export interface CoinOriginsLedger {
   summary: CoinOriginsSummary;
 }
 
+/**
+ * A bounded view over a ledger. The native engine uses this shape for normal
+ * screen reads so a broad wallet never crosses the renderer IPC boundary as one
+ * large array. `fingerprint` identifies the source snapshot used to derive the
+ * view; it is not a replacement for the engine freshness gate.
+ */
+export interface CoinOriginsPage {
+  version: 1;
+  fingerprint: string;
+  checkpointKey: string;
+  holdings: CoinOriginHolding[];
+  outpoints: CoinOriginOutpoint[];
+  summary: CoinOriginsSummary;
+  holdingsOffset: number;
+  outpointsOffset: number;
+  holdingsTotal: number;
+  outpointsTotal: number;
+  lotsTotal: number;
+  holdingsHasMore: boolean;
+  outpointsHasMore: boolean;
+  /** Present only for an explicitly requested passport detail. */
+  detail?: {
+    lots: CoinOriginLot[];
+    hops: CoinOriginHop[];
+    allocationsOffset: number;
+    allocationsTotal: number;
+    allocationsHasMore: boolean;
+    hopsOffset: number;
+    hopsTotal: number;
+    hopsHasMore: boolean;
+  };
+}
+
 export interface CoinOriginsInput {
   transactions: CoinOriginTransaction[];
   participants: CoinOriginParticipant[];

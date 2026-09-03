@@ -71,6 +71,7 @@ import {
   getWalletUsageSummaries,
   getVaultSummaries,
   getCoinOrigins,
+  getCoinOriginsPage,
   getDbFileStats,
   MIRROR_TABLES,
   type MirrorTable,
@@ -86,6 +87,7 @@ import {
   type BalanceGroupBy,
   type DbFileStats,
   type SyntheticSpec,
+  type CoinOriginsPageOptions,
 } from '../lib/engine/engine-core';
 
 // ---------------------------------------------------------------------------
@@ -530,6 +532,8 @@ function handleQuery(name: string, args: unknown): unknown {
       return getVaultSummaries(d, (args as { search?: string } | undefined) ?? {});
     case 'getCoinOrigins':
       return getCoinOrigins(d, (args as { walletName?: string } | undefined) ?? {});
+    case 'getCoinOriginsPage':
+      return getCoinOriginsPage(d, (args as CoinOriginsPageOptions | undefined) ?? {});
     default:
       throw new Error(`Unknown query: ${name}`);
   }
