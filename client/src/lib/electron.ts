@@ -331,6 +331,19 @@ interface ElectronAPI {
   backupWrite: (id: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
   backupClose: (id: string) => Promise<{ success: boolean; error?: string }>;
   backupAbort: (id: string) => Promise<{ success: boolean; error?: string }>;
+  // Scheduled backups use an opaque main-process file session. The renderer
+  // never receives a file descriptor or opens an arbitrary local path.
+  chooseBackupFolder?: () => Promise<{ success: boolean; token?: string; label?: string; path?: string; canceled?: boolean; error?: string }>;
+  scheduledBackupOpen?: (destinationToken: string, suggestedName: string) => Promise<{ success: boolean; id?: string; error?: string }>;
+  scheduledBackupWrite?: (id: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
+  scheduledBackupClose?: (id: string) => Promise<{ success: boolean; sizeBytes?: number; checksum?: string; error?: string }>;
+  scheduledBackupRead?: (id: string, offset: number) => Promise<{ success: boolean; data?: ArrayBuffer; bytesRead?: number; eof?: boolean; error?: string }>;
+  scheduledBackupValidate?: (id: string, rendererChecksum: string) => Promise<{ success: boolean; sizeBytes?: number; checksum?: string; error?: string }>;
+  scheduledBackupPromote?: (id: string, finalName: string, rendererVerified: boolean) => Promise<{ success: boolean; name?: string; sizeBytes?: number; checksum?: string; error?: string }>;
+  scheduledBackupAbort?: (id: string) => Promise<{ success: boolean; error?: string }>;
+  listScheduledBackups?: (destinationToken: string) => Promise<{ success: boolean; files?: ScheduledBackupFile[]; invalidFiles?: ScheduledBackupFile[]; error?: string }>;
+  deleteScheduledBackup?: (destinationToken: string, name: string) => Promise<{ success: boolean; error?: string }>;
+  getScheduledBackupDiskSpace?: (destinationToken: string) => Promise<{ success: boolean; freeBytes?: number; error?: string }>;
   // One-click demo vault (optional — older desktop builds lack these channels).
   checkDemoVault?: () => Promise<DemoVaultCheckResult>;
   readDemoVault?: (offset: number) => Promise<DemoVaultReadResult>;
@@ -370,6 +383,12 @@ interface ElectronAPI {
   electronVersion?: string;
   // Native read-engine bridge (present only in the desktop build).
   engine: EngineBridge;
+}
+
+export interface ScheduledBackupFile {
+  name: string;
+  sizeBytes: number;
+  modifiedAt: number;
 }
 
 declare global {

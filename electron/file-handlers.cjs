@@ -90,7 +90,7 @@ function randomSuffix() {
   return crypto.randomBytes(4).toString('hex');
 }
 
-function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir, portableMode, maxAttachmentBytes }) {
+function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir, portableMode, maxAttachmentBytes, scheduledPromotionFailure }) {
   const maxAttachmentBytesLimit =
     typeof maxAttachmentBytes === 'number' && maxAttachmentBytes > 0
       ? maxAttachmentBytes
@@ -939,6 +939,357 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     } catch (error) {
       logMainError('[KYUTXO] backup-abort failed', error);
       return { success: false, error: sanitizeIpcError(error, 'Failed to abort the backup') };
+    }
+  });
+
+  // --- Verified scheduled-backup sessions -------------------------------
+  // Scheduled archives are first written to a hidden partial file. The
+  // renderer verifies the closed stream through the normal v3 preview/parser,
+  // then asks main to atomically promote it to the visible .zip name. A
+  // crashed or failed run therefore leaves no file that looks restorable.
+  const scheduledStreams = new Map();
+  let scheduledSeq = 0;
+  const SCHEDULED_NAME = /^kyutxo-scheduled-[A-Za-z0-9_.-]+\.zip$/;
+  // Capabilities deliberately live main-side. Persist the opaque mapping so a
+  // saved schedule remains usable across restarts, without making a renderer
+  // supplied path an authority.
+  const capabilityFile = path.join(dataDir, 'scheduled-backup-destinations.json');
+  const verifiedIndexFile = path.join(dataDir, 'scheduled-backup-verified-index.json');
+  let scheduledDestinations = {};
+  try {
+    scheduledDestinations = JSON.parse(fs.readFileSync(capabilityFile, 'utf8'));
+  } catch {}
+  let verifiedScheduledIndex = {};
+  try { verifiedScheduledIndex = JSON.parse(fs.readFileSync(verifiedIndexFile, 'utf8')); } catch {}
+  function saveScheduledDestinations() {
+    const temp = `${capabilityFile}.tmp-${randomSuffix()}`;
+    fs.writeFileSync(temp, JSON.stringify(scheduledDestinations), { mode: 0o600 });
+    fs.renameSync(temp, capabilityFile);
+  }
+  function saveVerifiedScheduledIndex() {
+    const temp = `${verifiedIndexFile}.tmp-${randomSuffix()}`;
+    fs.writeFileSync(temp, JSON.stringify(verifiedScheduledIndex), { mode: 0o600 });
+    fs.renameSync(temp, verifiedIndexFile);
+  }
+  function indexKey(token, name) { return `${token}:${name}`; }
+
+  function cleanScheduledName(name) {
+    if (typeof name !== 'string' || path.basename(name) !== name || !SCHEDULED_NAME.test(name)) {
+      return null;
+    }
+    return name;
+  }
+
+  function resolveScheduledDirectory(destinationToken) {
+    if (typeof destinationToken !== 'string' || !/^[a-f0-9]{32}$/i.test(destinationToken)) return null;
+    try {
+      const directory = scheduledDestinations[destinationToken];
+      if (typeof directory !== 'string') return null;
+      const stat = fs.statSync(directory);
+      if (!stat.isDirectory()) return null;
+      const real = fs.realpathSync(directory);
+      // Do not silently follow a replaced path to a different destination.
+      if (real !== directory) return null;
+      return real;
+    } catch {
+      return null;
+    }
+  }
+
+  function scheduledFilePath(destinationToken, name) {
+    const clean = cleanScheduledName(name);
+    const realDir = resolveScheduledDirectory(destinationToken);
+    if (!clean || !realDir) return null;
+    const candidate = path.resolve(realDir, clean);
+    return candidate.startsWith(realDir + path.sep) ? candidate : null;
+  }
+
+  function sha256File(filePath) {
+    const hash = crypto.createHash('sha256');
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const buffer = Buffer.allocUnsafe(1024 * 1024);
+      for (;;) {
+        const bytes = fs.readSync(fd, buffer, 0, buffer.length, null);
+        if (!bytes) break;
+        hash.update(buffer.subarray(0, bytes));
+      }
+    } finally { fs.closeSync(fd); }
+    return hash.digest('hex');
+  }
+
+  // Validate the ZIP's end record and walk the complete central directory.
+  // This catches a truncated archive even if a writer checksum was calculated
+  // before a removable disk/interruption corrupted the closed file.
+  function assertCompleteZip(filePath) {
+    const stat = fs.statSync(filePath);
+    if (stat.size < 22) throw new Error('Scheduled backup ZIP is truncated');
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const tailLength = Math.min(stat.size, 0xffff + 22);
+      const tail = Buffer.alloc(tailLength);
+      fs.readSync(fd, tail, 0, tailLength, stat.size - tailLength);
+      let eocd = -1;
+      for (let i = tail.length - 22; i >= 0; i--) {
+        if (tail.readUInt32LE(i) === 0x06054b50 && i + 22 + tail.readUInt16LE(i + 20) === tail.length) { eocd = i; break; }
+      }
+      if (eocd < 0) throw new Error('Scheduled backup ZIP has no complete end record');
+      const entries = tail.readUInt16LE(eocd + 10);
+      const centralSize = tail.readUInt32LE(eocd + 12);
+      const centralOffset = tail.readUInt32LE(eocd + 16);
+      if (centralOffset + centralSize !== stat.size - tailLength + eocd) throw new Error('Scheduled backup ZIP central directory is incomplete');
+      const central = Buffer.alloc(centralSize);
+      if (fs.readSync(fd, central, 0, centralSize, centralOffset) !== centralSize) throw new Error('Scheduled backup ZIP central directory is truncated');
+      let offset = 0;
+      for (let count = 0; count < entries; count++) {
+        if (offset + 46 > central.length || central.readUInt32LE(offset) !== 0x02014b50) throw new Error('Scheduled backup ZIP central directory is invalid');
+        const length = 46 + central.readUInt16LE(offset + 28) + central.readUInt16LE(offset + 30) + central.readUInt16LE(offset + 32);
+        if (offset + length > central.length) throw new Error('Scheduled backup ZIP central directory is truncated');
+        offset += length;
+      }
+      if (offset !== central.length) throw new Error('Scheduled backup ZIP central directory is incomplete');
+    } finally { fs.closeSync(fd); }
+  }
+
+  ipcMain.handle('choose-backup-folder', async (event) => {
+    try {
+      const { dialog, BrowserWindow } = require('electron');
+      const win = BrowserWindow.fromWebContents(event.sender);
+      const result = await dialog.showOpenDialog(win, {
+        properties: ['openDirectory', 'createDirectory'],
+        title: 'Choose a scheduled backup folder',
+      });
+      if (result.canceled || !result.filePaths?.[0]) return { success: false, canceled: true };
+      const directory = resolveScheduledDirectoryPath(result.filePaths[0]);
+      if (!directory) return { success: false, error: 'The selected location is not a usable folder.' };
+      const token = crypto.randomBytes(16).toString('hex');
+      scheduledDestinations[token] = directory;
+      saveScheduledDestinations();
+      return { success: true, token, label: path.basename(directory) || directory, path: directory };
+    } catch (error) {
+      logMainError('[KYUTXO] choose-backup-folder failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to choose a backup folder') };
+    }
+  });
+
+  function resolveScheduledDirectoryPath(directory) {
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) return null;
+    try {
+      const stat = fs.statSync(directory);
+      return stat.isDirectory() ? fs.realpathSync(directory) : null;
+    } catch { return null; }
+  }
+
+  ipcMain.handle('scheduled-backup-open', async (event, { destinationToken, suggestedName }) => {
+    try {
+      const realDir = resolveScheduledDirectory(destinationToken);
+      const finalName = cleanScheduledName(suggestedName);
+      if (!realDir || !finalName) return { success: false, error: 'Invalid scheduled backup destination' };
+      const partialName = `.${finalName}.partial-${randomSuffix()}`;
+      const partialPath = path.join(realDir, partialName);
+      const stream = fs.createWriteStream(partialPath, { flags: 'wx' });
+      await new Promise((resolve, reject) => {
+        stream.once('open', resolve);
+        stream.once('error', reject);
+      });
+      const id = `scheduled_backup_${++scheduledSeq}`;
+      scheduledStreams.set(id, {
+        stream,
+        partialPath,
+        finalPath: path.join(realDir, finalName),
+        destinationToken,
+        hash: crypto.createHash('sha256'),
+        bytes: 0,
+        closed: false,
+        rendererValidated: false,
+      });
+      return { success: true, id };
+    } catch (error) {
+      logMainError('[KYUTXO] scheduled-backup-open failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to open the scheduled backup') };
+    }
+  });
+
+  ipcMain.handle('scheduled-backup-write', async (event, { id, data }) => {
+    try {
+      const entry = scheduledStreams.get(id);
+      if (!entry || entry.closed) return { success: false, error: 'Unknown or closed backup stream' };
+      const buffer = Buffer.from(data);
+      entry.hash.update(buffer);
+      entry.bytes += buffer.byteLength;
+      await new Promise((resolve, reject) => {
+        entry.stream.write(buffer, (err) => (err ? reject(err) : resolve()));
+      });
+      return { success: true };
+    } catch (error) {
+      logMainError('[KYUTXO] scheduled-backup-write failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to write the scheduled backup') };
+    }
+  });
+
+  ipcMain.handle('scheduled-backup-close', async (event, { id }) => {
+    try {
+      const entry = scheduledStreams.get(id);
+      if (!entry || entry.closed) return { success: false, error: 'Unknown or closed backup stream' };
+      await new Promise((resolve, reject) => {
+        entry.stream.end((err) => (err ? reject(err) : resolve()));
+      });
+      entry.closed = true;
+      entry.checksum = entry.hash.digest('hex');
+      return {
+        success: true,
+        sizeBytes: entry.bytes,
+        checksum: entry.checksum,
+      };
+    } catch (error) {
+      logMainError('[KYUTXO] scheduled-backup-close failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to close the scheduled backup') };
+    }
+  });
+
+  ipcMain.handle('scheduled-backup-read', async (event, { id, offset }) => {
+    try {
+      const entry = scheduledStreams.get(id);
+      if (!entry || !entry.closed || !Number.isSafeInteger(offset) || offset < 0) {
+        return { success: false, error: 'Unknown or unavailable backup stream' };
+      }
+      const handle = await fs.promises.open(entry.partialPath, 'r');
+      try {
+        const buffer = Buffer.allocUnsafe(1024 * 1024);
+        const result = await handle.read(buffer, 0, buffer.length, offset);
+        const exact = buffer.subarray(0, result.bytesRead);
+        return {
+          success: true,
+          data: exact.buffer.slice(exact.byteOffset, exact.byteOffset + exact.byteLength),
+          bytesRead: result.bytesRead,
+          eof: result.bytesRead === 0 || offset + result.bytesRead >= entry.bytes,
+        };
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      logMainError('[KYUTXO] scheduled-backup-read failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to read the scheduled backup') };
+    }
+  });
+
+  ipcMain.handle('scheduled-backup-validate', async (event, { id, rendererChecksum }) => {
+    try {
+      const entry = scheduledStreams.get(id);
+      if (!entry || !entry.closed || typeof rendererChecksum !== 'string') return { success: false, error: 'Unknown or unavailable backup stream' };
+      const checksum = sha256File(entry.partialPath);
+      if (checksum !== entry.checksum || checksum !== rendererChecksum) return { success: false, error: 'Scheduled backup checksum changed during verification' };
+      assertCompleteZip(entry.partialPath);
+      entry.rendererValidated = true;
+      return { success: true, checksum, sizeBytes: fs.statSync(entry.partialPath).size };
+    } catch (error) {
+      return { success: false, error: sanitizeIpcError(error, 'Scheduled backup main-process validation failed') };
+    }
+  });
+
+  ipcMain.handle('scheduled-backup-promote', async (event, { id, finalName, rendererVerified }) => {
+    try {
+      const entry = scheduledStreams.get(id);
+      const clean = cleanScheduledName(finalName);
+      if (!entry || !entry.closed || !entry.rendererValidated || rendererVerified !== true || !clean || path.resolve(entry.finalPath) !== path.resolve(path.dirname(entry.finalPath), clean)) {
+        return { success: false, error: 'Unknown or unavailable backup stream' };
+      }
+      if (lexistsSync(entry.finalPath)) return { success: false, error: 'A backup with that name already exists' };
+      // Revalidate immediately before promotion; no write-side checksum is trusted.
+      if (sha256File(entry.partialPath) !== entry.checksum) throw new Error('Scheduled backup changed before promotion');
+      assertCompleteZip(entry.partialPath);
+      fs.renameSync(entry.partialPath, entry.finalPath);
+      try {
+        if (scheduledPromotionFailure) throw new Error('Injected scheduled backup provenance failure');
+        fs.writeFileSync(`${entry.finalPath}.sha256`, `${entry.checksum}\n`, { flag: 'wx', mode: 0o600 });
+        verifiedScheduledIndex[indexKey(entry.destinationToken, clean)] = {
+          checksum: entry.checksum, sizeBytes: entry.bytes, verifiedAt: Date.now(),
+        };
+        saveVerifiedScheduledIndex();
+      } catch (error) {
+        try { fs.unlinkSync(entry.finalPath); } catch {}
+        try { fs.unlinkSync(`${entry.finalPath}.sha256`); } catch {}
+        delete verifiedScheduledIndex[indexKey(entry.destinationToken, clean)];
+        try { saveVerifiedScheduledIndex(); } catch {}
+        throw error;
+      }
+      scheduledStreams.delete(id);
+      return {
+        success: true,
+        name: clean,
+        sizeBytes: entry.bytes,
+        checksum: entry.checksum,
+      };
+    } catch (error) {
+      logMainError('[KYUTXO] scheduled-backup-promote failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to promote the verified backup') };
+    }
+  });
+
+  ipcMain.handle('scheduled-backup-abort', async (event, { id }) => {
+    try {
+      const entry = scheduledStreams.get(id);
+      if (!entry) return { success: true };
+      try { entry.stream.destroy(); } catch {}
+      scheduledStreams.delete(id);
+      try { fs.unlinkSync(entry.partialPath); } catch {}
+      return { success: true };
+    } catch (error) {
+      logMainError('[KYUTXO] scheduled-backup-abort failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to discard the partial backup') };
+    }
+  });
+
+  ipcMain.handle('scheduled-backup-list', async (event, { destinationToken }) => {
+    try {
+      const realDir = resolveScheduledDirectory(destinationToken);
+      if (!realDir) return { success: false, error: 'Backup destination is unavailable' };
+      const files = [], invalidFiles = [];
+      for (const entry of fs.readdirSync(realDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !cleanScheduledName(entry.name)) continue;
+        try {
+          const filePath = path.join(realDir, entry.name);
+          const stat = fs.statSync(filePath);
+          const file = { name: entry.name, sizeBytes: stat.size, modifiedAt: stat.mtimeMs };
+          const indexed = verifiedScheduledIndex[indexKey(destinationToken, entry.name)];
+          let expected = '';
+          try { expected = fs.readFileSync(`${filePath}.sha256`, 'utf8').trim(); } catch {}
+          if (indexed && indexed.checksum === expected && indexed.sizeBytes === stat.size && /^[a-f0-9]{64}$/i.test(expected) && sha256File(filePath) === expected) files.push(file);
+          else invalidFiles.push(file);
+        } catch {}
+      }
+      files.sort((a, b) => b.modifiedAt - a.modifiedAt || b.name.localeCompare(a.name));
+      return { success: true, files, invalidFiles };
+    } catch (error) {
+      logMainError('[KYUTXO] scheduled-backup-list failed', error);
+      return { success: false, error: sanitizeIpcError(error, 'Failed to list scheduled backups') };
+    }
+  });
+
+  ipcMain.handle('scheduled-backup-delete', async (event, { destinationToken, name }) => {
+    try {
+      const target = scheduledFilePath(destinationToken, name);
+      if (!target) return { success: false, error: 'Invalid scheduled backup file' };
+      fs.unlinkSync(target);
+      try { fs.unlinkSync(`${target}.sha256`); } catch {}
+      delete verifiedScheduledIndex[indexKey(destinationToken, name)];
+      saveVerifiedScheduledIndex();
+      return { success: true };
+    } catch (error) {
+      logMainError('[KYUTXO] scheduled-backup-delete failed');
+      return { success: false, error: sanitizeIpcError(error, 'Failed to remove the scheduled backup') };
+    }
+  });
+
+  ipcMain.handle('scheduled-backup-disk-space', async (event, { destinationToken }) => {
+    try {
+      const realDir = resolveScheduledDirectory(destinationToken);
+      if (!realDir) return { success: false, error: 'Backup destination is unavailable' };
+      const stats = await fs.promises.statfs(realDir);
+      return { success: true, freeBytes: stats.bavail * stats.bsize };
+    } catch (error) {
+      logMainError('[KYUTXO] scheduled-backup-disk-space failed');
+      return { success: false, error: sanitizeIpcError(error, 'Failed to check backup disk space') };
     }
   });
 }

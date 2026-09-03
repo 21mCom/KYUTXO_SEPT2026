@@ -4,6 +4,7 @@ import { Separator } from "@/components/ui/separator";
 import { MaintenanceToolsSection } from "./maintenance-tools-section";
 import { RestoreBackupFlow } from "./restore-backup-flow";
 import { ClearDatabaseFlow } from "./clear-database-flow";
+import { BackupScheduleSection } from "./backup-schedule-section";
 
 // Thin composition root for the Data Management card. Each flow lives in its
 // own file so future changes stay reviewable:
@@ -24,6 +25,10 @@ export function DataManagementSection() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <BackupScheduleSection />
+
+        <Separator />
+
         <MaintenanceToolsSection />
 
         <Separator />

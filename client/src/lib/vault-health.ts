@@ -10,6 +10,9 @@ import { getPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
 import { loadAuditSession } from "@/lib/data/privacy-audit-session-store";
 import { getRecordsAfterId } from "@/lib/data/record-crud";
 import { getRecordOriginsByRecordIds } from "@/lib/data/record-origins-crud";
+import { getSettings } from "@/lib/data/settings-crud";
+import { getElectronAPISafe } from "@/lib/electron";
+import { isBackupDue, normalizeBackupSchedule } from "@/lib/backup/scheduled";
 
 export type VaultHealthStatus = "healthy" | "warning" | "problem";
 
@@ -54,6 +57,20 @@ export interface VaultHealthSnapshot {
     attachmentCount: number;
     tableCount: number;
     canExport: boolean;
+    scheduledEnabled: boolean;
+    destinations: string[];
+    destinationAvailable: boolean[];
+    verifiedCopyCounts: number[];
+    invalidCopyCounts: number[];
+    destinationFailures: Array<{ at?: number; message?: string }>;
+    overdue: boolean;
+    lastVerifiedAt?: number;
+    lastVerifiedDestination?: string;
+    lastVerifiedSizeBytes?: number;
+    lastVerifiedChecksum?: string;
+    lastRestoreDrillAt?: number;
+    lastFailureAt?: number;
+    lastFailureMessage?: string;
   };
   privacy: {
     hasRun: boolean;
@@ -368,6 +385,31 @@ export async function runVaultHealthCheck(options: {
       (latestPrivacy?.severityCounts.HIGH ?? 0),
     unavailable: privacyUnavailable,
   };
+  let storedSettings: Awaited<ReturnType<typeof getSettings>>;
+  try {
+    storedSettings = await getSettings("default");
+  } catch {
+    // Backup scheduling is an independent, device-local health category. A
+    // missing/unavailable settings row must not discard the integrity results
+    // already gathered above.
+    storedSettings = undefined;
+  }
+  const backupSchedule = normalizeBackupSchedule(storedSettings?.backupSchedule);
+  const backupApi = getElectronAPISafe();
+  const destinationState = await Promise.all(
+    backupSchedule.destinations.map(async (destination) => {
+      try {
+        const listed = await backupApi?.listScheduledBackups?.(destination.token);
+        return {
+          available: listed?.success === true,
+          count: listed?.success ? listed.files?.length ?? 0 : 0,
+          invalid: listed?.success ? listed.invalidFiles?.length ?? 0 : 0,
+        };
+      } catch {
+        return { available: false, count: 0, invalid: 0 };
+      }
+    }),
+  );
   throwIfAborted(signal);
 
   return {
@@ -382,6 +424,24 @@ export async function runVaultHealthCheck(options: {
       attachmentCount: tableCounts.find((table) => table.name === "attachments")?.count ?? 0,
       tableCount: tableCounts.length,
       canExport: tableCounts.every((table) => !table.error),
+      scheduledEnabled: backupSchedule.enabled,
+      destinations: backupSchedule.destinations.map((destination) => destination.path || destination.label),
+      destinationAvailable: destinationState.map((state) => state.available),
+      verifiedCopyCounts: destinationState.map((state) => state.count),
+      invalidCopyCounts: destinationState.map((state) => state.invalid),
+      destinationFailures: backupSchedule.destinations.map((destination) => ({
+        at: backupSchedule.destinationStates?.[destination.token]?.lastFailureAt,
+        message: backupSchedule.destinationStates?.[destination.token]?.lastFailureMessage,
+      })),
+      overdue: backupSchedule.enabled &&
+        isBackupDue(backupSchedule.lastVerifiedAt, backupSchedule.cadenceDays),
+      lastVerifiedAt: backupSchedule.lastVerifiedAt,
+      lastVerifiedDestination: backupSchedule.lastVerifiedDestination,
+      lastVerifiedSizeBytes: backupSchedule.lastVerifiedSizeBytes,
+      lastVerifiedChecksum: backupSchedule.lastVerifiedChecksum,
+      lastRestoreDrillAt: backupSchedule.lastRestoreDrillAt,
+      lastFailureAt: backupSchedule.lastFailureAt,
+      lastFailureMessage: backupSchedule.lastFailureMessage,
     },
     privacy,
   };

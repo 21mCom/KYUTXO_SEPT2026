@@ -10,6 +10,8 @@ import {
   Loader2,
   RefreshCw,
   ShieldCheck,
+  FileUp,
+  HardDrive,
   XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +24,10 @@ import {
   type VaultHealthSnapshot,
   type VaultHealthStatus,
 } from "@/lib/vault-health";
+import { verifyScheduledBackup, normalizeBackupSchedule } from "@/lib/backup/scheduled";
+import { blobChunks } from "@/lib/backup/zip-stream";
+import { getSettings, updateSettings } from "@/lib/data/settings-crud";
+import { useToast } from "@/hooks/use-toast";
 
 type Phase = "checking" | "done" | "failed" | "cancelled";
 
@@ -43,6 +49,147 @@ function StatusIcon({ status }: { status: VaultHealthStatus }) {
   if (status === "healthy") return <CheckCircle2 className="h-5 w-5 text-emerald-600" />;
   if (status === "problem") return <XCircle className="h-5 w-5 text-destructive" />;
   return <AlertTriangle className="h-5 w-5 text-amber-600" />;
+}
+
+function formatBytes(value?: number): string {
+  if (value == null || !Number.isFinite(value)) return "Unknown";
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let amount = value / 1024;
+  let unit = units[0];
+  for (let i = 1; i < units.length && amount >= 1024; i++) {
+    amount /= 1024;
+    unit = units[i];
+  }
+  return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${unit}`;
+}
+
+function BackupHealthCard({
+  snapshot,
+  onRefresh,
+}: {
+  snapshot: VaultHealthSnapshot;
+  onRefresh: () => void;
+}) {
+  const { toast } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [drilling, setDrilling] = useState(false);
+  const backup = snapshot.backup;
+  const destinations = backup.destinations ?? [];
+  const destinationAvailable = backup.destinationAvailable ?? [];
+  const verifiedCopyCounts = backup.verifiedCopyCounts ?? [];
+  const invalidCopyCounts = backup.invalidCopyCounts ?? [];
+  const destinationFailures = backup.destinationFailures ?? [];
+  const unavailable = destinationAvailable.some((available) => !available);
+  const failureIsCurrent = destinationFailures.some((failure) => Boolean(failure.at && failure.message)) || Boolean(
+    backup.lastFailureAt && (!backup.lastVerifiedAt || backup.lastFailureAt > backup.lastVerifiedAt),
+  );
+  const status: VaultHealthStatus =
+    !backup.canExport || failureIsCurrent ? "problem" :
+      backup.scheduledEnabled && (backup.overdue || unavailable) ? "warning" : "healthy";
+
+  const runDrill = async (file: File) => {
+    setDrilling(true);
+    try {
+      let password: string | undefined;
+      try {
+        await verifyScheduledBackup(() => blobChunks(file), password);
+      } catch (error) {
+        if (!(error instanceof Error) || !/password|required|decrypt/i.test(error.message)) throw error;
+        const entered = window.prompt("Enter this backup's encryption password");
+        if (!entered) throw new Error("Password check was cancelled.");
+        password = entered;
+        await verifyScheduledBackup(() => blobChunks(file), password);
+      }
+      const settings = await getSettings("default");
+      const schedule = normalizeBackupSchedule(settings?.backupSchedule);
+      await updateSettings("default", {
+        backupSchedule: { ...schedule, lastRestoreDrillAt: Date.now() },
+      });
+      toast({
+        title: "Restore drill passed",
+        description: "The archive was read completely, its password was checked, and its table counts matched.",
+      });
+      onRefresh();
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Restore drill failed",
+        description: error instanceof Error ? error.message : "The backup could not be verified.",
+      });
+    } finally {
+      setDrilling(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  return (
+    <Card data-testid="card-health-backup">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <StatusIcon status={status} />
+            <div>
+              <CardTitle className="text-base">Backup safety</CardTitle>
+              <CardDescription className="mt-1">Verified local copies and restore readiness.</CardDescription>
+            </div>
+          </div>
+          <Badge variant={status === "problem" ? "destructive" : status === "warning" ? "outline" : "secondary"}>
+            {STATUS_LABELS[status]}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {backup.scheduledEnabled ? (
+          <>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div><span className="text-muted-foreground">Last verified:</span> {formatDate(backup.lastVerifiedAt)}</div>
+              <div><span className="text-muted-foreground">Size:</span> {formatBytes(backup.lastVerifiedSizeBytes)}</div>
+              <div><span className="text-muted-foreground">Restore drill:</span> {formatDate(backup.lastRestoreDrillAt)}</div>
+              <div><span className="text-muted-foreground">Checksum:</span> {backup.lastVerifiedChecksum ? `${backup.lastVerifiedChecksum.slice(0, 12)}…` : "None"}</div>
+            </div>
+            <div className="space-y-1">
+              {destinations.map((destination, index) => (
+                <div key={destination} className="flex items-start gap-2 rounded-md bg-muted/40 p-2">
+                  <HardDrive className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span className="min-w-0 flex-1 break-all font-mono text-xs">{destination}</span>
+                  <Badge variant={destinationAvailable[index] ? "secondary" : "destructive"}>
+                    {destinationAvailable[index]
+                      ? `${verifiedCopyCounts[index] ?? 0} verified${invalidCopyCounts[index] ? ` · ${invalidCopyCounts[index]} invalid` : ""}`
+                      : "Unavailable"}
+                  </Badge>
+                   {destinationFailures[index]?.message && <span className="text-xs text-destructive">{destinationFailures[index].message}</span>}
+                </div>
+              ))}
+            </div>
+            {backup.overdue && <p className="text-amber-700 dark:text-amber-400">The next verified backup is overdue and will be retried after unlock.</p>}
+            {failureIsCurrent && <p className="text-destructive" data-testid="backup-durable-failure">Last failure: {backup.lastFailureMessage}</p>}
+          </>
+        ) : (
+          <p className="text-muted-foreground">Scheduled backups are off. Manual backups remain available on the Export page.</p>
+        )}
+        {!backup.canExport && <p className="text-destructive">Some local tables are unreadable; resolve the integrity error before backing up.</p>}
+        <div className="flex flex-wrap gap-2">
+          <Link href="/export" data-testid="card-health-backup-link"><Button variant="outline" size="sm">Create a backup</Button></Link>
+          <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={drilling} data-testid="button-run-restore-drill">
+            <FileUp className="mr-2 h-4 w-4" />
+            {drilling ? "Checking…" : "Run restore drill"}
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".zip"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void runDrill(file);
+            }}
+            data-testid="input-restore-drill"
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 function CategoryCard({
@@ -315,16 +462,7 @@ export default function VaultHealth() {
               actionLabel="Open sync tools"
               testId="card-health-sync"
             />
-            <CategoryCard
-              title="Backup readiness"
-              description="Confirms the local tables are readable and a local backup can be created."
-              status={snapshot.backup.canExport ? "healthy" : "problem"}
-              count={snapshot.backup.canExport ? 0 : snapshot.integrity.tableErrors}
-              detail={snapshot.backup.canExport ? `${formatCount(snapshot.backup.recordCount)} records and ${formatCount(snapshot.backup.attachmentCount)} attachments are available to export. Backups are manual and stay on your device.` : "Some local tables could not be read, so create a backup after resolving the integrity problem."}
-              action="/export"
-              actionLabel="Create a backup"
-              testId="card-health-backup"
-            />
+            <BackupHealthCard snapshot={snapshot} onRefresh={() => void runCheck()} />
             <CategoryCard
               title="Privacy findings"
               description="Shows the latest saved Privacy Audit result without running a new analysis."

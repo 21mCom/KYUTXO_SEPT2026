@@ -518,6 +518,46 @@ export interface Settings {
   // When absent (or < 2), the Balance page triggers a full recompute so
   // stale cached values (old received-minus-spent formula) are corrected.
   balanceFormulaVersion?: number;
+  // Device-local scheduled backup policy. Destination paths intentionally stay
+  // local to this installation and are not imported from backup files.
+  backupSchedule?: BackupScheduleSettings;
+}
+
+export type BackupCadenceDays = 1 | 7 | 14 | 30 | 90;
+export type BackupPromptBehavior = "automatic" | "ask";
+
+export interface BackupScheduleSettings {
+  enabled: boolean;
+  destinations: BackupDestination[];
+  cadenceDays: BackupCadenceDays;
+  retentionCount: number;
+  compact: boolean;
+  encrypted: boolean;
+  promptBehavior: BackupPromptBehavior;
+  lastVerifiedAt?: number;
+  lastVerifiedDestination?: string;
+  lastVerifiedSizeBytes?: number;
+  lastVerifiedChecksum?: string;
+  lastRestoreDrillAt?: number;
+  lastFailureAt?: number;
+  lastFailureMessage?: string;
+  destinationStates?: { [token: string]: BackupDestinationState };
+}
+
+/** A displayable destination plus an opaque capability owned by the main process. */
+export interface BackupDestination {
+  token: string;
+  label: string;
+  /** Informational only; it must never be supplied to a filesystem IPC call. */
+  path?: string;
+}
+
+export interface BackupDestinationState {
+  lastVerifiedAt?: number;
+  lastVerifiedSizeBytes?: number;
+  lastVerifiedChecksum?: string;
+  lastFailureAt?: number;
+  lastFailureMessage?: string;
 }
 
 // Canonical shape of a freshly-created 'default' settings row. This is the single
@@ -560,6 +600,15 @@ export function createDefaultSettings(id: string = 'default'): Settings {
     fundTrailTxLimit: 2000,
     fundTrailLayout: 'classic',
     intermediaryAddressCap: 10,
+    backupSchedule: {
+      enabled: false,
+      destinations: [],
+      cadenceDays: 7,
+      retentionCount: 5,
+      compact: false,
+      encrypted: true,
+      promptBehavior: 'ask',
+    },
   };
 }
 

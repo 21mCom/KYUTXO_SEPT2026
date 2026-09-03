@@ -68,6 +68,7 @@ import FundTrail from "@/pages/FundTrail";
 import EngineDiagnostics from "@/pages/EngineDiagnostics";
 import DatabaseDoctor from "@/pages/DatabaseDoctor";
 import VaultHealth from "@/pages/VaultHealth";
+import { ScheduledBackupRunner } from "@/components/ScheduledBackupRunner";
 import AnnualActivityReport from "@/pages/AnnualActivityReport";
 import AddressChecker from "@/pages/AddressChecker";
 import AddressDeriver from "@/pages/AddressDeriver";
@@ -218,6 +219,7 @@ function AuthenticatedApp() {
       <RecordPreviewProvider>
         <SidebarProvider style={style as React.CSSProperties}>
           <EngineBootstrapper />
+          <ScheduledBackupRunner />
           <OrphanedTxNotifier />
           <EntityListLoader />
           <SyncStatsBackfill />

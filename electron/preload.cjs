@@ -55,6 +55,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   backupWrite: (id, data) => ipcRenderer.invoke('backup-write', { id, data }),
   backupClose: (id) => ipcRenderer.invoke('backup-close', { id }),
   backupAbort: (id) => ipcRenderer.invoke('backup-abort', { id }),
+
+  // Verified scheduled-backup sessions. The main process owns all paths and
+  // exposes only an opaque session id while an archive is being built.
+  chooseBackupFolder: () => ipcRenderer.invoke('choose-backup-folder'),
+  scheduledBackupOpen: (destinationToken, suggestedName) =>
+    ipcRenderer.invoke('scheduled-backup-open', { destinationToken, suggestedName }),
+  scheduledBackupWrite: (id, data) =>
+    ipcRenderer.invoke('scheduled-backup-write', { id, data }),
+  scheduledBackupClose: (id) => ipcRenderer.invoke('scheduled-backup-close', { id }),
+  scheduledBackupRead: (id, offset) =>
+    ipcRenderer.invoke('scheduled-backup-read', { id, offset }),
+  scheduledBackupValidate: (id, rendererChecksum) =>
+    ipcRenderer.invoke('scheduled-backup-validate', { id, rendererChecksum }),
+  scheduledBackupPromote: (id, finalName, rendererVerified) =>
+    ipcRenderer.invoke('scheduled-backup-promote', { id, finalName, rendererVerified }),
+  scheduledBackupAbort: (id) => ipcRenderer.invoke('scheduled-backup-abort', { id }),
+  listScheduledBackups: (destinationToken) =>
+    ipcRenderer.invoke('scheduled-backup-list', { destinationToken }),
+  deleteScheduledBackup: (destinationToken, name) =>
+    ipcRenderer.invoke('scheduled-backup-delete', { destinationToken, name }),
+  getScheduledBackupDiskSpace: (destinationToken) =>
+    ipcRenderer.invoke('scheduled-backup-disk-space', { destinationToken }),
   
   // Portable mode support
   isPortableMode: () => ipcRenderer.invoke('is-portable-mode'),
