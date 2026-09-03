@@ -7,7 +7,8 @@
 //   2. uses the real Radix date/amount filter popover and saves a named view;
 //   3. changes the search and amount filters, saves the same name again, and
 //      verifies that the existing view is updated rather than duplicated;
-//   4. creates and deletes a second view, exports a real backup, injects stale
+//   4. creates and deletes a second view, exports a password-encrypted real
+//      backup, injects stale
 //      local view state, and restores through the Settings dialog into the
 //      fresh vault;
 //   5. verifies the restored view has the updated filters exactly once, the
@@ -33,6 +34,7 @@ const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
 const BASE_URL = `http://localhost:${PORT}/`;
 const PAGE_URL = `${BASE_URL}transaction-inbox`;
 const SETUP_PASSWORD = 'transaction-inbox-check-123';
+const BACKUP_PASSWORD = 'transaction-inbox-backup-456';
 const VIEW_NAME = 'Inbox review today';
 const DELETED_VIEW_NAME = 'Deleted before backup';
 
@@ -483,13 +485,14 @@ async function main() {
     // Returning base64 keeps the ZIP bytes transportable across Playwright's
     // page boundary and lets the same script feed them to the real restore
     // file input below.
-    const backupB64 = await page.evaluate(async () => {
+    const backupB64 = await page.evaluate(async (password) => {
       const { exportBackup } = await import('/src/lib/backup/export.ts');
       const { MemorySink } = await import('/src/lib/backup/sink.ts');
       const sink = new MemorySink();
       await exportBackup({
         sink,
-        encrypted: false,
+        encrypted: true,
+        password,
         batchSize: 25,
         attachmentIO: {
           async listAll() { return []; },
@@ -500,11 +503,11 @@ async function main() {
       let binary = '';
       for (const byte of bytes) binary += String.fromCharCode(byte);
       return btoa(binary);
-    });
+    }, BACKUP_PASSWORD);
     record(
       'backup-export',
       backupB64.length > 100,
-      `unencrypted v3 backup bytes=${Math.round(backupB64.length * 0.75)}`,
+      `password-encrypted v3 backup bytes=${Math.round(backupB64.length * 0.75)}`,
     );
 
     // Make the current vault disagree with the exported snapshot. Replace
@@ -546,8 +549,17 @@ async function main() {
       state: 'visible',
       timeout: 20_000,
     });
+    const restorePassword = page.getByTestId('input-restore-password');
+    await restorePassword.waitFor({ state: 'visible', timeout: 10_000 });
+    const continueRestore = page.getByTestId('button-continue-restore');
+    record(
+      'encrypted-restore-password-required',
+      await continueRestore.isDisabled(),
+      'Continue is disabled until the backup password is entered',
+    );
+    await restorePassword.fill(BACKUP_PASSWORD);
     await page.getByTestId('radio-replace').click();
-    await page.getByTestId('button-continue-restore').click();
+    await continueRestore.click();
     await page.getByTestId('restore-preferences-preview').waitFor({
       state: 'visible',
       timeout: 20_000,
