@@ -64,6 +64,7 @@
     "@types/multer": "^2.0.0",
     "@types/qrcode": "^1.5.6",
     "better-sqlite3": "^12.11.1",
+    "better-sqlite3-multiple-ciphers": "^13.0.3",
     "bip32": "^5.0.0",
     "bip39": "^3.1.0",
     "bitcoinjs-lib": "^7.0.0",

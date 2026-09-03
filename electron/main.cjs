@@ -21,6 +21,7 @@ const {
   validateVaultLockSettings,
   createVaultLockLifecycle,
 } = require('./vault-lock-settings.cjs');
+const { registerProtectedStoreHandlers } = require('./protected-store.cjs');
 
 const {
   isExternalOpenAllowed,
@@ -66,7 +67,8 @@ let vaultLockSettings = {
   lockOnScreenLock: LOCK_ON_SCREEN_LOCK,
 };
 
-function lockRenderer(reason) {
+async function lockRenderer(reason) {
+  await protectedStoreLifecycle.lock();
   if (mainWindow && !mainWindow.isDestroyed()) {
     console.log(`[KYUTXO] Vault lock signal: ${reason}`);
     mainWindow.webContents.send('vault-lock', { reason });
@@ -87,10 +89,10 @@ const vaultLockLifecycle = createVaultLockLifecycle({
   },
 });
 
-// ============================================================================
+// ----------------------------------------------------------------------------
 // PORTABLE MODE SETUP - Must happen BEFORE app.whenReady()
 // This ensures IndexedDB, localStorage, and all browser storage goes to USB
-// ============================================================================
+// ----------------------------------------------------------------------------
 
 function getPortableDir() {
   if (process.env.PORTABLE_EXECUTABLE_DIR) {
@@ -266,17 +268,23 @@ function createWindow() {
   });
 }
 
-// ============================================================================
+// ----------------------------------------------------------------------------
 // REGISTER IPC HANDLERS
-// ============================================================================
+// ----------------------------------------------------------------------------
 
+// Register before the renderer is created. Packaged builds expose the protected
+// worker; browser/Electron development remains the explicit plaintext fallback.
+const protectedStoreLifecycle = registerProtectedStoreHandlers(ipcMain, {
+  dataDir,
+  enabled: !isDev,
+});
 registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir, portableMode });
 registerElectrumHandlers(ipcMain, { dataDir });
 registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow: () => mainWindow });
 
-// ============================================================================
+// ----------------------------------------------------------------------------
 // TOR PROXY IPC HANDLERS
-// ============================================================================
+// ----------------------------------------------------------------------------
 
 // Renderer pushes its stored node settings here (on load and on change); the
 // allowlist and SOCKS proxy selection for 'tor-request' derive from this
@@ -449,9 +457,9 @@ ipcMain.handle('tor-status', async () => {
   }
 });
 
-// ============================================================================
+// ----------------------------------------------------------------------------
 // APP LIFECYCLE & SECURITY
-// ============================================================================
+// ----------------------------------------------------------------------------
 
 // The packaged renderer is served only from dist/public inside app.asar. No
 // request path is ever treated as an operating-system path.
@@ -606,6 +614,7 @@ app.on('before-quit', () => {
   stopKeepalive();
   stopEngineWorker();
   vaultLockLifecycle.shutdown();
+  void protectedStoreLifecycle.close();
 });
 
 app.on('activate', () => {

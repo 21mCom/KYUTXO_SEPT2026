@@ -1,24 +1,50 @@
 const { contextBridge, ipcRenderer } = require('electron');
-
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
+  protectedStore: {
+    status: () => ipcRenderer.invoke('protected-store:status'),
+    create: (password) => ipcRenderer.invoke('protected-store:create', { password }),
+    unlock: (password) => ipcRenderer.invoke('protected-store:unlock', { password }),
+    lock: () => ipcRenderer.invoke('protected-store:lock'),
+    changePassword: (oldPassword, newPassword) =>
+      ipcRenderer.invoke('protected-store:changePassword', { oldPassword, newPassword }),
+    integrity: () => ipcRenderer.invoke('protected-store:integrity'),
+    putRow: (table, id, row) =>
+      ipcRenderer.invoke('protected-store:putRow', { table, id, row }),
+    getRow: (table, id) =>
+      ipcRenderer.invoke('protected-store:getRow', { table, id }),
+    listRows: (table, after, limit) =>
+      ipcRenderer.invoke('protected-store:listRows', { table, after, limit }),
+    deleteRow: (table, id) =>
+      ipcRenderer.invoke('protected-store:deleteRow', { table, id }),
+    writeAttachment: (bytes, alias) =>
+      ipcRenderer.invoke('protected-store:writeAttachment', { bytes, alias }),
+    readAttachment: (name, id) =>
+      ipcRenderer.invoke('protected-store:readAttachment', { name, id }),
+    deleteAttachment: (name) =>
+      ipcRenderer.invoke('protected-store:deleteAttachment', { name }),
+    listAttachments: () =>
+      ipcRenderer.invoke('protected-store:listAttachments'),
+    renameAttachment: (oldAlias, newAlias) =>
+      ipcRenderer.invoke('protected-store:renameAttachment', { oldAlias, newAlias }),
+  },
   // File system operations
   
   // Attachment operations
-  saveAttachment: (identifier, filename, data) => 
+  saveAttachment: (identifier, filename, data) =>
     ipcRenderer.invoke('save-attachment', { identifier, filename, data }),
-  readAttachment: (relativePath) => 
+  readAttachment: (relativePath) =>
     ipcRenderer.invoke('read-attachment', relativePath),
-  deleteAttachment: (relativePath) => 
+  deleteAttachment: (relativePath) =>
     ipcRenderer.invoke('delete-attachment', relativePath),
   listAttachments: (identifier) => 
     ipcRenderer.invoke('list-attachments', identifier),
   
   // Backup/restore operations for attachments
-  listAllAttachments: () => 
+  listAllAttachments: () =>
     ipcRenderer.invoke('list-all-attachments'),
-  writeAttachment: (relativePath, data) => 
+  writeAttachment: (relativePath, data) =>
     ipcRenderer.invoke('write-attachment', { relativePath, data }),
   renameAttachment: (oldPath, newPath) =>
     ipcRenderer.invoke('rename-attachment', { oldPath, newPath }),

@@ -282,8 +282,14 @@ export interface EngineEnvelope<T = unknown> {
   error?: string;
 }
 
-// One-click demo vault (presenters): probe/stream an on-disk copy of
-// kyutxo-demo-vault.zip found next to the executable or in the data directory.
+export interface ProtectedStoreStatus {
+  mode: 'protected' | 'plaintext-fallback';
+  available: boolean;
+  exists: boolean;
+  unlocked: boolean;
+  verified?: boolean;
+  version: number;
+}
 export interface DemoVaultCheckResult {
   present: boolean;
   size?: number;
@@ -328,6 +334,7 @@ export interface EngineBridge {
 
 // Type declarations for Electron API exposed via preload
 interface ElectronAPI {
+  protectedStore: ProtectedStoreBridge;
   saveAttachment: (identifier: string, filename: string, data: ArrayBuffer) => Promise<{ success: boolean; path?: string; error?: string }>;
   readAttachment: (relativePath: string) => Promise<{ success: boolean; data?: ArrayBuffer; error?: string }>;
   deleteAttachment: (relativePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -434,4 +441,22 @@ export interface ElectrumRevokeCertificateResult {
   // True when a pin existed and was removed; false when nothing was pinned.
   revoked?: boolean;
   error?: string;
+}
+
+export interface ProtectedStoreBridge {
+  status: () => Promise<EngineEnvelope<ProtectedStoreStatus>>;
+  create: (password: string) => Promise<EngineEnvelope<{ mode: 'protected'; verified: true; unlocked: true }>>;
+  unlock: (password: string) => Promise<EngineEnvelope<{ mode: 'protected'; verified: true; unlocked: true }>>;
+  lock: () => Promise<EngineEnvelope<{ unlocked: false }>>;
+  changePassword: (oldPassword: string, newPassword: string) => Promise<EngineEnvelope<{ changed: true }>>;
+  integrity: () => Promise<EngineEnvelope<{ ok: true }>>;
+  putRow: (table: string, id: string, row: unknown) => Promise<EngineEnvelope<{ id: string }>>;
+  getRow: (table: string, id: string) => Promise<EngineEnvelope<unknown | null>>;
+  listRows: (table: string, after?: string, limit?: number) => Promise<EngineEnvelope<Array<{ id: string; row: unknown }>>>;
+  deleteRow: (table: string, id: string) => Promise<EngineEnvelope<{ deleted: true }>>;
+  writeAttachment: (bytes: ArrayBuffer, alias?: string) => Promise<EngineEnvelope<{ id: string; name: string; alias?: string; size: number }>>;
+  readAttachment: (name: string, id: string) => Promise<EngineEnvelope<ArrayBuffer>>;
+  deleteAttachment: (name: string) => Promise<EngineEnvelope<{ deleted: true }>>;
+  listAttachments: () => Promise<EngineEnvelope<Array<{ alias: string; size: number }>>>;
+  renameAttachment: (oldAlias: string, newAlias: string) => Promise<EngineEnvelope<{ renamed: true }>>;
 }
