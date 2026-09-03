@@ -28,6 +28,7 @@ export const KEYBOARD_SHORTCUTS: ShortcutGroup[] = [
     category: "General",
     shortcuts: [
       { keys: ["?"], action: "Show this keyboard shortcuts reference" },
+      { keys: ["Cmd/Ctrl", "K"], action: "Search pages, records, addresses, and transactions" },
     ],
   },
   {

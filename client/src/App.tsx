@@ -46,6 +46,7 @@ import { OrphanedTxNotifier } from "@/components/OrphanedTxNotifier";
 import { ActivityBusProvider } from "@/lib/activity-bus";
 import { ActivityPulseDot } from "@/components/ActivityPulseDot";
 import { EngineBootstrapper, EnginePreparingIndicator } from "@/components/EngineMaintenanceUI";
+import { GlobalCommandPalette } from "@/components/GlobalCommandPalette";
 
 const UIAssets = lazy(() => import("@/pages/UIAssets"));
 const IconsReference = lazy(() => import("@/pages/IconsReference"));
@@ -220,6 +221,7 @@ function AuthenticatedApp() {
           <OrphanedTxNotifier />
           <EntityListLoader />
           <SyncStatsBackfill />
+          <GlobalCommandPalette />
           <div className="flex h-screen w-full">
             <AppSidebar />
             <div className="flex flex-col flex-1 overflow-hidden">

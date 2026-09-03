@@ -1,54 +1,4 @@
-import { 
-  Database, 
-  Settings, 
-  Download, 
-  QrCode, 
-  RefreshCw, 
-  Wallet, 
-  ArrowDownUp, 
-  List, 
-  Repeat2, 
-  BarChart3, 
-  Server, 
-  ClipboardList, 
-  Zap, 
-  Coins, 
-  Waypoints,
-  Sparkles, 
-  Wrench, 
-  Palette, 
-  Network, 
-  ChevronDown, 
-  Shapes, 
-  PanelLeft, 
-  LayoutGrid,
-  LayoutDashboard,
-  Upload,
-  Layers,
-  Map,
-  Import,
-  DollarSign,
-  AlertCircle,
-  Key,
-  FileText,
-  Tags,
-  Vault,
-  Trash2,
-  Smartphone,
-  LayoutList,
-  ShieldAlert,
-  Eye,
-  GitBranch,
-  FlaskConical,
-  ChevronsLeftRight,
-  CalendarRange,
-  Search,
-  Droplets,
-  KeyRound,
-  Biohazard,
-  Hourglass,
-  HeartPulse
-} from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
 import {
@@ -66,131 +16,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Link, useLocation } from "wouter";
 import { useState, useEffect } from "react";
 import { ActivityMonitorPanel } from "@/components/ActivityMonitorPanel";
-
-interface NavItem {
-  title: string;
-  url: string;
-  icon: React.ElementType;
-}
-
-interface NavGroup {
-  id: string;
-  title: string;
-  icon: React.ElementType;
-  items: NavItem[];
-  defaultOpen?: boolean;
-}
-
-const navGroups: NavGroup[] = [
-  {
-    id: "overview",
-    title: "Overview",
-    icon: LayoutDashboard,
-    defaultOpen: true,
-    items: [
-      { title: "Records", url: "/", icon: Database },
-      { title: "Nudgie", url: "/nudgie", icon: Sparkles },
-      { title: "Vault Health", url: "/vault-health", icon: HeartPulse },
-    ]
-  },
-  {
-    id: "data",
-    title: "Data",
-    icon: Database,
-    defaultOpen: true,
-    items: [
-      { title: "Balance", url: "/balance", icon: Wallet },
-      { title: "Transactions", url: "/transactions", icon: List },
-      { title: "UTXOs", url: "/utxos", icon: Coins },
-      { title: "UTXO Provenance", url: "/utxo-provenance", icon: Waypoints },
-      { title: "Vaults", url: "/vaults", icon: Vault },
-      { title: "Wallet Overview", url: "/wallet-overview", icon: LayoutList },
-      { title: "Bulk Editor", url: "/bulk-editor", icon: Layers },
-      { title: "Conflict Resolution", url: "/conflict-resolution", icon: AlertCircle },
-    ]
-  },
-  {
-    id: "analysis",
-    title: "Analysis",
-    icon: BarChart3,
-    defaultOpen: false,
-    items: [
-      { title: "Address Checker", url: "/address-checker", icon: Search },
-      { title: "Address Deriver", url: "/address-deriver", icon: KeyRound },
-      { title: "Address Reuse", url: "/address-reuse", icon: Repeat2 },
-      { title: "Provenance", url: "/provenance", icon: Map },
-      { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
-      { title: "Network Analysis", url: "/network-analysis", icon: GitBranch },
-      { title: "Fund Trail", url: "/fund-trail", icon: ChevronsLeftRight },
-      { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
-      { title: "Privacy Audit", url: "/privacy-audit", icon: Eye },
-      { title: "Quantum Risk", url: "/quantum-risk", icon: ShieldAlert },
-      { title: "Reports", url: "/reports", icon: ClipboardList },
-      { title: "Statement", url: "/statement", icon: FileText },
-      { title: "Proof of Funds", url: "/proof-of-funds", icon: FileText },
-      { title: "Annual Activity", url: "/annual-activity", icon: CalendarRange },
-      { title: "Lightning", url: "/lightning-speculator", icon: Zap },
-      { title: "Dusted", url: "/dusted", icon: Droplets },
-      { title: "Address Poisoning", url: "/address-poisoning", icon: Biohazard },
-      { title: "Dormant Coins", url: "/dormant-coins", icon: Hourglass },
-    ]
-  },
-  {
-    id: "import-export",
-    title: "Import / Export",
-    icon: Upload,
-    defaultOpen: false,
-    items: [
-      { title: "Address Importer", url: "/import", icon: Import },
-      { title: "Descriptor Import", url: "/descriptor-import", icon: Key },
-      { title: "BIP-329 Labels", url: "/bip329-import", icon: Tags },
-      { title: "Wallet Data Sync", url: "/wallet-import", icon: Wallet },
-      { title: "Mobile Wallets", url: "/mobile-wallet-import", icon: Smartphone },
-      { title: "Price Import", url: "/price-import", icon: DollarSign },
-      { title: "Transaction Sync", url: "/transaction-sync", icon: ArrowDownUp },
-      { title: "QR Tools", url: "/scanner", icon: QrCode },
-      { title: "Quick Tagger", url: "/quick-tagger", icon: Tags },
-      { title: "Backup", url: "/export", icon: Download },
-    ]
-  },
-  {
-    id: "documents",
-    title: "Documents",
-    icon: FileText,
-    defaultOpen: false,
-    items: [
-      { title: "Evidence", url: "/evidence", icon: FileText },
-    ]
-  },
-  {
-    id: "system",
-    title: "System",
-    icon: Settings,
-    defaultOpen: false,
-    items: [
-      { title: "Node Connection", url: "/node-settings", icon: Server },
-      { title: "Value Updater", url: "/value-updater", icon: RefreshCw },
-      { title: "Cleanup", url: "/cleanup", icon: Trash2 },
-      { title: "Engine Diagnostics", url: "/engine-diagnostics", icon: FlaskConical },
-      { title: "Settings", url: "/settings", icon: Settings },
-    ]
-  },
-];
-
-const devToolsGroup: NavGroup = {
-  id: "dev-tools",
-  title: "Dev Tools",
-  icon: Wrench,
-  defaultOpen: false,
-  items: [
-    { title: "Test Data Seeder", url: "/dev/test-data", icon: Database },
-    { title: "UI Assets", url: "/dev/ui-assets", icon: Palette },
-    { title: "Icons Reference", url: "/dev/icons", icon: Shapes },
-    { title: "Nav Patterns", url: "/dev/nav-patterns", icon: PanelLeft },
-    { title: "Grouped Sidebar", url: "/dev/grouped-sidebar", icon: LayoutGrid },
-    { title: "Flow Visualizations", url: "/dev/flow-viz", icon: Network },
-  ]
-};
+import { DEV_TOOLS_GROUP, NAV_GROUPS, type NavGroup } from "@/config/navigation";
 
 export function AppSidebar() {
   const [location] = useLocation();
@@ -198,13 +24,13 @@ export function AppSidebar() {
   const getInitialOpenState = () => {
     const state: Record<string, boolean> = {};
     
-    navGroups.forEach(group => {
+    NAV_GROUPS.forEach(group => {
       const hasActiveItem = group.items.some(item => location === item.url);
       state[group.id] = hasActiveItem || (group.defaultOpen ?? false);
     });
     
     const devToolsActive = location.startsWith("/dev/");
-    state[devToolsGroup.id] = devToolsActive || (devToolsGroup.defaultOpen ?? false);
+    state[DEV_TOOLS_GROUP.id] = devToolsActive || (DEV_TOOLS_GROUP.defaultOpen ?? false);
     
     return state;
   };
@@ -215,7 +41,7 @@ export function AppSidebar() {
     setOpenGroups(prev => {
       const newState = { ...prev };
       
-      navGroups.forEach(group => {
+      NAV_GROUPS.forEach(group => {
         const hasActiveItem = group.items.some(item => location === item.url);
         if (hasActiveItem && !prev[group.id]) {
           newState[group.id] = true;
@@ -223,8 +49,8 @@ export function AppSidebar() {
       });
       
       const devToolsActive = location.startsWith("/dev/");
-      if (devToolsActive && !prev[devToolsGroup.id]) {
-        newState[devToolsGroup.id] = true;
+      if (devToolsActive && !prev[DEV_TOOLS_GROUP.id]) {
+        newState[DEV_TOOLS_GROUP.id] = true;
       }
       
       return newState;
@@ -290,8 +116,8 @@ export function AppSidebar() {
       </SidebarHeader>
       <SidebarContent className="px-2">
         <div className="space-y-1">
-          {navGroups.map(renderGroup)}
-          {import.meta.env.DEV && renderGroup(devToolsGroup)}
+          {NAV_GROUPS.map(renderGroup)}
+          {import.meta.env.DEV && renderGroup(DEV_TOOLS_GROUP)}
         </div>
       </SidebarContent>
       <SidebarFooter className="p-4">

@@ -1363,6 +1363,107 @@ export async function getRecentRecordsByUpdatedAt(limit: number): Promise<Record
   return db.records.orderBy('updatedAt').reverse().limit(limit).toArray();
 }
 
+export interface BoundedRecordSearchOptions {
+  /** Maximum rows returned from each indexed prefix lookup. */
+  perIndexLimit?: number;
+  /** Maximum recent rows inspected for contains-only metadata fields. */
+  recentScanLimit?: number;
+  isCancelled?: () => boolean;
+  /** Optional observation hook used by scale regression tests. */
+  onRecentRecordInspected?: () => void;
+}
+
+function recordContainsLocalSearch(record: Record, query: string): boolean {
+  const searchText = [
+    record.label,
+    record.inputString,
+    record.owner,
+    record.walletName,
+    record.seedName,
+    record.walletSoftware,
+    record.notes,
+    record.source,
+    record.privateKeyStatus,
+    ...(record.tags ?? []),
+    ...(record.categories ?? []),
+    ...Object.values(record.customFields ?? {}),
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
+  return searchText.includes(query);
+}
+
+/**
+ * Bounded, entirely-local candidate search for the global command palette.
+ *
+ * High-value metadata fields use their existing indexes and prefix matching,
+ * while notes/custom fields (which intentionally have no indexes) are searched
+ * only inside a fixed newest-first window. The raw recent collection is stopped
+ * BEFORE applying the residual predicate, so rare/no-match terms inspect at
+ * most `recentScanLimit` rows rather than walking a million-row vault.
+ *
+ * Visibility uses exclusion semantics instead of addressImportance.anyOf:
+ * hidden discovery tiers are removed, while legacy rows with no tier remain
+ * visible exactly as they are in the app's default Records view.
+ */
+export async function searchVisibleRecordsBounded(
+  rawQuery: string,
+  options: BoundedRecordSearchOptions = {},
+): Promise<Record[]> {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) return [];
+
+  const perIndexLimit = Math.max(1, options.perIndexLimit ?? 50);
+  const recentScanLimit = Math.max(1, options.recentScanLimit ?? 2_000);
+  const isCancelled = options.isCancelled ?? (() => false);
+  const matches = new Map<number, Record>();
+
+  const addIfVisibleMatch = (record: Record) => {
+    if (
+      record.id == null ||
+      isHiddenDiscoveryTier(record.addressImportance) ||
+      !recordContainsLocalSearch(record, query)
+    ) return;
+    matches.set(record.id, record);
+  };
+
+  const plainPrefixFields = [
+    'inputStringLower',
+    'label',
+    'owner',
+    'walletName',
+    'seedName',
+    'walletSoftware',
+  ];
+  const multiEntryPrefixFields = ['tags', 'categories'];
+
+  const indexedGroups = await Promise.all([
+    ...plainPrefixFields.map((field) =>
+      db.records.where(field).startsWithIgnoreCase(query).limit(perIndexLimit).toArray()
+    ),
+    ...multiEntryPrefixFields.map((field) =>
+      db.records.where(field).startsWithIgnoreCase(query).limit(perIndexLimit).toArray()
+    ),
+  ]);
+  if (isCancelled()) return [];
+  indexedGroups.flat().forEach(addIfVisibleMatch);
+
+  let inspected = 0;
+  await db.records
+    .orderBy('updatedAt')
+    .reverse()
+    .until(() => inspected >= recentScanLimit || isCancelled())
+    .each((record) => {
+      inspected += 1;
+      options.onRecentRecordInspected?.();
+      addIfVisibleMatch(record);
+    });
+
+  if (isCancelled()) return [];
+  return [...matches.values()];
+}
+
 /**
  * Freshness fingerprint for the live `records` table — total count, the max id,
  * and the max updatedAt. Compared against the native engine mirror's fingerprint
