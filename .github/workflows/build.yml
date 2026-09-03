@@ -25,6 +25,112 @@ jobs:
   verify-desktop-package-matrix:
     uses: ./.github/workflows/desktop-package-matrix.yml
 
+  # RELEASE GATE: native power events must be exercised by release-like
+  # packages on dedicated, logged-in desktop runners. This job never runs for
+  # pull requests or ordinary branch pushes because it locks and suspends the
+  # host operating system.
+  native-power-smoke:
+    needs: verify-desktop-package-matrix
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    name: native-power-${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win
+            arch: x64
+            runner_label: desktop-release-win-x64
+            builder_flag: --win
+          - platform: darwin
+            arch: x64
+            runner_label: desktop-release-darwin-x64
+            builder_flag: --mac
+          - platform: darwin
+            arch: arm64
+            runner_label: desktop-release-darwin-arm64
+            builder_flag: --mac
+          - platform: linux
+            arch: x64
+            runner_label: desktop-release-linux-x64
+            builder_flag: --linux
+          - platform: linux
+            arch: arm64
+            runner_label: desktop-release-linux-arm64
+            builder_flag: --linux
+    runs-on:
+      - self-hosted
+      - "${{ matrix.runner_label }}"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v5.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build release-like package and run native power smoke check
+        shell: bash
+        env:
+          KYUTXO_NATIVE_POWER_SMOKE: '1'
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: |
+          set -euo pipefail
+          rm -rf release
+          mkdir -p release
+          LOG="release/native-power-smoke-${{ matrix.platform }}-${{ matrix.arch }}.log"
+          touch "$LOG"
+          set +e
+          (
+            set -euo pipefail
+            echo "target=${{ matrix.platform }}/${{ matrix.arch }}"
+            echo "runner=${{ matrix.runner_label }}"
+            echo "sha=${GITHUB_SHA}"
+            echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            npx vite build --config vite.config.electron.ts
+            node scripts/build-native-engine.mjs
+            npx electron-builder \
+              --config electron-builder.json \
+              --dir \
+              ${{ matrix.builder_flag }} \
+              --${{ matrix.arch }} \
+              --publish never
+            node scripts/check-packaged-vault-lock-native.mjs \
+              --platform ${{ matrix.platform }} \
+              --arch ${{ matrix.arch }}
+            echo "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ) 2>&1 | tee "$LOG"
+          STATUSES=("${PIPESTATUS[@]}")
+          set -e
+          if (( STATUSES[0] != 0 || STATUSES[1] != 0 )); then
+            echo "Native power smoke pipeline failed: command=${STATUSES[0]} tee=${STATUSES[1]}"
+            exit 1
+          fi
+          node -e '
+            const text = require("node:fs").readFileSync(process.argv[1], "utf8");
+            const passes = text.match(/^  PASS  /gm) || [];
+            const fails = text.match(/^  FAIL  /gm) || [];
+            if (passes.length !== 5 || fails.length !== 0) {
+              throw new Error(`Expected 5 PASS results and no FAIL results; got PASS=${passes.length} FAIL=${fails.length}`);
+            }
+          ' "$LOG"
+
+      - name: Upload native power smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: KYUTXO-native-power-smoke-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.run_id }}
+          path: release/native-power-smoke-${{ matrix.platform }}-${{ matrix.arch }}.log
+          if-no-files-found: error
+          retention-days: 90
+
   build-windows:
     needs: verify-desktop-package-matrix
     if: >-
@@ -187,10 +293,15 @@ jobs:
             release/*.exe.sha256
 
   publish-release:
-    needs: build-windows
+    needs: [build-windows, native-power-smoke]
     if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+      always() &&
+      needs.build-windows.result == 'success' &&
+      needs.native-power-smoke.result == 'success' &&
+      (
+        startsWith(github.ref, 'refs/tags/v') ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -202,6 +313,46 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Download native power smoke evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: KYUTXO-native-power-smoke-*-${{ github.run_id }}
+          path: native-power-smoke
+          merge-multiple: true
+
+      - name: Verify all native power smoke evidence before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const evidenceDir = 'native-power-smoke';
+          const expected = [
+            'native-power-smoke-win-x64.log',
+            'native-power-smoke-darwin-x64.log',
+            'native-power-smoke-darwin-arm64.log',
+            'native-power-smoke-linux-x64.log',
+            'native-power-smoke-linux-arm64.log',
+          ];
+          for (const filename of expected) {
+            const filePath = path.join(evidenceDir, filename);
+            if (!fs.existsSync(filePath)) {
+              throw new Error(`Missing required native power smoke evidence: ${filename}`);
+            }
+            const text = fs.readFileSync(filePath, 'utf8');
+            const passes = text.match(/^  PASS  /gm) || [];
+            const fails = text.match(/^  FAIL  /gm) || [];
+            if (passes.length !== 5 || fails.length !== 0) {
+              throw new Error(
+                `Invalid native power smoke evidence ${filename}: ` +
+                `PASS=${passes.length} FAIL=${fails.length}`,
+              );
+            }
+          }
+          console.log(`Verified ${expected.length} native power smoke evidence logs`);
+          NODE
+
       - name: Publish GitHub release
         shell: bash
         env:
@@ -210,9 +361,10 @@ jobs:
         run: |
           mapfile -t EXES < <(find release-assets -maxdepth 1 -type f -name '*.exe' -print)
           mapfile -t SUMS < <(find release-assets -maxdepth 1 -type f -name '*.exe.sha256' -print)
-          if [ "${#EXES[@]}" -eq 0 ] || [ "${#SUMS[@]}" -eq 0 ]; then
-            echo "::error::Validated executable or SHA-256 sidecar is missing"
+          mapfile -t SMOKE_LOGS < <(find native-power-smoke -maxdepth 1 -type f -name '*.log' -print)
+          if [ "${#EXES[@]}" -eq 0 ] || [ "${#SUMS[@]}" -eq 0 ] || [ "${#SMOKE_LOGS[@]}" -ne 5 ]; then
+            echo "::error::Validated executable, SHA-256 sidecar, or native power evidence is missing"
             exit 1
           fi
-          gh release create "$RELEASE_TAG" "${EXES[@]}" "${SUMS[@]}" \
+          gh release create "$RELEASE_TAG" "${EXES[@]}" "${SUMS[@]}" "${SMOKE_LOGS[@]}" \
             --verify-tag --generate-notes --title "KYUTXO $RELEASE_TAG"

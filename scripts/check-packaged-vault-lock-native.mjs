@@ -7,10 +7,11 @@
 // both captured, so a command that merely exits successfully without reaching
 // Electron cannot pass this check.
 //
-// This check is intentionally operator-controlled. Screen locking and sleep
-// can make an unattended CI session unavailable (Windows/macOS may require a
-// real user to unlock the runner), so it is a repeatable release smoke check,
-// not an ordinary pull-request gate. See docs/desktop-release-smoke-check.md.
+// This check is intentionally limited to an interactive release runner.
+// Screen locking and sleep can make an unattended CI session unavailable
+// (Windows/macOS require a real user to unlock the runner), so it is a release
+// gate and not an ordinary pull-request check. See
+// docs/desktop-release-smoke-check.md.
 
 import { chromium } from 'playwright-core';
 import { spawn, spawnSync } from 'node:child_process';
@@ -418,7 +419,20 @@ function expectedSignalsFor(policy, action) {
     : policy.suspendSignals || [];
 }
 
-async function runPolicyCase(target, output, env, page, policy, action) {
+export async function runPolicyCase(
+  target,
+  output,
+  env,
+  page,
+  policy,
+  action,
+  dependencies = {},
+) {
+  const performNativeAction = dependencies.runNativeAction || runNativeAction;
+  const awaitNativeEvents = dependencies.waitForNativeEvents || waitForNativeEvents;
+  const pause = dependencies.sleep || sleep;
+  const verifyRendererLockState =
+    dependencies.assertRendererLockState || assertRendererLockState;
   const expectedSignals = expectedSignalsFor(policy, action);
   const expectedNativeEvents = expectedNativeEventsFor(action);
   const nativeEventsBeforeAction = nativeEventsSeen(output.getOutput());
@@ -429,16 +443,16 @@ async function runPolicyCase(target, output, env, page, policy, action) {
     detail: '',
   };
   try {
-    await runNativeAction(target.platform, action, env);
-    await waitForNativeEvents(
+    await performNativeAction(target.platform, action, env);
+    await awaitNativeEvents(
       output.getOutput,
       nativeEventsBeforeAction,
       expectedNativeEvents,
     );
     // Native event logging and the following renderer signal are consecutive
     // writes, but they can arrive in separate stdout chunks.
-    await sleep(500);
-    const actualSignals = lockSignalsSeen(output.getOutput).slice(signalsBeforeAction.length);
+    await pause(500);
+    const actualSignals = lockSignalsSeen(output.getOutput()).slice(signalsBeforeAction.length);
     const exact = JSON.stringify(actualSignals) === JSON.stringify(expectedSignals);
     if (!exact) {
       throw new Error(
@@ -446,7 +460,7 @@ async function runPolicyCase(target, output, env, page, policy, action) {
           `expected=${JSON.stringify(expectedSignals)}`,
       );
     }
-    const rendererDetail = await assertRendererLockState(page, expectedSignals.length > 0);
+    const rendererDetail = await verifyRendererLockState(page, expectedSignals.length > 0);
     result.passed = true;
     result.detail =
       `native=${expectedNativeEvents.join(',')}; signals=${JSON.stringify(actualSignals)}; ` +
@@ -542,8 +556,8 @@ async function main() {
   const steps = [];
   console.log(`${TAG} target=${target.platform}/${target.arch}; package=${packaged.executable}`);
   console.log(
-    `${TAG} operator action: screen-lock cases require unlocking the desktop session ` +
-      'before the check can continue.',
+    `${TAG} release-runner action: screen-lock cases require unlocking the ` +
+      'desktop session before the check can continue.',
   );
 
   const enabled = POLICY_CASES[0];

@@ -151,3 +151,4 @@
 - [Coin Origins scope assertions](coin-origins-scope-assertions.md) — export checks must distinguish acquisition-lot count from rendered holdings; mixed outputs add a separate unresolved holding.
 - [Electron builder native ABI ordering](electron-builder-native-abi-ordering.md) — run Node-native tests before packaging; electron-builder rewrites shared addons for Electron ABI.
 - [Full-suite validation under concurrent merges](full-suite-concurrent-merges.md) — a long serial suite is a moving target while task branches merge; repair only reproducible failures and recheck changed harnesses directly.
+- [Release evidence fail-closed](release-evidence-fail-closed.md) — release gates must revalidate every downloaded evidence file immediately before publish; producer job success alone is insufficient.
