@@ -20,6 +20,7 @@ const KEYS = [
   "sourceOfFundsTxLimit",
   "quantumTagLevels",
   "entityListSnapshot",
+  "savedInboxViews",
 ] as const;
 
 function byKey(rows: any[]) {
@@ -46,6 +47,14 @@ describe("previewSettingsPreferences", () => {
         privacyHistoryLimit: 100,
         fundTrailTxLimit: 5000,
         entityListSnapshot: { entries: [{ address: "a" }, { address: "b" }] },
+        savedInboxViews: [{
+          id: "view-1",
+          name: "Large incoming",
+          tab: "new",
+          search: "invoice",
+          filters: { dateMode: "any", amountMode: "range", amountMinBtc: 1 },
+          createdAt: 1,
+        }],
       },
     ]);
     expect(map.disableOrphanCheck).toMatchObject({ fromBackup: true, backupValue: "Off" });
@@ -53,6 +62,7 @@ describe("previewSettingsPreferences", () => {
     expect(map.privacyHistoryLimit).toMatchObject({ fromBackup: true, backupValue: "100 runs" });
     expect(map.fundTrailTxLimit).toMatchObject({ fromBackup: true, backupValue: "5,000 per hop" });
     expect(map.entityListSnapshot).toMatchObject({ fromBackup: true, backupValue: "2 entries" });
+    expect(map.savedInboxViews).toMatchObject({ fromBackup: true, backupValue: "1 view" });
   });
 
   it("formats the boolean reminder, the 'always confirm' threshold, and a single entry", () => {
@@ -77,6 +87,7 @@ describe("previewSettingsPreferences", () => {
         cancelConfirmThreshold: Number.NaN,
         privacyHistoryLimit: "30", // wrong type
         entityListSnapshot: { entries: [] }, // empty snapshot
+        savedInboxViews: [{ name: "missing required fields" }],
       },
     ]);
     for (const key of KEYS) {

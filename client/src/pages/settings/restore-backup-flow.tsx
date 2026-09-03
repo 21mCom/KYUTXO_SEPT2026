@@ -428,6 +428,7 @@ export function RestoreBackupFlow() {
       fundTrailTxLimit?: number;
       intermediaryAddressCap?: number;
       entityListSnapshot?: unknown;
+      savedInboxViews?: unknown;
     };
     let preRestorePrefs: PortablePrefsSnapshot | null = null;
 
@@ -513,6 +514,7 @@ export function RestoreBackupFlow() {
               fundTrailTxLimit: cur.fundTrailTxLimit,
               intermediaryAddressCap: cur.intermediaryAddressCap,
               entityListSnapshot: cur.entityListSnapshot,
+              savedInboxViews: cur.savedInboxViews,
             };
           }
         } catch {

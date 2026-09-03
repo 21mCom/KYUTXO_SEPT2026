@@ -102,6 +102,11 @@ function formatDeviceValue(key: string, settings: any): string | null {
       };
       return levels.map((l: string) => labels[l] ?? String(l)).join(" + ");
     }
+    case "savedInboxViews": {
+      const views = settings.savedInboxViews;
+      if (!Array.isArray(views)) return null;
+      return `${views.length} ${views.length === 1 ? "view" : "views"}`;
+    }
     default:
       return null;
   }
@@ -193,6 +198,14 @@ describe("settings-preferences preview/restore parity", () => {
       sourceOfFundsTxLimit: 5000,
       quantumTagLevels: ["critical", "medium"],
       entityListSnapshot: { entries: [{ address: "a" }] },
+      savedInboxViews: [{
+        id: "view-1",
+        name: "Recent incoming",
+        tab: "new",
+        search: "",
+        filters: { dateMode: "range", dateStart: "2026-01-01T00:00:00.000Z", amountMode: "any" },
+        createdAt: 1,
+      }],
     };
 
     const preview = previewSettingsPreferences([backupRow]);
@@ -210,5 +223,6 @@ describe("settings-preferences preview/restore parity", () => {
     expect(after?.privacyHistoryLimit).toBe(100);
     expect((after as any)?.fundTrailTxLimit).toBe(5000);
     expect((after as any)?.entityListSnapshot?.entries).toHaveLength(1);
+    expect(after?.savedInboxViews).toHaveLength(1);
   });
 });

@@ -192,4 +192,35 @@ describe("settings preferences backup round-trip", () => {
     expect(after?.privacyHistoryLimit).toBe(45);
     expect((after as any)?.fundTrailTxLimit).toBe(10000);
   });
+
+  it("restores named Transaction Inbox views", async () => {
+    const savedInboxViews = [{
+      id: "view-1",
+      name: "High-value incoming",
+      tab: "new" as const,
+      search: "invoice",
+      filters: {
+        dateMode: "range" as const,
+        dateStart: "2026-01-01T00:00:00.000Z",
+        amountMode: "range" as const,
+        amountMinBtc: 1,
+      },
+      createdAt: 1,
+    }];
+    await putSettings({ ...BASE_SETTINGS, savedInboxViews }, { skipNotification: true });
+
+    const sink = new MemorySink();
+    await exportBackup({
+      sink: sink as BackupSink,
+      encrypted: false,
+      batchSize: 25,
+      attachmentIO,
+    });
+    const blob = sink.blob as Blob;
+    await updateSettings("default", { savedInboxViews: [] }, { skipNotification: true });
+
+    await restoreV3Backup({ source: blobChunks(blob), attachmentWriter });
+
+    expect((await getSettings("default"))?.savedInboxViews).toEqual(savedInboxViews);
+  });
 });

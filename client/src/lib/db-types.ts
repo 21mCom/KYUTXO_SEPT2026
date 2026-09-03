@@ -406,6 +406,33 @@ export interface CustomField {
   createdAt: number;
 }
 
+export interface SavedInboxViewFilters {
+  dateMode: 'any' | 'range' | 'exact';
+  dateStart?: string;
+  dateEnd?: string;
+  dateExact?: string;
+  amountMode: 'any' | 'range' | 'exact';
+  amountMinBtc?: number;
+  amountMaxBtc?: number;
+  amountExactBtc?: number;
+  entityAddress?: string;
+  entityWallet?: string[];
+  entitySeed?: string[];
+  entityOwner?: string[];
+  entityTag?: string[];
+  entityCategory?: string[];
+}
+
+/** A named, portable snapshot of the Transaction Inbox query controls. */
+export interface SavedInboxView {
+  id: string;
+  name: string;
+  tab: TransactionCurationState;
+  search: string;
+  filters: SavedInboxViewFilters;
+  createdAt: number;
+}
+
 export interface Settings {
   id: string;
   fieldVisibility: {
@@ -500,6 +527,10 @@ export interface Settings {
     mode?: 'replace' | 'merge';
     entries: EntityListSnapshotEntry[];
   };
+  // Named Transaction Inbox searches are local user workflow state. They are
+  // stored in settings (not on transactions) and carried by backups so a
+  // reviewer's saved views are available after restoring on another device.
+  savedInboxViews?: SavedInboxView[];
   // Device-local, derived cache of the vault-wide behavior-label tally (how many
   // addresses fall into each behavior label). Materialized by a streamed
   // background pass over the cached address stats — never holds the whole vault

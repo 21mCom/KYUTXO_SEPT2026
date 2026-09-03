@@ -1,4 +1,4 @@
-import { db, notifyDbChange, USER_CURATED_TIERS, type BlockchainTransaction, type TransactionParticipant, type TransactionCurationState, type Record } from '../database';
+import { db, notifyDbChange, USER_CURATED_TIERS, type BlockchainTransaction, type TransactionParticipant, type TransactionCurationState, type Record, type SavedInboxView, type SavedInboxViewFilters } from '../database';
 import { getAttachmentsByRecordId } from './attachments-crud';
 import { getRecordsByInputStrings } from './record-crud';
 import Dexie from 'dexie';
@@ -11,6 +11,64 @@ export interface TransactionWriteOptions {
 
 export interface TransactionCurationUpdateOptions extends TransactionWriteOptions {
   snoozedUntil?: number;
+}
+
+const CURATION_STATES = new Set<TransactionCurationState>([
+  'new',
+  'snoozed',
+  'annotated',
+  'ignored',
+]);
+
+function isFiniteOptionalNumber(value: unknown): value is number | undefined {
+  return value === undefined || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function isStringArray(value: unknown): value is string[] | undefined {
+  return value === undefined ||
+    (Array.isArray(value) && value.every(entry => typeof entry === 'string'));
+}
+
+function validateSavedInboxFilters(value: unknown): value is SavedInboxViewFilters {
+  if (!value || typeof value !== 'object') return false;
+  const filters = value as Partial<SavedInboxViewFilters>;
+  if (!['any', 'range', 'exact'].includes(filters.dateMode as string)) return false;
+  if (!['any', 'range', 'exact'].includes(filters.amountMode as string)) return false;
+  for (const key of ['dateStart', 'dateEnd', 'dateExact', 'entityAddress'] as const) {
+    if (filters[key] !== undefined && typeof filters[key] !== 'string') return false;
+  }
+  return isFiniteOptionalNumber(filters.amountMinBtc) &&
+    isFiniteOptionalNumber(filters.amountMaxBtc) &&
+    isFiniteOptionalNumber(filters.amountExactBtc) &&
+    isStringArray(filters.entityWallet) &&
+    isStringArray(filters.entitySeed) &&
+    isStringArray(filters.entityOwner) &&
+    isStringArray(filters.entityTag) &&
+    isStringArray(filters.entityCategory);
+}
+
+/**
+ * Validate the serializable settings shape before it is loaded or crosses a
+ * backup boundary. Malformed views are ignored instead of crashing the inbox.
+ */
+export function sanitizeSavedInboxViews(value: unknown): SavedInboxView[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const valid = value.filter((candidate): candidate is SavedInboxView => {
+    if (!candidate || typeof candidate !== 'object') return false;
+    const view = candidate as Partial<SavedInboxView>;
+    return typeof view.id === 'string' &&
+      view.id.trim().length > 0 &&
+      typeof view.name === 'string' &&
+      view.name.trim().length > 0 &&
+      view.name.length <= 100 &&
+      typeof view.tab === 'string' &&
+      CURATION_STATES.has(view.tab as TransactionCurationState) &&
+      typeof view.search === 'string' &&
+      typeof view.createdAt === 'number' &&
+      Number.isFinite(view.createdAt) &&
+      validateSavedInboxFilters(view.filters);
+  });
+  return valid.length === value.length ? valid : (valid.length > 0 ? valid : undefined);
 }
 
 function hasMeaningfulValue(value: unknown): boolean {

@@ -100,6 +100,8 @@ import {
   sanitizeQuantumTagLevels,
   type QuantumRiskLevel,
 } from "@/lib/quantum-risk";
+import { sanitizeSavedInboxViews } from "@/lib/data/transaction-crud";
+import type { SavedInboxView } from "@/lib/db-types";
 
 // Recognized Fund Trail layout values + their human-readable labels, derived
 // from the single source of truth so this allow-list never drifts from the UI.
@@ -250,6 +252,15 @@ const PORTABLE_PREFERENCES: PortablePreferenceDescriptor[] = [
     format: (v) => {
       const n = (v as { entries: unknown[] }).entries.length;
       return `${n} ${n === 1 ? "entry" : "entries"}`;
+    },
+  },
+  {
+    key: "savedInboxViews",
+    label: "Transaction Inbox saved views",
+    extract: (s) => sanitizeSavedInboxViews(s.savedInboxViews),
+    format: (v) => {
+      const n = (v as SavedInboxView[]).length;
+      return `${n} ${n === 1 ? "view" : "views"}`;
     },
   },
 ];

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { formatDistanceToNow } from "date-fns";
+import { addMonths, endOfDay, format, formatDistanceToNow } from "date-fns";
 import { Archive, Clock3, Inbox, RotateCcw, Search } from "lucide-react";
 import { type BlockchainTransaction, type Record, type TransactionCurationState, type TransactionParticipant } from "@/lib/database";
 import { bulkGetRecords, createRecord, getRecordsByInputStrings, updateRecord } from "@/lib/data/record-crud";
@@ -9,7 +9,10 @@ import {
   countTransactionCurations,
   getTransactionsByCurationState,
   updateTransactionCuration,
+  sanitizeSavedInboxViews,
 } from "@/lib/data/transaction-crud";
+import { ensureSettings, getSettings, updateSettings } from "@/lib/data/settings-crud";
+import type { SavedInboxView, SavedInboxViewFilters } from "@/lib/db-types";
 import { fetchParticipantsByTxids } from "@/lib/participant-repo";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { TransactionCard } from "@/pages/Transactions";
@@ -27,6 +30,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type InboxTab = TransactionCurationState;
 type UndoEntry = Array<{
@@ -37,6 +41,125 @@ type UndoEntry = Array<{
 
 const PAGE_LIMIT = 500;
 const SNOOZE_WEEK = 7 * 24 * 60 * 60 * 1000;
+
+function serializeInboxFilters(filters: SearchFilters): SavedInboxViewFilters {
+  return {
+    dateMode: filters.dateMode,
+    dateStart: filters.dateStart?.toISOString(),
+    dateEnd: filters.dateEnd?.toISOString(),
+    dateExact: filters.dateExact?.toISOString(),
+    amountMode: filters.amountMode,
+    amountMinBtc: filters.amountMinBtc,
+    amountMaxBtc: filters.amountMaxBtc,
+    amountExactBtc: filters.amountExactBtc,
+    entityAddress: filters.entityAddress,
+    entityWallet: filters.entityWallet,
+    entitySeed: filters.entitySeed,
+    entityOwner: filters.entityOwner,
+    entityTag: filters.entityTag,
+    entityCategory: filters.entityCategory,
+  };
+}
+
+function parseSavedDate(value?: string): Date | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function deserializeInboxFilters(filters: SavedInboxViewFilters): SearchFilters {
+  return {
+    dateMode: filters.dateMode,
+    dateStart: parseSavedDate(filters.dateStart),
+    dateEnd: parseSavedDate(filters.dateEnd),
+    dateExact: parseSavedDate(filters.dateExact),
+    amountMode: filters.amountMode,
+    amountMinBtc: filters.amountMinBtc,
+    amountMaxBtc: filters.amountMaxBtc,
+    amountExactBtc: filters.amountExactBtc,
+    entityAddress: filters.entityAddress,
+    entityWallet: filters.entityWallet,
+    entitySeed: filters.entitySeed,
+    entityOwner: filters.entityOwner,
+    entityTag: filters.entityTag,
+    entityCategory: filters.entityCategory,
+  };
+}
+
+function dateInputValue(date: Date): string {
+  return format(date, "yyyy-MM-dd");
+}
+
+function dateInputToEndOfDay(value: string): number | undefined {
+  const [year, month, day] = value.split("-").map(Number);
+  if (![year, month, day].every(Number.isFinite)) return undefined;
+  const date = endOfDay(new Date(year, month - 1, day));
+  return Number.isNaN(date.getTime()) ? undefined : date.getTime();
+}
+
+function SnoozePicker({
+  disabled,
+  onSnooze,
+  testId,
+}: {
+  disabled?: boolean;
+  onSnooze: (until: number) => void;
+  testId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [customDate, setCustomDate] = useState("");
+  const today = dateInputValue(new Date());
+  const choose = (until: number) => {
+    onSnooze(until);
+    setOpen(false);
+  };
+  const chooseCustom = () => {
+    const until = dateInputToEndOfDay(customDate);
+    if (until === undefined || until <= Date.now()) return;
+    choose(until);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="outline" disabled={disabled} data-testid={testId}>
+          <Clock3 className="h-4 w-4 mr-1" />Snooze
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 space-y-3" align="end">
+        <div>
+          <p className="font-medium text-sm">Snooze until</p>
+          <p className="text-xs text-muted-foreground">The transaction stays in the queue and becomes due later.</p>
+        </div>
+        <div className="grid gap-2">
+          <Button variant="outline" className="justify-start" onClick={() => choose(Date.now() + 24 * 60 * 60 * 1000)} data-testid={`${testId}-tomorrow`}>
+            Tomorrow
+          </Button>
+          <Button variant="outline" className="justify-start" onClick={() => choose(Date.now() + SNOOZE_WEEK)} data-testid={`${testId}-week`}>
+            1 week
+          </Button>
+          <Button variant="outline" className="justify-start" onClick={() => choose(addMonths(new Date(), 1).getTime())} data-testid={`${testId}-month`}>
+            1 month
+          </Button>
+        </div>
+        <div className="space-y-2 border-t pt-3">
+          <label htmlFor={`${testId}-date`} className="text-sm font-medium">Custom date</label>
+          <Input
+            id={`${testId}-date`}
+            type="date"
+            min={today}
+            value={customDate}
+            onChange={event => setCustomDate(event.target.value)}
+            data-testid={`${testId}-date`}
+          />
+          <Button className="w-full" disabled={!customDate} onClick={chooseCustom} data-testid={`${testId}-custom`}>
+            Snooze until date
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export default function TransactionInbox() {
   const { toast } = useToast();
@@ -50,7 +173,14 @@ export default function TransactionInbox() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [drafts, setDrafts] = useState<Map<string, { label: string; notes: string }>>(new Map());
   const [undo, setUndo] = useState<UndoEntry | null>(null);
-  const dbSignal = useDbChangeSignal(["blockchainTransactions", "transactionParticipants", "records"], 100);
+  const [viewName, setViewName] = useState("");
+  const [activeViewId, setActiveViewId] = useState("");
+  const dbSignal = useDbChangeSignal(["blockchainTransactions", "transactionParticipants", "records", "settings"], 100);
+  const settings = useLiveQuery(() => getSettings("default"), [dbSignal]);
+  const savedViews = useMemo(
+    () => sanitizeSavedInboxViews(settings?.savedInboxViews) ?? [],
+    [settings?.savedInboxViews],
+  );
 
   const counts = useLiveQuery(async () => {
     const [fresh, snoozed, annotated, ignored] = await Promise.all([
@@ -197,6 +327,61 @@ export default function TransactionInbox() {
     });
   };
 
+  const saveView = async () => {
+    const name = viewName.trim();
+    if (!name) {
+      toast({
+        variant: "destructive",
+        title: "Name required",
+        description: "Give this inbox view a name before saving it.",
+      });
+      return;
+    }
+    const existing = savedViews.find(view => view.name.toLowerCase() === name.toLowerCase());
+    const savedView: SavedInboxView = {
+      id: existing?.id ?? `inbox-view-${Date.now()}-${savedViews.length}`,
+      name,
+      tab,
+      search,
+      filters: serializeInboxFilters(filters),
+      createdAt: existing?.createdAt ?? Date.now(),
+    };
+    const nextViews = existing
+      ? savedViews.map(view => view.id === existing.id ? savedView : view)
+      : [...savedViews, savedView];
+    await ensureSettings("default");
+    await updateSettings("default", { savedInboxViews: nextViews });
+    setActiveViewId(savedView.id);
+    setViewName("");
+    toast({
+      title: existing ? "Inbox view updated" : "Inbox view saved",
+      description: `"${name}" is available on this device and in backups.`,
+    });
+  };
+
+  const loadSavedView = (viewId: string) => {
+    setActiveViewId(viewId);
+    const view = savedViews.find(candidate => candidate.id === viewId);
+    if (!view) return;
+    setTab(view.tab);
+    setSearch(view.search);
+    setFilters(deserializeInboxFilters(view.filters));
+    setSelected(new Set());
+  };
+
+  const deleteSavedView = async () => {
+    const view = savedViews.find(candidate => candidate.id === activeViewId);
+    if (!view) return;
+    await updateSettings("default", {
+      savedInboxViews: savedViews.filter(candidate => candidate.id !== activeViewId),
+    });
+    setActiveViewId("");
+    toast({
+      title: "Inbox view deleted",
+      description: `"${view.name}" was removed from this device.`,
+    });
+  };
+
   const undoLast = async () => {
     if (!undo) return;
     for (const entry of undo) {
@@ -237,6 +422,42 @@ export default function TransactionInbox() {
       </div>
 
       <Card>
+        <CardContent className="py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="h-9 min-w-48 rounded-md border border-input bg-background px-3 text-sm"
+              value={activeViewId}
+              onChange={event => loadSavedView(event.target.value)}
+              aria-label="Saved inbox views"
+              data-testid="select-inbox-saved-view"
+            >
+              <option value="">Saved views…</option>
+              {savedViews.map(view => <option key={view.id} value={view.id}>{view.name}</option>)}
+            </select>
+            <Input
+              className="min-w-48 flex-1"
+              value={viewName}
+              maxLength={100}
+              onChange={event => setViewName(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === "Enter") void saveView();
+              }}
+              placeholder="Name current view"
+              aria-label="Saved view name"
+              data-testid="input-inbox-view-name"
+            />
+            <Button variant="outline" onClick={() => void saveView()} data-testid="button-inbox-save-view">
+              Save view
+            </Button>
+            <Button variant="ghost" disabled={!activeViewId} onClick={() => void deleteSavedView()} data-testid="button-inbox-delete-view">
+              Delete view
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">Saved views remember this tab, search, date, and amount filters.</p>
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader className="py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -246,7 +467,7 @@ export default function TransactionInbox() {
             <div className="flex items-center gap-2">
               <Checkbox checked={allVisibleSelected} onCheckedChange={checked => setSelected(checked ? new Set(visibleRows.map(tx => tx.txid)) : new Set())} aria-label="Select all loaded transactions" />
               <Button size="sm" variant="outline" disabled={!selected.size} onClick={() => applyState(Array.from(selected), "ignored")}><Archive className="h-4 w-4 mr-1" />Ignore</Button>
-              <Button size="sm" variant="outline" disabled={!selected.size} onClick={() => applyState(Array.from(selected), "snoozed", Date.now() + SNOOZE_WEEK)}><Clock3 className="h-4 w-4 mr-1" />Snooze 1 week</Button>
+              <SnoozePicker disabled={!selected.size} onSnooze={until => applyState(Array.from(selected), "snoozed", until)} testId="button-inbox-snooze" />
               <Button size="sm" variant="outline" disabled={!selected.size} onClick={() => applyState(Array.from(selected), "new")}>Mark New</Button>
             </div>
           </div>
@@ -288,10 +509,10 @@ export default function TransactionInbox() {
                         <CardContent className="pt-4 grid gap-2 md:grid-cols-[1fr_1fr_auto]">
                           <Input value={draft.label} onChange={event => setDrafts(current => new Map(current).set(tx.txid, { ...draft, label: event.target.value }))} placeholder="Label" data-testid={`input-inbox-label-${tx.txid}`} />
                           <Textarea className="min-h-9 h-9" value={draft.notes} onChange={event => setDrafts(current => new Map(current).set(tx.txid, { ...draft, notes: event.target.value }))} placeholder="Notes" />
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap gap-2">
                             <Button size="sm" onClick={() => annotate(tx.txid)}>Save annotation</Button>
                             <Button size="sm" variant="outline" onClick={() => applyState([tx.txid], "ignored")}>Ignore</Button>
-                            <Button size="sm" variant="outline" onClick={() => applyState([tx.txid], "snoozed", Date.now() + SNOOZE_WEEK)}>Snooze</Button>
+                            <SnoozePicker onSnooze={until => applyState([tx.txid], "snoozed", until)} testId={`button-inbox-snooze-${tx.txid}`} />
                           </div>
                         </CardContent>
                       </Card>
