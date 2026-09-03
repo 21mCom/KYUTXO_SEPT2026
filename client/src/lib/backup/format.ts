@@ -17,9 +17,9 @@
 // record-dependent tables, so a single forward pass can relink everything.
 //
 // Encryption: AES-GCM per line/blob (never the whole vault as one string), key
-// derived from the password with PBKDF2 (see ../crypto). The PBKDF2 iteration
-// count is recorded in the manifest (kdfIterations); backups written before the
-// KDF strengthening carry no such field and are always legacy (100k). Each
+// derived from the password with the versioned KDF in ../crypto. Version-2 KDF
+// records use a purpose-specific encryption label. Manifests without a version
+// remain raw legacy derivations so old backups continue to restore. Each
 // encrypted NDJSON line is the base64 envelope returned by encrypt(); base64
 // contains no newline so it is a safe single line. The inline tables are
 // encrypted as one string.
@@ -75,8 +75,9 @@ export interface BackupManifest {
   // backups). Absent on backups written before the KDF strengthening — always
   // legacy (100k). Superseded by `kdf` when present. See getBackupKdfParams.
   kdfIterations?: number;
-  // Full KDF record (algorithm + parameters) the backup key was derived with.
-  // Written by Argon2id-era exports; takes precedence over kdfIterations.
+  // Full KDF record (version, algorithm + parameters) the backup key was
+  // derived with. Written by versioned Argon2id-era exports; takes precedence
+  // over kdfIterations. Missing version means the pre-domain-separation format.
   kdf?: KdfParams;
   check?: string; // encrypt(CHECK_SENTINEL), present iff encrypted
   counts: BackupCounts;

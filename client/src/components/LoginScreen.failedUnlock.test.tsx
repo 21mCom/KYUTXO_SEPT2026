@@ -146,4 +146,26 @@ describe('failed unlock shows the Incorrect password error (Task #1820)', () => 
     const error = await screen.findByTestId('text-error');
     expect(error.textContent).toBe('Login failed. Please try again.');
   });
+
+  it('states on both setup and unlock screens that the app lock does not encrypt disk data', async () => {
+    const unlockView = render(<App />);
+    await screen.findByTestId('input-password');
+    expect(document.body.textContent).toContain(
+      'Your password locks access to the app; it does not encrypt vault data stored on disk.',
+    );
+    expect(document.body.textContent).toContain(
+      'For at-rest protection, keep the vault on an encrypted disk or container.',
+    );
+
+    unlockView.unmount();
+    authStore.set({ isInitialized: false });
+    render(<App />);
+    await screen.findByTestId('input-confirm-password');
+    expect(document.body.textContent).toContain(
+      'Your password locks access to the app; it does not encrypt vault data stored on disk.',
+    );
+    expect(document.body.textContent).toContain(
+      'For at-rest protection, keep the vault on an encrypted disk or container.',
+    );
+  });
 });

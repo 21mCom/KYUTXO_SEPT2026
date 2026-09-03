@@ -1,6 +1,6 @@
 ---
 name: Vault/backup KDF parameters
-description: KDF record (Argon2id/PBKDF2) travels with the salt; absent always means legacy 100k PBKDF2; legacy at-rest decryption is pinned to LEGACY forever; Argon2id needs 'wasm-unsafe-eval' in the packaged CSP.
+description: Versioned KDF records travel with the salt; v2 purpose-separates verifier/encryption outputs; absent version preserves raw legacy derivation; Argon2id needs 'wasm-unsafe-eval' in packaged CSP.
 ---
 
 The vault password KDF evolved: PBKDF2-HMAC-SHA-256 100k (legacy) -> 600k
@@ -15,6 +15,11 @@ CURRENT_KDF_PARAMS in client/src/lib/crypto.ts). Rules future work must keep:
 - New derivations go through deriveKeyWithParams / hashPasswordWithParams /
   verifyPasswordWithParams. The bare PBKDF2 helpers remain only for legacy
   paths pinned to a known iteration count.
+- KDF record version 2 domain-separates the password-verifier output from the
+  encryption-key output with distinct labels. An absent version means the old
+  raw derivation, including unversioned Argon2id records; never reinterpret it
+  as version 2 or old vaults/backups become unreadable. New records must include
+  the current version.
 - Legacy at-rest encrypted payloads were only ever produced at PBKDF2 100k, so
   their decryption stays pinned to LEGACY even after a vault upgrades. The KDF
   upgrade (upgradeVaultKdfIfNeeded, gated by isCurrentKdf) re-derives ONLY the
@@ -29,9 +34,10 @@ CURRENT_KDF_PARAMS in client/src/lib/crypto.ts). Rules future work must keep:
 **Why:** an exported backup is the offline brute-force target, so parameters
 must be self-describing; PBKDF2 alone is GPU-cheap, hence memory-hard Argon2id;
 and the salt is shared between the login hash and the legacy at-rest
-encryption key, coupling upgrade to migration state.
+encryption key, coupling upgrade to migration state. Purpose labels prevent a
+stored verifier from also serving as a future data-encryption key.
 
 **How to apply:** when touching crypto.ts call sites, backup formats, or the
 legacy-decrypt migration, check which parameter record the data was written
-with rather than accepting defaults; never silently fall back to a weaker KDF
-when wasm fails.
+with rather than accepting defaults; treat version absence as an explicit
+compatibility signal; never silently fall back to a weaker KDF when wasm fails.

@@ -12,17 +12,17 @@ KYUTXO is an offline-first desktop application (Electron + React 18 / TypeScript
 
 - **Attachment files** — arbitrary files linked to records, stored on the local filesystem under a data directory. Compromise allows reading or modifying any attached file.
 - **IndexedDB vault data** — Bitcoin addresses, transaction metadata, labels, notes, entity-list snapshots. Stored as plaintext; OS-level encryption is expected if protection is required (documented design choice).
-- **UI lock password hash** — protects the UI lock screen. Argon2id (current) or PBKDF2 (legacy) hashes stored in IndexedDB. Compromise allows bypassing the in-app lock.
+- **UI lock password verifier** — protects the UI lock screen. New verifiers use the version-2, password-verifier-labeled Argon2id output; legacy PBKDF2 and unversioned Argon2id records remain readable during upgrade. Compromise allows bypassing the in-app lock.
 - **Launch token** — per-process random token (`/api` gate). Injected into served HTML; controls access to the local attachment API and Tor proxy.
 - **Tor proxy settings token** — per-process random token that gates `POST /api/tor/settings`. Only issued to loopback clients; prevents LAN/network clients from manipulating SSRF allowlists.
-- **Backup files** — ZIP archives, optionally encrypted with AES-GCM + Argon2id KDF. May contain full vault contents including sensitive metadata.
+- **Backup files** — ZIP archives, optionally encrypted with AES-GCM + the version-2, encryption-key-labeled KDF. May contain full vault contents including sensitive metadata.
 
 ## Trust Boundaries
 
 - **Browser/Electron renderer ↔ Express API (loopback):** The Express server accepts only requests bearing the per-launch token. In desktop mode it binds `127.0.0.1`; on Replit it binds `0.0.0.0` (Replit container isolation is the outer boundary). DNS-rebinding protection (`rejectUnknownHosts`) defends against rebounded malicious pages reading the token from `<meta>` and replaying it.
 - **Express API ↔ filesystem (attachment storage):** `containedRealPath` + lexical path validation + `O_NOFOLLOW` prevent path traversal and planted-symlink attacks.
 - **Express API ↔ Tor/SSRF proxy:** Server-side URL allowlist (mempool.space, blockstream.info, check.torproject.org, user-configured custom provider) + separate settings token (loopback-only issuance) prevent the Tor relay from becoming an open SSRF relay.
-- **User ↔ UI lock:** Argon2id password hash in IndexedDB controls the in-app lock screen. Does NOT encrypt data at rest.
+- **User ↔ UI lock:** A versioned password verifier in IndexedDB controls the in-app lock screen. The lock is an app access control, not at-rest encryption; vault records and attachment files remain plaintext on disk.
 
 ## Scan Anchors
 
@@ -58,7 +58,7 @@ Attachment file writes go through `containedRealPath` containment, `O_NOFOLLOW` 
 
 Server error middleware strips 5xx detail in production. The request logger intentionally omits response bodies. Attachment download uses `application/octet-stream` content type, and filenames are set via `Content-Disposition` with proper RFC 5987 encoding and header-injection-safe sanitization.
 
-IndexedDB data is stored as plaintext. The documented threat model defers data-at-rest protection to OS-level encrypted containers; this is an acceptable design tradeoff for a desktop app that does not handle raw private keys.
+IndexedDB data and attachment files are stored as plaintext. The password only locks access through the app and does not encrypt this storage. The documented threat model therefore requires an OS-level encrypted disk or container (for example, VeraCrypt, BitLocker, FileVault, or LUKS) when at-rest protection is needed; this is an explicit design tradeoff for a desktop app that does not handle raw private keys.
 
 **Required guarantees:**
 - Server MUST NOT log request/response bodies, filenames, or user data.

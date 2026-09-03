@@ -39,6 +39,7 @@ import {
 } from "./format";
 import {
   deriveKey,
+  deriveKeyWithParams,
   encrypt,
   generateSalt,
   bufferToBase64,
@@ -138,6 +139,50 @@ async function buildPbkdf2EncryptedZip(iterations: number, recordIterations: boo
   return sink.blob as Blob;
 }
 
+async function buildUnversionedArgon2EncryptedZip(): Promise<Blob> {
+  const salt = generateSalt();
+  const kdf = {
+    algorithm: "argon2id" as const,
+    memoryKiB: 65536,
+    timeCost: 3,
+    parallelism: 1,
+  };
+  const key = await deriveKeyWithParams(PASSWORD, salt, kdf);
+  const manifest: BackupManifest = {
+    formatVersion: BACKUP_FORMAT_VERSION,
+    app: "KYUTXO",
+    appVersion: "3.0.0-pre-domain-separation",
+    exportDate: new Date().toISOString(),
+    encrypted: true,
+    salt: bufferToBase64(salt),
+    kdf,
+    check: await encrypt(CHECK_SENTINEL, key),
+    counts: {
+      records: 0,
+      blockchainTransactions: 0,
+      transactionParticipants: 0,
+      attachments: 0,
+      addressSyncState: 0,
+      utxoLineage: 0,
+      custodySegments: 0,
+      lineageSnapshots: 0,
+      attachmentFiles: 0,
+    },
+    totalAttachmentBytes: 0,
+    streamedTables: [...STREAMED_TABLES],
+    ...(await serializeInline({}, key)),
+  };
+
+  const sink = new MemorySink();
+  const writer = new ZipStreamWriter(sink);
+  await writer.addBytes(
+    MANIFEST_FILENAME,
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
+  await writer.finalize();
+  return sink.blob as Blob;
+}
+
 beforeEach(clearEverything);
 
 describe("getBackupKdfIterations", () => {
@@ -178,6 +223,19 @@ describe("encrypted backup with current (Argon2id) parameters", () => {
     expect(result.manifest.kdf?.algorithm).toBe("argon2id");
     // Argon2id-era exports no longer write the PBKDF2-only field.
     expect(result.manifest.kdfIterations).toBeUndefined();
+    expect(result.counts.records).toBe(0);
+  });
+
+  it("restores an unversioned Argon2id backup from before domain separation", async () => {
+    const blob = await buildUnversionedArgon2EncryptedZip();
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      password: PASSWORD,
+      attachmentWriter,
+    });
+
+    expect(result.manifest.kdf?.version).toBeUndefined();
+    expect(result.manifest.kdf?.algorithm).toBe("argon2id");
     expect(result.counts.records).toBe(0);
   });
 

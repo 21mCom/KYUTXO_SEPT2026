@@ -23,11 +23,14 @@ import {
   verifyPassword,
   verifyPasswordWithParams,
   generateSalt,
+  base64ToBuffer,
   encrypt,
   decrypt,
   LEGACY_PBKDF2_ITERATIONS,
   CURRENT_PBKDF2_ITERATIONS,
   CURRENT_KDF_PARAMS,
+  CURRENT_KDF_VERSION,
+  LEGACY_KDF_VERSION,
   isCurrentKdf,
 } from "./crypto";
 
@@ -46,6 +49,9 @@ describe("KDF constants", () => {
 
   it("pins the current KDF to memory-hard Argon2id at/above the chosen floor", () => {
     expect(CURRENT_KDF_PARAMS.algorithm).toBe("argon2id");
+    expect(CURRENT_KDF_PARAMS.version).toBe(CURRENT_KDF_VERSION);
+    expect(CURRENT_KDF_VERSION).toBe(2);
+    expect(LEGACY_KDF_VERSION).toBe(1);
     if (CURRENT_KDF_PARAMS.algorithm === "argon2id") {
       // 64 MiB / 3 passes: memory-hard floor. Lowering either silently
       // weakens every new vault/backup — fail loudly instead.
@@ -56,6 +62,69 @@ describe("KDF constants", () => {
     expect(isCurrentKdf(CURRENT_KDF_PARAMS)).toBe(true);
     expect(isCurrentKdf({ algorithm: "pbkdf2-sha256", iterations: CURRENT_PBKDF2_ITERATIONS })).toBe(false);
     expect(isCurrentKdf({ algorithm: "argon2id", memoryKiB: 19456, timeCost: 2, parallelism: 1 })).toBe(false);
+  });
+});
+
+describe("domain-separated version-2 outputs", () => {
+  it("derives verifier bytes that are not a usable encryption key", async () => {
+    const salt = generateSalt();
+    const verifier = base64ToBuffer(
+      await hashPasswordWithParams(PASSWORD, salt, CURRENT_KDF_PARAMS),
+    );
+    const encryptionKey = await deriveKeyWithParams(PASSWORD, salt, CURRENT_KDF_PARAMS);
+    const encryptionBytes = new Uint8Array(
+      await crypto.subtle.exportKey("raw", encryptionKey),
+    );
+
+    expect(verifier).not.toEqual(encryptionBytes);
+    expect(verifier.length).toBe(encryptionBytes.length);
+    // The verifier is not merely different at the serialized representation:
+    // trying to use it as an AES-GCM key must not be interchangeable with the
+    // purpose-specific encryption key.
+    const ciphertext = await encrypt("domain-separated payload", encryptionKey);
+    const verifierKey = await crypto.subtle.importKey(
+      "raw",
+      verifier,
+      { name: "AES-GCM", length: 256 },
+      true,
+      ["decrypt"],
+    );
+    await expect(decrypt(ciphertext, verifierKey)).rejects.toThrow();
+  });
+
+  it("keeps unversioned Argon2id derivations readable for pre-migration data", async () => {
+    const salt = generateSalt();
+    const legacyParams = {
+      algorithm: "argon2id" as const,
+      memoryKiB: 65536,
+      timeCost: 3,
+      parallelism: 1,
+      // No version: this is the pre-domain-separation Argon2id record shape.
+    };
+    const hash = await hashPasswordWithParams(PASSWORD, salt, legacyParams);
+    expect(await verifyPasswordWithParams(PASSWORD, salt, hash, legacyParams)).toBe(true);
+
+    const key = await deriveKeyWithParams(PASSWORD, salt, legacyParams);
+    const ciphertext = await encrypt("pre-migration payload", key);
+    expect(await decrypt(ciphertext, await deriveKeyWithParams(PASSWORD, salt, legacyParams))).toBe(
+      "pre-migration payload",
+    );
+    expect(isCurrentKdf(legacyParams)).toBe(false);
+  });
+
+  it("rejects unknown KDF versions instead of treating them as legacy", async () => {
+    const salt = generateSalt();
+    const unknownVersion = {
+      ...CURRENT_KDF_PARAMS,
+      version: 99,
+    } as unknown as typeof CURRENT_KDF_PARAMS;
+
+    await expect(
+      hashPasswordWithParams(PASSWORD, salt, unknownVersion),
+    ).rejects.toThrow("Unsupported KDF version");
+    await expect(
+      deriveKeyWithParams(PASSWORD, salt, unknownVersion),
+    ).rejects.toThrow("Unsupported KDF version");
   });
 });
 

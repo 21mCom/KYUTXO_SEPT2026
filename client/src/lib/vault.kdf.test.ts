@@ -222,4 +222,33 @@ describe("upgradeVaultKdfIfNeeded", () => {
     expect(after.passwordHash).toBe(before.passwordHash);
     expect(after.kdf).toEqual(CURRENT_KDF_PARAMS);
   });
+
+  it("upgrades a pre-domain-separation Argon2id verifier without changing its salt", async () => {
+    const salt = generateSalt();
+    const legacyParams = {
+      algorithm: "argon2id" as const,
+      memoryKiB: 65536,
+      timeCost: 3,
+      parallelism: 1,
+      // Older Argon2id rows did not carry a version and used the raw output.
+    };
+    const passwordHash = await hashPasswordWithParams(PASSWORD, salt, legacyParams);
+    await vaultDb.vault.put({
+      id: "main",
+      salt: bufferToBase64(salt),
+      passwordHash,
+      kdf: legacyParams,
+      createdAt: Date.now(),
+    });
+    const before = (await getVaultSettings())!;
+
+    expect(await verifyVaultPassword(PASSWORD, before)).toBe(true);
+    expect(await upgradeVaultKdfIfNeeded(PASSWORD, before)).toBe(true);
+
+    const after = (await getVaultSettings())!;
+    expect(after.salt).toBe(before.salt);
+    expect(after.kdf).toEqual(CURRENT_KDF_PARAMS);
+    expect(after.passwordHash).not.toBe(before.passwordHash);
+    expect(await verifyVaultPassword(PASSWORD, after)).toBe(true);
+  });
 });

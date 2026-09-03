@@ -34,7 +34,8 @@ export function LoginScreen() {
       await setupPassword(password);
       toast({
         title: 'Vault Created',
-        description: 'Your encrypted vault is now ready to use.',
+        description:
+          'Your vault is ready. The password locks access to the app but does not encrypt vault data on disk. Use an encrypted disk or container for at-rest protection.',
       });
     } catch (err) {
       setError('Failed to create vault. Please try again.');
@@ -65,8 +66,8 @@ export function LoginScreen() {
           <CardTitle className="text-2xl">KYUTXO Vault</CardTitle>
           <CardDescription>
             {isInitialized
-              ? 'Enter your password to unlock your vault.'
-              : 'Create a password to lock access to your data.'}
+              ? 'Enter your password to unlock the app and access your vault.'
+              : 'Create a password to lock access to the app.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -130,14 +131,21 @@ export function LoginScreen() {
               {isLoading ? 'Please wait...' : isInitialized ? 'Unlock Vault' : 'Create Vault'}
             </Button>
 
-            {!isInitialized && (
-              <div className="text-xs text-muted-foreground text-center space-y-1">
-                <p>Your password locks access to the app.</p>
+            <div className="text-xs text-muted-foreground text-center space-y-1">
+                <p>
+                  Your password locks access to the app; it does not encrypt
+                  vault data stored on disk.
+                </p>
+                <p>
+                  For at-rest protection, keep the vault on an encrypted disk
+                  or container.
+                </p>
+              {!isInitialized && (
                 <p className="font-medium text-destructive">
                   Remember your password to access the app.
                 </p>
+              )}
               </div>
-            )}
           </form>
         </CardContent>
       </Card>

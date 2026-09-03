@@ -627,7 +627,7 @@ export default function MetadataForm({
               Save template for future derivations
             </Label>
             <p className="text-xs text-muted-foreground">
-              Store this xpub (encrypted) to easily derive more addresses later without re-entering it.
+              Store this xpub in your local vault to easily derive more addresses later without re-entering it.
             </p>
           </div>
         </div>
@@ -640,8 +640,9 @@ export default function MetadataForm({
                 <p className="font-medium">Privacy Note:</p>
                 <p>
                   Storing an xpub doesn't risk your funds (no private keys), but it does reveal 
-                  your wallet structure and all derived addresses. The xpub will be encrypted 
-                  with your password.
+                  your wallet structure and all derived addresses. Vault data is stored
+                  plaintext on disk, so use an encrypted disk or container if this
+                  information needs at-rest protection.
                 </p>
               </div>
             </div>

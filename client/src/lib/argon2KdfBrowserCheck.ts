@@ -24,6 +24,7 @@ import {
   CURRENT_KDF_PARAMS,
   LEGACY_PBKDF2_ITERATIONS,
   CURRENT_PBKDF2_ITERATIONS,
+  base64ToBuffer,
 } from './crypto';
 
 export interface Argon2KdfCheckStep {
@@ -60,6 +61,16 @@ export async function runArgon2KdfBrowserCheck(): Promise<Argon2KdfCheckReport> 
     step('argon2id-verify', okRight === true && okWrong === false, `right=${okRight} wrong=${okWrong}`);
 
     const key = await deriveKeyWithParams(password, salt, CURRENT_KDF_PARAMS);
+    const verifierBytes = base64ToBuffer(hash);
+    const encryptionBytes = new Uint8Array(await crypto.subtle.exportKey('raw', key));
+    const outputsDiffer =
+      verifierBytes.length === encryptionBytes.length &&
+      verifierBytes.some((byte, index) => byte !== encryptionBytes[index]);
+    step(
+      'argon2id-domain-separation',
+      outputsDiffer,
+      `verifierBytes=${verifierBytes.length} encryptionBytes=${encryptionBytes.length}`,
+    );
     const ciphertext = await encrypt('argon2id browser payload', key);
     const roundTrip = await decrypt(ciphertext, key);
     step('argon2id-aes-roundtrip', roundTrip === 'argon2id browser payload', `decrypted="${roundTrip}"`);

@@ -13,6 +13,15 @@ const KEY_LENGTH = 256;
 export const LEGACY_PBKDF2_ITERATIONS = 100000;
 export const CURRENT_PBKDF2_ITERATIONS = 600000;
 
+// KDF record versions. Records without a version predate domain separation and
+// MUST continue using the raw derivation so existing vaults and backups remain
+// readable. Version 2 derives independent outputs for password verification and
+// encryption by including a purpose-specific label in the KDF salt input.
+export const LEGACY_KDF_VERSION = 1;
+export const CURRENT_KDF_VERSION = 2;
+export const PASSWORD_VERIFIER_LABEL = 'KYUTXO/KDF/v2/password-verifier';
+export const ENCRYPTION_KEY_LABEL = 'KYUTXO/KDF/v2/encryption-key';
+
 // ---- KDF parameter record --------------------------------------------------
 //
 // Every vault row / backup manifest records WHICH algorithm and parameters its
@@ -21,7 +30,7 @@ export const CURRENT_PBKDF2_ITERATIONS = 600000;
 //   - only `kdfIterations`         -> PBKDF2 at that count (strengthening era)
 //   - neither                      -> PBKDF2 at LEGACY 100k (pre-strengthening)
 export type KdfParams =
-  | { algorithm: 'pbkdf2-sha256'; iterations: number }
+  | { algorithm: 'pbkdf2-sha256'; iterations: number; version?: 1 | 2 }
   | {
       algorithm: 'argon2id';
       /** Memory cost in KiB. */
@@ -30,6 +39,7 @@ export type KdfParams =
       timeCost: number;
       /** Lanes. hash-wasm computes them sequentially; keep low. */
       parallelism: number;
+      version?: 1 | 2;
     };
 
 // Current defaults for NEW vaults/backups: Argon2id, 64 MiB, 3 passes, 1 lane.
@@ -44,14 +54,40 @@ export const CURRENT_KDF_PARAMS: KdfParams = {
   memoryKiB: 65536,
   timeCost: 3,
   parallelism: 1,
+  version: CURRENT_KDF_VERSION,
 };
 
 export function isCurrentKdf(params: KdfParams): boolean {
   return (
+    params.version === CURRENT_KDF_VERSION &&
     params.algorithm === 'argon2id' &&
     params.memoryKiB >= 65536 &&
     params.timeCost >= 3
   );
+}
+
+function getKdfSalt(
+  salt: Uint8Array,
+  label: string,
+  params: KdfParams,
+): Uint8Array {
+  const version = (params as { version?: unknown }).version;
+  if (version == null || version === LEGACY_KDF_VERSION) {
+    return salt;
+  }
+  if (version !== CURRENT_KDF_VERSION) {
+    throw new Error(`Unsupported KDF version: ${String(version)}`);
+  }
+
+  const labelBytes = new TextEncoder().encode(label);
+  // Keep the caller's random salt intact as the prefix and add an unambiguous
+  // separator before the purpose label. This preserves the old salt for legacy
+  // records while making the two version-2 outputs cryptographically distinct.
+  const derivedSalt = new Uint8Array(salt.length + 1 + labelBytes.length);
+  derivedSalt.set(salt, 0);
+  derivedSalt[salt.length] = 0;
+  derivedSalt.set(labelBytes, salt.length + 1);
+  return derivedSalt;
 }
 
 // Raw 32-byte Argon2id derivation (hash-wasm; wasm is inlined in the bundle so
@@ -80,10 +116,11 @@ export async function deriveKeyWithParams(
   salt: Uint8Array,
   params: KdfParams = CURRENT_KDF_PARAMS,
 ): Promise<CryptoKey> {
+  const derivationSalt = getKdfSalt(salt, ENCRYPTION_KEY_LABEL, params);
   if (params.algorithm === 'pbkdf2-sha256') {
-    return deriveKey(password, salt, params.iterations);
+    return deriveKey(password, derivationSalt, params.iterations);
   }
-  const bits = await argon2idBits(password, salt, params);
+  const bits = await argon2idBits(password, derivationSalt, params);
   return crypto.subtle.importKey(
     'raw',
     bits,
@@ -99,10 +136,11 @@ export async function hashPasswordWithParams(
   salt: Uint8Array,
   params: KdfParams = CURRENT_KDF_PARAMS,
 ): Promise<string> {
+  const derivationSalt = getKdfSalt(salt, PASSWORD_VERIFIER_LABEL, params);
   if (params.algorithm === 'pbkdf2-sha256') {
-    return hashPassword(password, salt, params.iterations);
+    return hashPassword(password, derivationSalt, params.iterations);
   }
-  const bits = await argon2idBits(password, salt, params);
+  const bits = await argon2idBits(password, derivationSalt, params);
   return bufferToBase64(bits);
 }
 
