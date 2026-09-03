@@ -1025,6 +1025,10 @@ args = "global-command-search-browser-check"
 task = "workflow.run"
 args = "first-run-network-privacy"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "record-search-index-concurrency-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3695,6 +3699,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-coin-origins-export-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "record-search-index-concurrency-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/record-crud.globalSearch.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

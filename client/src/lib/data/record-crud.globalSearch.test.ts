@@ -3,6 +3,10 @@ import "fake-indexeddb/auto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import Dexie, { type Table } from "dexie";
 import type { Record as DbRecord } from "@/lib/database";
+import type {
+  RecordSearchIndexFingerprint,
+  RecordSearchIndexState,
+} from "./record-search-index";
 
 class TestDb extends Dexie {
   records!: Table<DbRecord, number>;
@@ -12,14 +16,7 @@ class TestDb extends Dexie {
     kind: "notes" | "custom";
     recordId: number;
   }, number>;
-  recordSearchIndexState!: Table<{
-    id: "state";
-    version: 1;
-    status: "ready" | "building";
-    recordCount: number;
-    maxId: number;
-    maxUpdatedAt: number;
-  }, string>;
+  recordSearchIndexState!: Table<RecordSearchIndexState, string>;
 
   constructor(name: string) {
     super(name);
@@ -50,8 +47,40 @@ const {
   searchVisibleRecordsBounded,
   updateRecord,
 } = await import("./record-crud");
+const {
+  beginRecordSearchIndexMutation,
+  beginRecordSearchIndexRebuild,
+  buildRecordSearchIndexEntries,
+  completeRecordSearchIndexMutation,
+  persistRecordSearchIndexReadyState,
+  resetRecordSearchIndexForRebuild,
+  syncRecordSearchIndex,
+} = await import("./record-search-index");
 
 const CREATE_OPTIONS = { skipNotification: true, skipVocabularySync: true };
+
+async function getSearchIndexFingerprint(): Promise<RecordSearchIndexFingerprint> {
+  const [recordCount, newestById, newestByUpdatedAt] = await Promise.all([
+    testDb.records.count(),
+    testDb.records.orderBy("id").reverse().first(),
+    testDb.records.orderBy("updatedAt").reverse().first(),
+  ]);
+  return {
+    recordCount,
+    maxId: newestById?.id ?? 0,
+    maxUpdatedAt: newestByUpdatedAt?.updatedAt ?? 0,
+  };
+}
+
+function postingSignature(entries: Array<{
+  gram: string;
+  kind: "notes" | "custom";
+  recordId: number;
+}>): string[] {
+  return entries
+    .map(({ gram, kind, recordId }) => `${kind}:${recordId}:${gram}`)
+    .sort();
+}
 
 beforeEach(async () => {
   await clearAllRecords();
@@ -172,6 +201,131 @@ describe("searchVisibleRecordsBounded", () => {
       expect(state?.status).toBe("ready");
       expect(state?.maxUpdatedAt).toBeGreaterThan(Date.now());
     });
+  });
+
+  it("rejects a rebuild generation captured before a metadata update and retries", async () => {
+    const recordId = await createRecord(
+      {
+        type: "other",
+        inputString: "rebuild-generation-race",
+        label: "Generation race",
+        notes: "metadata before rebuild capture",
+        tags: [],
+        categories: [],
+      },
+      CREATE_OPTIONS,
+    );
+    const capturedFingerprint = await getSearchIndexFingerprint();
+    const capturedGeneration = await beginRecordSearchIndexRebuild(capturedFingerprint);
+    expect(capturedGeneration).toEqual(expect.any(Number));
+
+    await updateRecord(recordId, { notes: "metadata after rebuild capture" }, CREATE_OPTIONS);
+
+    // Model the paused rebuild resuming after the update. It must not certify
+    // the now-cleared postings with the generation it captured earlier.
+    await resetRecordSearchIndexForRebuild();
+    const currentFingerprint = await getSearchIndexFingerprint();
+    await expect(
+      persistRecordSearchIndexReadyState(currentFingerprint, capturedGeneration),
+    ).resolves.toBe(false);
+    expect(await testDb.recordSearchIndexState.get("state")).toMatchObject({
+      status: "building",
+      pendingMutations: 0,
+      generation: capturedGeneration! + 1,
+    });
+
+    // A search observes the rejected certification and starts the real retry.
+    await searchVisibleRecordsBounded("after rebuild capture", {
+      perIndexLimit: 5,
+      recentScanLimit: 1,
+    });
+    await vi.waitFor(async () => {
+      expect((await testDb.recordSearchIndexState.get("state"))?.status).toBe("ready");
+    });
+    const indexedEntries = await testDb.recordSearchIndex.where("recordId").equals(recordId).toArray();
+    const currentRecord = (await testDb.records.get(recordId))!;
+    expect(postingSignature(indexedEntries)).toEqual(
+      postingSignature(buildRecordSearchIndexEntries(currentRecord)),
+    );
+  });
+
+  it("does not capture a rebuild while a record metadata mutation is pending", async () => {
+    const recordId = await createRecord(
+      {
+        type: "other",
+        inputString: "pending-mutation-race",
+        label: "Pending mutation",
+        notes: "metadata before pending mutation",
+        tags: [],
+        categories: [],
+      },
+      CREATE_OPTIONS,
+    );
+
+    // Hold an outer mutation open while the normal CRUD update performs its
+    // own mutation. The rebuild capture must see that outstanding mutation.
+    await beginRecordSearchIndexMutation();
+    await updateRecord(recordId, { notes: "metadata during pending mutation" }, CREATE_OPTIONS);
+    const blockedCapture = await beginRecordSearchIndexRebuild(
+      await getSearchIndexFingerprint(),
+    );
+    expect(blockedCapture).toBeUndefined();
+    expect(await testDb.recordSearchIndexState.get("state")).toMatchObject({
+      status: "building",
+      pendingMutations: 1,
+    });
+
+    await completeRecordSearchIndexMutation(await getSearchIndexFingerprint());
+    const retryGeneration = await beginRecordSearchIndexRebuild(
+      await getSearchIndexFingerprint(),
+    );
+    expect(retryGeneration).toEqual(
+      (await testDb.recordSearchIndexState.get("state"))?.generation,
+    );
+    await resetRecordSearchIndexForRebuild();
+    await syncRecordSearchIndex((await testDb.records.get(recordId))!);
+    await expect(
+      persistRecordSearchIndexReadyState(await getSearchIndexFingerprint(), retryGeneration),
+    ).resolves.toBe(true);
+  });
+
+  it("leaves only the newest metadata postings after overlapping updates", async () => {
+    const recordId = await createRecord(
+      {
+        type: "other",
+        inputString: "overlapping-metadata-updates",
+        label: "Overlapping updates",
+        notes: "original overlapping metadata",
+        tags: [],
+        categories: [],
+      },
+      CREATE_OPTIONS,
+    );
+
+    const firstUpdate = updateRecord(
+      recordId,
+      { notes: "first overlapping metadata" },
+      CREATE_OPTIONS,
+    );
+    await vi.waitFor(async () => {
+      expect((await testDb.records.get(recordId))?.notes).toBe("first overlapping metadata");
+    });
+    const secondUpdate = updateRecord(
+      recordId,
+      { notes: "newest overlapping metadata" },
+      CREATE_OPTIONS,
+    );
+    await Promise.all([firstUpdate, secondUpdate]);
+
+    const newestRecord = (await testDb.records.get(recordId))!;
+    expect(newestRecord.notes).toBe("newest overlapping metadata");
+    const indexedEntries = await testDb.recordSearchIndex.where("recordId").equals(recordId).toArray();
+    expect(postingSignature(indexedEntries)).toEqual(
+      postingSignature(buildRecordSearchIndexEntries(newestRecord)),
+    );
+    expect(postingSignature(indexedEntries)).not.toContain(
+      `notes:${recordId}:ori`,
+    );
   });
 
   it("rebuilds cleanly after a replace-restore-style clear and bulk load", async () => {
