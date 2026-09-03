@@ -51,3 +51,4 @@ stream identically. Real users run modern Electron Chromium.
 ## pdf.js 6.x notes (Aug 2026)
 - pdfjs-dist 6.x removed the `isEvalSupported` getDocument option — TS callers fail typecheck (drop it); plain-JS scripts passing it are harmlessly ignored.
 - The 6.x legacy build + legacy worker still run fine on the Nix-pinned Chromium v125 harness and in Node vitest; no other API changes bit the glyph/sample/PoF PDF checks.
+- Node's `getDocument({ data: uint8Array })` may transfer and detach that buffer. Capture byte length/header before parsing and pass `uint8Array.slice()` when post-parse byte assertions are needed.

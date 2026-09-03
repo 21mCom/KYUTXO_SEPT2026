@@ -73,7 +73,7 @@ function CoinPassport({
             <TableHeader><TableRow><TableHead>Origin</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Satoshis</TableHead></TableRow></TableHeader>
             <TableBody>
               {holdings.map(({ allocation, holding }) => (
-                <TableRow key={allocation.lotId}>
+                <TableRow key={allocation.lotId} data-testid={`coin-passport-allocation-${allocation.lotId}`}>
                   <TableCell>
                     <div>{holding?.label ?? "Unknown origin"}</div>
                     {holding?.acquiredTxid && <div className="font-mono text-xs text-muted-foreground">{short(`${holding.acquiredTxid}:${holding.acquiredVout}`)}</div>}

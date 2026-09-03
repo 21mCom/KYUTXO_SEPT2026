@@ -3628,3 +3628,14 @@ args = "node scripts/check-global-command-search-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "coin-passport-export-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-coin-passport-export-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
