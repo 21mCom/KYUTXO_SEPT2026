@@ -35,8 +35,13 @@ function close(server: http.Server | net.Server): () => Promise<void> {
 // Minimal SOCKS5 (no-auth) proxy: completes the handshake, CONNECTs to the
 // requested destination, then pipes bytes. Counts client connections so tests
 // can prove the request went through it.
-async function startSocksServer(): Promise<{ port: number; connectionCount: () => number }> {
+async function startSocksServer(): Promise<{
+  port: number;
+  connectionCount: () => number;
+  requestedHosts: () => string[];
+}> {
   let connections = 0;
+  const hosts: string[] = [];
   const server = net.createServer((socket) => {
     connections++;
     let stage: "greeting" | "request" | "done" = "greeting";
@@ -76,8 +81,13 @@ async function startSocksServer(): Promise<{ port: number; connectionCount: () =
           return;
         }
         const port = buffer.readUInt16BE(headerLen - 2);
+        hosts.push(host);
 
-        const upstream = net.connect(port, host, () => {
+        // remote-dns.example is intentionally not locally resolvable. Map it
+        // inside this fake SOCKS server to prove the client sent the domain
+        // name through SOCKS instead of resolving it before the handshake.
+        const connectHost = host === "remote-dns.example" ? "127.0.0.1" : host;
+        const upstream = net.connect(port, connectHost, () => {
           // Success reply: VER REP=0 RSV ATYP=IPv4 BND.ADDR BND.PORT
           socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
           socket.pipe(upstream);
@@ -92,7 +102,11 @@ async function startSocksServer(): Promise<{ port: number; connectionCount: () =
 
   const port = await listen(server);
   cleanups.push(close(server));
-  return { port, connectionCount: () => connections };
+  return {
+    port,
+    connectionCount: () => connections,
+    requestedHosts: () => [...hosts],
+  };
 }
 
 // Real HTTP target counting hits — the no-direct-egress oracle.
@@ -125,6 +139,23 @@ describe("tor proxy transport", () => {
     expect(target.hitCount()).toBe(1);
     // ...and the SOCKS server actually received a client connection.
     expect(socks.connectionCount()).toBe(1);
+  });
+
+  it("sends destination hostnames to the SOCKS proxy for remote DNS resolution", async () => {
+    const socks = await startSocksServer();
+    const target = await startHttpTarget();
+
+    const result = await makeProxiedRequest({
+      url: `http://remote-dns.example:${target.port}/api/test`,
+      // Legacy persisted values are accepted only by upgrading the scheme
+      // before SocksProxyAgent sees it.
+      torProxyUrl: `socks5://127.0.0.1:${socks.port}`,
+      timeout: 10000,
+    });
+
+    expect(result.success).toBe(true);
+    expect(target.hitCount()).toBe(1);
+    expect(socks.requestedHosts()).toContain("remote-dns.example");
   });
 
   it("never falls back to a direct connection when the SOCKS proxy is unreachable", async () => {

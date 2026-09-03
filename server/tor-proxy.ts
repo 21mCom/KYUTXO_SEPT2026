@@ -94,16 +94,21 @@ export function resetTorProxySettings(): void {
   settingsInitialized = false;
 }
 
-function isValidSocksProxyUrl(value: string): boolean {
+export function canonicalizeSocksProxyUrl(value: string): string | undefined {
   try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "socks5:" && parsed.protocol !== "socks5h:") return false;
-    if (!parsed.hostname) return false;
+    const schemeMatch = /^(socks5h?):\/\//i.exec(value);
+    if (!schemeMatch) return undefined;
+    const parsed = new URL(`http://${value.slice(schemeMatch[0].length)}`);
+    if (!parsed.hostname) return undefined;
     const port = parseInt(parsed.port, 10);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
-    return true;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
+    if ((parsed.pathname && parsed.pathname !== "/") || parsed.search || parsed.hash) return undefined;
+    const withoutRootSlash = value.replace(/\/$/, "");
+    return schemeMatch[1].toLowerCase() === "socks5"
+      ? withoutRootSlash.replace(/^socks5:/i, "socks5h:")
+      : withoutRootSlash;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -153,10 +158,12 @@ export function updateTorProxySettings(input: unknown): { success: boolean; erro
 
   let torProxyUrl: string | undefined;
   if (raw.torProxyUrl !== undefined && raw.torProxyUrl !== null && raw.torProxyUrl !== "") {
-    if (typeof raw.torProxyUrl !== "string" || !isValidSocksProxyUrl(raw.torProxyUrl)) {
-      return { success: false, error: "torProxyUrl must be a socks5:// or socks5h:// URL with a port" };
+    const canonicalProxy =
+      typeof raw.torProxyUrl === "string" ? canonicalizeSocksProxyUrl(raw.torProxyUrl.trim()) : undefined;
+    if (!canonicalProxy) {
+      return { success: false, error: "torProxyUrl must be a socks5h:// URL with a hostname and port" };
     }
-    torProxyUrl = raw.torProxyUrl;
+    torProxyUrl = canonicalProxy;
   }
 
   torProxySettings = { customProviderUrl, trustedLocalHosts: trusted.hosts, torProxyUrl };
@@ -176,33 +183,66 @@ function getConfiguredCustomProviderHost(): string | undefined {
 }
 
 // Check if a hostname matches private/local IP patterns
-function isPrivateAddress(hostname: string): boolean {
-  // IPv4-mapped IPv6 addresses such as [::ffff:7f00:1] (Node's WHATWG URL
-  // parser normalises [::ffff:127.0.0.1] and similar to this hex form).
-  // Extract the embedded IPv4 dotted-decimal and re-test it against all
-  // private-range patterns so every RFC-1918/loopback range is covered.
-  const ipv4Mapped = hostname.match(/^\[::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})\]$/i);
-  if (ipv4Mapped) {
-    const hi = parseInt(ipv4Mapped[1], 16);
-    const lo = parseInt(ipv4Mapped[2], 16);
-    const embedded = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
-    return isPrivateAddress(embedded);
+function parseIpv4(hostname: string): number[] | undefined {
+  const parts = hostname.split(".");
+  if (parts.length !== 4) return undefined;
+  const bytes = parts.map((part) => /^\d{1,3}$/.test(part) ? Number(part) : NaN);
+  return bytes.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+    ? bytes
+    : undefined;
+}
+
+function parseIpv6(hostname: string): number[] | undefined {
+  const value = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!value.includes(":") || value.includes("%")) return undefined;
+  const halves = value.split("::");
+  if (halves.length > 2) return undefined;
+  const parseSide = (side: string): number[] | undefined => {
+    if (!side) return [];
+    const tokens = side.split(":");
+    const groups: number[] = [];
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      const ipv4 = parseIpv4(token);
+      if (ipv4) {
+        if (index !== tokens.length - 1) return undefined;
+        groups.push((ipv4[0] << 8) | ipv4[1], (ipv4[2] << 8) | ipv4[3]);
+      } else {
+        if (!/^[0-9a-f]{1,4}$/.test(token)) return undefined;
+        groups.push(parseInt(token, 16));
+      }
+    }
+    return groups;
+  };
+  const left = parseSide(halves[0]);
+  const right = parseSide(halves[1] ?? "");
+  if (!left || !right) return undefined;
+  if (halves.length === 1) return left.length === 8 ? left : undefined;
+  const zeroCount = 8 - left.length - right.length;
+  return zeroCount >= 1 ? [...left, ...Array(zeroCount).fill(0), ...right] : undefined;
+}
+
+export function isPrivateAddress(rawHostname: string): boolean {
+  const hostname = rawHostname.trim().replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) return true;
+  const ipv4 = parseIpv4(hostname);
+  if (ipv4) {
+    const [a, b] = ipv4;
+    return a === 0 || a === 10 || a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168);
   }
-  const privatePatterns = [
-    /^localhost$/i,
-    /^127\./,
-    /^10\./,
-    /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
-    /^192\.168\./,
-    /^0\./,
-    /^169\.254\./,
-    /^\[::1\]$/,
-    /^\[fe80:/i,
-    /^\[fc00:/i,
-    /^\[fd00:/i,
-    /\.local$/i,  // mDNS local domains
-  ];
-  return privatePatterns.some(p => p.test(hostname));
+  const ipv6 = parseIpv6(hostname);
+  if (!ipv6) return false;
+  if (ipv6.slice(0, 5).every((group) => group === 0) && ipv6[5] === 0xffff) {
+    return isPrivateAddress(`${ipv6[6] >> 8}.${ipv6[6] & 0xff}.${ipv6[7] >> 8}.${ipv6[7] & 0xff}`);
+  }
+  return ipv6.every((group) => group === 0) ||
+    (ipv6.slice(0, 7).every((group) => group === 0) && ipv6[7] === 1) ||
+    (ipv6[0] & 0xfe00) === 0xfc00 ||
+    (ipv6[0] & 0xffc0) === 0xfe80;
 }
 
 function hostMatches(hostname: string, allowed: string): boolean {
@@ -226,7 +266,7 @@ export function isAllowedUrl(url: string): { allowed: boolean; reason?: string; 
       }
       return {
         allowed: false,
-        reason: `Onion host '${hostname}' is not your configured provider. Set it as your custom provider in Node Settings first.`,
+        reason: "This onion host is not your configured provider. Set it as your custom provider in Node Settings first.",
       };
     }
 
@@ -245,7 +285,7 @@ export function isAllowedUrl(url: string): { allowed: boolean; reason?: string; 
 
       return {
         allowed: false,
-        reason: `Local address '${hostname}' is not in your trusted hosts whitelist. Add it in Node Settings → Trusted Local Hosts.`
+        reason: "This local address is not in your trusted hosts whitelist. Add it in Node Settings → Trusted Local Hosts."
       };
     }
 
@@ -258,7 +298,7 @@ export function isAllowedUrl(url: string): { allowed: boolean; reason?: string; 
     if (!allowedHosts.some(allowed => hostMatches(hostname, allowed))) {
       return {
         allowed: false,
-        reason: `Host '${hostname}' is not in the allowed list. Only Bitcoin API providers are permitted.`
+        reason: "Host is not in the allowed list. Only Bitcoin API providers are permitted."
       };
     }
 
@@ -394,6 +434,18 @@ async function readResponseData(response: {
   return { data, contentType };
 }
 
+function safeResponseMetadata(
+  ok: boolean,
+  contentType: string | null,
+): { statusText: string; contentType: string } {
+  return {
+    statusText: ok ? "OK" : "Upstream request failed",
+    contentType: contentType?.toLowerCase().includes("application/json")
+      ? "application/json"
+      : "text/plain",
+  };
+}
+
 // Log a proxy failure server-side WITHOUT the raw error message: fetch/socks
 // error strings embed proxy and target URLs, which are internal detail. The
 // error name is enough to diagnose (AbortError, TypeError, ...).
@@ -445,10 +497,13 @@ interface ProxyResponse {
 
 export async function makeProxiedRequest(req: ProxyRequest & { torProxyUrl?: string }): Promise<ProxyResponse> {
   const startTime = Date.now();
-  const proxyUrl = req.torProxyUrl || DEFAULT_TOR_PROXY;
+  const proxyUrl = canonicalizeSocksProxyUrl(req.torProxyUrl || DEFAULT_TOR_PROXY);
   const timeout = clampProxyTimeout(req.timeout);
 
   try {
+    if (!proxyUrl) {
+      return { success: false, error: "Tor proxy settings require remote DNS resolution.", latency: 0 };
+    }
     const fetchImpl = await getNodeFetch();
     const agent = new SocksProxyAgent(proxyUrl);
 
@@ -460,6 +515,7 @@ export async function makeProxiedRequest(req: ProxyRequest & { torProxyUrl?: str
       headers: req.headers,
       signal: controller.signal,
       agent,
+      redirect: "error",
     };
 
     const body = serializeRequestBody(req.body);
@@ -475,14 +531,15 @@ export async function makeProxiedRequest(req: ProxyRequest & { torProxyUrl?: str
       const latency = Date.now() - startTime;
 
       const { data, contentType } = await readResponseData(response);
+      const safeMetadata = safeResponseMetadata(response.ok, contentType);
 
       return {
         success: response.ok,
         status: response.status,
-        statusText: response.statusText,
+        statusText: safeMetadata.statusText,
         data,
         latency,
-        contentType: contentType || undefined,
+        contentType: safeMetadata.contentType,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -529,7 +586,7 @@ export async function makeProxiedRequest(req: ProxyRequest & { torProxyUrl?: str
 }
 
 // Direct request without Tor proxy (for trusted local hosts)
-async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
+export async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
   const startTime = Date.now();
   const timeout = clampProxyTimeout(req.timeout);
 
@@ -542,6 +599,7 @@ async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
       method: req.method || "GET",
       headers: req.headers,
       signal: controller.signal,
+      redirect: "error",
     };
 
     const body = serializeRequestBody(req.body);
@@ -557,14 +615,15 @@ async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
       const latency = Date.now() - startTime;
 
       const { data, contentType } = await readResponseData(response);
+      const safeMetadata = safeResponseMetadata(response.ok, contentType);
 
       return {
         success: response.ok,
         status: response.status,
-        statusText: response.statusText,
+        statusText: safeMetadata.statusText,
         data,
         latency,
-        contentType: contentType || undefined,
+        contentType: safeMetadata.contentType,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -735,7 +794,7 @@ router.post("/request", async (req: Request, res: Response) => {
 
     // Use direct request for trusted local hosts (skip Tor proxy)
     if (urlCheck.isLocal) {
-      console.log(`[KYUTXO] Making direct request to trusted local host: ${new URL(url).hostname}`);
+      console.log("[KYUTXO] Making direct request to trusted local host");
       const result = await makeDirectRequest(proxiedReq);
       return res.json(result);
     }
@@ -782,7 +841,6 @@ router.post("/test", async (_req: Request, res: Response) => {
         if (torCheck.IsTor) {
           return res.json({
             success: true,
-            proxyUrl: proxy.url,
             proxyName: proxy.name,
             isTor: true,
             torIp: torCheck.IP,
@@ -799,7 +857,7 @@ router.post("/test", async (_req: Request, res: Response) => {
   res.json({
     success: false,
     error: "Could not connect to Tor. Make sure Tor Browser or Tor service is running.",
-    testedProxies: proxiesToTest.map(p => p.url),
+    testedProxies: proxiesToTest.map(p => p.name),
   });
 });
 
@@ -823,7 +881,6 @@ router.get("/status", async (_req: Request, res: Response) => {
         const torCheck = result.data as { IsTor?: boolean; IP?: string };
         results.push({
           name: proxy.name,
-          url: proxy.url,
           port: proxy.port,
           available: true,
           isTor: torCheck.IsTor || false,
@@ -833,7 +890,6 @@ router.get("/status", async (_req: Request, res: Response) => {
       } else {
         results.push({
           name: proxy.name,
-          url: proxy.url,
           port: proxy.port,
           available: false,
           error: result.error,
@@ -843,7 +899,6 @@ router.get("/status", async (_req: Request, res: Response) => {
       logProxyError(`[KYUTXO] Tor status check (${proxy.name}) failed`, error);
       results.push({
         name: proxy.name,
-        url: proxy.url,
         port: proxy.port,
         available: false,
         error: "Status check failed",

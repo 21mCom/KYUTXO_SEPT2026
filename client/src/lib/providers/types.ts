@@ -186,27 +186,104 @@ export interface ParsedTransaction {
 export const DEFAULT_RATE_LIMIT_DELAY = 250;
 export const TOR_RATE_LIMIT_DELAY = 500;
 
+function parseIpv4(hostname: string): number[] | null {
+  const parts = hostname.split('.');
+  if (parts.length !== 4) return null;
+  const bytes = parts.map((part) => {
+    if (!/^\d{1,3}$/.test(part)) return NaN;
+    return Number(part);
+  });
+  return bytes.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+    ? bytes
+    : null;
+}
+
+function parseIpv6(hostname: string): number[] | null {
+  const value = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!value.includes(':') || value.includes('%')) return null;
+
+  const halves = value.split('::');
+  if (halves.length > 2) return null;
+
+  const parseSide = (side: string): number[] | null => {
+    if (!side) return [];
+    const tokens = side.split(':');
+    const groups: number[] = [];
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      const ipv4 = parseIpv4(token);
+      if (ipv4) {
+        if (index !== tokens.length - 1) return null;
+        groups.push((ipv4[0] << 8) | ipv4[1], (ipv4[2] << 8) | ipv4[3]);
+        continue;
+      }
+      if (!/^[0-9a-f]{1,4}$/.test(token)) return null;
+      groups.push(parseInt(token, 16));
+    }
+    return groups;
+  };
+
+  const left = parseSide(halves[0]);
+  const right = parseSide(halves[1] ?? '');
+  if (!left || !right) return null;
+  if (halves.length === 1) return left.length === 8 ? left : null;
+
+  const zeroCount = 8 - left.length - right.length;
+  if (zeroCount < 1) return null;
+  return [...left, ...Array(zeroCount).fill(0), ...right];
+}
+
+export function isLocalOrPrivateHostname(rawHostname: string): boolean {
+  const hostname = rawHostname.trim().replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+  if (!hostname) return false;
+  if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
+    return true;
+  }
+
+  const ipv4 = parseIpv4(hostname);
+  if (ipv4) {
+    const [a, b] = ipv4;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
+  }
+
+  const ipv6 = parseIpv6(hostname);
+  if (!ipv6) return false;
+
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d / ::ffff:7f00:1) inherits the
+  // embedded IPv4 address classification.
+  if (
+    ipv6.slice(0, 5).every((group) => group === 0) &&
+    ipv6[5] === 0xffff
+  ) {
+    return isLocalOrPrivateHostname(
+      `${ipv6[6] >> 8}.${ipv6[6] & 0xff}.${ipv6[7] >> 8}.${ipv6[7] & 0xff}`,
+    );
+  }
+
+  const isUnspecified = ipv6.every((group) => group === 0);
+  const isLoopback = ipv6.slice(0, 7).every((group) => group === 0) && ipv6[7] === 1;
+  const isUniqueLocal = (ipv6[0] & 0xfe00) === 0xfc00; // fc00::/7
+  const isLinkLocal = (ipv6[0] & 0xffc0) === 0xfe80; // fe80::/10
+  return isUnspecified || isLoopback || isUniqueLocal || isLinkLocal;
+}
+
 export function isLocalOrPrivateUrl(urlString: string): boolean {
   try {
     const parsed = new URL(urlString);
-    const hostname = parsed.hostname.toLowerCase();
+    const hostname = parsed.hostname;
     
-    if (hostname.endsWith('.onion')) {
+    if (hostname.toLowerCase().endsWith('.onion')) {
       return false;
     }
-    
-    const privatePatterns = [
-      /^localhost$/i,
-      /^127\./,
-      /^10\./,
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
-      /^192\.168\./,
-      /^0\./,
-      /^169\.254\./,
-      /\.local$/i,
-    ];
-    
-    return privatePatterns.some(p => p.test(hostname));
+    return isLocalOrPrivateHostname(hostname);
   } catch {
     return false;
   }

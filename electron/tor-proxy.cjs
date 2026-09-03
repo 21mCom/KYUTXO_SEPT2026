@@ -31,6 +31,10 @@ async function getFetch() {
   return nodeFetch;
 }
 
+function setFetchImplementationForTests(fetchImpl) {
+  nodeFetch = fetchImpl;
+}
+
 // Log a proxy/direct failure WITHOUT the raw error message: fetch/socks error
 // strings embed proxy and target URLs, which are internal detail. The error
 // name is enough to diagnose (AbortError, TypeError, ...).
@@ -64,6 +68,7 @@ async function isProxyReachable(proxyUrl, timeoutMs = 5000) {
       const response = await fetch('https://check.torproject.org/api/ip', {
         signal: controller.signal,
         agent,
+        redirect: 'error',
       });
       return response.ok;
     } finally {
@@ -141,16 +146,21 @@ function resetTorProxySettings() {
   torProxySettings = { trustedLocalHosts: [] };
 }
 
-function isValidSocksProxyUrl(value) {
+function canonicalizeSocksProxyUrl(value) {
   try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "socks5:" && parsed.protocol !== "socks5h:") return false;
-    if (!parsed.hostname) return false;
+    const schemeMatch = /^(socks5h?):\/\//i.exec(value);
+    if (!schemeMatch) return undefined;
+    const parsed = new URL(`http://${value.slice(schemeMatch[0].length)}`);
+    if (!parsed.hostname) return undefined;
     const port = parseInt(parsed.port, 10);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
-    return true;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
+    if ((parsed.pathname && parsed.pathname !== "/") || parsed.search || parsed.hash) return undefined;
+    const withoutRootSlash = value.replace(/\/$/, "");
+    return schemeMatch[1].toLowerCase() === "socks5"
+      ? withoutRootSlash.replace(/^socks5:/i, "socks5h:")
+      : withoutRootSlash;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -203,10 +213,12 @@ function updateTorProxySettings(input) {
   let torProxyUrl;
   const rawProxy = input.torProxyUrl;
   if (rawProxy !== undefined && rawProxy !== null && rawProxy !== "") {
-    if (typeof rawProxy !== "string" || !isValidSocksProxyUrl(rawProxy)) {
-      return { success: false, error: "torProxyUrl must be a socks5:// or socks5h:// URL with a port" };
+    const canonicalProxy =
+      typeof rawProxy === "string" ? canonicalizeSocksProxyUrl(rawProxy.trim()) : undefined;
+    if (!canonicalProxy) {
+      return { success: false, error: "torProxyUrl must be a socks5h:// URL with a hostname and port" };
     }
-    torProxyUrl = rawProxy;
+    torProxyUrl = canonicalProxy;
   }
 
   torProxySettings = { customProviderUrl, trustedLocalHosts, torProxyUrl };
@@ -231,33 +243,66 @@ const ALLOWED_API_HOSTS = [
 ];
 
 // Check if a hostname matches private/local IP patterns
-function isPrivateAddress(hostname) {
-  // IPv4-mapped IPv6 addresses such as [::ffff:7f00:1] (Node's WHATWG URL
-  // parser normalises [::ffff:127.0.0.1] and similar to this hex form).
-  // Extract the embedded IPv4 dotted-decimal and re-test it against all
-  // private-range patterns so every RFC-1918/loopback range is covered.
-  const ipv4Mapped = hostname.match(/^\[::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})\]$/i);
-  if (ipv4Mapped) {
-    const hi = parseInt(ipv4Mapped[1], 16);
-    const lo = parseInt(ipv4Mapped[2], 16);
-    const embedded = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
-    return isPrivateAddress(embedded);
+function parseIpv4(hostname) {
+  const parts = hostname.split(".");
+  if (parts.length !== 4) return undefined;
+  const bytes = parts.map((part) => /^\d{1,3}$/.test(part) ? Number(part) : NaN);
+  return bytes.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+    ? bytes
+    : undefined;
+}
+
+function parseIpv6(hostname) {
+  const value = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!value.includes(":") || value.includes("%")) return undefined;
+  const halves = value.split("::");
+  if (halves.length > 2) return undefined;
+  const parseSide = (side) => {
+    if (!side) return [];
+    const tokens = side.split(":");
+    const groups = [];
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      const ipv4 = parseIpv4(token);
+      if (ipv4) {
+        if (index !== tokens.length - 1) return undefined;
+        groups.push((ipv4[0] << 8) | ipv4[1], (ipv4[2] << 8) | ipv4[3]);
+      } else {
+        if (!/^[0-9a-f]{1,4}$/.test(token)) return undefined;
+        groups.push(parseInt(token, 16));
+      }
+    }
+    return groups;
+  };
+  const left = parseSide(halves[0]);
+  const right = parseSide(halves[1] || "");
+  if (!left || !right) return undefined;
+  if (halves.length === 1) return left.length === 8 ? left : undefined;
+  const zeroCount = 8 - left.length - right.length;
+  return zeroCount >= 1 ? [...left, ...Array(zeroCount).fill(0), ...right] : undefined;
+}
+
+function isPrivateAddress(rawHostname) {
+  const hostname = rawHostname.trim().replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) return true;
+  const ipv4 = parseIpv4(hostname);
+  if (ipv4) {
+    const [a, b] = ipv4;
+    return a === 0 || a === 10 || a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168);
   }
-  const privatePatterns = [
-    /^localhost$/i,
-    /^127\./,
-    /^10\./,
-    /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
-    /^192\.168\./,
-    /^0\./,
-    /^169\.254\./,
-    /^\[::1\]$/,
-    /^\[fe80:/i,
-    /^\[fc00:/i,
-    /^\[fd00:/i,
-    /\.local$/i,  // mDNS local domains
-  ];
-  return privatePatterns.some(p => p.test(hostname));
+  const ipv6 = parseIpv6(hostname);
+  if (!ipv6) return false;
+  if (ipv6.slice(0, 5).every((group) => group === 0) && ipv6[5] === 0xffff) {
+    return isPrivateAddress(`${ipv6[6] >> 8}.${ipv6[6] & 0xff}.${ipv6[7] >> 8}.${ipv6[7] & 0xff}`);
+  }
+  return ipv6.every((group) => group === 0) ||
+    (ipv6.slice(0, 7).every((group) => group === 0) && ipv6[7] === 1) ||
+    (ipv6[0] & 0xfe00) === 0xfc00 ||
+    (ipv6[0] & 0xffc0) === 0xfe80;
 }
 
 function hostMatches(hostname, allowed) {
@@ -430,16 +475,30 @@ async function readResponseData(response) {
   return { data, contentType };
 }
 
+function safeResponseMetadata(ok, contentType) {
+  return {
+    statusText: ok ? 'OK' : 'Upstream request failed',
+    contentType: contentType && contentType.toLowerCase().includes('application/json')
+      ? 'application/json'
+      : 'text/plain',
+  };
+}
+
 async function makeProxiedRequest(requestParams) {
   const { SocksProxyAgent } = require('socks-proxy-agent');
   const fetch = await getFetch();
   const startTime = Date.now();
 
   // Use the configured proxy URL, or auto-detect if not specified
-  const proxyUrl = requestParams.torProxyUrl || await detectWorkingTorProxy();
+  const proxyUrl = canonicalizeSocksProxyUrl(
+    requestParams.torProxyUrl || await detectWorkingTorProxy(),
+  );
   const timeout = clampProxyTimeout(requestParams.timeout);
 
   try {
+    if (!proxyUrl) {
+      return { success: false, error: "Tor proxy settings require remote DNS resolution.", latency: 0 };
+    }
     const agent = new SocksProxyAgent(proxyUrl);
 
     const controller = new AbortController();
@@ -450,6 +509,7 @@ async function makeProxiedRequest(requestParams) {
       headers: requestParams.headers,
       signal: controller.signal,
       agent,
+      redirect: 'error',
     };
 
     const body = serializeRequestBody(requestParams.body);
@@ -465,14 +525,15 @@ async function makeProxiedRequest(requestParams) {
       const latency = Date.now() - startTime;
 
       const { data, contentType } = await readResponseData(response);
+      const safeMetadata = safeResponseMetadata(response.ok, contentType);
 
       return {
         success: response.ok,
         status: response.status,
-        statusText: response.statusText,
+        statusText: safeMetadata.statusText,
         data,
         latency,
-        contentType: contentType || undefined,
+        contentType: safeMetadata.contentType,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -538,6 +599,7 @@ async function makeDirectRequest(requestParams) {
       method: requestParams.method || "GET",
       headers: { ...defaultHeaders, ...requestParams.headers },
       signal: controller.signal,
+      redirect: 'error',
     };
 
     const body = serializeRequestBody(requestParams.body);
@@ -557,8 +619,9 @@ async function makeDirectRequest(requestParams) {
     }
 
     const contentType = response.headers.get('content-type') || '';
+    const safeMetadata = safeResponseMetadata(response.ok, contentType);
 
-    console.log(`[KYUTXO] [${new Date().toISOString()}] Reading response body (bounded) - contentType: ${contentType}`);
+    console.log(`[KYUTXO] [${new Date().toISOString()}] Reading bounded response body`);
     const { data } = await readResponseData(response);
 
     const latency = Date.now() - startTime;
@@ -568,20 +631,21 @@ async function makeDirectRequest(requestParams) {
       return {
         success: false,
         status: response.status,
-        statusText: response.statusText,
+        statusText: safeMetadata.statusText,
         data,
         latency,
-        error: `HTTP ${response.status}: ${response.statusText}`,
+        contentType: safeMetadata.contentType,
+        error: `Upstream request failed with HTTP ${response.status}`,
       };
     }
 
     return {
       success: true,
       status: response.status,
-      statusText: response.statusText,
+      statusText: safeMetadata.statusText,
       data,
       latency,
-      contentType,
+      contentType: safeMetadata.contentType,
     };
   } catch (error) {
     const latency = Date.now() - startTime;
@@ -689,8 +753,10 @@ module.exports = {
   MAX_CONCURRENT_PROXIED_REQUESTS,
   MAX_QUEUED_PROXIED_REQUESTS,
   getFetch,
+  setFetchImplementationForTests,
   isProxyReachable,
   detectWorkingTorProxy,
+  canonicalizeSocksProxyUrl,
   isPrivateAddress,
   isAllowedUrl,
   clampProxyTimeout,

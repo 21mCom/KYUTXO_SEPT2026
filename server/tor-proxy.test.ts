@@ -5,8 +5,13 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import router, {
   isAllowedUrl,
+  isPrivateAddress,
+  canonicalizeSocksProxyUrl,
   updateTorProxySettings,
+  getTorProxySettings,
   resetTorProxySettings,
+  makeProxiedRequest,
+  makeDirectRequest,
   clampProxyTimeout,
   MAX_REQUEST_BODY_BYTES,
   MAX_INCOMING_CONTENT_LENGTH,
@@ -45,6 +50,10 @@ describe("tor-proxy settings validation", () => {
     expect(updateTorProxySettings({ torProxyUrl: "socks5h://127.0.0.1:99999" }).success).toBe(false);
     expect(updateTorProxySettings({ torProxyUrl: "socks5h://127.0.0.1:9050" }).success).toBe(true);
     expect(updateTorProxySettings({ torProxyUrl: "socks5://192.168.1.5:9050" }).success).toBe(true);
+    expect(getTorProxySettings().torProxyUrl).toBe("socks5h://192.168.1.5:9050");
+    expect(canonicalizeSocksProxyUrl("socks5://proxy.example:9050")).toBe(
+      "socks5h://proxy.example:9050",
+    );
   });
 });
 
@@ -105,6 +114,35 @@ describe("isAllowedUrl (server-side allowlist)", () => {
     expect(isAllowedUrl("https://[::ffff:a9fe:101]/api").allowed).toBe(false); // 169.254.1.1
   });
 
+  it.each([
+    "127.99.1.2",
+    "10.4.3.2",
+    "172.31.255.1",
+    "192.168.2.3",
+    "169.254.8.9",
+    "100.64.0.1",
+    "100.127.255.254",
+    "0.0.0.0",
+    "[::]",
+    "[::1]",
+    "[fc00::1]",
+    "[fd12:3456::1]",
+    "[fe80::1]",
+    "[febf::1]",
+  ])("classifies %s as local/private", (hostname) => {
+    expect(isPrivateAddress(hostname)).toBe(true);
+  });
+
+  it.each([
+    "100.63.255.255",
+    "100.128.0.0",
+    "8.8.8.8",
+    "[2001:4860:4860::8888]",
+    "[fec0::1]",
+  ])("does not classify %s as local/private", (hostname) => {
+    expect(isPrivateAddress(hostname)).toBe(false);
+  });
+
   it("allows configured trusted local hosts and marks them local", () => {
     updateTorProxySettings({ trustedLocalHosts: ["192.168.1.50", "umbrel.local"] });
     const trusted = isAllowedUrl("http://192.168.1.50:3002/api");
@@ -124,6 +162,52 @@ describe("clampProxyTimeout", () => {
     expect(clampProxyTimeout(500)).toBe(1_000);
     expect(clampProxyTimeout(30_000)).toBe(30_000);
     expect(clampProxyTimeout(10 * 60_000)).toBe(MAX_TIMEOUT_MS);
+  });
+});
+
+describe("server upstream redirect policy", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["Tor-routed", makeProxiedRequest, { torProxyUrl: "socks5h://127.0.0.1:9050" }],
+    ["direct", makeDirectRequest, {}],
+  ])("refuses redirects on the %s request path", async (_name, request, extra) => {
+    const fetchSpy = vi.fn(async (_url: unknown, init: { redirect?: string }) => {
+      expect(init.redirect).toBe("error");
+      throw new Error("redirect mode is set to error");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await request({
+      url: "https://mempool.space/api",
+      ...extra,
+    });
+    expect(result.success).toBe(false);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(result.error).not.toContain("mempool.space");
+  });
+
+  it.each([
+    ["Tor-routed", makeProxiedRequest, { torProxyUrl: "socks5h://127.0.0.1:9050" }],
+    ["direct", makeDirectRequest, {}],
+  ])("does not propagate upstream-controlled metadata on the %s path", async (_name, request, extra) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("blocked", {
+      status: 502,
+      statusText: "See https://private-node.invalid:8443/error",
+      headers: { "content-type": "text/plain; profile=https://private-node.invalid/type" },
+    })));
+
+    const result = await request({
+      url: "https://mempool.space/api",
+      ...extra,
+    });
+    const serialized = JSON.stringify(result);
+    expect(result.statusText).toBe("Upstream request failed");
+    expect(result.contentType).toBe("text/plain");
+    expect(serialized).not.toContain("private-node.invalid");
   });
 });
 
@@ -213,6 +297,7 @@ describe("/api/tor endpoints", () => {
     const body = await res.json();
     expect(body.success).toBe(false);
     expect(body.error).toMatch(/not in the allowed list/);
+    expect(body.error).not.toContain("evil.example.com");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -232,6 +317,7 @@ describe("/api/tor endpoints", () => {
     expect(res.status).toBe(403);
     const body = await res.json();
     expect(body.error).toMatch(/trusted hosts whitelist/);
+    expect(body.error).not.toContain("192.168.1.99");
   });
 
   it("rejects unconfigured .onion destinations even over Tor", async () => {

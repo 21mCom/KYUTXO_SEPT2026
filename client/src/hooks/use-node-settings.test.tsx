@@ -3,6 +3,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 let mockQueryReturn: unknown = undefined;
+const nodeSettingsCrudMocks = vi.hoisted(() => ({
+  getNodeSettings: vi.fn(async () => undefined),
+  putNodeSettings: vi.fn(async () => undefined),
+  updateNodeSettings: vi.fn(async () => undefined),
+}));
+
 vi.mock("dexie-react-hooks", () => ({
   useLiveQuery: (fn: () => unknown) => mockQueryReturn,
 }));
@@ -18,11 +24,19 @@ vi.mock("@/lib/database", () => ({
   DEFAULT_TRUSTED_LOCAL_HOSTS: ["127.0.0.1", "localhost"],
 }));
 
+vi.mock("@/lib/data/node-settings-crud", () => nodeSettingsCrudMocks);
+
+vi.mock("@/lib/tor-proxy-settings-sync", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tor-proxy-settings-sync")>()),
+  syncTorProxySettings: vi.fn(async () => true),
+}));
+
 import { useNodeSettings, getDefaultNodeSettings } from "./use-node-settings";
 
 beforeEach(() => {
   vi.useFakeTimers();
   mockQueryReturn = undefined;
+  vi.clearAllMocks();
 });
 
 afterEach(() => {
@@ -108,6 +122,24 @@ describe("useNodeSettings", () => {
     expect(typeof result.current.updateSettings).toBe("function");
     expect(typeof result.current.resetToDefaults).toBe("function");
     expect(typeof result.current.setConnectionStatus).toBe("function");
+  });
+
+  it("persists a remote-DNS migration for legacy socks5 proxy settings", async () => {
+    mockQueryReturn = {
+      id: "default",
+      providerType: "mempool-space",
+      useTor: true,
+      requestTimeout: 60_000,
+      network: "mainnet",
+      torProxyUrl: "socks5://127.0.0.1:9050",
+    };
+    renderHook(() => useNodeSettings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(nodeSettingsCrudMocks.updateNodeSettings).toHaveBeenCalledWith("default", {
+      torProxyUrl: "socks5h://127.0.0.1:9050",
+    });
   });
 });
 

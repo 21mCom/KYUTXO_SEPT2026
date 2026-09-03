@@ -6,25 +6,33 @@ import type { AddressInfo } from "node:net";
 const requireCjs = createRequire(import.meta.url);
 const {
   isAllowedUrl,
+  isPrivateAddress,
+  canonicalizeSocksProxyUrl,
   updateTorProxySettings,
+  getTorProxySettings,
   resetTorProxySettings,
   clampProxyTimeout,
   sanitizeForwardHeaders,
   handleTorRequest,
   makeProxiedRequest,
   makeDirectRequest,
+  setFetchImplementationForTests,
   MAX_REQUEST_BODY_BYTES,
   MAX_RESPONSE_BODY_BYTES,
   MAX_TIMEOUT_MS,
 } = requireCjs("./tor-proxy.cjs") as {
   isAllowedUrl: (url: string) => { allowed: boolean; reason?: string; isLocal?: boolean };
+  isPrivateAddress: (hostname: string) => boolean;
+  canonicalizeSocksProxyUrl: (url: string) => string | undefined;
   updateTorProxySettings: (input: unknown) => { success: boolean; error?: string };
+  getTorProxySettings: () => { torProxyUrl?: string };
   resetTorProxySettings: () => void;
   clampProxyTimeout: (timeout?: number) => number;
   sanitizeForwardHeaders: (headers: unknown) => Record<string, string> | undefined;
   handleTorRequest: (params: { url: string; method?: string; body?: unknown; timeout?: number }) => Promise<{ success: boolean; error?: string }>;
   makeProxiedRequest: (params: { url: string; timeout?: number; torProxyUrl?: string }) => Promise<{ success: boolean; error?: string }>;
   makeDirectRequest: (params: { url: string; timeout?: number }) => Promise<{ success: boolean; error?: string }>;
+  setFetchImplementationForTests: (fetchImpl: unknown) => void;
   MAX_REQUEST_BODY_BYTES: number;
   MAX_RESPONSE_BODY_BYTES: number;
   MAX_TIMEOUT_MS: number;
@@ -50,6 +58,14 @@ describe("electron tor-proxy settings validation", () => {
         torProxyUrl: "socks5h://127.0.0.1:9050",
       }).success,
     ).toBe(true);
+  });
+
+  it("migrates legacy local-DNS SOCKS settings to remote DNS", () => {
+    expect(updateTorProxySettings({ torProxyUrl: "socks5://proxy.example:9050" }).success).toBe(true);
+    expect(getTorProxySettings().torProxyUrl).toBe("socks5h://proxy.example:9050");
+    expect(canonicalizeSocksProxyUrl("socks5://127.0.0.1:9150")).toBe(
+      "socks5h://127.0.0.1:9150",
+    );
   });
 });
 
@@ -92,6 +108,35 @@ describe("electron isAllowedUrl (main-process allowlist)", () => {
     expect(isAllowedUrl("https://[::ffff:c0a8:101]/api").allowed).toBe(false); // 192.168.1.1
     expect(isAllowedUrl("https://[::ffff:a9fe:101]/api").allowed).toBe(false); // 169.254.1.1
   });
+
+  it.each([
+    "127.99.1.2",
+    "10.4.3.2",
+    "172.31.255.1",
+    "192.168.2.3",
+    "169.254.8.9",
+    "100.64.0.1",
+    "100.127.255.254",
+    "0.0.0.0",
+    "[::]",
+    "[::1]",
+    "[fc00::1]",
+    "[fd12:3456::1]",
+    "[fe80::1]",
+    "[febf::1]",
+  ])("classifies %s as local/private", (hostname) => {
+    expect(isPrivateAddress(hostname)).toBe(true);
+  });
+
+  it.each([
+    "100.63.255.255",
+    "100.128.0.0",
+    "8.8.8.8",
+    "[2001:4860:4860::8888]",
+    "[fec0::1]",
+  ])("does not classify %s as local/private", (hostname) => {
+    expect(isPrivateAddress(hostname)).toBe(false);
+  });
 });
 
 describe("electron handleTorRequest bounds", () => {
@@ -122,6 +167,7 @@ describe("electron handleTorRequest bounds", () => {
 
 describe("electron tor-proxy helpers", () => {
   afterEach(() => {
+    setFetchImplementationForTests(undefined);
     vi.restoreAllMocks();
   });
 
@@ -186,6 +232,49 @@ describe("electron tor-proxy helpers", () => {
       .join("\n");
     expect(logged).not.toContain("127.0.0.1:9");
     expect(result.error).not.toContain("127.0.0.1:9");
+  });
+
+  it.each([
+    ["Tor-routed", makeProxiedRequest, { torProxyUrl: "socks5h://127.0.0.1:9050" }],
+    ["direct", makeDirectRequest, {}],
+  ])("refuses redirects on the %s request path", async (_name, request, extra) => {
+    const fetchStub = vi.fn(async (_url: unknown, init: { redirect?: string }) => {
+      expect(init.redirect).toBe("error");
+      throw new Error("redirect mode is set to error for https://redirect.invalid/");
+    });
+    setFetchImplementationForTests(fetchStub);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await request({
+      url: "https://mempool.space/api",
+      ...extra,
+    });
+    expect(result.success).toBe(false);
+    expect(fetchStub).toHaveBeenCalledOnce();
+    expect(result.error).not.toContain("redirect.invalid");
+    expect(errorSpy.mock.calls.flat().join("\n")).not.toContain("redirect.invalid");
+  });
+
+  it.each([
+    ["Tor-routed", makeProxiedRequest, { torProxyUrl: "socks5h://127.0.0.1:9050" }],
+    ["direct", makeDirectRequest, {}],
+  ])("does not propagate or log upstream-controlled metadata on the %s path", async (_name, request, extra) => {
+    setFetchImplementationForTests(vi.fn(async () => new Response("blocked", {
+      status: 502,
+      statusText: "See https://private-node.invalid:8443/error",
+      headers: { "content-type": "text/plain; profile=https://private-node.invalid/type" },
+    })));
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const result = await request({
+      url: "https://mempool.space/api",
+      ...extra,
+    });
+    const serialized = JSON.stringify(result);
+    expect(result.statusText).toBe("Upstream request failed");
+    expect(result.contentType).toBe("text/plain");
+    expect(serialized).not.toContain("private-node.invalid");
+    expect(logSpy.mock.calls.flat().join("\n")).not.toContain("private-node.invalid");
   });
 
   it("rejects an oversized upstream response cleanly instead of buffering it", async () => {

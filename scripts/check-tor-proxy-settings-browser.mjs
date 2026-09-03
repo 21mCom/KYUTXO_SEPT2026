@@ -22,7 +22,9 @@
 //      (no Tor in this environment → "Tor Not Available", not a crash/403).
 //   6. The Test Tor sync does not clobber the allowlist: the configured
 //      provider is still reachable through the proxy afterwards.
-//   7. Server-restart recovery: after the dev-only /api/tor/settings/reset
+//   7. A legacy socks5:// setting is saved back as socks5h:// so later
+//      sessions cannot resolve destination hostnames locally.
+//   8. Server-restart recovery: after the dev-only /api/tor/settings/reset
 //      hook drops the pushed settings (simulating a restart), a proxied
 //      request issued through the client provider library recovers via the
 //      428 → invalidateTorProxySettingsSync → re-push → retry-once loop
@@ -207,6 +209,9 @@ async function main() {
           network: 'mainnet',
           allowLocalNetwork: true,
           trustedLocalHosts: ['127.0.0.1'],
+           // Legacy local-DNS scheme: useNodeSettings must migrate this in
+           // Dexie before it can be used by either proxy runtime.
+           torProxyUrl: 'socks5://127.0.0.1:19050',
           useElectrum: false,
           electrumPort: 50001,
           electrumSSL: false,
@@ -233,6 +238,23 @@ async function main() {
       'app pushed node settings to the proxy on load (POST /api/tor/settings → 200)',
       !!hookPush && hookPush.status === 200,
       hookPush ? `status=${hookPush.status}` : 'no settings push observed within 30s',
+    );
+
+    let persistedProxy = null;
+    const migrationDeadline = Date.now() + 10_000;
+    while (Date.now() < migrationDeadline) {
+      persistedProxy = await page.evaluate(async () => {
+        const nodeCrud = await import('/src/lib/data/node-settings-crud.ts');
+        const settings = await nodeCrud.getNodeSettings('default');
+        return settings?.torProxyUrl ?? null;
+      });
+      if (persistedProxy === 'socks5h://127.0.0.1:19050') break;
+      await page.waitForTimeout(250);
+    }
+    step(
+      'persisted legacy socks5 setting migrated to remote DNS (socks5h)',
+      persistedProxy === 'socks5h://127.0.0.1:19050',
+      `persisted=${persistedProxy}`,
     );
 
     // ── Proxied sync request to the configured local provider succeeds ─────
@@ -302,7 +324,7 @@ async function main() {
     // POST /api/tor/settings (200) happens before the /api/tor/test response.
     const torProxyInput = page.getByTestId('input-tor-proxy');
     await torProxyInput.waitFor({ state: 'visible', timeout: 30_000 });
-    await torProxyInput.fill('socks5://127.0.0.1:19050');
+    await torProxyInput.fill('socks5h://127.0.0.1:19051');
 
     const callsBeforeTest = torCalls.length;
     const testTorBtn = page.getByTestId('button-test-tor');

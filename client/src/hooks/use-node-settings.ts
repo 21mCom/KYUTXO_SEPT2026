@@ -6,7 +6,11 @@ import {
   putNodeSettings,
   updateNodeSettings as updateStoredNodeSettings,
 } from '@/lib/data/node-settings-crud';
-import { syncTorProxySettings, torProxySettingsFromNodeSettings } from '@/lib/tor-proxy-settings-sync';
+import {
+  canonicalizeTorProxyUrl,
+  syncTorProxySettings,
+  torProxySettingsFromNodeSettings,
+} from '@/lib/tor-proxy-settings-sync';
 
 const DEFAULT_NODE_SETTINGS: NodeSettings = {
   id: 'default',
@@ -52,6 +56,16 @@ export function useNodeSettings() {
         trustedLocalHosts: settings.trustedLocalHosts ?? [...DEFAULT_TRUSTED_LOCAL_HOSTS],
       }
     : DEFAULT_NODE_SETTINGS;
+
+  // Migrate legacy socks5:// values in-place. socks5 delegates destination DNS
+  // to the local resolver; socks5h sends the hostname through Tor instead.
+  useEffect(() => {
+    if (!settings?.torProxyUrl) return;
+    const normalized = canonicalizeTorProxyUrl(settings.torProxyUrl);
+    if (normalized.ok && normalized.migrated && normalized.value) {
+      void updateStoredNodeSettings('default', { torProxyUrl: normalized.value });
+    }
+  }, [settings?.torProxyUrl]);
 
   // Keep the Tor proxy's server-side allowlist/proxy settings in sync with the
   // stored node settings (deduped — only pushes when they actually change).

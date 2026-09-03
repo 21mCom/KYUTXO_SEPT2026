@@ -13,6 +13,59 @@ import type { NodeSettings } from './database';
 
 export type TorProxySettingsPayload = TorUpdateSettingsParams;
 
+export type CanonicalTorProxyUrlResult =
+  | { ok: true; value: string | undefined; migrated: boolean }
+  | { ok: false; error: string };
+
+export function canonicalizeTorProxyUrl(value: string | undefined): CanonicalTorProxyUrlResult {
+  const trimmed = value?.trim();
+  if (!trimmed) return { ok: true, value: undefined, migrated: false };
+
+  try {
+    const schemeMatch = /^(socks5h?):\/\//i.exec(trimmed);
+    if (!schemeMatch) {
+      throw new Error('unsupported proxy scheme');
+    }
+    // Browsers do not parse socks5 as an authority-based special scheme:
+    // hostname/port are empty and "//host:port" becomes the pathname. Parse
+    // the authority through HTTP after strictly validating the real scheme.
+    const parsed = new URL(`http://${trimmed.slice(schemeMatch[0].length)}`);
+    if (
+      !parsed.hostname ||
+      !parsed.port ||
+      (parsed.pathname !== '' && parsed.pathname !== '/') ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return {
+        ok: false,
+        error: 'Enter a SOCKS5 proxy as socks5h://host:port. The socks5h scheme is required so DNS resolves through Tor.',
+      };
+    }
+    const port = Number(parsed.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return {
+        ok: false,
+        error: 'Enter a SOCKS5 proxy as socks5h://host:port with a valid port.',
+      };
+    }
+    const withoutRootSlash = trimmed.replace(/\/$/, '');
+    if (schemeMatch[1].toLowerCase() === 'socks5') {
+      return {
+        ok: true,
+        value: withoutRootSlash.replace(/^socks5:/i, 'socks5h:'),
+        migrated: true,
+      };
+    }
+    return { ok: true, value: withoutRootSlash, migrated: withoutRootSlash !== trimmed };
+  } catch {
+    return {
+      ok: false,
+      error: 'Enter a SOCKS5 proxy as socks5h://host:port. The socks5h scheme is required so DNS resolves through Tor.',
+    };
+  }
+}
+
 // Dedup key of the last successfully pushed payload, so hook re-renders and
 // per-request ensure calls don't spam the endpoint with identical settings.
 let lastSyncedKey: string | null = null;
@@ -66,10 +119,13 @@ export function invalidateTorProxySettingsSync(): void {
 export function torProxySettingsFromNodeSettings(settings: NodeSettings): TorProxySettingsPayload {
   const isCustomProvider =
     settings.providerType === 'custom-electrs' || settings.providerType === 'custom-mempool';
+  const normalizedProxy = canonicalizeTorProxyUrl(settings.torProxyUrl);
   return {
     customProviderUrl: isCustomProvider ? settings.customUrl : undefined,
     trustedLocalHosts: settings.allowLocalNetwork ? settings.trustedLocalHosts ?? [] : [],
-    torProxyUrl: settings.torProxyUrl,
+    // Invalid legacy values fail closed in the runtime settings validator.
+    // A valid socks5:// value is safely upgraded to socks5h:// before use.
+    torProxyUrl: normalizedProxy.ok ? normalizedProxy.value : settings.torProxyUrl,
   };
 }
 

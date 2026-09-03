@@ -51,9 +51,14 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useNodeSettings } from "@/hooks/use-node-settings";
-import { syncTorProxySettings, torProxySettingsFromNodeSettings } from "@/lib/tor-proxy-settings-sync";
+import {
+  canonicalizeTorProxyUrl,
+  syncTorProxySettings,
+  torProxySettingsFromNodeSettings,
+} from "@/lib/tor-proxy-settings-sync";
 import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
 import { NodeProviderType, NodeSettings as NodeSettingsType, DEFAULT_TRUSTED_LOCAL_HOSTS } from "@/lib/database";
+import { isLocalOrPrivateHostname } from "@/lib/providers/types";
 import { 
   testConnectionWithSettings, 
   getProviderDisplayName, 
@@ -76,29 +81,7 @@ function classifyUrl(url: string | undefined): UrlClassification {
       return 'onion';
     }
     
-    // Check for localhost
-    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
-      return 'local';
-    }
-    
-    // Check for .local domains (mDNS/Bonjour)
-    if (hostname.endsWith('.local')) {
-      return 'local';
-    }
-    
-    // Check for private/RFC1918 IP addresses
-    const ipv4Match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (ipv4Match) {
-      const [, a, b] = ipv4Match.map(Number);
-      // 10.0.0.0/8
-      if (a === 10) return 'local';
-      // 172.16.0.0/12
-      if (a === 172 && b >= 16 && b <= 31) return 'local';
-      // 192.168.0.0/16
-      if (a === 192 && b === 168) return 'local';
-      // 169.254.0.0/16 (link-local)
-      if (a === 169 && b === 254) return 'local';
-    }
+    if (isLocalOrPrivateHostname(hostname)) return 'local';
     
     return 'public';
   } catch {
@@ -286,8 +269,8 @@ export default function NodeSettings() {
         // proxy name back to its known built-in URL ("Custom" needs no update
         // since the setting already holds the custom URL).
         const builtInProxyUrls: Record<string, string> = {
-          "Tor Browser": "socks5://127.0.0.1:9150",
-          "Tor Service": "socks5://127.0.0.1:9050",
+          "Tor Browser": "socks5h://127.0.0.1:9150",
+          "Tor Service": "socks5h://127.0.0.1:9050",
         };
         const detectedProxyUrl =
           result.proxyUrl ?? (result.proxyName ? builtInProxyUrls[result.proxyName] : undefined);
@@ -395,6 +378,18 @@ export default function NodeSettings() {
     try {
       // Normalize electrumHost before saving - remove http:// prefix
       const settingsToSave = { ...pendingChanges };
+      if (settingsToSave.torProxyUrl !== undefined) {
+        const normalizedProxy = canonicalizeTorProxyUrl(settingsToSave.torProxyUrl);
+        if (!normalizedProxy.ok) {
+          toast({
+            title: "Invalid Tor Proxy",
+            description: normalizedProxy.error,
+            variant: "destructive",
+          });
+          return;
+        }
+        settingsToSave.torProxyUrl = normalizedProxy.value;
+      }
       if (settingsToSave.electrumHost) {
         settingsToSave.electrumHost = settingsToSave.electrumHost
           .replace(/^https?:\/\//i, '')
@@ -903,7 +898,7 @@ export default function NodeSettings() {
                       data-testid="input-tor-proxy"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Leave empty to auto-detect Tor Browser (port 9150) or Tor service (port 9050)
+                      Use socks5h://host:port so destination DNS is resolved through Tor. Leave empty to auto-detect Tor Browser (port 9150) or Tor service (port 9050).
                     </p>
                   </div>
                   
