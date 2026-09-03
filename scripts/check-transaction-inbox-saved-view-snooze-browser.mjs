@@ -5,11 +5,14 @@
 // This drives the actual /transaction-inbox page in Chromium:
 //   1. creates a fresh vault and seeds two new, annotated transaction rows;
 //   2. uses the real Radix date/amount filter popover and saves a named view;
-//   3. reloads, unlocks again, selects the saved view, and verifies that its
+//   3. changes the search and amount filters, saves the same name again, and
+//      verifies that the existing view is updated rather than duplicated;
+//   4. reloads, unlocks again, selects the updated view, and verifies that its
 //      tab, search, date, and amount filters are restored;
-//   4. snoozes one row with the one-week preset and the other with the native
-//      custom date input, then verifies the persisted state/timestamps and
-//      that both underlying transactions still exist.
+//   5. deletes the active view, reloads, and verifies that it stays gone while
+//      both underlying transactions remain unchanged;
+//   6. snoozes one row with the one-week preset and the other with the native
+//      custom date input, then verifies the persisted state/timestamps.
 //
 // Everything runs offline against local IndexedDB.
 //
@@ -356,6 +359,7 @@ async function main() {
             tab: view.tab,
             search: view.search,
             filters: view.filters,
+            createdAt: view.createdAt,
             createdAtType: typeof view.createdAt,
           }
         : undefined;
@@ -373,6 +377,49 @@ async function main() {
         saved.filters?.amountMaxBtc === 0.8 &&
         saved.createdAtType === 'number',
       `persisted tab=${saved?.tab} search=${JSON.stringify(saved?.search)} date=${saved?.filters?.dateExact} amount=${saved?.filters?.amountMinBtc}-${saved?.filters?.amountMaxBtc}`,
+    );
+
+    // Change two persisted filter values and save the exact same name. This
+    // exercises the case-insensitive update-in-place path rather than creating
+    // a duplicate saved view.
+    await clickEl(page, 'button-advanced-filters');
+    await activateTab(page, 'tab-amount-range');
+    await setInputValue(page, 'input-amount-min', '0.45');
+    await setInputValue(page, 'input-amount-max', '0.8');
+    await clickEl(page, 'button-apply-filters');
+    await setInputValue(page, 'input-inbox-search', 'Inbox');
+    await page.getByTestId('input-inbox-view-name').fill(VIEW_NAME);
+    await clickEl(page, 'button-inbox-save-view');
+
+    const updated = await page.evaluate(async (name) => {
+      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
+      const settings = await settingsCrud.getSettings('default');
+      const views = Array.isArray(settings?.savedInboxViews) ? settings.savedInboxViews : [];
+      const matching = views.filter((candidate) => candidate.name.toLowerCase() === name.toLowerCase());
+      const view = matching[0];
+      return view
+        ? {
+            count: views.length,
+            matchingCount: matching.length,
+            id: view.id,
+            search: view.search,
+            filters: view.filters,
+            createdAt: view.createdAt,
+          }
+        : { count: views.length, matchingCount: matching.length };
+    }, VIEW_NAME);
+    record(
+      'update-view-in-place',
+      updated.count === 1 &&
+        updated.matchingCount === 1 &&
+        updated.id === saved?.id &&
+        updated.createdAt === saved?.createdAt &&
+        updated.search === 'Inbox' &&
+        updated.filters?.dateMode === 'exact' &&
+        updated.filters?.amountMode === 'range' &&
+        updated.filters?.amountMinBtc === 0.45 &&
+        updated.filters?.amountMaxBtc === 0.8,
+      `views=${updated.count} matching=${updated.matchingCount} id=${updated.id} search=${JSON.stringify(updated.search)} amount=${updated.filters?.amountMinBtc}-${updated.filters?.amountMaxBtc}`,
     );
 
     // Change away from the saved state before reload so selecting the saved
@@ -415,14 +462,110 @@ async function main() {
       'restore-view',
       restoredSavedId !== '' &&
         restoredTab === 'active' &&
-        restoredSearch === '24' &&
+        restoredSearch === 'Inbox' &&
         restoredDateChip?.includes(todayLabel) &&
-        restoredAmountChip?.includes('0.4 BTC') &&
+        restoredAmountChip?.includes('0.45 BTC') &&
         restoredAmountChip?.includes('0.8 BTC') &&
         restoredDateButton?.includes(todayLabel) &&
-        restoredAmountMin === '0.4' &&
+        restoredAmountMin === '0.45' &&
         restoredAmountMax === '0.8',
       `selected=${restoredSavedId} tab=${restoredTab} search=${JSON.stringify(restoredSearch)} date=${JSON.stringify(restoredDateButton)} amount=${restoredAmountMin}-${restoredAmountMax}`,
+    );
+
+    const beforeDelete = await page.evaluate(async ({ txPreset, txCustom }) => {
+      const txCrud = await import('/src/lib/data/transaction-crud.ts');
+      const transactions = await Promise.all([
+        txCrud.getTransactionByTxid(txPreset),
+        txCrud.getTransactionByTxid(txCustom),
+      ]);
+      return {
+        count: await txCrud.countTransactions(),
+        transactions: transactions.map((transaction) => transaction && ({
+          id: transaction.id,
+          txid: transaction.txid,
+          blockHeight: transaction.blockHeight,
+          blockTime: transaction.blockTime,
+          curationState: transaction.curationState,
+          snoozedUntil: transaction.snoozedUntil,
+          curationUpdatedAt: transaction.curationUpdatedAt,
+        })),
+      };
+    }, { txPreset: TX_PRESET, txCustom: TX_CUSTOM });
+
+    // Delete the selected view, then prove both the in-memory selection and
+    // persisted settings are cleared. The transaction snapshot makes this
+    // guard fail if view maintenance accidentally touches transaction data.
+    await clickEl(page, 'button-inbox-delete-view');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="select-inbox-saved-view"]')?.value === '',
+      null,
+      { timeout: 10_000 },
+    );
+    const afterDelete = await page.evaluate(async ({ name, txPreset, txCustom }) => {
+      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
+      const txCrud = await import('/src/lib/data/transaction-crud.ts');
+      const settings = await settingsCrud.getSettings('default');
+      const transactions = await Promise.all([
+        txCrud.getTransactionByTxid(txPreset),
+        txCrud.getTransactionByTxid(txCustom),
+      ]);
+      const views = Array.isArray(settings?.savedInboxViews) ? settings.savedInboxViews : [];
+      return {
+        views: views.filter((candidate) => candidate.name.toLowerCase() === name.toLowerCase()),
+        count: await txCrud.countTransactions(),
+        transactions: transactions.map((transaction) => transaction && ({
+          id: transaction.id,
+          txid: transaction.txid,
+          blockHeight: transaction.blockHeight,
+          blockTime: transaction.blockTime,
+          curationState: transaction.curationState,
+          snoozedUntil: transaction.snoozedUntil,
+          curationUpdatedAt: transaction.curationUpdatedAt,
+        })),
+      };
+    }, { name: VIEW_NAME, txPreset: TX_PRESET, txCustom: TX_CUSTOM });
+    record(
+      'delete-view-preserves-transactions',
+      afterDelete.views.length === 0 &&
+        afterDelete.count === beforeDelete.count &&
+        JSON.stringify(afterDelete.transactions) === JSON.stringify(beforeDelete.transactions),
+      `remainingViews=${afterDelete.views.length} transactionCount=${afterDelete.count} unchanged=${JSON.stringify(afterDelete.transactions) === JSON.stringify(beforeDelete.transactions)}`,
+    );
+
+    await page.reload({ waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
+    await page.getByTestId('transaction-curation-inbox').waitFor({
+      state: 'visible',
+      timeout: 30_000,
+    });
+    await page.waitForFunction(
+      (name) => !Array.from(
+        document.querySelector('[data-testid="select-inbox-saved-view"]')?.options ?? [],
+      ).some((option) => option.textContent === name),
+      VIEW_NAME,
+      { timeout: 10_000 },
+    );
+    const afterReload = await page.evaluate(async ({ name, txPreset, txCustom }) => {
+      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
+      const txCrud = await import('/src/lib/data/transaction-crud.ts');
+      const settings = await settingsCrud.getSettings('default');
+      const transactions = await Promise.all([
+        txCrud.getTransactionByTxid(txPreset),
+        txCrud.getTransactionByTxid(txCustom),
+      ]);
+      const views = Array.isArray(settings?.savedInboxViews) ? settings.savedInboxViews : [];
+      return {
+        viewCount: views.filter((candidate) => candidate.name.toLowerCase() === name.toLowerCase()).length,
+        count: await txCrud.countTransactions(),
+        transactionIds: transactions.map((transaction) => transaction?.id),
+      };
+    }, { name: VIEW_NAME, txPreset: TX_PRESET, txCustom: TX_CUSTOM });
+    record(
+      'delete-view-persists-after-reload',
+      afterReload.viewCount === 0 &&
+        afterReload.count === beforeDelete.count &&
+        afterReload.transactionIds.every((id) => typeof id === 'number'),
+      `matchingViews=${afterReload.viewCount} transactionCount=${afterReload.count} transactionIds=${afterReload.transactionIds.join('/')}`,
     );
 
     // ── Preset snooze: one-week path through the real Radix popover ─────────
