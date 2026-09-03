@@ -176,6 +176,32 @@ export async function completeRecordSearchIndexMutation(
 }
 
 /**
+ * Release a mutation whose derived index write failed without claiming that
+ * the current postings are usable. The source records remain authoritative,
+ * so the next search must rebuild from them rather than waiting forever on a
+ * pending mutation that can never complete.
+ */
+export async function failRecordSearchIndexMutation(): Promise<void> {
+  const stateTable = getStateTable();
+  if (!stateTable) return;
+  await db.transaction("rw", stateTable, async () => {
+    const current = await stateTable.get("state");
+    const pendingMutations = Math.max(0, (current?.pendingMutations ?? 1) - 1);
+    await stateTable.put({
+      id: "state",
+      version: INDEX_VERSION,
+      status: "building",
+      pendingMutations,
+      rebuilding: true,
+      generation: current?.generation ?? 0,
+      recordCount: current?.recordCount ?? 0,
+      maxId: current?.maxId ?? 0,
+      maxUpdatedAt: current?.maxUpdatedAt ?? 0,
+    });
+  });
+}
+
+/**
  * Keep one record's metadata postings in sync. The CRUD layer calls this after
  * the source row is written; a failed derived write is recoverable because the
  * fingerprint forces a rebuild on the next search.

@@ -11,6 +11,7 @@ import {
   beginRecordSearchIndexRebuild,
   clearRecordSearchIndex,
   completeRecordSearchIndexMutation,
+  failRecordSearchIndexMutation,
   getRecordSearchIndexState,
   getRecordIdsFromSearchIndex,
   persistRecordSearchIndexReadyState,
@@ -43,6 +44,11 @@ async function safelySyncRecordSearchIndex(record: Record): Promise<void> {
   } catch (error) {
     // Records are authoritative. The persisted fingerprint makes the next
     // search rebuild this derived index after an interrupted/failed update.
+    try {
+      await failRecordSearchIndexMutation();
+    } catch (releaseError) {
+      console.warn('[record-search-index] Failed to release record mutation:', releaseError);
+    }
     console.warn('[record-search-index] Record index update failed:', error);
   }
 }
@@ -54,6 +60,11 @@ async function safelySyncRecordSearchIndexBatch(records: Record[]): Promise<void
     await syncRecordSearchIndexBatch(current);
     await completeRecordSearchIndexMutation(await getRecordSearchIndexFingerprint());
   } catch (error) {
+    try {
+      await failRecordSearchIndexMutation();
+    } catch (releaseError) {
+      console.warn('[record-search-index] Failed to release batch mutation:', releaseError);
+    }
     console.warn('[record-search-index] Batch index update failed:', error);
   }
 }
@@ -63,6 +74,11 @@ async function safelyRemoveRecordsFromSearchIndex(ids: number[]): Promise<void> 
     await removeRecordsFromSearchIndex(ids);
     await completeRecordSearchIndexMutation(await getRecordSearchIndexFingerprint());
   } catch (error) {
+    try {
+      await failRecordSearchIndexMutation();
+    } catch (releaseError) {
+      console.warn('[record-search-index] Failed to release removal mutation:', releaseError);
+    }
     console.warn('[record-search-index] Record index removal failed:', error);
   }
 }

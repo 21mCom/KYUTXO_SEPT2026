@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Dexie, { type Table } from "dexie";
 import type { Record as DbRecord } from "@/lib/database";
 import type {
@@ -42,6 +42,7 @@ vi.mock("@/lib/database", async () => {
 
 const {
   bulkCreateRecords,
+  bulkDeleteRecords,
   clearAllRecords,
   createRecord,
   searchVisibleRecordsBounded,
@@ -84,6 +85,10 @@ function postingSignature(entries: Array<{
 
 beforeEach(async () => {
   await clearAllRecords();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -287,6 +292,110 @@ describe("searchVisibleRecordsBounded", () => {
     await expect(
       persistRecordSearchIndexReadyState(await getSearchIndexFingerprint(), retryGeneration),
     ).resolves.toBe(true);
+  });
+
+  it("releases a failed per-record index update so the next search rebuilds", async () => {
+    const recordId = await createRecord(
+      {
+        type: "other",
+        inputString: "failed-per-record-index",
+        label: "Failed per-record index",
+        notes: "metadata before failure",
+        tags: [],
+        categories: [],
+      },
+      CREATE_OPTIONS,
+    );
+    await bulkCreateRecords(
+      Array.from({ length: 80 }, (_, index) => ({
+        type: "other" as const,
+        inputString: `per-record-newer-${index}`,
+        label: `Per-record newer ${index}`,
+        tags: [],
+        categories: [],
+      })),
+      CREATE_OPTIONS,
+    );
+
+    vi.spyOn(testDb.recordSearchIndex, "bulkAdd").mockRejectedValueOnce(
+      new Error("injected per-record index failure"),
+    );
+    await updateRecord(recordId, { notes: "latest per-record metadata" }, CREATE_OPTIONS);
+
+    expect(await testDb.recordSearchIndexState.get("state")).toMatchObject({
+      status: "building",
+      pendingMutations: 0,
+      rebuilding: true,
+    });
+
+    await searchVisibleRecordsBounded("latest per-record metadata", {
+      perIndexLimit: 5,
+      recentScanLimit: 1,
+    });
+    await vi.waitFor(async () => {
+      expect((await testDb.recordSearchIndexState.get("state"))?.status).toBe("ready");
+    });
+    expect(
+      (await searchVisibleRecordsBounded("latest per-record metadata", {
+        perIndexLimit: 5,
+        recentScanLimit: 1,
+      })).map((row) => row.id),
+    ).toContain(recordId);
+  });
+
+  it("releases a failed batch index update without certifying stale postings", async () => {
+    vi.spyOn(testDb.recordSearchIndex, "bulkAdd").mockRejectedValueOnce(
+      new Error("injected batch index failure"),
+    );
+    const [recordId] = await bulkCreateRecords(
+      [{
+        type: "other",
+        inputString: "failed-batch-index",
+        label: "Failed batch index",
+        notes: "latest batch metadata",
+        tags: [],
+        categories: [],
+      }],
+      CREATE_OPTIONS,
+    );
+
+    expect(recordId).toEqual(expect.any(Number));
+    expect(await testDb.recordSearchIndexState.get("state")).toMatchObject({
+      status: "building",
+      pendingMutations: 0,
+      rebuilding: true,
+    });
+    const capturedState = await testDb.recordSearchIndexState.get("state");
+    expect(capturedState?.status).not.toBe("ready");
+    expect(
+      await testDb.recordSearchIndex.where("recordId").equals(recordId).count(),
+    ).toBe(0);
+  });
+
+  it("releases a failed delete index update for a rebuild", async () => {
+    const recordId = await createRecord(
+      {
+        type: "other",
+        inputString: "failed-delete-index",
+        label: "Failed delete index",
+        notes: "delete metadata",
+        tags: [],
+        categories: [],
+      },
+      CREATE_OPTIONS,
+    );
+
+    vi.spyOn(testDb.recordSearchIndex, "where").mockImplementationOnce(() => {
+      throw new Error("injected delete index failure");
+    });
+    await bulkDeleteRecords([recordId], CREATE_OPTIONS);
+
+    expect(await testDb.records.get(recordId)).toBeUndefined();
+    expect(await testDb.recordSearchIndexState.get("state")).toMatchObject({
+      status: "building",
+      pendingMutations: 0,
+      rebuilding: true,
+    });
   });
 
   it("leaves only the newest metadata postings after overlapping updates", async () => {
