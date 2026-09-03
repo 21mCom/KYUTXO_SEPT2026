@@ -48,6 +48,21 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  getProviderClassDescription,
+  isFirstSyncConfirmationRequired,
+  markFirstSyncConfirmed,
+} from "@/lib/network-privacy";
 
 export default function TransactionSync() {
   const [, navigate] = useLocation();
@@ -96,6 +111,8 @@ export default function TransactionSync() {
   
   // Connected-only sync mode
   const [connectedOnly, setConnectedOnly] = useState(false);
+  const [firstSyncDisclosureCount, setFirstSyncDisclosureCount] = useState<number | null>(null);
+  const pendingFirstSyncAction = useRef<(() => Promise<void>) | null>(null);
 
   // Skipped addresses and blacklist
   const [skippedAddresses, setSkippedAddresses] = useState<SkippedAddress[]>([]);
@@ -118,6 +135,23 @@ export default function TransactionSync() {
       includeNoSource,
     };
   }, [selectedSources, includeNoSource]);
+
+  const requestFirstSyncApproval = useCallback((addressCount: number, action: () => Promise<void>) => {
+    if (!isFirstSyncConfirmationRequired(nodeSettings)) {
+      void action();
+      return;
+    }
+    pendingFirstSyncAction.current = action;
+    setFirstSyncDisclosureCount(addressCount);
+  }, [nodeSettings]);
+
+  const confirmFirstSync = async () => {
+    const action = pendingFirstSyncAction.current;
+    pendingFirstSyncAction.current = null;
+    await markFirstSyncConfirmed();
+    setFirstSyncDisclosureCount(null);
+    if (action) await action();
+  };
 
   const loadStats = useCallback(async () => {
     const s = await transactionSyncService.getStats();
@@ -300,7 +334,10 @@ export default function TransactionSync() {
       maxDepth,
       connectedOnly: maxDepth > 1 ? connectedOnly : undefined,
     };
-    await runSync(options, cachedRecords ?? undefined, 'Transaction Sync');
+    requestFirstSyncApproval(
+      filteredAddressCount ?? 0,
+      () => runSync(options, cachedRecords ?? undefined, 'Transaction Sync'),
+    );
   };
 
   // Sync a specific set of owning addresses (handed off from the Annual Activity
@@ -361,9 +398,15 @@ export default function TransactionSync() {
       maxDepth: 1,
       specificRecordIds: recordIds,
     };
+    if (isFirstSyncConfirmationRequired(nodeSettings)) {
+      requestFirstSyncApproval(recordIds.length, async () => {
+        await handleSyncTargetedAddresses(addresses);
+      });
+      return recordIds.length;
+    }
     await runSync(options, undefined, 'Transaction Sync (Report)');
     return recordIds.length;
-  }, [toast]);
+  }, [toast, nodeSettings, requestFirstSyncApproval]);
 
   // Consume any pending targeted-sync request handed off from another page and
   // kick off the sync once on mount. The ref guards against StrictMode's
@@ -413,6 +456,10 @@ export default function TransactionSync() {
   };
   
   const handleResumeSync = async () => {
+    if (isFirstSyncConfirmationRequired(nodeSettings)) {
+      requestFirstSyncApproval(pausedState?.remainingRecordIds.length ?? 0, handleResumeSync);
+      return;
+    }
     setIsSyncing(true);
     isSyncingRef.current = true;
     setSyncProgress({
@@ -492,6 +539,10 @@ export default function TransactionSync() {
 
   const handleSingleAddressSync = async () => {
     if (!singleAddress.trim()) return;
+    if (isFirstSyncConfirmationRequired(nodeSettings)) {
+      requestFirstSyncApproval(1, handleSingleAddressSync);
+      return;
+    }
     setIsSingleSyncing(true);
     setSingleSyncResult(null);
 
@@ -606,6 +657,30 @@ export default function TransactionSync() {
 
   return (
     <div className="flex-1 overflow-auto p-6">
+      <AlertDialog
+        open={firstSyncDisclosureCount !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            pendingFirstSyncAction.current = null;
+            setFirstSyncDisclosureCount(null);
+          }
+        }}
+      >
+        <AlertDialogContent data-testid="dialog-first-sync-disclosure">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm your first blockchain request</AlertDialogTitle>
+            <AlertDialogDescription>
+              KYUTXO will send {firstSyncDisclosureCount ?? 0} address{firstSyncDisclosureCount === 1 ? '' : 'es'} to {getProviderClassDescription(nodeSettings)}. The provider can associate addresses queried together. This confirmation is stored only in this vault.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmFirstSync} data-testid="button-confirm-first-sync">
+              Confirm and sync
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" onClick={() => navigate("/")} data-testid="button-back">
@@ -1171,7 +1246,7 @@ export default function TransactionSync() {
           <CardFooter className="gap-2">
             <Button 
               onClick={handleSync} 
-              disabled={isSyncing || filteredAddressCount === 0}
+              disabled={isSyncing || filteredAddressCount === null || filteredAddressCount === 0}
               data-testid="button-sync"
             >
               {isSyncing ? (

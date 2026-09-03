@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { NodeSettings, NodeProviderType, DEFAULT_TRUSTED_LOCAL_HOSTS } from '@/lib/database';
 import {
@@ -11,6 +11,7 @@ import {
   syncTorProxySettings,
   torProxySettingsFromNodeSettings,
 } from '@/lib/tor-proxy-settings-sync';
+import { setRuntimeNetworkSettings } from '@/lib/network-privacy';
 
 const DEFAULT_NODE_SETTINGS: NodeSettings = {
   id: 'default',
@@ -46,16 +47,23 @@ export function useNodeSettings() {
 
   // Use defaults if settings haven't loaded or timed out
   // Also merge in any missing fields (e.g., trustedLocalHosts for existing users)
-  const nodeSettings: NodeSettings = settings 
-    ? {
+  const nodeSettings: NodeSettings = useMemo(() => settings
+    ? ({
         ...DEFAULT_NODE_SETTINGS,
         ...settings,
         // Ensure allowLocalNetwork defaults to false for existing users (security)
         allowLocalNetwork: settings.allowLocalNetwork ?? false,
         // Ensure trustedLocalHosts is always defined (for existing users who don't have it)
         trustedLocalHosts: settings.trustedLocalHosts ?? [...DEFAULT_TRUSTED_LOCAL_HOSTS],
-      }
-    : DEFAULT_NODE_SETTINGS;
+      })
+    : DEFAULT_NODE_SETTINGS, [settings]);
+
+  // Only a new persisted snapshot may replace an optimistic runtime update.
+  // Ordinary component renders must never race an offline-switch write by
+  // restoring the previous live-query value.
+  useEffect(() => {
+    if (settings !== undefined) setRuntimeNetworkSettings(nodeSettings);
+  }, [settings, nodeSettings]);
 
   // Migrate legacy socks5:// values in-place. socks5 delegates destination DNS
   // to the local resolver; socks5h sends the hostname through Tor instead.
@@ -82,6 +90,7 @@ export function useNodeSettings() {
   }, [syncKey]);
 
   const updateSettings = async (updates: Partial<Omit<NodeSettings, 'id'>>) => {
+    setRuntimeNetworkSettings({ ...nodeSettings, ...updates });
     const existing = await getNodeSettings('default');
     if (existing) {
       await updateStoredNodeSettings('default', updates);
@@ -94,7 +103,18 @@ export function useNodeSettings() {
   };
 
   const resetToDefaults = async () => {
-    await putNodeSettings(DEFAULT_NODE_SETTINGS);
+    const resetSettings: NodeSettings = {
+      ...DEFAULT_NODE_SETTINGS,
+      networkAccessEnabled: nodeSettings.networkAccessEnabled,
+      networkOnboardingStage: nodeSettings.networkOnboardingStage,
+      networkPrivacyMode: nodeSettings.networkPrivacyMode === undefined
+        ? undefined
+        : 'public-direct',
+      networkPrivacyChosenAt: nodeSettings.networkPrivacyChosenAt,
+      firstSyncConfirmedAt: nodeSettings.firstSyncConfirmedAt,
+    };
+    setRuntimeNetworkSettings(resetSettings);
+    await putNodeSettings(resetSettings);
   };
 
   const setConnectionStatus = async (status: string, connected: boolean) => {

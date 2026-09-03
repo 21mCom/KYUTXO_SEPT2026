@@ -32,6 +32,7 @@ vi.mock("@/lib/tor-proxy-settings-sync", async (importOriginal) => ({
 }));
 
 import { useNodeSettings, getDefaultNodeSettings } from "./use-node-settings";
+import { assertNetworkAccessAllowed, setRuntimeNetworkSettings } from "@/lib/network-privacy";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -122,6 +123,49 @@ describe("useNodeSettings", () => {
     expect(typeof result.current.updateSettings).toBe("function");
     expect(typeof result.current.resetToDefaults).toBe("function");
     expect(typeof result.current.setConnectionStatus).toBe("function");
+  });
+
+  it("keeps an optimistic offline policy authoritative across a rerender", async () => {
+    mockQueryReturn = {
+      id: "default",
+      providerType: "mempool-space",
+      useTor: false,
+      networkPrivacyMode: "public-direct",
+      networkOnboardingStage: "complete",
+      networkAccessEnabled: true,
+    };
+    nodeSettingsCrudMocks.getNodeSettings.mockImplementation(() => new Promise(() => {}));
+    const { result, rerender } = renderHook(() => useNodeSettings());
+
+    void result.current.updateSettings({ networkAccessEnabled: false });
+    rerender();
+
+    expect(() => assertNetworkAccessAllowed()).toThrow("Network access is offline");
+  });
+
+  it("reset preserves offline and onboarding policy fields", async () => {
+    mockQueryReturn = {
+      id: "default",
+      providerType: "custom-electrs",
+      customUrl: "http://umbrel.local:3006/api",
+      useTor: false,
+      networkPrivacyMode: "own-node",
+      networkOnboardingStage: "complete",
+      networkAccessEnabled: false,
+      firstSyncConfirmedAt: 123,
+    };
+    const { result } = renderHook(() => useNodeSettings());
+    await act(async () => {
+      await result.current.resetToDefaults();
+    });
+
+    expect(nodeSettingsCrudMocks.putNodeSettings).toHaveBeenCalledWith(expect.objectContaining({
+      providerType: "mempool-space",
+      networkPrivacyMode: "public-direct",
+      networkOnboardingStage: "complete",
+      networkAccessEnabled: false,
+      firstSyncConfirmedAt: 123,
+    }));
   });
 
   it("persists a remote-DNS migration for legacy socks5 proxy settings", async () => {

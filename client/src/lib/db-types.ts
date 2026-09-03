@@ -822,7 +822,11 @@ export type NodeProviderType =
   | 'custom-electrs'      // Self-hosted Electrs/Esplora API
   | 'custom-mempool';     // Self-hosted mempool instance
 
-// Default trusted local hosts for local network connections
+export type NetworkPrivacyMode =
+  | 'own-node'
+  | 'electrum'
+  | 'public-tor'
+  | 'public-direct';
 export const DEFAULT_TRUSTED_LOCAL_HOSTS = [
   'localhost',
   '127.0.0.1',
@@ -859,6 +863,17 @@ export interface NodeSettings {
   lastConnectedAt?: number;
   // Connection status message
   lastConnectionStatus?: string;
+  /**
+   * Present only after the user has explicitly chosen how this vault may
+   * contact the Bitcoin network. Older vaults omit it and retain their existing
+   * behavior; freshly-created vaults persist onboardingStage='source' and
+   * networkAccessEnabled=false before the authenticated app is mounted.
+   */
+  networkPrivacyMode?: NetworkPrivacyMode;
+  networkAccessEnabled?: boolean;
+  networkOnboardingStage?: NetworkOnboardingStage;
+  networkPrivacyChosenAt?: number;
+  firstSyncConfirmedAt?: number;
 }
 
 // === Paused Sync State ===
@@ -1220,6 +1235,8 @@ export interface DerivationTemplate {
   createdAt: number;
   updatedAt: number;
 }
+
+export type NetworkOnboardingStage = 'source' | 'import' | 'complete';
 
 export type DesktopLockTimeoutSeconds = typeof DESKTOP_LOCK_TIMEOUT_OPTIONS[number];
 

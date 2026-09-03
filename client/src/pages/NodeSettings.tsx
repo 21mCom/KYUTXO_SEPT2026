@@ -75,6 +75,11 @@ import {
   testTorConnectivity,
   TorTestResult
 } from "@/lib/blockchain-api";
+import {
+  assertNetworkAccessAllowed,
+  deriveNetworkPrivacyMode,
+  isNetworkAccessEnabled,
+} from "@/lib/network-privacy";
 
 type UrlClassification = 'local' | 'onion' | 'public' | 'unknown';
 
@@ -415,6 +420,10 @@ export default function NodeSettings() {
           .replace(/\/+$/, '')
           .trim();
       }
+      settingsToSave.networkPrivacyMode = deriveNetworkPrivacyMode({
+        ...currentSettings,
+        ...settingsToSave,
+      });
       if (Object.keys(settingsToSave).length > 0) {
         await updateSettings(settingsToSave);
       }
@@ -511,6 +520,16 @@ export default function NodeSettings() {
       toast({
         title: "Not Available",
         description: "Electrum protocol requires the desktop app",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      assertNetworkAccessAllowed(currentSettings);
+    } catch (error) {
+      toast({
+        title: "Network Offline",
+        description: error instanceof Error ? error.message : "Enable network access before testing.",
         variant: "destructive",
       });
       return;
@@ -725,6 +744,15 @@ export default function NodeSettings() {
         </div>
       
       {/* Privacy Warning for Public APIs */}
+      {!isNetworkAccessEnabled(currentSettings) && (
+        <Alert>
+          <WifiOff className="h-4 w-4" />
+          <AlertTitle>Network access is offline</AlertTitle>
+          <AlertDescription>
+            Your provider settings are preserved. Use the privacy control in the header before testing or syncing.
+          </AlertDescription>
+        </Alert>
+      )}
       <Alert variant={privacyInfo.level === 'low' ? 'destructive' : privacyInfo.level === 'medium' ? 'default' : 'default'}>
         <Shield className="h-4 w-4" />
         <AlertTitle className="flex items-center gap-2">

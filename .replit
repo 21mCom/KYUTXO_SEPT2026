@@ -1021,6 +1021,10 @@ args = "packaged-electron-binaries-tests"
 task = "workflow.run"
 args = "global-command-search-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "first-run-network-privacy"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3625,6 +3629,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-global-command-search-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "first-run-network-privacy"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/network-privacy.test.ts client/src/hooks/use-node-settings.test.tsx && node scripts/check-first-run-network-privacy-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

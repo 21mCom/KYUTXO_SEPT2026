@@ -33,10 +33,14 @@ import {
   getPriceDataByKey,
   getPriceDataByAsset,
 } from "@/lib/data/price-data-crud";
+import { useNodeSettings } from "@/hooks/use-node-settings";
+import { isNetworkAccessEnabled } from "@/lib/network-privacy";
 
 export default function PriceImport() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { nodeSettings } = useNodeSettings();
+  const networkEnabled = isNetworkAccessEnabled(nodeSettings);
   
   const [step, setStep] = useState(1);
   const [file, setFile] = useState<File | null>(null);
@@ -112,6 +116,14 @@ export default function PriceImport() {
   };
   
   const handleImport = async () => {
+    if (!networkEnabled) {
+      toast({
+        title: "Network Offline",
+        description: "Enable networking before importing externally-sourced price data.",
+        variant: "destructive",
+      });
+      return;
+    }
     if (!parseResult || !parseResult.success) return;
     
     setIsImporting(true);
@@ -230,10 +242,20 @@ export default function PriceImport() {
               </CardHeader>
               <CardContent>
                 <a
-                  href={DATA_SOURCE_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-between p-4 rounded-lg border hover-elevate transition-colors"
+                  href={networkEnabled ? DATA_SOURCE_URL : undefined}
+                  target={networkEnabled ? "_blank" : undefined}
+                  rel={networkEnabled ? "noopener noreferrer" : undefined}
+                  aria-disabled={!networkEnabled}
+                  onClick={(event) => {
+                    if (!networkEnabled) {
+                      event.preventDefault();
+                      toast({
+                        title: "Network Offline",
+                        description: "Use the header privacy control before opening a price-data provider.",
+                      });
+                    }
+                  }}
+                  className={`flex items-center justify-between p-4 rounded-lg border transition-colors ${networkEnabled ? 'hover-elevate' : 'opacity-60 cursor-not-allowed'}`}
                   data-testid="link-source-investing"
                 >
                   <div>

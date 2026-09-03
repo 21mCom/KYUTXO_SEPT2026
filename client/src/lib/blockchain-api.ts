@@ -21,6 +21,10 @@ import { BlockstreamProvider } from './providers/blockstream';
 import { CustomElectrsProvider } from './providers/custom-electrs';
 import { CustomMempoolProvider } from './providers/custom-mempool';
 import { ElectrumProvider } from './providers/electrum';
+import {
+  assertFirstSyncConfirmed,
+  assertNetworkAccessAllowed,
+} from './network-privacy';
 
 export type { BlockchainProvider, ApiTransaction, ParsedTransaction, TorStatus, TorTestResult };
 export type { ProviderType };
@@ -36,6 +40,24 @@ export const NODE_PROBE_TIMEOUT_MS = 5000;
 // of grinding through every remaining address one full timeout at a time. Isolated
 // single transient failures stay below this threshold and surface per-row.
 export const NODE_UNREACHABLE_CONSECUTIVE_LIMIT = 3;
+
+function guardProvider(provider: BlockchainProvider): BlockchainProvider {
+  return new Proxy(provider, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        // Re-check the live runtime policy before every provider operation.
+        // This is the enforcement boundary shared by current and future pages.
+        assertNetworkAccessAllowed();
+        if (typeof property === 'string' && property.startsWith('getAddress')) {
+          assertFirstSyncConfirmed();
+        }
+        return Reflect.apply(value, target, args);
+      };
+    },
+  });
+}
 
 // Classify an error as a node-level connectivity failure (node down, refused,
 // DNS failure, proxy failure, or our short probe timeout) rather than a
@@ -56,15 +78,16 @@ export function isNodeUnreachableError(error: unknown): boolean {
 export function createProvider(type: ProviderType = 'mempool', network: 'mainnet' | 'testnet' = 'mainnet'): BlockchainProvider {
   switch (type) {
     case 'blockstream':
-      return new BlockstreamProvider(network);
+      return guardProvider(new BlockstreamProvider(network));
     case 'mempool':
     default:
-      return new MempoolSpaceProvider(network);
+      return guardProvider(new MempoolSpaceProvider(network));
   }
 }
 
 // Create a provider from NodeSettings configuration
 export function createProviderFromSettings(settings: NodeSettings): BlockchainProvider {
+  assertNetworkAccessAllowed(settings);
   const { providerType, customUrl, useTor, requestTimeout, network, torProxyUrl, trustedLocalHosts, allowLocalNetwork } = settings;
   // Only use trusted local hosts when allowLocalNetwork is explicitly enabled (SECURITY)
   // This prevents accidental local network access on public networks
@@ -73,7 +96,7 @@ export function createProviderFromSettings(settings: NodeSettings): BlockchainPr
   // Use Electrum protocol if enabled and configured (EXCLUSIVELY - no HTTP fallback)
   if (settings.useElectrum && settings.electrumHost && isElectron()) {
     console.log(`[BlockchainAPI] Using Electrum protocol exclusively (${settings.electrumHost}:${settings.electrumPort || 50001})`);
-    return new ElectrumProvider(
+    return guardProvider(new ElectrumProvider(
       settings.electrumHost,
       settings.electrumPort || 50001,
       settings.electrumSSL || false,
@@ -81,7 +104,7 @@ export function createProviderFromSettings(settings: NodeSettings): BlockchainPr
       // Route Electrum through the configured Tor SOCKS proxy when Tor is on
       // (also enables .onion Electrum hosts).
       { useTor, torProxyUrl }
-    );
+    ));
   }
   
   // Log which HTTP provider is being used
@@ -92,23 +115,23 @@ export function createProviderFromSettings(settings: NodeSettings): BlockchainPr
   
   switch (providerType) {
     case 'blockstream':
-      return new BlockstreamProvider(network, requestTimeout, useTor, torProxyUrl, localHosts);
+      return guardProvider(new BlockstreamProvider(network, requestTimeout, useTor, torProxyUrl, localHosts));
     
     case 'custom-electrs':
       if (!customUrl) {
         throw new Error('Custom URL is required for custom Electrs provider');
       }
-      return new CustomElectrsProvider(customUrl, requestTimeout, useTor, torProxyUrl, localHosts);
+      return guardProvider(new CustomElectrsProvider(customUrl, requestTimeout, useTor, torProxyUrl, localHosts));
     
     case 'custom-mempool':
       if (!customUrl) {
         throw new Error('Custom URL is required for custom mempool provider');
       }
-      return new CustomMempoolProvider(customUrl, requestTimeout, useTor, torProxyUrl, localHosts);
+      return guardProvider(new CustomMempoolProvider(customUrl, requestTimeout, useTor, torProxyUrl, localHosts));
     
     case 'mempool-space':
     default:
-      return new MempoolSpaceProvider(network, requestTimeout, useTor, torProxyUrl, localHosts);
+      return guardProvider(new MempoolSpaceProvider(network, requestTimeout, useTor, torProxyUrl, localHosts));
   }
 }
 
@@ -328,8 +351,9 @@ export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
 // Test if Tor is available and working. The proxies tested (including the
 // user's configured custom SOCKS proxy) come from server-side settings — sync
 // settings via syncTorProxySettings first if unsaved changes should apply.
-export async function testTorConnectivity(): Promise<TorTestResult> {
+export async function testTorConnectivity(settings?: NodeSettings): Promise<TorTestResult> {
   try {
+    assertNetworkAccessAllowed(settings);
     if (isElectron()) {
       const electronAPI = getElectronAPI();
       return await electronAPI.torTest();

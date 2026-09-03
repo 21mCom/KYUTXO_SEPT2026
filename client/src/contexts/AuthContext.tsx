@@ -55,6 +55,7 @@ import {
   clearDbUpgradeProgress,
   type DbUpgradeProgress,
 } from '@/lib/db-upgrade-progress';
+import { initializeFreshNetworkPrivacy } from '@/lib/network-privacy';
 
 interface AuthContextType {
   isInitialized: boolean | null;
@@ -562,6 +563,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const hash = await hashPasswordWithParams(password, salt, CURRENT_KDF_PARAMS);
 
       await saveVaultSettings(saltBase64, hash);
+      await initializeFreshNetworkPrivacy();
 
       // Brand-new vault: nothing legacy to scan/decrypt/repair. Mark every
       // one-time startup migration done up front so the very first login of a

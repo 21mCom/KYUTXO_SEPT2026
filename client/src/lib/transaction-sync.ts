@@ -34,6 +34,11 @@ import {
   queueTransactionForReview,
 } from './dataFacade';
 import { recomputeAddressStats } from './data/address-stats';
+import {
+  assertFirstSyncConfirmed,
+  assertNetworkAccessAllowed,
+  setRuntimeNetworkSettings,
+} from './network-privacy';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -141,6 +146,15 @@ async function loadAddressRecordsAtDepth(depth: number): Promise<Record[]> {
 
 
 export class TransactionSyncService {
+  private async prepareNetworkAction(): Promise<void> {
+    const settings = await getNodeSettings('default');
+    if (!settings) return;
+    setRuntimeNetworkSettings(settings);
+    assertNetworkAccessAllowed(settings);
+    assertFirstSyncConfirmed(settings);
+    this.provider = createProviderFromSettings(settings);
+  }
+
   private provider: BlockchainProvider;
   private onProgress?: SyncProgressCallback;
   private cancelled: boolean = false;
@@ -424,6 +438,8 @@ export class TransactionSyncService {
     if (onProgress) {
       this.onProgress = onProgress;
     }
+
+    await this.prepareNetworkAction();
 
     this.resetProgress();
     this.cancelled = false;
@@ -745,6 +761,7 @@ export class TransactionSyncService {
 
   async syncWithDepth(options: SyncOptions, preloadedRecords?: Record[]): Promise<SyncResult> {
     const { sourceFilter, maxDepth, specificRecordIds, resumeContext } = options;
+    await this.prepareNetworkAction();
     
     // Reset progress counters and cancellation flags at the start of each sync
     this.resetProgress();

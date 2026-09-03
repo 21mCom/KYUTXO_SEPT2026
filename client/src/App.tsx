@@ -49,6 +49,9 @@ import { EngineBootstrapper, EnginePreparingIndicator } from "@/components/Engin
 import { GlobalCommandPalette } from "@/components/GlobalCommandPalette";
 import CoinOrigins from "@/pages/CoinOrigins";
 import TransactionInbox from "@/pages/TransactionInbox";
+import { NetworkPrivacyControl } from "@/components/NetworkPrivacyControl";
+import { NetworkPrivacyOnboarding } from "@/components/NetworkPrivacyOnboarding";
+import { useNodeSettings } from "@/hooks/use-node-settings";
 
 const UIAssets = lazy(() => import("@/pages/UIAssets"));
 const IconsReference = lazy(() => import("@/pages/IconsReference"));
@@ -238,6 +241,7 @@ function AuthenticatedApp() {
                 </div>
                 <div className="flex items-center gap-2">
                   <EnginePreparingIndicator />
+                  <NetworkPrivacyControl />
                   <KeyboardShortcutsDialog />
                   <ThemeToggle />
                   <Button
@@ -262,6 +266,23 @@ function AuthenticatedApp() {
   );
 }
 
+function AuthenticatedGate() {
+  const { nodeSettings, isLoading } = useNodeSettings();
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      </div>
+    );
+  }
+  if (
+    nodeSettings.networkOnboardingStage === 'source' ||
+    nodeSettings.networkOnboardingStage === 'import'
+  ) {
+    return <NetworkPrivacyOnboarding />;
+  }
+  return <AuthenticatedApp />;
+}
 function AppContent() {
   const {
     isAuthenticated,
@@ -348,7 +369,7 @@ function AppContent() {
           </div>
         </div>
       ) : (
-        <AuthenticatedApp />
+        <AuthenticatedGate />
       )}
     </>
   );
