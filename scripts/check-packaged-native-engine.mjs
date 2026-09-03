@@ -55,6 +55,12 @@ import {
   assertPackagedAsarFresh,
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
+import {
+  electronBuilderTargetArgs,
+  expectedUnpackedDirectory,
+  packagedTargetHelp,
+  parsePackagedTargetArgs,
+} from './packaged-targets.mjs';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -65,14 +71,30 @@ const require = createRequire(import.meta.url);
 // Windows-safe (fileURLToPath): `new URL(...).pathname` is `/D:/...` on win32
 // and path.resolve mangles it — see repoRootFromModuleUrl.
 const ROOT = repoRootFromModuleUrl(import.meta.url);
-// electron-builder's --dir/unpacked layout is platform-named.
-const UNPACKED_DIR = path.join(
-  ROOT,
-  'release',
-  process.platform === 'win32' ? 'win-unpacked' : 'linux-unpacked',
-);
-const REQUIRE_ELECTRON_RUNTIME = process.env.KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON === '1';
-const RESOURCES = path.join(UNPACKED_DIR, 'resources');
+const HOST_PLATFORM = process.platform === 'win32' ? 'win' : process.platform;
+if (process.argv.slice(2).includes('--help')) {
+  console.log(packagedTargetHelp());
+  process.exit(0);
+}
+const targetArgs = parsePackagedTargetArgs(process.argv.slice(2));
+if (targetArgs.help) {
+  console.log(packagedTargetHelp());
+  process.exit(0);
+}
+const TARGET_PLATFORM = targetArgs.localDiagnostic ? HOST_PLATFORM : targetArgs.platform;
+const TARGET_ARCH = targetArgs.localDiagnostic ? process.arch : targetArgs.arch;
+// electron-builder's --dir/unpacked layout differs for macOS app bundles and
+// arm64 outputs. An explicit override is accepted for CI extraction jobs.
+const UNPACKED_DIR = targetArgs.unpackedDir
+  ? path.resolve(targetArgs.unpackedDir)
+  : expectedUnpackedDirectory(ROOT, TARGET_PLATFORM, TARGET_ARCH);
+const REQUIRE_ELECTRON_RUNTIME =
+  !targetArgs.localDiagnostic ||
+  targetArgs.requireElectron ||
+  process.env.KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON === '1';
+const RESOURCES = TARGET_PLATFORM === 'darwin'
+  ? path.join(UNPACKED_DIR, 'KYUTXO.app', 'Contents', 'Resources')
+  : path.join(UNPACKED_DIR, 'resources');
 const ASAR = path.join(RESOURCES, 'app.asar');
 const ASAR_UNPACKED = path.join(RESOURCES, 'app.asar.unpacked');
 const WORKER_REL = path.join('electron', 'engine', 'engine-worker.bundle.cjs');
@@ -121,7 +143,7 @@ function buildAsar() {
     '--config',
     'electron-builder.json',
     '--dir',
-    '--linux',
+    ...electronBuilderTargetArgs(TARGET_PLATFORM, TARGET_ARCH),
     '-c.npmRebuild=false',
   ]);
   if (!fs.existsSync(ASAR)) {
@@ -132,7 +154,16 @@ function buildAsar() {
 /** Locate the packaged app executable (extraMetadata.name = "kyutxo",
  *  productName = "KYUTXO"; Windows uses productName + .exe). */
 function findPackagedBinary() {
-  const names = process.platform === 'win32'
+  if (TARGET_PLATFORM === 'darwin') {
+    const candidate = path.join(UNPACKED_DIR, 'KYUTXO.app', 'Contents', 'MacOS', 'KYUTXO');
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      return null;
+    }
+  }
+  const names = TARGET_PLATFORM === 'win'
     ? ['KYUTXO.exe', 'kyutxo.exe']
     : ['kyutxo', 'KYUTXO'];
   for (const name of names) {
@@ -150,11 +181,18 @@ function findPackagedBinary() {
 const DRIVER_SOURCE = `
 // Spawns the extracted packaged worker bundle as a real worker_thread and
 // drives the correlation-id protocol: init -> status -> integrityCheck.
-// argv: [bundlePath, dbPath]
+// argv: [bundlePath, dbPath, expectedPlatform, expectedArch]
 const { Worker } = require('node:worker_threads');
 const fs = require('node:fs');
 
-const [bundlePath, dbPath] = process.argv.slice(2);
+const [bundlePath, dbPath, expectedPlatform, expectedArch] = process.argv.slice(2);
+if (process.platform !== expectedPlatform || process.arch !== expectedArch) {
+  console.error(
+    'DRIVER-FAIL runtime target mismatch: expected=' + expectedPlatform + '/' + expectedArch +
+    ' actual=' + process.platform + '/' + process.arch
+  );
+  process.exit(1);
+}
 const worker = new Worker(bundlePath, { workerData: { dbPath } });
 
 const timer = setTimeout(() => {
@@ -221,11 +259,16 @@ worker.on('exit', (code) => {
 
 function spawnDriver(runtime, driverPath, bundlePath, dbPath) {
   return new Promise((resolve) => {
-    const child = spawn(runtime.bin, [driverPath, bundlePath, dbPath], {
+    const expectedNodePlatform = TARGET_PLATFORM === 'win' ? 'win32' : TARGET_PLATFORM;
+    const child = spawn(
+      runtime.bin,
+      [driverPath, bundlePath, dbPath, expectedNodePlatform, TARGET_ARCH],
+      {
       cwd: ROOT,
       env: { ...process.env, ...runtime.env },
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+      },
+    );
     let out = '';
     child.stdout.on('data', (d) => {
       out += d;
@@ -252,6 +295,11 @@ async function main() {
 
   const asar = require('@electron/asar');
   const steps = [];
+  steps.push({
+    name: 'packaged target is explicit and supported',
+    passed: true,
+    detail: `${TARGET_PLATFORM}/${TARGET_ARCH}; unpacked=${path.relative(ROOT, UNPACKED_DIR)}`,
+  });
 
   // ── 1. Worker bundle is inside the asar at the exact spawn path ──────────
   let bundleInAsar = false;

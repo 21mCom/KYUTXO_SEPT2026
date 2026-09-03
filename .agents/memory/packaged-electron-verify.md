@@ -21,6 +21,23 @@ description: How to launch and drive the electron-builder asar in this environme
 ## Native save dialog
 - The Electron backup sink opens a native GTK "Save File" dialog (invisible to CDP). Accept it with `xdotool windowfocus --sync <win> ; key Return` on the fixed Xvfb display (no WM → `windowactivate` is a no-op). The file saves relative to the Electron process **cwd** (defaultPath is a bare filename), not $HOME.
 
+## Local native-addon diagnostic ABI
+
+The non-release local fallback in `check-packaged-native-engine.mjs` runs under
+the workspace Node binary. After a Node runtime upgrade, `node_modules` can
+still contain a `better-sqlite3` binary built for the old module ABI; rebuild
+that dependency before interpreting the fallback result. Release/CI checks
+must never use this fallback: they require `ELECTRON_RUN_AS_NODE` under the
+packaged executable and assert the explicit target platform/architecture.
+
+**Why:** otherwise a stale development addon produces an ABI mismatch unrelated
+to the packaged Electron rebuild, while a Node fallback in release CI could
+mask the exact Electron ABI failure the gate exists to catch.
+
+**How to apply:** local diagnostics may rebuild the addon for the current Node
+runtime; packaged matrix jobs always use `--require-electron` and explicit
+`--platform`/`--arch`.
+
 ## Windows portable release gate
 The Windows renderer release gate must launch the generated `*-Portable.exe` wrapper, not only the sibling `win-unpacked` executable. Copy the exact package-version artifact into a disposable directory before launching it, and place `TEMP`, `TMP`, and Windows profile fallbacks under the same root.
 

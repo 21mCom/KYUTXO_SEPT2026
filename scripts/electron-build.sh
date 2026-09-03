@@ -8,6 +8,12 @@ set -euo pipefail
 
 echo "Building KYUTXO desktop application..."
 
+# Keep the current plaintext-at-rest product status honest. This negative gate
+# must stay green until a real protected primary store and its packaged
+# verification suite replace it; a native read replica alone is not protection.
+echo "Step 0: Verifying protected-vault claims remain gated..."
+node scripts/check-protected-vault-claims.mjs
+
 # First build the web app
 echo "Step 1: Building web application..."
 npm run build
@@ -43,6 +49,11 @@ node scripts/check-packaged-electron-browser.mjs
 # never mask an ABI/load regression. (The GitHub Actions build runs the same
 # check post-package on the Windows runner — see .github/workflows/build.yml.)
 echo "Step 5: Verifying the packaged native read-engine (asarUnpack release gate)..."
-KYUTXO_PACKAGED_SKIP_BUILD=1 KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON=1 node scripts/check-packaged-native-engine.mjs
+TARGET_PLATFORM="$(node -p "process.platform === 'win32' ? 'win' : process.platform")"
+TARGET_ARCH="$(node -p "process.arch")"
+KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-native-engine.mjs \
+  --platform "$TARGET_PLATFORM" \
+  --arch "$TARGET_ARCH" \
+  --require-electron
 
 echo "Build complete! Check the 'release' folder for distributable packages."

@@ -1,0 +1,92 @@
+name: Verify desktop package matrix
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-native-boundary:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: win
+            arch: x64
+            builder_flag: --win
+          - os: macos-13
+            platform: darwin
+            arch: x64
+            builder_flag: --mac
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+            builder_flag: --mac
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+            builder_flag: --linux
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            builder_flag: --linux
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify target matrix and protected-claim gate
+        shell: bash
+        run: |
+          node --test scripts/packaged-targets.test.mjs scripts/check-protected-vault-claims.test.mjs
+          node scripts/check-protected-vault-claims.mjs
+
+      - name: Build packaged renderer and native worker
+        shell: bash
+        run: |
+          npx vite build --config vite.config.electron.ts
+          node scripts/build-native-engine.mjs
+
+      - name: Build target package
+        shell: bash
+        run: >-
+          npx electron-builder
+          --config electron-builder.json
+          ${{ matrix.builder_flag }}
+          --${{ matrix.arch }}
+          --publish never
+
+      - name: Verify packaged native module under shipping Electron ABI
+        shell: bash
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: >-
+          node scripts/check-packaged-native-engine.mjs
+          --platform ${{ matrix.platform }}
+          --arch ${{ matrix.arch }}
+          --require-electron
+
+      - name: Upload verified package
+        uses: actions/upload-artifact@v4
+        with:
+          name: KYUTXO-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+          if-no-files-found: error

@@ -11,7 +11,11 @@ permissions:
   contents: write
 
 jobs:
+  verify-desktop-package-matrix:
+    uses: ./.github/workflows/desktop-package-matrix.yml
+
   build-windows:
+    needs: verify-desktop-package-matrix
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     # Pinned to windows-2022: the newer windows-latest (windows-2025) image is not
     # detected by the @electron/node-gyp fork's Visual Studio finder, breaking the
@@ -48,6 +52,9 @@ jobs:
 
       - name: Fail on high/critical npm audit findings
         run: node scripts/check-audit.js
+
+      - name: Keep protected-at-rest claims disabled until packaged verification exists
+        run: node scripts/check-protected-vault-claims.mjs
 
       - name: Set build version
         if: github.event_name == 'push'
@@ -88,8 +95,11 @@ jobs:
       - name: Verify packaged native read-engine under shipping Electron ABI
         env:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
-          KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON: '1'
-        run: node scripts/check-packaged-native-engine.mjs
+        run: >-
+          node scripts/check-packaged-native-engine.mjs
+          --platform win
+          --arch x64
+          --require-electron
 
       # RELEASE GATE: launch the exact generated Portable.exe release asset
       # from a disposable directory, create a vault, stop the full process
