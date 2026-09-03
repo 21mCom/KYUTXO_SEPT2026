@@ -81,6 +81,9 @@ export function mergeVerifiedBackupDestination(
   token: string,
   verified: { at: number; sizeBytes?: number; checksum?: string; label: string },
 ): BackupScheduleSettings {
+  if (!schedule.destinations.some((destination) => destination.token === token)) {
+    return schedule;
+  }
   const current = schedule.destinationStates?.[token];
   return {
     ...schedule,
@@ -97,6 +100,29 @@ export function mergeVerifiedBackupDestination(
         lastVerifiedChecksum: verified.checksum,
         lastFailureAt: undefined,
         lastFailureMessage: undefined,
+      },
+    },
+  };
+}
+
+export function mergeFailedBackupDestination(
+  schedule: BackupScheduleSettings,
+  token: string,
+  failure: { at: number; message: string },
+): BackupScheduleSettings {
+  if (!schedule.destinations.some((destination) => destination.token === token)) {
+    return schedule;
+  }
+  return {
+    ...schedule,
+    lastFailureAt: failure.at,
+    lastFailureMessage: failure.message,
+    destinationStates: {
+      ...schedule.destinationStates,
+      [token]: {
+        ...schedule.destinationStates?.[token],
+        lastFailureAt: failure.at,
+        lastFailureMessage: failure.message,
       },
     },
   };
@@ -500,19 +526,8 @@ export async function runDueScheduledBackup(options: {
       const message = error instanceof BackupCancelledError ? "Scheduled backup was cancelled." : error instanceof Error ? error.message : String(error);
       failures.push(`${destination.label}: ${message}`);
       throwIfCancelled(options.signal);
-      statusSchedule = await mutateBackupSchedule((current) => ({
-        ...current,
-        lastFailureAt: now,
-        lastFailureMessage: message,
-        destinationStates: {
-          ...current.destinationStates,
-          [destination.token]: {
-            ...current.destinationStates?.[destination.token],
-            lastFailureAt: now,
-            lastFailureMessage: message,
-          },
-        },
-      }));
+      statusSchedule = await mutateBackupSchedule((current) =>
+        mergeFailedBackupDestination(current, destination.token, { at: now, message }));
     }
   }
   if (verified > 0) {

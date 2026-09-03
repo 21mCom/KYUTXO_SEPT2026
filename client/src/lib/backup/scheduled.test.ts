@@ -4,6 +4,7 @@ import {
   DEFAULT_BACKUP_SCHEDULE,
   appendBackupFreeSpaceReading,
   isBackupDue,
+  mergeFailedBackupDestination,
   mergeBackupSchedulePolicy,
   mergeVerifiedBackupDestination,
   normalizeBackupSchedule,
@@ -131,6 +132,31 @@ describe("scheduled backup policy", () => {
     expect(merged.destinationStates?.[token]?.freeSpaceHistory).toEqual(history);
     expect(merged.destinationStates?.[token]?.lastFailureMessage).toBeUndefined();
     expect(merged.destinationStates?.[token]?.lastVerifiedAt).toBe(3);
+  });
+
+  it("ignores a late status update for a removed destination", () => {
+    const token = "a".repeat(32);
+    const schedule = {
+      ...DEFAULT_BACKUP_SCHEDULE,
+      destinations: [{ token, label: "one" }],
+      lastFailureAt: 1,
+      lastFailureMessage: "Existing failure",
+      destinationStates: {
+        [token]: { freeSpaceHistory: [{ at: 1, freeBytes: 10 }] },
+      },
+    };
+    const removed = { ...schedule, destinations: [] };
+
+    expect(mergeVerifiedBackupDestination(removed, token, {
+      at: 3,
+      label: "one",
+      sizeBytes: 4,
+      checksum: "checksum",
+    })).toBe(removed);
+    expect(mergeFailedBackupDestination(removed, token, {
+      at: 3,
+      message: "Disconnected",
+    })).toBe(removed);
   });
 
   it("preserves current status and history when schedule policy edits are saved", () => {
