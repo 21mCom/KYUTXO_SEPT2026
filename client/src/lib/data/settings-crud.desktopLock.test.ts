@@ -11,6 +11,7 @@ vi.mock("../electron", () => ({
 
 import { db } from "../database";
 import {
+  clearSettings,
   getSettings,
   putSettings,
   clearSettings,

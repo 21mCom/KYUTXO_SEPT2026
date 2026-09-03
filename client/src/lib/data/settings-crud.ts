@@ -90,6 +90,26 @@ export async function updateSettings(
   }
 }
 
+export async function mutateSettings(
+  id: string,
+  mutate: (current: Settings) => Partial<Settings> | undefined,
+  options?: SettingsWriteOptions
+): Promise<Settings | undefined> {
+  let updated: Settings | undefined;
+  await db.transaction('rw', db.settings, async () => {
+    const current = await db.settings.get(id);
+    if (!current) return;
+    const changes = mutate(current);
+    if (!changes) return;
+    await db.settings.update(id, changes);
+    updated = { ...current, ...changes };
+  });
+
+  if (updated && !options?.skipNotification) {
+    notifyDbChange('settings');
+  }
+  return updated;
+}
 export async function clearSettings(
   options?: SettingsWriteOptions
 ): Promise<void> {

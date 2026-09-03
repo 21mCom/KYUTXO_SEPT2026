@@ -25,8 +25,9 @@ import {
   type VaultHealthStatus,
 } from "@/lib/vault-health";
 import { verifyScheduledBackup, normalizeBackupSchedule } from "@/lib/backup/scheduled";
+import type { BackupFreeSpaceReading } from "@/lib/db-types";
 import { blobChunks } from "@/lib/backup/zip-stream";
-import { getSettings, updateSettings } from "@/lib/data/settings-crud";
+import { getSettings, mutateSettings } from "@/lib/data/settings-crud";
 import { useToast } from "@/hooks/use-toast";
 
 type Phase = "checking" | "done" | "failed" | "cancelled";
@@ -64,6 +65,22 @@ function formatBytes(value?: number): string {
   return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${unit}`;
 }
 
+function formatFreeSpaceTrend(readings?: BackupFreeSpaceReading[]): string {
+  const validReadings = (readings ?? []).filter(
+    (reading) => Number.isFinite(reading.at) && Number.isFinite(reading.freeBytes),
+  );
+  if (validReadings.length === 0) return "Trend: No readings yet";
+  if (validReadings.length === 1) return "Trend: 1 reading; run another check to see change";
+
+  const first = validReadings[0];
+  const last = validReadings[validReadings.length - 1];
+  const delta = last.freeBytes - first.freeBytes;
+  const elapsedDays = Math.max((last.at - first.at) / (24 * 60 * 60 * 1000), 1 / 24);
+  const ratePerDay = Math.abs(delta) / elapsedDays;
+  const direction = delta < 0 ? "decreasing" : delta > 0 ? "increasing" : "steady";
+  return `Trend: ${direction} · ${formatBytes(first.freeBytes)} → ${formatBytes(last.freeBytes)} · ${formatBytes(ratePerDay)}/day`;
+}
+
 function BackupHealthCard({
   snapshot,
   onRefresh,
@@ -78,6 +95,7 @@ function BackupHealthCard({
   const destinations = backup.destinations ?? [];
   const destinationAvailable = backup.destinationAvailable ?? [];
   const destinationFreeBytes = backup.destinationFreeBytes ?? [];
+  const destinationFreeSpaceHistory = backup.destinationFreeSpaceHistory ?? [];
   const destinationCapacityWarning = backup.destinationCapacityWarning ?? [];
   const verifiedCopyCounts = backup.verifiedCopyCounts ?? [];
   const invalidCopyCounts = backup.invalidCopyCounts ?? [];
@@ -104,10 +122,14 @@ function BackupHealthCard({
         await verifyScheduledBackup(() => blobChunks(file), password);
       }
       const settings = await getSettings("default");
-      const schedule = normalizeBackupSchedule(settings?.backupSchedule);
-      await updateSettings("default", {
-        backupSchedule: { ...schedule, lastRestoreDrillAt: Date.now() },
-      });
+      if (!settings) throw new Error("Settings are unavailable.");
+      const drillAt = Date.now();
+      await mutateSettings("default", (current) => ({
+        backupSchedule: {
+          ...normalizeBackupSchedule(current.backupSchedule),
+          lastRestoreDrillAt: drillAt,
+        },
+      }));
       toast({
         title: "Restore drill passed",
         description: "The archive was read completely, its password was checked, and its table counts matched.",
@@ -165,6 +187,9 @@ function BackupHealthCard({
                        Free: {formatBytes(destinationFreeBytes[index])}
                      </span>
                    )}
+                   <span className="basis-full text-xs text-muted-foreground" data-testid={`backup-free-space-trend-${index}`}>
+                     {formatFreeSpaceTrend(destinationFreeSpaceHistory[index])}
+                   </span>
                    {destinationFailures[index]?.message && <span className="text-xs text-destructive">{destinationFailures[index].message}</span>}
                    {destinationCapacityWarning[index] && (
                      <span className="text-xs text-amber-700 dark:text-amber-400" data-testid={`backup-capacity-warning-${index}`}>

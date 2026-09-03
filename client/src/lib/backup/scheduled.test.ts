@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  BACKUP_FREE_SPACE_HISTORY_LIMIT,
+  DEFAULT_BACKUP_SCHEDULE,
+  appendBackupFreeSpaceReading,
   isBackupDue,
+  mergeBackupSchedulePolicy,
+  mergeVerifiedBackupDestination,
   normalizeBackupSchedule,
   selectBackupsForRotation,
   verifyScheduledBackup,
@@ -75,6 +80,91 @@ describe("scheduled backup policy", () => {
     });
     expect(value.destinations.map((destination) => destination.path)).toEqual(["/one", "/two"]);
     expect(value.retentionCount).toBe(1);
+  });
+
+  it("keeps only recent valid free-space readings", () => {
+    const token = "a".repeat(32);
+    const history = Array.from({ length: BACKUP_FREE_SPACE_HISTORY_LIMIT + 3 }, (_, index) => ({
+      at: index + 1,
+      freeBytes: index + 10,
+    }));
+    const normalized = normalizeBackupSchedule({
+      ...DEFAULT_BACKUP_SCHEDULE,
+      destinations: [{ token, label: "one" }],
+      destinationStates: {
+        [token]: {
+          freeSpaceHistory: [
+            ...history,
+            { at: Number.NaN, freeBytes: 1 },
+            { at: 100, freeBytes: -1 },
+          ],
+        },
+      },
+    });
+    expect(normalized.destinationStates?.[token]?.freeSpaceHistory).toEqual(
+      history.slice(-BACKUP_FREE_SPACE_HISTORY_LIMIT),
+    );
+    expect(appendBackupFreeSpaceReading(history, { at: 1000, freeBytes: 5 })).toHaveLength(
+      BACKUP_FREE_SPACE_HISTORY_LIMIT,
+    );
+  });
+
+  it("preserves free-space history when a scheduled backup succeeds", () => {
+    const token = "a".repeat(32);
+    const history = [{ at: 1, freeBytes: 10 }];
+    const merged = mergeVerifiedBackupDestination({
+      ...DEFAULT_BACKUP_SCHEDULE,
+      destinations: [{ token, label: "one" }],
+      destinationStates: {
+        [token]: {
+          freeSpaceHistory: history,
+          lastFailureAt: 2,
+          lastFailureMessage: "Disconnected",
+        },
+      },
+    }, token, {
+      at: 3,
+      label: "one",
+      sizeBytes: 4,
+      checksum: "checksum",
+    });
+    expect(merged.destinationStates?.[token]?.freeSpaceHistory).toEqual(history);
+    expect(merged.destinationStates?.[token]?.lastFailureMessage).toBeUndefined();
+    expect(merged.destinationStates?.[token]?.lastVerifiedAt).toBe(3);
+  });
+
+  it("preserves current status and history when schedule policy edits are saved", () => {
+    const keptToken = "a".repeat(32);
+    const removedToken = "b".repeat(32);
+    const current = normalizeBackupSchedule({
+      ...DEFAULT_BACKUP_SCHEDULE,
+      destinations: [
+        { token: keptToken, label: "kept" },
+        { token: removedToken, label: "removed" },
+      ],
+      lastFailureAt: 5,
+      lastFailureMessage: "Latest failure",
+      destinationStates: {
+        [keptToken]: {
+          freeSpaceHistory: [{ at: 1, freeBytes: 10 }],
+          lastFailureAt: 5,
+          lastFailureMessage: "Latest failure",
+        },
+        [removedToken]: {
+          freeSpaceHistory: [{ at: 1, freeBytes: 20 }],
+        },
+      },
+    });
+    const merged = mergeBackupSchedulePolicy(current, {
+      ...current,
+      destinations: [{ token: keptToken, label: "kept" }],
+      cadenceDays: 14,
+      destinationStates: undefined,
+    });
+    expect(merged.cadenceDays).toBe(14);
+    expect(merged.lastFailureMessage).toBe("Latest failure");
+    expect(merged.destinationStates?.[keptToken]?.freeSpaceHistory).toEqual([{ at: 1, freeBytes: 10 }]);
+    expect(merged.destinationStates?.[removedToken]).toBeUndefined();
   });
 
   it("runs only after the configured cadence", () => {

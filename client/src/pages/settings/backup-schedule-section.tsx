@@ -7,9 +7,10 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { getElectronAPISafe, isElectron } from "@/lib/electron";
-import { getSettings, updateSettings } from "@/lib/data/settings-crud";
+import { getSettings, mutateSettings } from "@/lib/data/settings-crud";
 import {
   DEFAULT_BACKUP_SCHEDULE,
+  mergeBackupSchedulePolicy,
   normalizeBackupSchedule,
   type ScheduledBackupRunResult,
 } from "@/lib/backup/scheduled";
@@ -59,8 +60,11 @@ export function BackupScheduleSection() {
         toast({ variant: "destructive", title: "Choose a destination", description: "Select at least one local backup folder before enabling the schedule." });
         return;
       }
-      await updateSettings("default", { backupSchedule: normalized });
-      setSchedule(normalized);
+      const updated = await mutateSettings("default", (current) => ({
+        backupSchedule: mergeBackupSchedulePolicy(current.backupSchedule, normalized),
+      }));
+      const saved = normalizeBackupSchedule(updated?.backupSchedule ?? normalized);
+      setSchedule(saved);
       toast({ title: "Backup schedule saved", description: normalized.enabled ? "KYUTXO will check whether a backup is due after each unlock." : "Scheduled backups are off." });
     } finally {
       setSaving(false);

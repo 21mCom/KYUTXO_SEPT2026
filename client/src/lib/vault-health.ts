@@ -11,9 +11,14 @@ import { loadAuditSession } from "@/lib/data/privacy-audit-session-store";
 import { getRecordsAfterId } from "@/lib/data/record-crud";
 import { getRecordOriginsByRecordIds } from "@/lib/data/record-origins-crud";
 import { sumAttachmentSizes } from "@/lib/data/attachments-crud";
-import { getSettings } from "@/lib/data/settings-crud";
+import { getSettings, mutateSettings } from "@/lib/data/settings-crud";
 import { getElectronAPISafe } from "@/lib/electron";
-import { isBackupDue, normalizeBackupSchedule } from "@/lib/backup/scheduled";
+import {
+  appendBackupFreeSpaceReading,
+  isBackupDue,
+  normalizeBackupSchedule,
+} from "@/lib/backup/scheduled";
+import type { BackupFreeSpaceReading } from "@/lib/db-types";
 import { estimateExportBytes } from "@/lib/backup/export";
 import { STREAMED_TABLES } from "@/lib/backup/format";
 
@@ -64,6 +69,7 @@ export interface VaultHealthSnapshot {
     destinations: string[];
     destinationAvailable: boolean[];
     destinationFreeBytes?: Array<number | undefined>;
+    destinationFreeSpaceHistory?: Array<BackupFreeSpaceReading[] | undefined>;
     destinationCapacityWarning?: boolean[];
     verifiedCopyCounts: number[];
     invalidCopyCounts: number[];
@@ -460,8 +466,57 @@ export async function runVaultHealthCheck(options: {
   );
   throwIfAborted(signal);
 
+  const checkedAt = Date.now();
+  const destinationFreeSpaceHistory = destinationState.map((state, index) => {
+    const destination = backupSchedule.destinations[index];
+    const existing = destination
+      ? backupSchedule.destinationStates?.[destination.token]?.freeSpaceHistory
+      : undefined;
+    return state.available && state.freeBytes != null
+      ? appendBackupFreeSpaceReading(existing, { at: checkedAt, freeBytes: state.freeBytes })
+      : existing;
+  });
+  const successfulReadings = backupSchedule.destinations.flatMap((destination, index) => {
+    const state = destinationState[index];
+    return state.available && state.freeBytes != null
+      ? [{ token: destination.token, freeBytes: state.freeBytes }]
+      : [];
+  });
+  if (successfulReadings.length > 0 && storedSettings) {
+    try {
+      throwIfAborted(signal);
+      await mutateSettings("default", (currentSettings) => {
+        throwIfAborted(signal);
+        const latestSchedule = normalizeBackupSchedule(currentSettings.backupSchedule);
+        const configuredTokens = new Set(latestSchedule.destinations.map((destination) => destination.token));
+        const recordedStates = { ...(latestSchedule.destinationStates ?? {}) };
+        for (const reading of successfulReadings) {
+          if (!configuredTokens.has(reading.token)) continue;
+          const current = recordedStates[reading.token];
+          recordedStates[reading.token] = {
+            ...current,
+            freeSpaceHistory: appendBackupFreeSpaceReading(current?.freeSpaceHistory, {
+              at: checkedAt,
+              freeBytes: reading.freeBytes,
+            }),
+          };
+        }
+        return {
+          backupSchedule: {
+            ...latestSchedule,
+            destinationStates: recordedStates,
+          },
+        };
+      });
+    } catch (error) {
+      if (error instanceof VaultHealthCancelledError) throw error;
+      // A settings write must not turn an otherwise useful health result into
+      // a failed check. The current readings remain visible in this snapshot.
+    }
+  }
+
   return {
-    checkedAt: Date.now(),
+    checkedAt,
     tableCounts,
     integrity,
     metadata,
@@ -476,6 +531,7 @@ export async function runVaultHealthCheck(options: {
       destinations: backupSchedule.destinations.map((destination) => destination.path || destination.label),
       destinationAvailable: destinationState.map((state) => state.available),
       destinationFreeBytes: destinationState.map((state) => state.freeBytes),
+      destinationFreeSpaceHistory,
       destinationCapacityWarning: destinationState.map((state) =>
         state.available && state.freeBytes != null && backupCapacityThresholdBytes != null
           ? state.freeBytes < backupCapacityThresholdBytes

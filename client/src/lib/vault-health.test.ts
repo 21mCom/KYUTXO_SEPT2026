@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { recordRows, syncRows, tableErrors, tables, backupHarness } = vi.hoisted(() => {
+const { recordRows, syncRows, tableErrors, tables, backupHarness, mutateSettingsMock } = vi.hoisted(() => {
   const rows: any[] = [];
   const errors = new Set<string>();
   return {
@@ -19,6 +19,11 @@ const { recordRows, syncRows, tableErrors, tables, backupHarness } = vi.hoisted(
       api: null as any,
       attachmentBytes: 0,
     },
+    mutateSettingsMock: vi.fn(async (_id: string, mutate: (settings: any) => any) => {
+      const changes = mutate(backupHarness.settings);
+      backupHarness.settings = { ...backupHarness.settings, ...changes };
+      return backupHarness.settings;
+    }),
   };
 });
 
@@ -38,6 +43,7 @@ vi.mock("@/lib/data/attachments-crud", async (importOriginal) => ({
 }));
 vi.mock("@/lib/data/settings-crud", () => ({
   getSettings: vi.fn(async () => backupHarness.settings),
+  mutateSettings: mutateSettingsMock,
 }));
 vi.mock("@/lib/electron", () => ({
   getElectronAPISafe: vi.fn(() => backupHarness.api),
@@ -87,6 +93,7 @@ describe("getVaultHealthStatus", () => {
     backupHarness.settings = undefined;
     backupHarness.api = null;
     backupHarness.attachmentBytes = 0;
+    mutateSettingsMock.mockClear();
   });
 
   it("reports a clean vault as healthy", () => {
@@ -160,6 +167,11 @@ describe("runVaultHealthCheck", () => {
         encrypted: true,
         promptBehavior: "ask",
         destinationStates: {
+          [availableToken]: {
+            freeSpaceHistory: [
+              { at: 100, freeBytes: 75 * 1024 * 1024 },
+            ],
+          },
           [missingToken]: { lastFailureAt: 123, lastFailureMessage: "Drive disconnected" },
         },
       },
@@ -173,6 +185,11 @@ describe("runVaultHealthCheck", () => {
     expect(result.backup.destinationAvailable).toEqual([true, false]);
     expect(result.backup.destinationFreeBytes).toEqual([50 * 1024 * 1024, undefined]);
     expect(result.backup.destinationCapacityWarning).toEqual([true, false]);
+    expect(result.backup.destinationFreeSpaceHistory?.[0]).toEqual([
+      { at: 100, freeBytes: 75 * 1024 * 1024 },
+      { at: result.checkedAt, freeBytes: 50 * 1024 * 1024 },
+    ]);
+    expect(result.backup.destinationFreeSpaceHistory?.[1]).toBeUndefined();
     expect(result.backup.estimatedNextFullBackupBytes).toBe(10 * 1024 * 1024);
     expect(result.backup.backupCapacityThresholdBytes).toBe(
       10 * 1024 * 1024 + BACKUP_CAPACITY_SAFETY_MARGIN_BYTES,
@@ -180,6 +197,11 @@ describe("runVaultHealthCheck", () => {
     expect(result.backup.destinationFailures[1]).toEqual({
       at: 123,
       message: "Drive disconnected",
+    });
+    expect(mutateSettingsMock).toHaveBeenCalledTimes(1);
+    expect(backupHarness.settings.backupSchedule.destinationStates[missingToken]).toEqual({
+      lastFailureAt: 123,
+      lastFailureMessage: "Drive disconnected",
     });
   });
 

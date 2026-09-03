@@ -1,5 +1,5 @@
 import { getElectronAPISafe } from "@/lib/electron";
-import { getSettings, updateSettings } from "@/lib/data/settings-crud";
+import { getSettings, mutateSettings } from "@/lib/data/settings-crud";
 import { countRecords } from "@/lib/data/record-crud";
 import { countAttachments, sumAttachmentSizes } from "@/lib/data/attachments-crud";
 import { countTransactions, countTransactionParticipants } from "@/lib/data/transaction-crud";
@@ -23,7 +23,12 @@ import {
 } from "./format";
 import { deriveKeyWithParams, base64ToBuffer, decrypt } from "@/lib/crypto";
 import { readZipStream, lineConsumer, collectBytesConsumer } from "./zip-stream";
-import type { BackupDestination, BackupScheduleSettings } from "@/lib/db-types";
+import type {
+  BackupDestination,
+  BackupDestinationState,
+  BackupFreeSpaceReading,
+  BackupScheduleSettings,
+} from "@/lib/db-types";
 
 export const DEFAULT_BACKUP_SCHEDULE: BackupScheduleSettings = {
   enabled: false,
@@ -35,6 +40,100 @@ export const DEFAULT_BACKUP_SCHEDULE: BackupScheduleSettings = {
   promptBehavior: "ask",
 };
 
+// Health checks are user-initiated and may happen more often than scheduled
+// backups. Keep enough points for a useful trend without allowing settings to
+// grow without bound.
+export const BACKUP_FREE_SPACE_HISTORY_LIMIT = 30;
+
+function normalizeFreeSpaceHistory(value: unknown): BackupFreeSpaceReading[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const readings = value
+    .filter((reading): reading is BackupFreeSpaceReading =>
+      Boolean(reading) &&
+      typeof reading === "object" &&
+      typeof (reading as BackupFreeSpaceReading).at === "number" &&
+      Number.isFinite((reading as BackupFreeSpaceReading).at) &&
+      typeof (reading as BackupFreeSpaceReading).freeBytes === "number" &&
+      Number.isFinite((reading as BackupFreeSpaceReading).freeBytes) &&
+      (reading as BackupFreeSpaceReading).freeBytes >= 0,
+    )
+    .map((reading) => ({
+      at: reading.at,
+      freeBytes: Math.max(0, reading.freeBytes),
+    }))
+    .sort((a, b) => a.at - b.at);
+  return readings.length > 0 ? readings.slice(-BACKUP_FREE_SPACE_HISTORY_LIMIT) : undefined;
+}
+
+export function appendBackupFreeSpaceReading(
+  history: BackupFreeSpaceReading[] | undefined,
+  reading: BackupFreeSpaceReading,
+): BackupFreeSpaceReading[] {
+  const normalized = normalizeFreeSpaceHistory(history) ?? [];
+  const last = normalized[normalized.length - 1];
+  if (last?.at === reading.at && last.freeBytes === reading.freeBytes) return normalized;
+  return [...normalized, { at: reading.at, freeBytes: Math.max(0, reading.freeBytes) }]
+    .slice(-BACKUP_FREE_SPACE_HISTORY_LIMIT);
+}
+
+export function mergeVerifiedBackupDestination(
+  schedule: BackupScheduleSettings,
+  token: string,
+  verified: { at: number; sizeBytes?: number; checksum?: string; label: string },
+): BackupScheduleSettings {
+  const current = schedule.destinationStates?.[token];
+  return {
+    ...schedule,
+    lastVerifiedAt: verified.at,
+    lastVerifiedDestination: verified.label,
+    lastVerifiedSizeBytes: verified.sizeBytes,
+    lastVerifiedChecksum: verified.checksum,
+    destinationStates: {
+      ...schedule.destinationStates,
+      [token]: {
+        ...current,
+        lastVerifiedAt: verified.at,
+        lastVerifiedSizeBytes: verified.sizeBytes,
+        lastVerifiedChecksum: verified.checksum,
+        lastFailureAt: undefined,
+        lastFailureMessage: undefined,
+      },
+    },
+  };
+}
+
+export function mergeBackupSchedulePolicy(
+  currentValue: BackupScheduleSettings | undefined,
+  editedValue: BackupScheduleSettings,
+): BackupScheduleSettings {
+  const current = normalizeBackupSchedule(currentValue);
+  const edited = normalizeBackupSchedule(editedValue);
+  const configuredTokens = new Set(edited.destinations.map((destination) => destination.token));
+  const destinationStates = Object.fromEntries(
+    Object.entries(current.destinationStates ?? {}).filter(([token]) => configuredTokens.has(token)),
+  );
+  return {
+    ...current,
+    enabled: edited.enabled,
+    destinations: edited.destinations,
+    cadenceDays: edited.cadenceDays,
+    retentionCount: edited.retentionCount,
+    compact: edited.compact,
+    encrypted: edited.encrypted,
+    promptBehavior: edited.promptBehavior,
+    destinationStates: Object.keys(destinationStates).length > 0 ? destinationStates : undefined,
+  };
+}
+
+async function mutateBackupSchedule(
+  mutate: (current: BackupScheduleSettings) => BackupScheduleSettings,
+): Promise<BackupScheduleSettings> {
+  const updated = await mutateSettings("default", (settings) => ({
+    backupSchedule: mutate(normalizeBackupSchedule(settings.backupSchedule)),
+  }));
+  return normalizeBackupSchedule(updated?.backupSchedule);
+}
+
 export function normalizeBackupSchedule(value?: BackupScheduleSettings): BackupScheduleSettings {
   const source: Partial<BackupScheduleSettings> = value ?? {};
   const cadenceValue = source.cadenceDays;
@@ -42,6 +141,19 @@ export function normalizeBackupSchedule(value?: BackupScheduleSettings): BackupS
     ? cadenceValue
     : 7;
   const retentionValue = source.retentionCount;
+  const destinationStates = source.destinationStates && typeof source.destinationStates === "object"
+    ? Object.fromEntries(
+      Object.entries(source.destinationStates).flatMap(([token, state]) => {
+        if (!/^[a-f0-9]{32}$/i.test(token) || !state || typeof state !== "object") return [];
+        const typedState = state as BackupDestinationState;
+        const freeSpaceHistory = normalizeFreeSpaceHistory(typedState.freeSpaceHistory);
+        return [[token, {
+          ...typedState,
+          ...(freeSpaceHistory ? { freeSpaceHistory } : { freeSpaceHistory: undefined }),
+        }]];
+      }),
+    )
+    : undefined;
   return {
     ...DEFAULT_BACKUP_SCHEDULE,
     ...source,
@@ -57,6 +169,7 @@ export function normalizeBackupSchedule(value?: BackupScheduleSettings): BackupS
       ? Math.max(1, Math.min(100, Math.floor(retentionValue)))
       : 5,
     promptBehavior: source.promptBehavior === "automatic" ? "automatic" : "ask",
+    destinationStates,
   };
 }
 
@@ -304,7 +417,11 @@ export async function runDueScheduledBackup(options: {
       ? await options.requestPassword()
       : typeof window !== "undefined" ? window.prompt("Enter the backup password for this scheduled run") : null;
     if (!value) {
-      await updateSettings("default", { backupSchedule: { ...schedule, lastFailureAt: now, lastFailureMessage: "Scheduled backup was not created because no password was provided." } });
+      await mutateBackupSchedule((current) => ({
+        ...current,
+        lastFailureAt: now,
+        lastFailureMessage: "Scheduled backup was not created because no password was provided.",
+      }));
       return { verified: 0, skipped: false, failures: ["No encryption password was provided."] };
     }
     password = value;
@@ -370,38 +487,32 @@ export async function runDueScheduledBackup(options: {
       if (!promoted.success) throw new Error(promoted.error || "Could not promote verified backup.");
       id = undefined;
       verified++;
-      statusSchedule = {
-        ...statusSchedule,
-        lastVerifiedAt: now,
-        lastVerifiedDestination: destination.label,
-        lastVerifiedSizeBytes: promoted.sizeBytes,
-        lastVerifiedChecksum: promoted.checksum,
-        destinationStates: {
-          ...statusSchedule.destinationStates,
-          [destination.token]: { lastVerifiedAt: now, lastVerifiedSizeBytes: promoted.sizeBytes, lastVerifiedChecksum: promoted.checksum },
-        },
-      };
       throwIfCancelled(options.signal);
-      await updateSettings("default", {
-        backupSchedule: statusSchedule,
-      });
+      statusSchedule = await mutateBackupSchedule((current) =>
+        mergeVerifiedBackupDestination(current, destination.token, {
+          at: now,
+          label: destination.label,
+          sizeBytes: promoted.sizeBytes,
+          checksum: promoted.checksum,
+        }));
     } catch (error) {
       if (id) await api.scheduledBackupAbort(id);
       const message = error instanceof BackupCancelledError ? "Scheduled backup was cancelled." : error instanceof Error ? error.message : String(error);
       failures.push(`${destination.label}: ${message}`);
-      statusSchedule = {
-        ...statusSchedule,
+      throwIfCancelled(options.signal);
+      statusSchedule = await mutateBackupSchedule((current) => ({
+        ...current,
         lastFailureAt: now,
         lastFailureMessage: message,
         destinationStates: {
-          ...statusSchedule.destinationStates,
-          [destination.token]: { ...statusSchedule.destinationStates?.[destination.token], lastFailureAt: now, lastFailureMessage: message },
+          ...current.destinationStates,
+          [destination.token]: {
+            ...current.destinationStates?.[destination.token],
+            lastFailureAt: now,
+            lastFailureMessage: message,
+          },
         },
-      };
-      throwIfCancelled(options.signal);
-      await updateSettings("default", {
-        backupSchedule: statusSchedule,
-      });
+      }));
     }
   }
   if (verified > 0) {

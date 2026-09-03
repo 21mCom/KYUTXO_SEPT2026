@@ -595,13 +595,14 @@ export interface BackupDestinationState {
   lastVerifiedChecksum?: string;
   lastFailureAt?: number;
   lastFailureMessage?: string;
+  /** Device-local free-space readings for this opaque destination capability. */
+  freeSpaceHistory?: BackupFreeSpaceReading[];
 }
 
-// Canonical shape of a freshly-created 'default' settings row. This is the single
-// source of truth used both when the database is first initialized and when a
-// settings mutator has to create the row on demand (so a missing row never makes
-// a settings change silently no-op). Keep this in sync with the read-time
-// fallbacks in `useSettings`.
+export interface BackupFreeSpaceReading {
+  at: number;
+  freeBytes: number;
+}
 export function createDefaultSettings(id: string = 'default'): Settings {
   return {
     id,

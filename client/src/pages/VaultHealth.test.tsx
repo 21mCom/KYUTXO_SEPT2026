@@ -105,6 +105,10 @@ describe("VaultHealth", () => {
         destinations: ["Removable backup"],
         destinationAvailable: [true],
         destinationFreeBytes: [estimated],
+        destinationFreeSpaceHistory: [[
+          { at: new Date("2026-09-01T00:00:00Z").getTime(), freeBytes: estimated + 256 * 1024 * 1024 },
+          { at: new Date("2026-09-03T00:00:00Z").getTime(), freeBytes: estimated },
+        ]],
         destinationCapacityWarning: [true],
         estimatedNextFullBackupBytes: estimated - 1,
         backupCapacityThresholdBytes: estimated + BACKUP_CAPACITY_SAFETY_MARGIN_BYTES,
@@ -115,7 +119,31 @@ describe("VaultHealth", () => {
     const { getByTestId } = render(<VaultHealth />);
     await waitFor(() => expect(getByTestId("text-health-verdict").textContent).toContain("needs attention"));
     expect(getByTestId("backup-free-space-0").textContent).toContain("Free:");
+    expect(getByTestId("backup-free-space-trend-0").textContent).toContain("decreasing");
+    expect(getByTestId("backup-free-space-trend-0").textContent).toContain("/day");
     expect(getByTestId("backup-capacity-warning-0").textContent).toContain("Low space");
     expect(getByTestId("backup-capacity-warning").textContent).toContain("safety margin");
+  });
+
+  it("keeps a saved free-space trend visible while a destination is unavailable", async () => {
+    runHealthCheck.mockResolvedValue(snapshot({
+      backup: {
+        ...snapshot().backup,
+        scheduledEnabled: true,
+        destinations: ["Disconnected drive"],
+        destinationAvailable: [false],
+        destinationFreeSpaceHistory: [[
+          { at: 1, freeBytes: 900 * 1024 * 1024 },
+          { at: 2, freeBytes: 800 * 1024 * 1024 },
+        ]],
+        verifiedCopyCounts: [0],
+        invalidCopyCounts: [0],
+        destinationFailures: [{ at: 2, message: "Drive disconnected" }],
+      },
+    }));
+    const { getByTestId } = render(<VaultHealth />);
+    await waitFor(() => expect(getByTestId("backup-free-space-trend-0")).toBeTruthy());
+    expect(getByTestId("backup-free-space-trend-0").textContent).toContain("decreasing");
+    expect(getByTestId("card-health-backup").textContent).toContain("Drive disconnected");
   });
 });
