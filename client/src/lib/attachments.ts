@@ -35,6 +35,14 @@ export interface AttachmentUploadResult {
   objectStoragePath: string;
 }
 
+async function attachmentResponseError(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  const body = await response.json().catch(() => null) as { error?: unknown } | null;
+  return typeof body?.error === 'string' && body.error ? body.error : fallback;
+}
+
 // Upload attachment - works in both Electron and web modes
 export async function uploadAttachment(
   recordId: number,
@@ -121,7 +129,7 @@ export async function downloadAttachment(objectPath: string): Promise<Blob> {
       const response = await fetch(`/api/attachments/download/${encodedPath}`);
       
       if (!response.ok) {
-        throw new Error('Download failed');
+        throw new Error(await attachmentResponseError(response, 'Download failed'));
       }
       
       data = await response.arrayBuffer();
@@ -437,7 +445,9 @@ async function readAttachmentBytes(relPath: string): Promise<ArrayBuffer> {
   }
   const encoded = relPath.split('/').map(s => encodeURIComponent(s)).join('/');
   const response = await fetch(`/api/attachments/download/${encoded}`);
-  if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+  if (!response.ok) {
+    throw new Error(await attachmentResponseError(response, 'Download failed'));
+  }
   return response.arrayBuffer();
 }
 

@@ -236,6 +236,55 @@ describe("symlink containment", () => {
     });
     expect(missing.status).toBe(404);
   });
+
+  it("refuses to overwrite an existing rename destination", async () => {
+    fs.mkdirSync(path.join(attachmentsDir, "collision"), { recursive: true });
+    const source = path.join(attachmentsDir, "collision", "source.txt");
+    const destination = path.join(attachmentsDir, "collision", "destination.txt");
+    fs.writeFileSync(source, "SOURCE BYTES");
+    fs.writeFileSync(destination, "DESTINATION BYTES");
+
+    const res = await fetch(`${baseUrl}/api/attachments/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        oldPath: "collision/source.txt",
+        newPath: "collision/destination.txt",
+      }),
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "Destination file already exists" });
+    expect(fs.readFileSync(source, "utf8")).toBe("SOURCE BYTES");
+    expect(fs.readFileSync(destination, "utf8")).toBe("DESTINATION BYTES");
+  });
+
+  it("falls back to an exclusive copy when hard links are unsupported", async () => {
+    fs.mkdirSync(path.join(attachmentsDir, "portable"), { recursive: true });
+    const source = path.join(attachmentsDir, "portable", "source.txt");
+    const destination = path.join(attachmentsDir, "portable", "destination.txt");
+    fs.writeFileSync(source, "PORTABLE BYTES");
+    const linkSpy = vi
+      .spyOn(fs.promises, "link")
+      .mockRejectedValueOnce(Object.assign(new Error("cross-device link"), { code: "EXDEV" }));
+
+    try {
+      const res = await fetch(`${baseUrl}/api/attachments/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          oldPath: "portable/source.txt",
+          newPath: "portable/destination.txt",
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(fs.existsSync(source)).toBe(false);
+      expect(fs.readFileSync(destination, "utf8")).toBe("PORTABLE BYTES");
+    } finally {
+      linkSpy.mockRestore();
+    }
+  });
 });
 
 describe("in-root symlink never redirects operations onto its target", () => {
@@ -305,6 +354,22 @@ describe("legitimate round-trip still works", () => {
 
     const del = await fetch(`${baseUrl}/api/attachments/${objectStoragePath}`, { method: "DELETE" });
     expect(del.status).toBe(200);
+
+    const missingDownload = await fetch(
+      `${baseUrl}/api/attachments/download/${objectStoragePath}`,
+    );
+    expect(missingDownload.status).toBe(404);
+    expect(await missingDownload.json()).toEqual({ error: "Attachment not found" });
+
+    const repeatedDelete = await fetch(
+      `${baseUrl}/api/attachments/${objectStoragePath}`,
+      { method: "DELETE" },
+    );
+    expect(repeatedDelete.status).toBe(200);
+    expect(await repeatedDelete.json()).toEqual({
+      success: true,
+      alreadyDeleted: true,
+    });
   });
 
   it("an aborted download closes the file descriptor (no fd leak)", async () => {

@@ -3,7 +3,7 @@
 // with a FakeIpcMain (same pattern as needs-review.test.ts) against a temp
 // directory tree with planted symlinks.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -121,6 +121,11 @@ describe("read-attachment", () => {
     const r = await ipc.invoke("read-attachment", "d/f.bin");
     expect(r.success).toBe(true);
     expect([...new Uint8Array(r.data)]).toEqual([...small(5)]);
+  });
+
+  it("returns a stable not-found error for a missing file", async () => {
+    const r = await ipc.invoke("read-attachment", "missing.bin");
+    expect(r).toEqual({ success: false, error: "Attachment not found" });
   });
 
   it("refuses to read through a symlinked directory", async () => {
@@ -248,6 +253,49 @@ describe("rename-attachment", () => {
       newPath: "legit/renamed.txt",
     });
     expect(r.success).toBe(false);
+  });
+
+  it("refuses to overwrite an existing destination", async () => {
+    fs.mkdirSync(path.join(attachmentsDir, "collision"), { recursive: true });
+    const source = path.join(attachmentsDir, "collision", "source.txt");
+    const destination = path.join(attachmentsDir, "collision", "destination.txt");
+    fs.writeFileSync(source, "SOURCE BYTES");
+    fs.writeFileSync(destination, "DESTINATION BYTES");
+
+    const r = await ipc.invoke("rename-attachment", {
+      oldPath: "collision/source.txt",
+      newPath: "collision/destination.txt",
+    });
+
+    expect(r).toEqual({
+      success: false,
+      error: "Destination file already exists",
+    });
+    expect(fs.readFileSync(source, "utf8")).toBe("SOURCE BYTES");
+    expect(fs.readFileSync(destination, "utf8")).toBe("DESTINATION BYTES");
+  });
+
+  it("falls back to an exclusive copy when hard links are unsupported", async () => {
+    fs.mkdirSync(path.join(attachmentsDir, "portable"), { recursive: true });
+    const source = path.join(attachmentsDir, "portable", "source.txt");
+    const destination = path.join(attachmentsDir, "portable", "destination.txt");
+    fs.writeFileSync(source, "PORTABLE BYTES");
+    const linkSpy = vi.spyOn(fs, "linkSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("cross-device link"), { code: "EXDEV" });
+    });
+
+    try {
+      const r = await ipc.invoke("rename-attachment", {
+        oldPath: "portable/source.txt",
+        newPath: "portable/destination.txt",
+      });
+
+      expect(r).toEqual({ success: true });
+      expect(fs.existsSync(source)).toBe(false);
+      expect(fs.readFileSync(destination, "utf8")).toBe("PORTABLE BYTES");
+    } finally {
+      linkSpy.mockRestore();
+    }
   });
 });
 

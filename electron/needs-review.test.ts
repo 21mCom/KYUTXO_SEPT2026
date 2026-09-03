@@ -130,8 +130,10 @@ describe("write-needs-review IPC", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.savedPath).toBe(path.join(dirs.needsReviewDir, "receipt.pdf"));
-    expect(fs.readFileSync(result.savedPath, "utf8")).toBe("orphan attachment bytes");
+    expect(result.savedName).toBe("receipt.pdf");
+    expect(
+      fs.readFileSync(path.join(dirs.needsReviewDir, result.savedName), "utf8"),
+    ).toBe("orphan attachment bytes");
   });
 
   it("auto-creates the Needs Review folder if it was deleted before writing", async () => {
@@ -161,10 +163,14 @@ describe("write-needs-review IPC", () => {
       data: new TextEncoder().encode("second"),
     });
 
-    expect(a.savedPath).toBe(path.join(dirs.needsReviewDir, "photo.png"));
-    expect(b.savedPath).toBe(path.join(dirs.needsReviewDir, "photo_1.png"));
-    expect(fs.readFileSync(a.savedPath, "utf8")).toBe("first");
-    expect(fs.readFileSync(b.savedPath, "utf8")).toBe("second");
+    expect(a.savedName).toBe("photo.png");
+    expect(b.savedName).toBe("photo_1.png");
+    expect(fs.readFileSync(path.join(dirs.needsReviewDir, a.savedName), "utf8")).toBe(
+      "first",
+    );
+    expect(fs.readFileSync(path.join(dirs.needsReviewDir, b.savedName), "utf8")).toBe(
+      "second",
+    );
   });
 
   it("strips path separators so callers cannot escape the folder", async () => {
@@ -177,19 +183,12 @@ describe("write-needs-review IPC", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.savedPath).toBe(path.join(dirs.needsReviewDir, "escape.txt"));
+    expect(result.savedName).toBe("escape.txt");
     expect(fs.existsSync(path.join(dirs.needsReviewDir, "escape.txt"))).toBe(true);
   });
 });
 
 describe("get/open Needs Review IPC", () => {
-  it("get-needs-review-path returns the resolved folder", async () => {
-    const ipc = new FakeIpcMain();
-    registerHandlers(ipc);
-    const p = await ipc.invoke("get-needs-review-path");
-    expect(p).toBe(dirs.needsReviewDir);
-  });
-
   it("open-needs-review-folder calls shell.openPath with the correct path", async () => {
     const ipc = new FakeIpcMain();
     registerHandlers(ipc);
@@ -200,6 +199,65 @@ describe("get/open Needs Review IPC", () => {
     expect(openPath).toHaveBeenCalledTimes(1);
     expect(openPath).toHaveBeenCalledWith(dirs.needsReviewDir);
     expect(fs.existsSync(dirs.needsReviewDir)).toBe(true);
+  });
+});
+
+describe("read/delete Needs Review IPC hardening", () => {
+  it("reads and idempotently deletes a real file", async () => {
+    ensureDirectories(dirs);
+    fs.writeFileSync(path.join(dirs.needsReviewDir, "orphan.bin"), "ORPHAN BYTES");
+    const ipc = new FakeIpcMain();
+    registerHandlers(ipc);
+
+    const read: any = await ipc.invoke("read-needs-review", { name: "orphan.bin" });
+    expect(read.success).toBe(true);
+    expect(new TextDecoder().decode(new Uint8Array(read.data))).toBe("ORPHAN BYTES");
+
+    expect(await ipc.invoke("delete-needs-review", { name: "orphan.bin" })).toEqual({
+      success: true,
+    });
+    expect(await ipc.invoke("delete-needs-review", { name: "orphan.bin" })).toEqual({
+      success: true,
+    });
+  });
+
+  it("rejects path substitution instead of silently using the basename", async () => {
+    ensureDirectories(dirs);
+    fs.writeFileSync(path.join(dirs.needsReviewDir, "victim.txt"), "KEEP");
+    const ipc = new FakeIpcMain();
+    registerHandlers(ipc);
+
+    const read: any = await ipc.invoke("read-needs-review", {
+      name: "../victim.txt",
+    });
+    const del: any = await ipc.invoke("delete-needs-review", {
+      name: "folder/victim.txt",
+    });
+
+    expect(read).toEqual({ success: false, error: "Invalid filename" });
+    expect(del).toEqual({ success: false, error: "Invalid filename" });
+    expect(fs.readFileSync(path.join(dirs.needsReviewDir, "victim.txt"), "utf8")).toBe(
+      "KEEP",
+    );
+  });
+
+  it("refuses read/delete through a symlink and preserves its target", async () => {
+    ensureDirectories(dirs);
+    const outside = path.join(dirs.dataDir, "outside.txt");
+    fs.writeFileSync(outside, "OUTSIDE BYTES");
+    fs.symlinkSync(outside, path.join(dirs.needsReviewDir, "alias.txt"));
+    const ipc = new FakeIpcMain();
+    registerHandlers(ipc);
+
+    const read: any = await ipc.invoke("read-needs-review", { name: "alias.txt" });
+    const del: any = await ipc.invoke("delete-needs-review", { name: "alias.txt" });
+
+    expect(read).toEqual({ success: false, error: "Access denied" });
+    expect(del).toEqual({ success: false, error: "Access denied" });
+    expect(fs.readFileSync(outside, "utf8")).toBe("OUTSIDE BYTES");
+    expect(
+      fs.lstatSync(path.join(dirs.needsReviewDir, "alias.txt")).isSymbolicLink(),
+    ).toBe(true);
   });
 });
 
@@ -223,7 +281,7 @@ describe("persistence across an app restart", () => {
 
     // The file from the previous session is still on disk and intact.
     const survivor = path.join(relaunchDirs.needsReviewDir, "orphan.dat");
-    expect(survivor).toBe(written.savedPath);
+    expect(written.savedName).toBe("orphan.dat");
     expect(fs.existsSync(survivor)).toBe(true);
     expect(fs.readFileSync(survivor, "utf8")).toBe("survives restart");
   });

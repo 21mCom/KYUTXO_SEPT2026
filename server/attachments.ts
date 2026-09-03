@@ -598,7 +598,32 @@ router.post('/rename', async (req: Request, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    await fs.rename(oldReal, path.join(newDirReal, path.basename(newFilePath)));
+    const destination = path.join(newDirReal, path.basename(newFilePath));
+    try {
+      // link(2) is the portable no-replace primitive available through Node:
+      // it atomically fails with EEXIST when the destination is already present
+      // (including a symlink), so migration can never overwrite attachment
+      // bytes. Only after the new directory entry exists do we remove the old
+      // one. If unlink fails, both names still reference the same intact bytes.
+      try {
+        await fs.link(oldReal, destination);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (!['EXDEV', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP'].includes(code ?? '')) {
+          throw error;
+        }
+        // FAT/exFAT and mount boundaries may not support hard links. Fall back
+        // to an exclusive copy: COPYFILE_EXCL preserves no-overwrite semantics,
+        // and the source remains untouched until the full copy succeeds.
+        await fs.copyFile(oldReal, destination, fsConstants.COPYFILE_EXCL);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        return res.status(409).json({ error: 'Destination file already exists' });
+      }
+      throw error;
+    }
+    await fs.unlink(oldReal);
 
     // Try to remove old directory if empty
     const oldDir = path.dirname(oldReal);
@@ -629,16 +654,14 @@ router.get('/download/:path(*)', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Symlink containment: unlinking THROUGH a symlinked directory component
-    // would delete a file outside the attachments root. (Deleting a symlink
-    // AT the target only removes the link itself, but we still refuse it —
-    // attachment paths must be real files.) Missing files stay an idempotent
-    // success, so check existence lexically first.
+    // Missing reads are NOT successful empty files. Keep the not-found response
+    // distinct from DELETE's idempotent already-missing success so callers
+    // cannot archive JSON error bytes as if they were attachment content.
     try {
       await fs.lstat(filePath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return res.json({ success: true, alreadyDeleted: true });
+        return res.status(404).json({ error: 'Attachment not found' });
       }
       throw error;
     }
@@ -682,8 +705,15 @@ router.get('/download/:path(*)', async (req, res) => {
       if (!res.writableEnded) res.destroy();
     }
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !res.headersSent) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
     logServerError('Download error', error);
-    res.status(500).json({ error: 'Download failed' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Download failed' });
+    } else if (!res.writableEnded) {
+      res.destroy();
+    }
   }
 });
 

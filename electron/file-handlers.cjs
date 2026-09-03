@@ -105,6 +105,35 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       ? p.slice('attachments/'.length)
       : p;
 
+  // Needs Review accepts only one literal child filename. Unlike the write
+  // path (which deliberately sanitizes legacy archive names), read/delete must
+  // never silently substitute `dir/name` with `name`.
+  const isLiteralNeedsReviewName = (name) =>
+    typeof name === 'string' &&
+    name.length > 0 &&
+    name !== '.' &&
+    name !== '..' &&
+    !name.includes('/') &&
+    !name.includes('\\') &&
+    !path.isAbsolute(name) &&
+    path.basename(name) === name;
+
+  // Return undefined when absent and null when present-but-unsafe. The folder
+  // itself must be a real directory, not a symlink that redirects all review
+  // operations elsewhere.
+  const getNeedsReviewRoot = () => {
+    try {
+      const stat = fs.lstatSync(needsReviewDir);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return null;
+      const real = fs.realpathSync(needsReviewDir);
+      if (real !== path.resolve(needsReviewDir)) return null;
+      return real;
+    } catch (error) {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    }
+  };
+
   // Note: absolute data/attachments paths are deliberately NOT exposed over
   // IPC; the renderer only ever needs presence/mode flags.
   ipcMain.handle('is-portable-mode', () => {
@@ -168,6 +197,14 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       if (!resolvedPath.startsWith(resolvedAttachmentsDir + path.sep) && resolvedPath !== resolvedAttachmentsDir) {
         return { success: false, error: 'Path traversal detected' };
       }
+      try {
+        fs.lstatSync(filePath);
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          return { success: false, error: 'Attachment not found' };
+        }
+        throw error;
+      }
       // Symlink containment: the file (or a directory above it) must not be a
       // symlink redirecting the read outside the attachments root.
       const realPath = realpathContainedSync(attachmentsDir, filePath);
@@ -190,6 +227,9 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       const exact = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
       return { success: true, data: exact };
     } catch (error) {
+      if (error.code === 'ENOENT') {
+        return { success: false, error: 'Attachment not found' };
+      }
       logMainError('[KYUTXO] read-attachment failed', error);
       return { success: false, error: sanitizeIpcError(error, 'Failed to read attachment') };
     }
@@ -290,7 +330,29 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
         return { success: false, error: 'Access denied' };
       }
 
-      fs.renameSync(oldReal, path.join(newDirReal, path.basename(newFilePath)));
+      const destination = path.join(newDirReal, path.basename(newFilePath));
+      try {
+        // Atomic no-replace move: link fails with EEXIST for every existing
+        // destination type and therefore can never overwrite attachment bytes.
+        // Unlink only after the destination name safely references the source.
+        try {
+          fs.linkSync(oldReal, destination);
+        } catch (error) {
+          if (!['EXDEV', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP'].includes(error.code)) {
+            throw error;
+          }
+          // Portable FAT/exFAT volumes and mount boundaries may reject hard
+          // links. Exclusive copy keeps the same no-clobber guarantee, and the
+          // source is removed only after the full copy succeeds.
+          fs.copyFileSync(oldReal, destination, fs.constants.COPYFILE_EXCL);
+        }
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          return { success: false, error: 'Destination file already exists' };
+        }
+        throw error;
+      }
+      fs.unlinkSync(oldReal);
 
       // Try to remove old directory if empty
       const oldDir = path.dirname(oldFilePath);
@@ -523,8 +585,12 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
 
       // Ensure the Needs Review folder exists (it may have been removed by the
       // user or not yet created on first run).
-      if (!fs.existsSync(needsReviewDir)) {
+      if (!lexistsSync(needsReviewDir)) {
         fs.mkdirSync(needsReviewDir, { recursive: true });
+      }
+      const reviewRoot = getNeedsReviewRoot();
+      if (!reviewRoot) {
+        return { success: false, error: 'Access denied' };
       }
 
       // De-duplicate: if <name> already exists, try <stem>_1<ext>, _2, ...
@@ -535,12 +601,6 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       const stem = safeName.slice(0, safeName.length - ext.length);
       let candidate = safeName;
       let counter = 0;
-      while (lexistsSync(path.join(needsReviewDir, candidate))) {
-        counter++;
-        candidate = `${stem}_${counter}${ext}`;
-      }
-
-      const dest = path.join(needsReviewDir, candidate);
       const buffer = Buffer.from(data);
       if (buffer.byteLength > maxAttachmentBytesLimit) {
         // Distinct code so the restore writer can map this to the typed
@@ -552,8 +612,28 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
           error: `Attachment exceeds the maximum size of ${maxAttachmentBytesLimit} bytes`,
         };
       }
-      // O_EXCL: never overwrite (or write through a link at) an existing name.
-      fs.writeFileSync(dest, buffer, { flag: 'wx' });
+      // O_EXCL + O_NOFOLLOW: never overwrite or follow an existing candidate,
+      // including one substituted after the lstat collision check.
+      for (;;) {
+        const dest = path.join(reviewRoot, candidate);
+        try {
+          const fh = fs.openSync(
+            dest,
+            fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW,
+            0o600,
+          );
+          try {
+            fs.writeFileSync(fh, buffer);
+          } finally {
+            fs.closeSync(fh);
+          }
+          break;
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          counter++;
+          candidate = `${stem}_${counter}${ext}`;
+        }
+      }
       // Return the folder-relative name only; absolute paths stay main-side.
       return { success: true, savedName: candidate };
     } catch (error) {
@@ -565,11 +645,15 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
   // Open the Needs Review folder in the OS file manager.
   ipcMain.handle('open-needs-review-folder', async () => {
     try {
-      if (!fs.existsSync(needsReviewDir)) {
+      if (!lexistsSync(needsReviewDir)) {
         fs.mkdirSync(needsReviewDir, { recursive: true });
       }
+      const reviewRoot = getNeedsReviewRoot();
+      if (!reviewRoot) {
+        return { success: false, error: 'Access denied' };
+      }
       const { shell } = require('electron');
-      await shell.openPath(needsReviewDir);
+      await shell.openPath(reviewRoot);
       return { success: true };
     } catch (error) {
       logMainError('[KYUTXO] open-needs-review-folder failed', error);
@@ -582,15 +666,19 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
   // it was routed there (mtime — written once on route, never touched after).
   ipcMain.handle('list-needs-review', async () => {
     try {
-      if (!fs.existsSync(needsReviewDir)) {
+      const reviewRoot = getNeedsReviewRoot();
+      if (reviewRoot === undefined) {
         return { success: true, files: [] };
       }
-      const names = await fs.promises.readdir(needsReviewDir);
+      if (reviewRoot === null) {
+        return { success: false, error: 'Access denied' };
+      }
+      const names = await fs.promises.readdir(reviewRoot);
       const files = [];
       for (const name of names) {
-        const full = path.join(needsReviewDir, name);
+        const full = path.join(reviewRoot, name);
         try {
-          const stat = await fs.promises.stat(full);
+          const stat = await fs.promises.lstat(full);
           if (!stat.isFile()) continue;
           files.push({
             name,
@@ -614,18 +702,34 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
   // record). The name is sanitized so callers cannot escape the folder.
   ipcMain.handle('read-needs-review', async (event, { name }) => {
     try {
-      if (!name || typeof name !== 'string') {
+      if (!isLiteralNeedsReviewName(name)) {
         return { success: false, error: 'Invalid filename' };
       }
-      const safeName = path.basename(name);
-      if (!safeName) {
-        return { success: false, error: 'Invalid filename' };
-      }
-      const target = path.join(needsReviewDir, safeName);
-      if (!fs.existsSync(target)) {
+      const reviewRoot = getNeedsReviewRoot();
+      if (reviewRoot === undefined) {
         return { success: false, error: 'File not found' };
       }
-      const data = await fs.promises.readFile(target);
+      if (reviewRoot === null) {
+        return { success: false, error: 'Access denied' };
+      }
+      const target = path.join(reviewRoot, name);
+      try {
+        fs.lstatSync(target);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        return { success: false, error: 'File not found' };
+      }
+      const realTarget = realpathContainedSync(reviewRoot, target, reviewRoot);
+      if (!realTarget) {
+        return { success: false, error: 'Access denied' };
+      }
+      const fh = await fs.promises.open(realTarget, fs.constants.O_RDONLY | NOFOLLOW);
+      let data;
+      try {
+        data = await fh.readFile();
+      } finally {
+        await fh.close();
+      }
       // Slice to this file's own bytes — never hand back the pooled Buffer's
       // underlying ArrayBuffer, which may include unrelated neighbouring bytes.
       return {
@@ -642,19 +746,29 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
   // sanitized so callers cannot escape the folder.
   ipcMain.handle('delete-needs-review', async (event, { name }) => {
     try {
-      if (!name || typeof name !== 'string') {
+      if (!isLiteralNeedsReviewName(name)) {
         return { success: false, error: 'Invalid filename' };
       }
-      const safeName = path.basename(name);
-      if (!safeName) {
-        return { success: false, error: 'Invalid filename' };
+      const reviewRoot = getNeedsReviewRoot();
+      if (reviewRoot === undefined) {
+        return { success: true };
       }
-      const target = path.join(needsReviewDir, safeName);
-      if (!fs.existsSync(target)) {
+      if (reviewRoot === null) {
+        return { success: false, error: 'Access denied' };
+      }
+      const target = path.join(reviewRoot, name);
+      try {
+        fs.lstatSync(target);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
         // Already gone — treat as success so the UI converges to a clean state.
         return { success: true };
       }
-      await fs.promises.unlink(target);
+      const realTarget = realpathContainedSync(reviewRoot, target, reviewRoot);
+      if (!realTarget) {
+        return { success: false, error: 'Access denied' };
+      }
+      await fs.promises.unlink(realTarget);
       return { success: true };
     } catch (error) {
       logMainError('[KYUTXO] delete-needs-review failed', error);

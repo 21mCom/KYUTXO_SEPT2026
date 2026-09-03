@@ -282,6 +282,27 @@ async function seedRecordsWithAttachments(plan: Plan[]): Promise<void> {
 }
 
 describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment files survive export -> wipe -> restore", () => {
+  it("treats a missing file as absent in backup IO and never as JSON attachment bytes", async () => {
+    const missingPath = "missing/no-file.bin";
+
+    const direct = await fetch(
+      `/api/attachments/download/attachments/${missingPath}`,
+    );
+    expect(direct.status).toBe(404);
+    expect(await direct.json()).toEqual({ error: "Attachment not found" });
+
+    // Export's production-shaped reader converts the non-success response to
+    // null, so export skips a file that vanished after list-all instead of
+    // archiving the server's JSON response as attachment content.
+    expect(await attachmentIO.read(missingPath)).toBeNull();
+
+    // Viewer and Evidence Package Builder both use getFileBlob. They receive
+    // the same clear client error rather than a Blob containing JSON bytes.
+    await expect(
+      getFileBlob(`attachments/${missingPath}`, "application/octet-stream"),
+    ).rejects.toThrow("Attachment not found");
+  });
+
   it("re-materialises record attachment bytes from an unencrypted zip and they open via their restored path (record ids shift)", async () => {
     // 1. Pre-seed UNRELATED records so the table's autoincrement key generator
     //    is advanced past the backup ids. After restore the backup record ids
