@@ -26,8 +26,10 @@ import { getSettings, putSettings, updateSettings, clearSettings } from "@/lib/d
 import { clearAllRecords } from "@/lib/data/record-crud";
 import { clearAttachments } from "@/lib/data/attachments-crud";
 import {
+  bulkAddTransactions,
   clearParticipants,
   clearTransactions,
+  getTransactionByTxid,
 } from "@/lib/data/transaction-crud";
 import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
 import {
@@ -193,8 +195,8 @@ describe("settings preferences backup round-trip", () => {
     expect((after as any)?.fundTrailTxLimit).toBe(10000);
   });
 
-  it("restores named Transaction Inbox views", async () => {
-    const savedInboxViews = [{
+  it("restores updated named Transaction Inbox views without resurrecting deleted views", async () => {
+    const updatedView = {
       id: "view-1",
       name: "High-value incoming",
       tab: "new" as const,
@@ -206,8 +208,18 @@ describe("settings preferences backup round-trip", () => {
         amountMinBtc: 1,
       },
       createdAt: 1,
-    }];
-    await putSettings({ ...BASE_SETTINGS, savedInboxViews }, { skipNotification: true });
+    };
+    const unrelatedTxid = "a".repeat(64);
+    await putSettings({ ...BASE_SETTINGS, savedInboxViews: [updatedView] }, { skipNotification: true });
+    await bulkAddTransactions([{
+      txid: unrelatedTxid,
+      blockHeight: 900_001,
+      blockTime: 1_735_689_600,
+      fee: 100,
+      feeRate: 1,
+      syncedAt: 1_735_689_600_000,
+      curationState: "new",
+    }], { skipNotification: true });
 
     const sink = new MemorySink();
     await exportBackup({
@@ -217,10 +229,35 @@ describe("settings preferences backup round-trip", () => {
       attachmentIO,
     });
     const blob = sink.blob as Blob;
-    await updateSettings("default", { savedInboxViews: [] }, { skipNotification: true });
+    await updateSettings(
+      "default",
+      {
+        savedInboxViews: [
+          {
+            ...updatedView,
+            search: "stale",
+            filters: { dateMode: "any", amountMode: "any" },
+          },
+          {
+            id: "deleted-view",
+            name: "Deleted before backup",
+            tab: "ignored",
+            search: "stale",
+            filters: { dateMode: "any", amountMode: "any" },
+            createdAt: 2,
+          },
+        ],
+      },
+      { skipNotification: true },
+    );
 
     await restoreV3Backup({ source: blobChunks(blob), attachmentWriter });
 
-    expect((await getSettings("default"))?.savedInboxViews).toEqual(savedInboxViews);
+    expect((await getSettings("default"))?.savedInboxViews).toEqual([updatedView]);
+    expect(await getTransactionByTxid(unrelatedTxid)).toMatchObject({
+      txid: unrelatedTxid,
+      blockHeight: 900_001,
+      curationState: "new",
+    });
   });
 });

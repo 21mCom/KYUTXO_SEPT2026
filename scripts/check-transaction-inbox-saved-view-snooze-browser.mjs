@@ -7,11 +7,14 @@
 //   2. uses the real Radix date/amount filter popover and saves a named view;
 //   3. changes the search and amount filters, saves the same name again, and
 //      verifies that the existing view is updated rather than duplicated;
-//   4. reloads, unlocks again, selects the updated view, and verifies that its
+//   4. creates and deletes a second view, exports a real backup, injects stale
+//      local view state, and restores through the Settings dialog into the
+//      fresh vault;
+//   5. verifies the restored view has the updated filters exactly once, the
+//      deleted view is absent, and both underlying transactions remain intact;
+//   6. reloads, unlocks again, selects the restored view, and verifies that its
 //      tab, search, date, and amount filters are restored;
-//   5. deletes the active view, reloads, and verifies that it stays gone while
-//      both underlying transactions remain unchanged;
-//   6. snoozes one row with the one-week preset and the other with the native
+//   7. snoozes one row with the one-week preset and the other with the native
 //      custom date input, then verifies the persisted state/timestamps.
 //
 // Everything runs offline against local IndexedDB.
@@ -31,6 +34,7 @@ const BASE_URL = `http://localhost:${PORT}/`;
 const PAGE_URL = `${BASE_URL}transaction-inbox`;
 const SETUP_PASSWORD = 'transaction-inbox-check-123';
 const VIEW_NAME = 'Inbox review today';
+const DELETED_VIEW_NAME = 'Deleted before backup';
 
 // The shared "24" prefix makes the saved search match both rows while the
 // first eight characters remain different, so each TransactionCard has a
@@ -190,6 +194,24 @@ async function waitForCuration(page, txid, predicate, timeoutMs = 30_000) {
   return state;
 }
 
+async function finishNetworkPrivacyOnboardingIfPresent(page) {
+  const sourceStep = page.getByTestId('network-onboarding-source');
+  const appeared = await sourceStep
+    .waitFor({ state: 'visible', timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!appeared) return false;
+
+  await page.getByTestId('choice-network-public-direct').click();
+  await page.getByTestId('button-save-network-choice').click();
+  await page.getByTestId('network-onboarding-import').waitFor({
+    state: 'visible',
+    timeout: 10_000,
+  });
+  await page.getByTestId('button-onboarding-finish').click();
+  return true;
+}
+
 async function main() {
   const exe = resolveChromium();
   console.log(`[transaction-inbox-browser] chromium: ${exe}`);
@@ -244,6 +266,10 @@ async function main() {
       appearTimeoutMs: 30_000,
       dismissMigration: false,
     });
+    if (await finishNetworkPrivacyOnboardingIfPresent(page)) {
+      await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
+      await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
+    }
     await page.getByTestId('transaction-curation-inbox').waitFor({
       state: 'visible',
       timeout: 30_000,
@@ -421,6 +447,167 @@ async function main() {
         updated.filters?.amountMaxBtc === 0.8,
       `views=${updated.count} matching=${updated.matchingCount} id=${updated.id} search=${JSON.stringify(updated.search)} amount=${updated.filters?.amountMinBtc}-${updated.filters?.amountMaxBtc}`,
     );
+
+    // Create a second view and delete it before the backup. The stale local
+    // state injected below contains this deleted view, so a restore that
+    // merges or resurrects local settings instead of applying the backup
+    // snapshot will fail the post-restore assertion.
+    await page.getByTestId('input-inbox-view-name').fill(DELETED_VIEW_NAME);
+    await clickEl(page, 'button-inbox-save-view');
+    await page.getByTestId('select-inbox-saved-view').selectOption({ label: DELETED_VIEW_NAME });
+    await clickEl(page, 'button-inbox-delete-view');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="select-inbox-saved-view"]')?.value === '',
+      null,
+      { timeout: 10_000 },
+    );
+    const beforeBackupViews = await page.evaluate(async ({ viewName, deletedViewName }) => {
+      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
+      const settings = await settingsCrud.getSettings('default');
+      const views = Array.isArray(settings?.savedInboxViews) ? settings.savedInboxViews : [];
+      return {
+        viewCount: views.length,
+        updatedCount: views.filter((view) => view.name.toLowerCase() === viewName.toLowerCase()).length,
+        deletedCount: views.filter((view) => view.name.toLowerCase() === deletedViewName.toLowerCase()).length,
+      };
+    }, { viewName: VIEW_NAME, deletedViewName: DELETED_VIEW_NAME });
+    record(
+      'delete-view-before-backup',
+      beforeBackupViews.viewCount === 1 &&
+        beforeBackupViews.updatedCount === 1 &&
+        beforeBackupViews.deletedCount === 0,
+      `views=${beforeBackupViews.viewCount} updated=${beforeBackupViews.updatedCount} deleted=${beforeBackupViews.deletedCount}`,
+    );
+
+    // Export the exact live settings through the production backup pipeline.
+    // Returning base64 keeps the ZIP bytes transportable across Playwright's
+    // page boundary and lets the same script feed them to the real restore
+    // file input below.
+    const backupB64 = await page.evaluate(async () => {
+      const { exportBackup } = await import('/src/lib/backup/export.ts');
+      const { MemorySink } = await import('/src/lib/backup/sink.ts');
+      const sink = new MemorySink();
+      await exportBackup({
+        sink,
+        encrypted: false,
+        batchSize: 25,
+        attachmentIO: {
+          async listAll() { return []; },
+          async read() { return null; },
+        },
+      });
+      const bytes = new Uint8Array(await sink.blob.arrayBuffer());
+      let binary = '';
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary);
+    });
+    record(
+      'backup-export',
+      backupB64.length > 100,
+      `unencrypted v3 backup bytes=${Math.round(backupB64.length * 0.75)}`,
+    );
+
+    // Make the current vault disagree with the exported snapshot. Replace
+    // restore must remove the deleted view and replace the old filters with
+    // the updated view from the backup, rather than preserving these rows.
+    await page.evaluate(async ({ oldView, deletedViewName }) => {
+      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
+      await settingsCrud.updateSettings('default', {
+        savedInboxViews: [
+          oldView,
+          {
+            id: 'stale-deleted-view',
+            name: deletedViewName,
+            tab: 'ignored',
+            search: 'stale',
+            filters: { dateMode: 'any', amountMode: 'any' },
+            createdAt: 2,
+          },
+        ],
+      }, { skipNotification: true });
+    }, {
+      oldView: saved,
+      deletedViewName: DELETED_VIEW_NAME,
+    });
+
+    // Drive the actual replace restore dialog, not just restoreSettingsPreferences
+    // in a module test. This is the fresh-vault backup boundary under test.
+    await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
+    const openRestore = page.getByTestId('button-open-restore');
+    await openRestore.scrollIntoViewIfNeeded();
+    await openRestore.click();
+    await page.getByTestId('input-restore-file').setInputFiles({
+      name: 'transaction-inbox-check-backup.zip',
+      mimeType: 'application/zip',
+      buffer: Buffer.from(backupB64, 'base64'),
+    });
+    await page.getByText('Backup Date:', { exact: false }).waitFor({
+      state: 'visible',
+      timeout: 20_000,
+    });
+    await page.getByTestId('radio-replace').click();
+    await page.getByTestId('button-continue-restore').click();
+    await page.getByTestId('restore-preferences-preview').waitFor({
+      state: 'visible',
+      timeout: 20_000,
+    });
+    await page.getByTestId('button-confirm-restore').click();
+    await page.getByText('Restore Successful', { exact: false }).first().waitFor({
+      state: 'visible',
+      timeout: 120_000,
+    });
+
+    const afterBackupRestore = await page.evaluate(async ({ txPreset, txCustom, viewName, deletedViewName }) => {
+      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
+      const txCrud = await import('/src/lib/data/transaction-crud.ts');
+      const settings = await settingsCrud.getSettings('default');
+      const views = Array.isArray(settings?.savedInboxViews) ? settings.savedInboxViews : [];
+      const matching = views.filter((view) => view.name.toLowerCase() === viewName.toLowerCase());
+      const deleted = views.filter((view) => view.name.toLowerCase() === deletedViewName.toLowerCase());
+      const transactions = await Promise.all([
+        txCrud.getTransactionByTxid(txPreset),
+        txCrud.getTransactionByTxid(txCustom),
+      ]);
+      return {
+        viewCount: views.length,
+        matching,
+        deletedCount: deleted.length,
+        transactionCount: await txCrud.countTransactions(),
+        transactionIds: transactions.map((transaction) => transaction?.txid),
+        transactionHeights: transactions.map((transaction) => transaction?.blockHeight),
+        transactionStates: transactions.map((transaction) => transaction?.curationState),
+      };
+    }, {
+      txPreset: TX_PRESET,
+      txCustom: TX_CUSTOM,
+      viewName: VIEW_NAME,
+      deletedViewName: DELETED_VIEW_NAME,
+    });
+    const restoredBackupView = afterBackupRestore.matching[0];
+    record(
+      'restore-backup-view-snapshot',
+      afterBackupRestore.viewCount === 1 &&
+        afterBackupRestore.matching.length === 1 &&
+        afterBackupRestore.deletedCount === 0 &&
+        restoredBackupView?.search === 'Inbox' &&
+        restoredBackupView?.filters?.dateMode === 'exact' &&
+        restoredBackupView?.filters?.amountMode === 'range' &&
+        restoredBackupView?.filters?.amountMinBtc === 0.45 &&
+        restoredBackupView?.filters?.amountMaxBtc === 0.8 &&
+        afterBackupRestore.transactionCount === 2 &&
+        JSON.stringify(afterBackupRestore.transactionIds) === JSON.stringify([TX_PRESET, TX_CUSTOM]) &&
+        JSON.stringify(afterBackupRestore.transactionHeights) === JSON.stringify([900_001, 900_002]) &&
+        JSON.stringify(afterBackupRestore.transactionStates) === JSON.stringify(['new', 'new']),
+      `views=${afterBackupRestore.viewCount} matching=${afterBackupRestore.matching.length} deleted=${afterBackupRestore.deletedCount} txCount=${afterBackupRestore.transactionCount} txids=${afterBackupRestore.transactionIds.join(',')}`,
+    );
+
+    await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
+    await page.getByTestId('transaction-curation-inbox').waitFor({
+      state: 'visible',
+      timeout: 30_000,
+    });
 
     // Change away from the saved state before reload so selecting the saved
     // view proves the tab itself is restored, not merely retained in memory.
