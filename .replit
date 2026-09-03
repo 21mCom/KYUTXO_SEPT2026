@@ -3687,3 +3687,14 @@ args = "node scripts/check-packaged-vault-migration.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "coin-origins-export-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-coin-origins-export-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true

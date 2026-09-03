@@ -260,9 +260,9 @@ export default function CoinOriginsPage() {
       </div>
       <div className="grid gap-3 sm:grid-cols-4">
         <Card><CardHeader className="p-3"><CardDescription>Current holdings</CardDescription><CardTitle data-testid="origin-total">{(nativePage?.summary.currentSats ?? ledger?.summary.currentSats ?? 0).toLocaleString()} sats</CardTitle></CardHeader></Card>
-        <Card><CardHeader className="p-3"><CardDescription>Acquisition lots</CardDescription><CardTitle>{(nativePage?.lotsTotal ?? ledger?.lots.length ?? 0).toLocaleString()}</CardTitle></CardHeader></Card>
-        <Card><CardHeader className="p-3"><CardDescription>Unknown origin</CardDescription><CardTitle>{(nativePage?.summary.unknownSats ?? ledger?.summary.unknownSats ?? 0).toLocaleString()} sats</CardTitle></CardHeader></Card>
-        <Card><CardHeader className="p-3"><CardDescription>Exact reconciliation</CardDescription><CardTitle>{(nativePage?.summary.reconciled ?? ledger?.summary.reconciled) ? "Yes" : "No"}</CardTitle></CardHeader></Card>
+        <Card><CardHeader className="p-3"><CardDescription>Acquisition lots</CardDescription><CardTitle data-testid="origin-lots">{(nativePage?.lotsTotal ?? ledger?.lots.length ?? 0).toLocaleString()}</CardTitle></CardHeader></Card>
+        <Card><CardHeader className="p-3"><CardDescription>Unknown origin</CardDescription><CardTitle data-testid="origin-unknown">{(nativePage?.summary.unknownSats ?? ledger?.summary.unknownSats ?? 0).toLocaleString()} sats</CardTitle></CardHeader></Card>
+        <Card><CardHeader className="p-3"><CardDescription>Exact reconciliation</CardDescription><CardTitle data-testid="origin-reconciled">{(nativePage?.summary.reconciled ?? ledger?.summary.reconciled) ? "Yes" : "No"}</CardTitle></CardHeader></Card>
       </div>
       <Card>
         <CardHeader>
@@ -285,8 +285,8 @@ export default function CoinOriginsPage() {
               </Select>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => void exportLedger("csv")} disabled={(!ledger && !nativePage) || loading}><Download className="mr-1 h-4 w-4" /> Export CSV</Button>
-              <Button variant="outline" onClick={() => void exportLedger("pdf")} disabled={(!ledger && !nativePage) || loading}><FileText className="mr-1 h-4 w-4" /> Export PDF</Button>
+              <Button variant="outline" onClick={() => void exportLedger("csv")} disabled={(!ledger && !nativePage) || loading} data-testid="coin-origins-csv"><Download className="mr-1 h-4 w-4" /> Export CSV</Button>
+              <Button variant="outline" onClick={() => void exportLedger("pdf")} disabled={(!ledger && !nativePage) || loading} data-testid="coin-origins-pdf"><FileText className="mr-1 h-4 w-4" /> Export PDF</Button>
             </div>
           </div>
         </CardHeader>
@@ -333,7 +333,7 @@ export default function CoinOriginsPage() {
                 <TableHeader><TableRow><TableHead>Outpoint</TableHead><TableHead>Address</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Satoshis</TableHead><TableHead /></TableRow></TableHeader>
                 <TableBody>
                   {(nativePage?.outpoints ?? ledger?.outpoints ?? []).map((row) => (
-                    <TableRow key={`${row.txid}:${row.vout}`}>
+                    <TableRow key={`${row.txid}:${row.vout}`} data-testid={`origin-outpoint-${row.txid}:${row.vout}`}>
                       <TableCell className="font-mono text-xs">{short(`${row.txid}:${row.vout}`)}</TableCell>
                       <TableCell className="font-mono text-xs">{short(row.address)}</TableCell>
                       <TableCell>{boundaryBadge(row.boundary)}</TableCell>
