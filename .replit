@@ -3639,3 +3639,14 @@ args = "node scripts/check-coin-passport-export-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "transaction-inbox-saved-view-snooze-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-transaction-inbox-saved-view-snooze-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
