@@ -119,6 +119,14 @@ jobs:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
         run: node scripts/check-packaged-coin-passport-browser.mjs
 
+      # RELEASE GATE: the Coin Origins renderer must preserve separate
+      # acquisition-lot and holding-row counts for the entire vault and wallet
+      # scopes through the packaged native engine bridge.
+      - name: Verify Coin Origins wallet-scoped counts through packaged IPC
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-coin-origins-browser.mjs
+
       # RELEASE GATE: the exact packaged app must prove protected-store
       # migration, crash recovery, tamper rejection, password re-wrap, and
       # encrypted-backup recovery before the artifact can be uploaded.

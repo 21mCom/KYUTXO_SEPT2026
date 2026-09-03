@@ -1031,6 +1031,10 @@ args = "packaged-coin-passport-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "packaged-coin-origins-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "backup-schedule-concurrency-node-check"
 
 [[workflows.workflow]]
@@ -3703,6 +3707,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-packaged-coin-passport-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-coin-origins-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-coin-origins-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

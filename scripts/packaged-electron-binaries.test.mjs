@@ -18,6 +18,7 @@ const PACKAGED_BROWSER_CHECKS = [
   'check-wrong-password-packaged.mjs',
   'check-packaged-electrum-cancel-browser.mjs',
   'check-packaged-coin-passport-browser.mjs',
+  'check-packaged-coin-origins-browser.mjs',
   'check-packaged-vault-migration.mjs',
 ];
 
@@ -186,5 +187,34 @@ test('the packaged Coin Passport gate is release-wired after the native worker c
   assert.match(
     buildScript,
     /KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts\/check-packaged-coin-passport-browser\.mjs/,
+  );
+});
+
+test('the packaged Coin Origins gate is release-wired after the native worker check', () => {
+  const script = fs.readFileSync(
+    path.join(SCRIPTS_DIR, 'check-packaged-coin-origins-browser.mjs'),
+    'utf8',
+  );
+  const workflow = fs.readFileSync(
+    path.join(ROOT, '.github', 'workflows', 'build.yml'),
+    'utf8',
+  );
+  const buildScript = fs.readFileSync(path.join(SCRIPTS_DIR, 'electron-build.sh'), 'utf8');
+
+  assert.match(script, /engine\.query\('getCoinOriginsPage'/);
+  assert.match(script, /Native engine Alpha acquisition/);
+  assert.match(script, /Dexie fallback Alpha acquisition/);
+  assert.match(script, /lotsTotal === 2/);
+  assert.match(script, /holdingsTotal === 3/);
+  assert.match(script, /origin-holding-unknown/);
+  assert.match(script, /findPortableArtifact\(\)/);
+  assert.match(script, /KYUTXO-.+-Portable\\\.exe/);
+  assert.match(
+    workflow,
+    /- name: Verify Coin Origins wallet-scoped counts through packaged IPC\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-coin-origins-browser\.mjs/,
+  );
+  assert.match(
+    buildScript,
+    /KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts\/check-packaged-coin-origins-browser\.mjs/,
   );
 });

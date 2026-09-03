@@ -63,11 +63,17 @@ KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-native-engine.mjs \
 echo "Step 6: Verifying oversized packaged Coin Passport paging..."
 KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-coin-passport-browser.mjs
 
+# RELEASE GATE: prove the packaged Coin Origins page preserves the distinction
+# between acquisition-lot cards and the synthetic unresolved holding row for
+# the entire vault and for each wallet scope.
+echo "Step 7: Verifying packaged Coin Origins wallet-scoped counts..."
+KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-coin-origins-browser.mjs
+
 # RELEASE GATE: prove protected-vault migration and restore failure recovery in
 # the same packaged application. This is intentionally fail-closed until the
 # protected main-process test bridge is present; a plaintext app must not pass
 # by returning a superficial success flag.
-echo "Step 7: Verifying protected-vault migration recovery..."
+echo "Step 8: Verifying protected-vault migration recovery..."
 KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-vault-migration.mjs
 
 # RELEASE GATE: prove the device-local network activity log survives a real
