@@ -61,6 +61,29 @@ inspect any failed or still-queued scheduled run, restore the named runner's
 logged-in desktop session, and rerun the workflow manually until all five jobs
 report **Ready**.
 
+The separate `Monitor desktop release runner readiness` workflow runs on a
+GitHub-hosted Ubuntu runner every five minutes. If one of those matrix jobs has
+remained queued for more than **15 minutes**, it opens one deduplicated issue
+whose title names the unavailable label, for example
+`desktop-release-darwin-arm64`. Repository maintainers should subscribe to
+**Issues** notifications so this alert route reaches them without anyone
+watching the Actions page. The monitor run also fails visibly when it creates a
+new alert.
+
+The monitor has only `actions: read`, `contents: read`, and `issues: write`
+permissions. It reads workflow runs and jobs and creates, comments on, or closes
+its own alert issues. It does not call runner-management APIs and cannot
+control, lock, suspend, relabel, register, or remove a runner.
+
+To recover, start the named Actions runner from its logged-in interactive
+desktop session, confirm its exact release label is still registered, and
+manually rerun `Check desktop release runner readiness`. The hosted monitor
+keeps the issue open if the old job is merely cancelled, expires, or if a newer
+probe fails. Only after that exact label successfully completes a readiness job
+newer than the alert does the monitor add a recovery comment and close the issue
+automatically. If the runner is healthy but the issue remains open, run the
+monitor manually after the successful readiness rerun has completed.
+
 ## Interactive runner setup
 
 Register each machine as a repository self-hosted runner with the labels
