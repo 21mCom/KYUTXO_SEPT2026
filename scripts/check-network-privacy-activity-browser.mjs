@@ -8,6 +8,51 @@ await acquireBrowserCheckLock();
 
 const baseUrl = 'http://127.0.0.1:5000';
 const password = 'network-privacy-activity-check';
+const syncAddress = '1BoatSLRHtKNngkdXEeobR76b53LETtpyT';
+
+async function readNodeSettings(page) {
+  return page.evaluate(async () => {
+    const { getNodeSettings } = await import('/src/lib/data/node-settings-crud.ts');
+    return getNodeSettings('default');
+  });
+}
+
+async function verifyBlockedSyncSettingsAction(page, expectedMessage, expectedMode, label) {
+  await page.goto(`${baseUrl}/transaction-sync`, { waitUntil: 'domcontentloaded' });
+  await unlockIfNeeded(page, password, { label });
+  await page.getByTestId('button-sync').waitFor({ state: 'visible' });
+
+  const before = await readNodeSettings(page);
+  if (
+    before?.networkAccessEnabled !== false ||
+    before?.networkPrivacyMode !== expectedMode
+  ) {
+    throw new Error(`${label} fixture did not persist the intended blocked state: ${JSON.stringify(before)}`);
+  }
+  await page.getByTestId('button-sync').click();
+
+  const action = page.getByTestId('action-open-node-settings');
+  await action.waitFor({ state: 'visible' }).catch(async (error) => {
+    const visibleText = await page.locator('body').innerText();
+    throw new Error(`${label} warning did not expose Open Node Settings. Visible page text:\n${visibleText}`, {
+      cause: error,
+    });
+  });
+  const toastText = await action.locator('..').innerText();
+  if (!toastText.includes(expectedMessage)) {
+    throw new Error(`${label} toast showed the settings action with the wrong warning: ${toastText}`);
+  }
+  await action.click();
+  await page.waitForURL('**/node-settings');
+
+  const after = await readNodeSettings(page);
+  if (JSON.stringify(after) !== JSON.stringify(before)) {
+    throw new Error(`${label} toast action changed network provider settings`);
+  }
+  if (after?.networkAccessEnabled !== false) {
+    throw new Error(`${label} toast action enabled network access`);
+  }
+}
 
 function chromiumPath() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -48,14 +93,21 @@ const browser = await chromium.launch({
 try {
   const context = await browser.newContext({ serviceWorkers: 'block' });
   const page = await context.newPage();
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning') {
+      console.error(`[browser ${message.type()}] ${message.text()}`);
+    }
+  });
+  page.on('pageerror', (error) => console.error(`[browser pageerror] ${error.stack ?? error.message}`));
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await unlockIfNeeded(page, password, {
     appearTimeoutMs: 60_000,
     label: 'network-privacy-activity',
   });
 
-  await page.evaluate(async () => {
+  await page.evaluate(async (address) => {
     const { db } = await import('/src/lib/database.ts');
+    const records = await import('/src/lib/data/record-crud.ts');
     await db.open();
     await db.networkPrivacyActivity.clear();
     await db.nodeSettings.put({
@@ -84,7 +136,17 @@ try {
         action: 'provider-test',
       },
     ]);
-  });
+    await records.createRecord({
+      type: 'address',
+      inputString: address,
+      label: 'Blocked Transaction Sync browser check',
+      tags: [],
+      categories: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      addressImportance: 'manual',
+    });
+  }, syncAddress);
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await unlockIfNeeded(page, password, { label: 'network-privacy-activity-reload' });
@@ -126,7 +188,44 @@ try {
     throw new Error('Clear activity changed provider settings');
   }
 
-  console.log('Network privacy activity browser check passed');
+  await page.evaluate(async () => {
+    const { updateNodeSettings } = await import('/src/lib/data/node-settings-crud.ts');
+    await updateNodeSettings('default', {
+      networkPrivacyMode: undefined,
+      networkPrivacyChosenAt: undefined,
+      networkAccessEnabled: false,
+      networkOnboardingStage: 'complete',
+      firstSyncConfirmedAt: undefined,
+    });
+  });
+  await verifyBlockedSyncSettingsAction(
+    page,
+    'No network source is configured. Configure and enable one in Node Settings before contacting the Bitcoin network.',
+    undefined,
+    'transaction-sync-unconfigured',
+  );
+
+  await page.evaluate(async () => {
+    const { updateNodeSettings } = await import('/src/lib/data/node-settings-crud.ts');
+    await updateNodeSettings('default', {
+      providerType: 'blockstream',
+      useTor: false,
+      useElectrum: false,
+      networkPrivacyMode: 'public-direct',
+      networkPrivacyChosenAt: Date.now(),
+      networkAccessEnabled: false,
+      networkOnboardingStage: 'complete',
+      firstSyncConfirmedAt: Date.now(),
+    });
+  });
+  await verifyBlockedSyncSettingsAction(
+    page,
+    'Network access is offline. Use the privacy control in the header to enable it.',
+    'public-direct',
+    'transaction-sync-configured-offline',
+  );
+
+  console.log('Network privacy activity and blocked Transaction Sync browser checks passed');
 } finally {
   await browser.close();
   server?.kill('SIGTERM');

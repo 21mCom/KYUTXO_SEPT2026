@@ -260,10 +260,6 @@ export default function TransactionSync() {
     });
     setLastResult(null);
 
-    // Update the sync service to use current node settings and protection
-    transactionSyncService.updateProvider(nodeSettings);
-    transactionSyncService.setSyncProtection(syncProtection);
-
     transactionSyncService.setProgressCallback((progress) => {
       setSyncProgress(progress);
       try {
@@ -283,6 +279,10 @@ export default function TransactionSync() {
     });
 
     try {
+      // Provider construction enforces the live network policy and can throw.
+      // Keep it inside this boundary so blocked requests surface the settings action.
+      transactionSyncService.updateProvider(nodeSettings);
+      transactionSyncService.setSyncProtection(syncProtection);
       const result = await transactionSyncService.syncWithDepth(options, cachedRecordsArg);
       setLastResult(result);
 
@@ -490,9 +490,6 @@ export default function TransactionSync() {
     });
     setLastResult(null);
 
-    // Update the sync service to use current node settings
-    transactionSyncService.updateProvider(nodeSettings);
-    
     transactionSyncService.setProgressCallback((progress) => {
       setSyncProgress(progress);
       try {
@@ -512,6 +509,8 @@ export default function TransactionSync() {
     });
 
     try {
+      // Provider construction enforces the live network policy and can throw.
+      transactionSyncService.updateProvider(nodeSettings);
       const result = await transactionSyncService.resumeSync();
       setLastResult(result);
       // Note: paused state is managed by the service - if sync was paused again, state is preserved
@@ -568,9 +567,9 @@ export default function TransactionSync() {
     setIsSingleSyncing(true);
     setSingleSyncResult(null);
 
-    transactionSyncService.updateProvider(nodeSettings);
-
     try {
+      // Provider construction enforces the live network policy and can throw.
+      transactionSyncService.updateProvider(nodeSettings);
       const result = await transactionSyncService.syncSingleAddress(
         singleAddress.trim(),
         (progress) => setSyncProgress(progress)
