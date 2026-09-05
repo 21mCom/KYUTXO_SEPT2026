@@ -75,6 +75,22 @@ permissions. It reads workflow runs and jobs and creates, comments on, or closes
 its own alert issues. It does not call runner-management APIs and cannot
 control, lock, suspend, relabel, register, or remove a runner.
 
+An independent `Watch desktop release runner monitor heartbeat` workflow runs
+on GitHub-hosted Ubuntu at minutes 7, 22, 37, and 52 of every hour. It opens a
+deduplicated issue if `Monitor desktop release runner readiness` has not
+completed for **30 minutes**. The issue names that monitor and links its latest
+run (or its Actions page when no run exists). Subscribe to **Issues**
+notifications for this dead-man route as well.
+
+The watchdog has the same narrow `actions: read`, `contents: read`, and
+`issues: write` permissions. It does not inspect, select, or mutate self-hosted
+runners. Its owner is the repository maintainers responsible for desktop
+releases. To recover, use the issue's link to inspect scheduling or permission
+failures, re-enable or repair the monitor, and manually dispatch `Monitor
+desktop release runner readiness`. The watchdog closes its issue only after it
+observes a monitor completion newer than the alert; a failed monitor run still
+counts as a heartbeat and must be investigated through that run's own failure.
+
 To recover, start the named Actions runner from its logged-in interactive
 desktop session, confirm its exact release label is still registered, and
 manually rerun `Check desktop release runner readiness`. The hosted monitor

@@ -11,6 +11,7 @@ const {
   staleQueuedLabels,
   run,
 } = require('../.github/scripts/monitor-release-runner-readiness.cjs');
+const watchdog = require('../.github/scripts/watch-release-runner-monitor.cjs');
 
 test('stale queued readiness jobs resolve to their exact release-runner labels', () => {
   const now = Date.parse('2026-09-05T12:30:00Z');
@@ -181,4 +182,96 @@ test('cancelled and failed follow-up jobs do not close an alert', async () => {
     });
     assert.deepEqual(calls, []);
   }
+});
+
+test('independent watchdog is scheduled, least-privilege, and never uses release runners', () => {
+  const workflow = fs.readFileSync(
+    new URL('../.github/workflows/desktop-release-runner-monitor-watchdog.yml', import.meta.url),
+    'utf8',
+  );
+  assert.match(workflow, /cron: '7,22,37,52 \* \* \* \*'/);
+  assert.match(workflow, /runs-on: ubuntu-latest/);
+  assert.match(workflow, /permissions:\s*\n\s+actions: read\s*\n\s+contents: read\s*\n\s+issues: write/);
+  assert.doesNotMatch(workflow, /self-hosted|administration:|organization:|runner-groups:/);
+
+  const script = fs.readFileSync(
+    new URL('../.github/scripts/watch-release-runner-monitor.cjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(script, /listWorkflowRuns/);
+  assert.doesNotMatch(script, /listJobsForWorkflowRun|deleteSelfHostedRunner|removeAllCustomLabels|setCustomLabels/);
+});
+
+test('watchdog alert names and links the silent monitor', () => {
+  const body = watchdog.alertBody({
+    latestRunUrl: 'https://github.example/monitor/7',
+    lastCompletedAt: '2026-09-05T12:00:00Z',
+  });
+  assert.match(watchdog.ALERT_TITLE, new RegExp(watchdog.MONITOR_NAME));
+  assert.match(body, new RegExp(watchdog.MONITOR_NAME));
+  assert.match(body, /https:\/\/github\.example\/monitor\/7/);
+  assert.match(body, new RegExp(`${watchdog.SILENCE_MINUTES} minutes`));
+  assert.match(body, /Owner: repository maintainers/);
+  assert.match(body, /dispatch .* manually/);
+});
+
+test('watchdog opens one alert after silence and closes it only after a newer completion', async () => {
+  const calls = [];
+  let runs = [{
+    status: 'completed',
+    updated_at: '2026-09-05T11:00:00Z',
+    html_url: 'https://example.test/runs/old',
+  }];
+  const github = {
+    paginate: async () => calls.some((call) => call.type === 'create')
+      ? [{
+          number: 11,
+          title: watchdog.ALERT_TITLE,
+          created_at: '2026-09-05T12:00:00Z',
+          html_url: 'https://example.test/issues/11',
+        }]
+      : [],
+    rest: {
+      actions: {
+        listWorkflowRuns: async () => ({ data: { workflow_runs: runs } }),
+      },
+      issues: {
+        listForRepo: 'listForRepo',
+        create: async (request) => {
+          calls.push({ type: 'create', request });
+          return { data: { html_url: 'https://example.test/issues/11' } };
+        },
+        createComment: async (request) => calls.push({ type: 'comment', request }),
+        update: async (request) => calls.push({ type: 'update', request }),
+      },
+    },
+  };
+  const invocation = {
+    github,
+    context: { repo: { owner: 'owner', repo: 'repo' } },
+    core: {
+      info: () => {},
+      warning: () => calls.push({ type: 'warning' }),
+      setFailed: (message) => calls.push({ type: 'failed', message }),
+    },
+    now: Date.parse('2026-09-05T12:00:01Z'),
+  };
+
+  await watchdog.run(invocation);
+  assert.equal(calls.filter((call) => call.type === 'create').length, 1);
+  assert.match(calls.find((call) => call.type === 'create').request.body, /runs\/old/);
+
+  await watchdog.run(invocation);
+  assert.equal(calls.filter((call) => call.type === 'create').length, 1);
+  assert.equal(calls.filter((call) => call.type === 'warning').length, 1);
+
+  runs = [{
+    status: 'completed',
+    conclusion: 'failure',
+    updated_at: '2026-09-05T12:05:00Z',
+    html_url: 'https://example.test/runs/recovered',
+  }];
+  await watchdog.run(invocation);
+  assert.equal(calls.filter((call) => call.type === 'comment').length, 1);
+  assert.equal(calls.filter((call) => call.type === 'update').length, 1);
 });
