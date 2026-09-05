@@ -20,6 +20,7 @@ import {
 import {
   buildEvidencePackage,
   buildEvidencePackageToSink,
+  evidencePackageFilename,
   EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES,
   EvidencePackageError,
   NO_EVIDENCE_PACKAGE_REDACTION,
@@ -214,11 +215,11 @@ export function EvidencePackageBuilder() {
       const reader = { read: (attachment: { objectStoragePath: string; mimeType: string }) => getFileBlob(attachment.objectStoragePath, attachment.mimeType) };
 
       if (streamToDisk && canStreamToDisk) {
-        // The suggested filename embeds the date, and the save dialog must be
+        // The suggested filename embeds the build and date, and the save dialog must be
         // opened (and the user's choice known) before the build starts — so
         // generatedAt is fixed here rather than left to the library default.
         const generatedAt = Date.now();
-        const fileName = `kyutxo-evidence-package-${new Date(generatedAt).toISOString().slice(0, 10)}.zip`;
+        const fileName = evidencePackageFilename(generatedAt);
         let sink;
         try {
           sink = canStreamElectron ? await openElectronFileSink(fileName) : await openFileSystemSink(fileName);
@@ -250,8 +251,7 @@ export function EvidencePackageBuilder() {
         });
         if (cancelRequested.current) throw new EvidencePackageError("Export cancelled.");
 
-        const date = new Date(result.manifest.generatedAt).toISOString().slice(0, 10);
-        downloadBlob(result.blob, `kyutxo-evidence-package-${date}.zip`);
+        downloadBlob(result.blob, evidencePackageFilename(result.manifest.generatedAt));
         setProgress("Export complete.");
         toast({
           title: "Evidence package exported",

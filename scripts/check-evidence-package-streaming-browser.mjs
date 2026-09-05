@@ -48,12 +48,16 @@
 
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 import { unlockIfNeeded } from './browser-check-utils.mjs';
 import { buildEngineBridgeInitScript } from './engine-bridge-mock.mjs';
 
 await acquireBrowserCheckLock();
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
 const BASE_URL = `http://localhost:${PORT}/`;
 const EXPORT_URL = `${BASE_URL}export`;
@@ -413,7 +417,12 @@ async function main() {
       step('[A1] all bytes landed in the fake disk sink, not a Blob download', fsState.createObjectURLCalls === 0, `createObjectURLCalls=${fsState.createObjectURLCalls}`);
       step('[A1] streamed total exceeds the 75 MiB in-memory cap', fsState.totalWritten > AGGREGATE_CAP, `totalWritten=${fsState.totalWritten} cap=${AGGREGATE_CAP}`);
       step('[A1] sink was closed (write completed cleanly)', fsState.closed === true && fsState.aborted !== true, `closed=${fsState.closed} aborted=${fsState.aborted}`);
-      step('[A1] suggested filename embeds a date-stamped kyutxo evidence name', /^kyutxo-evidence-package-\d{4}-\d{2}-\d{2}\.zip$/.test(fsState.suggestedName || ''), `suggestedName="${fsState.suggestedName}"`);
+      const packageVersion = JSON.parse(await fs.readFile(path.join(ROOT, 'package.json'), 'utf8')).version;
+      step(
+        '[A1] suggested filename embeds the package-derived build and date',
+        fsState.suggestedName === `kyutxo-evidence-package-v${packageVersion}-${new Date().toISOString().slice(0, 10)}.zip`,
+        `suggestedName="${fsState.suggestedName}" packageVersion="${packageVersion}"`,
+      );
 
       // ── A2: same oversized selection with streaming OFF is refused, and
       // the error mentions the streaming opt-in. ──

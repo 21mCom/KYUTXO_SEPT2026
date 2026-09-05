@@ -3,11 +3,20 @@ import JSZip from "jszip";
 import {
   buildEvidencePackage,
   buildEvidencePackageToSink,
+  evidencePackageFilename,
   EVIDENCE_PACKAGE_MAX_ATTACHMENT_BYTES,
   EvidencePackageError,
   stableJson,
   type EvidencePackageSelection,
 } from "./evidence-package-export";
+import { APP_VERSION } from "./app-version";
+
+describe("evidence package filename", () => {
+  it("includes the package-derived app version and UTC package date", () => {
+    expect(evidencePackageFilename(Date.UTC(2026, 8, 5, 23, 59, 59)))
+      .toBe(`kyutxo-evidence-package-v${APP_VERSION}-2026-09-05.zip`);
+  });
+});
 import { MemorySink } from "./backup/sink";
 import type { BackupSink } from "./backup/sink";
 import { APP_VERSION } from "./app-version";

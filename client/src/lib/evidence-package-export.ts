@@ -17,6 +17,11 @@ export const EVIDENCE_PACKAGE_VERSION = 1;
 export const EVIDENCE_PACKAGE_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 export const EVIDENCE_PACKAGE_MAX_TOTAL_ATTACHMENT_BYTES = 75 * 1024 * 1024;
 
+export function evidencePackageFilename(generatedAt: number): string {
+  const date = new Date(generatedAt).toISOString().slice(0, 10);
+  return `kyutxo-evidence-package-v${APP_VERSION}-${date}.zip`;
+}
+
 export interface EvidencePackageRedaction {
   redactAddresses: boolean;
   redactNotes: boolean;

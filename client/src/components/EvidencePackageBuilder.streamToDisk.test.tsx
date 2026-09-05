@@ -89,6 +89,7 @@ vi.mock("@/lib/electron", () => ({
 
 import { EvidencePackageBuilder } from "./EvidencePackageBuilder";
 import { BackupCancelledError } from "@/lib/backup/sink";
+import { APP_VERSION } from "@/lib/app-version";
 
 function enterRecordId() {
   fireEvent.change(screen.getByTestId("input-package-record-ids"), { target: { value: "4" } });
@@ -135,6 +136,9 @@ describe("EvidencePackageBuilder streaming toggle", () => {
     fireEvent.click(screen.getByTestId("button-export-evidence-package"));
 
     await waitFor(() => expect(buildEvidencePackageToSinkMock).toHaveBeenCalledTimes(1));
+    expect(openFileSystemSinkMock).toHaveBeenCalledWith(
+      expect.stringMatching(new RegExp(`^kyutxo-evidence-package-v${APP_VERSION.replace(/\./g, "\\.")}-\\d{4}-\\d{2}-\\d{2}\\.zip$`)),
+    );
     expect(openElectronFileSinkMock).not.toHaveBeenCalled();
     expect(buildEvidencePackageMock).not.toHaveBeenCalled();
     expect(downloadBlobMock).not.toHaveBeenCalled();
@@ -210,5 +214,9 @@ describe("EvidencePackageBuilder streaming toggle", () => {
     expect(buildEvidencePackageToSinkMock).not.toHaveBeenCalled();
     expect(openFileSystemSinkMock).not.toHaveBeenCalled();
     await waitFor(() => expect(downloadBlobMock).toHaveBeenCalledTimes(1));
+    expect(downloadBlobMock).toHaveBeenCalledWith(
+      expect.any(Blob),
+      `kyutxo-evidence-package-v${APP_VERSION}-2023-11-14.zip`,
+    );
   });
 });
