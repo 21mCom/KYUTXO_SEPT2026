@@ -6,6 +6,7 @@ import {
   putNodeSettings,
   updateNodeSettings as updateStoredNodeSettings,
 } from '@/lib/data/node-settings-crud';
+import { useDbChangeSignal } from './use-db-change-signal';
 import {
   canonicalizeTorProxyUrl,
   syncTorProxySettings,
@@ -53,10 +54,11 @@ function getResetSettings(current: NodeSettings): NodeSettings {
 
 export function useNodeSettings() {
   const [hasTimedOut, setHasTimedOut] = useState(false);
-  
+  const changeSignal = useDbChangeSignal(['nodeSettings']);
+
   const queryResult = useLiveQuery(
     async () => ({ settings: await getNodeSettings('default') }),
-    []
+    [changeSignal]
   );
   const queryResolved = queryResult !== undefined;
   const settings = queryResult?.settings;

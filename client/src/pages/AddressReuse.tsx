@@ -2,7 +2,9 @@ import { useState, useMemo } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { format } from "date-fns";
-import { db, Record, AddressImportance, USER_CURATED_TIERS, ALL_IMPORTANCE_TIERS, getImportanceTierOptions } from "@/lib/database";
+import { Record, AddressImportance, USER_CURATED_TIERS, ALL_IMPORTANCE_TIERS, getImportanceTierOptions } from "@/lib/database";
+import { getVaultRepository } from "@/lib/repository";
+import { getTransactionsByTxids } from "@/lib/data/transaction-crud";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useAsyncMemo, checkAbort } from "@/hooks/use-async-memo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -91,24 +93,25 @@ export async function analyzeAddressReuse(
   includeBlockchainDiscovered: boolean,
   signal: AbortSignal,
 ): Promise<{ reusedAddresses: AddressReuseInfo[]; totalBlockchainDiscovered: number }> {
-    const blockchainCount = await db.records
-      .where('addressImportance')
-      .anyOf(['blockchain-discovered', 'pending-review'])
-      .and(r => r.type === 'address')
-      .count();
+    // Page by primary key: the protected repository has no renderer query
+    // builder and this remains bounded on both storage backends.
+    const allRecords: Record[] = [];
+    let cursor: string | number | undefined;
+    do {
+      const page = await getVaultRepository().list('records', { cursor, limit: 500 });
+      allRecords.push(...page.rows);
+      cursor = page.cursor;
+    } while (cursor !== undefined);
+    const blockchainCount = allRecords.filter((r) =>
+      r.type === 'address' && (r.addressImportance === 'blockchain-discovered' || r.addressImportance === 'pending-review'),
+    ).length;
     checkAbort(signal);
 
     const tiersToLoad = includeBlockchainDiscovered ? ALL_IMPORTANCE_TIERS : USER_CURATED_TIERS;
 
-    let curatedRecords = await db.records
-      .where('addressImportance')
-      .anyOf(tiersToLoad)
-      .and(r => r.type === 'address')
-      .toArray();
+    let curatedRecords = allRecords.filter((r) => r.type === 'address' && tiersToLoad.includes(r.addressImportance as AddressImportance));
 
-    const legacyRecords = await db.records
-      .filter(r => r.type === 'address' && !r.addressImportance)
-      .toArray();
+    const legacyRecords = allRecords.filter((r) => r.type === 'address' && !r.addressImportance);
     curatedRecords = [...curatedRecords, ...legacyRecords];
     checkAbort(signal);
 
@@ -126,7 +129,7 @@ export async function analyzeAddressReuse(
     }
 
     const addressArray = Array.from(addressSet);
-    const relevantParticipants = await getParticipantsByAddresses(addressArray, signal);
+    const relevantParticipants = await getParticipantsByAddresses(addressArray);
     checkAbort(signal);
 
     // Electrum-synced spend inputs carry a blank address, so the address-keyed
@@ -161,10 +164,7 @@ export async function analyzeAddressReuse(
 
     const txidToBlockTime = new Map<string, number>();
     if (relevantTxids.size > 0) {
-      const transactions = await db.blockchainTransactions
-        .where('txid')
-        .anyOf(Array.from(relevantTxids))
-        .toArray();
+      const transactions = await getTransactionsByTxids(Array.from(relevantTxids));
       transactions.forEach(tx => {
         txidToBlockTime.set(tx.txid, tx.blockTime);
       });

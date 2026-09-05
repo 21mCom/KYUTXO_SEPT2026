@@ -1,5 +1,6 @@
 import { decryptBinary } from './crypto';
-import { db } from './database';
+import { getVaultRepository } from './repository';
+import type { Attachment, EvidenceAttachment } from './db-types';
 import { isElectron, getElectronAPI } from './electron';
 
 export interface FileDecryptProgress {
@@ -119,7 +120,8 @@ export async function decryptLegacyAttachmentFiles(
   }
 
   // Indexed counts give a stable progress denominator without loading any rows.
-  const total = (await db.attachments.count()) + (await db.evidenceAttachments.count());
+  const repository = getVaultRepository();
+  const total = (await repository.count('attachments')) + (await repository.count('evidenceAttachments'));
 
   let decrypted = 0;
   let failed = 0;
@@ -143,10 +145,8 @@ export async function decryptLegacyAttachmentFiles(
     let lastId = tableIndex === startCp.tableIndex ? startCp.lastId : 0;
 
     for (;;) {
-      const chunk =
-        table === 'attachments'
-          ? await db.attachments.where('id').above(lastId).limit(FILE_DECRYPT_BATCH).toArray()
-          : await db.evidenceAttachments.where('id').above(lastId).limit(FILE_DECRYPT_BATCH).toArray();
+      const page = await repository.list(table, { cursor: lastId || undefined, limit: FILE_DECRYPT_BATCH });
+      const chunk = page.rows as Array<Attachment | EvidenceAttachment>;
       if (chunk.length === 0) break;
 
       const batchLastId = chunk[chunk.length - 1].id!;

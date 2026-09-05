@@ -1,6 +1,6 @@
 import { decrypt } from './crypto';
-import { db } from './database';
-import type { Table } from 'dexie';
+import { getVaultRepository } from './repository';
+import type { VaultRows, VaultTableName } from './repository';
 import type {
   Record,
   Attachment,
@@ -51,7 +51,7 @@ type LegacyRecord<T> = T & {
 
 interface TableConfig<T> {
   name: string;
-  table: Table<T>;
+  table: VaultTableName;
   // Historical list of the columns that were encrypted for this table. The
   // restore loop no longer uses it to decide which fields to write back — it now
   // restores every field found in the decrypted payload. Retained only as
@@ -71,7 +71,7 @@ function getTableConfigs(): TableConfig<LegacyRecord<
   return [
     {
       name: 'Records',
-      table: db.records as Table<LegacyRecord<Record>>,
+      table: 'records',
       sensitiveFields: ['inputString', 'label', 'notes', 'seedName', 'walletSoftware', 'owner', 'walletName', 'source', 'customFields', 'costBasisUsd'] as (keyof Record)[],
       // inputStringLower backs case-insensitive / fast inputString lookups. It
       // must be re-derived from the restored plaintext inputString: the v30
@@ -86,62 +86,62 @@ function getTableConfigs(): TableConfig<LegacyRecord<
     },
     {
       name: 'Attachments',
-      table: db.attachments as Table<LegacyRecord<Attachment>>,
+      table: 'attachments',
       sensitiveFields: ['filename', 'objectStoragePath'] as (keyof Attachment)[],
     },
     {
       name: 'Tags',
-      table: db.tags as Table<LegacyRecord<Tag>>,
+      table: 'tags',
       sensitiveFields: ['name'] as (keyof Tag)[],
     },
     {
       name: 'Categories',
-      table: db.categories as Table<LegacyRecord<Category>>,
+      table: 'categories',
       sensitiveFields: ['name'] as (keyof Category)[],
     },
     {
       name: 'Owners',
-      table: db.owners as Table<LegacyRecord<Owner>>,
+      table: 'owners',
       sensitiveFields: ['name'] as (keyof Owner)[],
     },
     {
       name: 'Wallet Names',
-      table: db.walletNames as Table<LegacyRecord<WalletName>>,
+      table: 'walletNames',
       sensitiveFields: ['name'] as (keyof WalletName)[],
     },
     {
       name: 'Seed Names',
-      table: db.seedNames as Table<LegacyRecord<SeedName>>,
+      table: 'seedNames',
       sensitiveFields: ['name'] as (keyof SeedName)[],
     },
     {
       name: 'Wallet Software',
-      table: db.walletSoftware as Table<LegacyRecord<WalletSoftware>>,
+      table: 'walletSoftware',
       sensitiveFields: ['name'] as (keyof WalletSoftware)[],
     },
     {
       name: 'Record Origins',
-      table: db.recordOrigins as Table<LegacyRecord<RecordOrigin>>,
+      table: 'recordOrigins',
       sensitiveFields: ['label', 'notes', 'seedName', 'walletSoftware', 'owner', 'walletName', 'source', 'xpub', 'derivationPath'] as (keyof RecordOrigin)[],
     },
     {
       name: 'Transaction Participants',
-      table: db.transactionParticipants as Table<LegacyRecord<TransactionParticipant>>,
+      table: 'transactionParticipants',
       sensitiveFields: ['address', 'amount', 'prevTxid', 'prevVout', 'scriptType'] as (keyof TransactionParticipant)[],
     },
     {
       name: 'Derivation Templates',
-      table: db.derivationTemplates as Table<LegacyRecord<DerivationTemplate>>,
+      table: 'derivationTemplates',
       sensitiveFields: ['xpub', 'notes', 'owner', 'walletName', 'seedName'] as (keyof DerivationTemplate)[],
     },
     {
       name: 'Evidence',
-      table: db.evidence as Table<LegacyRecord<Evidence>>,
+      table: 'evidence',
       sensitiveFields: ['title', 'notes', 'partiesInvolved', 'source'] as (keyof Evidence)[],
     },
     {
       name: 'Evidence Attachments',
-      table: db.evidenceAttachments as Table<LegacyRecord<EvidenceAttachment>>,
+      table: 'evidenceAttachments',
       sensitiveFields: ['filename', 'objectStoragePath'] as (keyof EvidenceAttachment)[],
     },
   ];
@@ -258,20 +258,37 @@ async function withDbRetry<T>(
   }
 }
 
+async function readLegacyPage<T>(table: VaultTableName, afterId: number): Promise<LegacyRecord<T>[]> {
+  return (await getVaultRepository().list(table, {
+    // Every legacy-migrated table has an auto-increment numeric primary key;
+    // start strictly after zero. This keeps the browser adapter on its
+    // keyset/index path as well as matching protected-store paging.
+    cursor: afterId,
+    limit: BATCH_SIZE,
+  })).rows as unknown as LegacyRecord<T>[];
+}
+
+async function countLegacyRows(table: VaultTableName): Promise<number> {
+  return getVaultRepository().count(table);
+}
+
+async function saveLegacyRows<T>(table: VaultTableName, rows: LegacyRecord<T>[]): Promise<void> {
+  await getVaultRepository().bulkPut(table, rows as unknown as VaultRows[typeof table][]);
+}
+
 export async function hasLegacyEncryptedRecords(alreadyCompletedTables?: string[]): Promise<boolean> {
   const configs = getTableConfigs();
   const completed = new Set(alreadyCompletedTables ?? []);
   for (const config of configs) {
     if (completed.has(config.name)) continue;
-    const firstLegacy = await withDbRetry(
-      () =>
-        config.table
-          .filter((item: LegacyRecord<{ id?: number }>) => !!item._legacyEncryptedPayload)
-          .limit(1)
-          .toArray(),
-      `Probe ${config.name}`,
-    );
-    if (firstLegacy.length > 0) return true;
+    let lastId = 0;
+    for (;;) {
+      const rows = await withDbRetry(() => readLegacyPage(config.table, lastId), `Probe ${config.name}`);
+      if (!rows.length) break;
+      if (rows.some(item => !!item._legacyEncryptedPayload)) return true;
+      lastId = (rows[rows.length - 1] as { id: number }).id;
+      if (rows.length < BATCH_SIZE) break;
+    }
   }
   return false;
 }
@@ -368,12 +385,7 @@ export async function countUnrecoveredLegacyRows(
     while (hasMore) {
       if (signal?.aborted) break;
       const chunk = await withDbRetry(
-        () =>
-          config.table
-            .where('id')
-            .above(lastProcessedId)
-            .limit(BATCH_SIZE)
-            .toArray(),
+        () => readLegacyPage(config.table, lastProcessedId),
         `Scan ${config.name}`,
       );
 
@@ -444,12 +456,7 @@ export async function hasUnrecoveredLegacyData(signal?: AbortSignal): Promise<bo
     while (hasMore) {
       if (signal?.aborted) break;
       const chunk = await withDbRetry(
-        () =>
-          config.table
-            .where('id')
-            .above(lastProcessedId)
-            .limit(BATCH_SIZE)
-            .toArray(),
+        () => readLegacyPage(config.table, lastProcessedId),
         `Probe ${config.name}`,
       );
 
@@ -503,7 +510,7 @@ export async function auditLegacyPayloads(
   for (const config of configs) {
     let totalRows = 0;
     try {
-      totalRows = await withDbRetry(() => config.table.count(), `Audit count ${config.name}`);
+      totalRows = await withDbRetry(() => countLegacyRows(config.table), `Audit count ${config.name}`);
     } catch {
       totalRows = 0;
     }
@@ -517,12 +524,7 @@ export async function auditLegacyPayloads(
       let chunk: LegacyRecord<{ id?: number }>[];
       try {
         chunk = await withDbRetry(
-          () =>
-            config.table
-              .where('id')
-              .above(lastProcessedId)
-              .limit(BATCH_SIZE)
-              .toArray(),
+          () => readLegacyPage(config.table, lastProcessedId),
           `Audit read ${config.name}`,
         );
       } catch {
@@ -604,7 +606,7 @@ export async function decryptLegacyRecords(
     // indeterminate progress and let the batched walk below do the real work.
     let tableTotal = 0;
     try {
-      tableTotal = await withDbRetry(() => config.table.count(), `Count ${config.name}`);
+      tableTotal = await withDbRetry(() => countLegacyRows(config.table), `Count ${config.name}`);
     } catch (err) {
       console.warn(
         `[LegacyDecrypt] Could not pre-count ${config.name}, continuing with indeterminate progress:`,
@@ -624,12 +626,7 @@ export async function decryptLegacyRecords(
       let chunk: LegacyRecord<{ id?: number }>[];
       try {
         chunk = await withDbRetry(
-          () =>
-            config.table
-              .where('id')
-              .above(lastProcessedId)
-              .limit(BATCH_SIZE)
-              .toArray(),
+          () => readLegacyPage(config.table, lastProcessedId),
           `Read ${config.name}`,
         );
       } catch (err) {
@@ -725,7 +722,7 @@ export async function decryptLegacyRecords(
         if (updatedBatch.length > 0) {
           try {
             await withDbRetry(
-              () => config.table.bulkPut(updatedBatch as unknown as Parameters<typeof config.table.bulkPut>[0]),
+              () => saveLegacyRows(config.table, updatedBatch),
               `Write ${config.name}`,
             );
             tableDecrypted += updatedBatch.length;
@@ -852,11 +849,7 @@ async function countRowsWithMarkers(
     if (signal?.aborted) break;
     let chunk: LegacyRecord<{ id?: number }>[];
     try {
-      chunk = await config.table
-        .where('id')
-        .above(lastProcessedId)
-        .limit(BATCH_SIZE)
-        .toArray();
+      chunk = await readLegacyPage(config.table, lastProcessedId);
     } catch (err) {
       throw new Error(
         `Failed to read ${config.name} during verification: ${err instanceof Error ? err.message : String(err)}`,
@@ -902,11 +895,7 @@ export async function stripLegacyMarkers(
 
       let chunk: LegacyRecord<{ id?: number }>[];
       try {
-        chunk = await config.table
-          .where('id')
-          .above(lastProcessedId)
-          .limit(BATCH_SIZE)
-          .toArray();
+        chunk = await readLegacyPage(config.table, lastProcessedId);
       } catch (err) {
         const msg = `Failed to read ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
         console.error(`[StripMarkers] ${msg}`);
@@ -953,7 +942,7 @@ export async function stripLegacyMarkers(
         });
 
         try {
-          await config.table.bulkPut(cleanedBatch as unknown as Parameters<typeof config.table.bulkPut>[0]);
+          await saveLegacyRows(config.table, cleanedBatch);
           rowsCleaned += cleanedBatch.length;
         } catch (err) {
           const msg = `Failed to write ${config.name}: ${err instanceof Error ? err.message : String(err)}`;

@@ -1,6 +1,6 @@
-import { db, notifyDbChange, type Attachment } from '@/lib/database';
+import { notifyDbChange, type Attachment, type EvidenceAttachment } from '@/lib/database';
 import { isElectron, getElectronAPI } from '@/lib/electron';
-import { updateEvidenceAttachment } from '@/lib/data/evidence-crud';
+import { updateEvidenceAttachment, countEvidenceAttachments, getAllEvidenceAttachments } from '@/lib/data/evidence-crud';
 import { getRecord } from '@/lib/data/record-crud';
 import { archiveAttachments } from '@/lib/data/trash-crud';
 import {
@@ -12,6 +12,7 @@ import {
   updateAttachment,
   countAttachments,
 } from '@/lib/data/attachments-crud';
+import { getVaultRepository } from '@/lib/repository';
 
 async function hashIdentifier(identifier: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -535,7 +536,7 @@ export async function auditAttachments(): Promise<AttachmentAuditResult> {
   const referenced = new Set<string>();
 
   const allAttachments = await getAllAttachments();
-  const allEvidence = await db.evidenceAttachments.toArray();
+  const allEvidence = await getAllEvidenceAttachments();
 
   let matched = 0;
   const missingFiles: AttachmentAuditRow[] = [];
@@ -635,10 +636,7 @@ async function collectReferencedPaths(diskSet: Set<string>): Promise<Set<string>
   for (const table of tables) {
     let lastId = 0;
     for (;;) {
-      const chunk =
-        table === 'attachments'
-          ? await db.attachments.where('id').above(lastId).limit(BATCH).toArray()
-          : await db.evidenceAttachments.where('id').above(lastId).limit(BATCH).toArray();
+      const chunk = (await getVaultRepository().list(table, { cursor: lastId, limit: BATCH })).rows as Array<Attachment | EvidenceAttachment>;
       if (chunk.length === 0) break;
       lastId = chunk[chunk.length - 1].id!;
       for (const row of chunk) {
@@ -780,7 +778,7 @@ export async function reconcileAttachmentPaths(
   const { diskSet, byDir } = await buildAttachmentDiskIndex();
   const referenced = await collectReferencedPaths(diskSet);
 
-  const total = (await countAttachments()) + (await db.evidenceAttachments.count());
+  const total = (await countAttachments()) + (await countEvidenceAttachments());
   if (total === 0) return { repaired: 0, unresolved: 0 };
 
   const BATCH = 500;
@@ -792,10 +790,7 @@ export async function reconcileAttachmentPaths(
   for (const table of tables) {
     let lastId = 0;
     for (;;) {
-      const chunk =
-        table === 'attachments'
-          ? await db.attachments.where('id').above(lastId).limit(BATCH).toArray()
-          : await db.evidenceAttachments.where('id').above(lastId).limit(BATCH).toArray();
+      const chunk = (await getVaultRepository().list(table, { cursor: lastId, limit: BATCH })).rows as Array<Attachment | EvidenceAttachment>;
       if (chunk.length === 0) break;
       lastId = chunk[chunk.length - 1].id!;
 
@@ -1031,7 +1026,7 @@ async function migrateOneAttachmentPath(item: AttachmentMigrationItem, index?: A
 export async function migrateAttachmentPaths(
   onProgress?: (current: number, total: number, message: string) => void
 ): Promise<{ migrated: number; failed: number }> {
-  const total = (await countAttachments()) + (await db.evidenceAttachments.count());
+  const total = (await countAttachments()) + (await countEvidenceAttachments());
   if (total === 0) {
     return { migrated: 0, failed: 0 };
   }
@@ -1051,10 +1046,7 @@ export async function migrateAttachmentPaths(
   for (const table of tables) {
     let lastId = 0;
     for (;;) {
-      const chunk =
-        table === 'attachments'
-          ? await db.attachments.where('id').above(lastId).limit(BATCH).toArray()
-          : await db.evidenceAttachments.where('id').above(lastId).limit(BATCH).toArray();
+      const chunk = (await getVaultRepository().list(table, { cursor: lastId, limit: BATCH })).rows as Array<Attachment | EvidenceAttachment>;
       if (chunk.length === 0) break;
       lastId = chunk[chunk.length - 1].id!;
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { db, ALL_IMPORTANCE_TIERS, IMPORTANCE_TIER_LABELS } from '@/lib/database';
+import { ALL_IMPORTANCE_TIERS, IMPORTANCE_TIER_LABELS } from '@/lib/database';
+import { getVaultRepository } from '@/lib/repository';
 import { countAttachments } from '@/lib/data/attachments-crud';
 import { countAddressSyncState } from '@/lib/data/address-sync-crud';
 import { countPriceData } from '@/lib/data/price-data-crud';
@@ -134,8 +135,8 @@ async function loadAllStats(): Promise<StatsData> {
     countRecordsByType('address'),
     countRecordsByType('transaction'),
     countRecordsByType('other'),
-    db.tags.count(),
-    db.categories.count(),
+    getVaultRepository().count('tags'),
+    getVaultRepository().count('categories'),
     countAttachments(),
     countTransactions(),
     countTransactionParticipants(),

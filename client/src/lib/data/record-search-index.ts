@@ -1,5 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import { db, type Record as DbRecord } from "../database";
+import { getVaultRepository } from "../repository";
 
 /**
  * This table is deliberately derived and device-local. It is not included in
@@ -31,10 +32,15 @@ type SearchIndexTable = Table<RecordSearchIndexEntry, number>;
 type SearchIndexStateTable = Table<RecordSearchIndexState, string>;
 
 function getIndexTable(): SearchIndexTable | undefined {
+  // This device-local Dexie-derived index is not part of the protected vault.
+  // Packaged storage searches source records through native repository queries;
+  // it must never open or write IndexedDB as a shadow store.
+  if (getVaultRepository().kind === 'protected') return undefined;
   return (db as unknown as { recordSearchIndex?: SearchIndexTable }).recordSearchIndex;
 }
 
 function getStateTable(): SearchIndexStateTable | undefined {
+  if (getVaultRepository().kind === 'protected') return undefined;
   return (db as unknown as { recordSearchIndexState?: SearchIndexStateTable }).recordSearchIndexState;
 }
 

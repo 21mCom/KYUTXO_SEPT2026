@@ -12,6 +12,7 @@ export * from './data/settings-crud';
 export * from './data/node-settings-crud';
 export * from './data/custom-fields-crud';
 export * from './data/record-origins-crud';
+export * from './data/cleanup-crud';
 export * from './data/derivation-templates-crud';
 export * from './data/address-sync-crud';
 export * from './data/paused-sync-crud';

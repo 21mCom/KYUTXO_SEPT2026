@@ -27,7 +27,7 @@
  * callbacks (backpressure), which the page wires to the scratch report store.
  */
 
-import { db } from './database';
+import type { UtxoLineage } from './database';
 import { isUserCuratedImportance } from './db-types';
 import { canonicalizeRecordIdentifier } from './bitcoin';
 import { DEFAULT_DUST_THRESHOLD_SATS } from './address-poisoning';
@@ -37,6 +37,7 @@ import {
   getTransactionParticipantsAfterId,
   getTransactionsAfterId,
 } from './data/transaction-crud';
+import { getVaultRepository } from './repository';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -441,10 +442,13 @@ export async function runDormantScan(
     for (let i = 0; i < unknownCandidates.length; i += LINEAGE_BATCH) {
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
       const batch = unknownCandidates.slice(i, i + LINEAGE_BATCH);
-      const rows = await db.utxoLineage
-        .where('[createdTxid+createdVout]')
-        .anyOf(batch.map((c) => [c.txid, c.vout] as [string, number]))
-        .toArray();
+      const outpoints = batch.map((c) => [c.txid, c.vout] as [string, number]);
+      const rows = await getVaultRepository().query<UtxoLineage>(
+        'utxoLineage',
+        'lineage.byCreatedOutpoints',
+        outpoints,
+        outpoints.length,
+      );
       for (const l of rows) {
         if (l.isChange) changeOutpoints.add(`${l.createdTxid}:${l.createdVout}`);
       }

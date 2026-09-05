@@ -76,6 +76,7 @@ import { searchPendingClass } from "@/lib/search-pending-class";
 import { buildRecordsCollection, buildIdentifierSearchCollection, looksLikeBitcoinIdentifier, fetchRecordsPage, MAX_MATERIALIZE, resolveVisibleTierValues } from "@/lib/records-query";
 import { getActivityBus } from "@/lib/activity-bus";
 import { batchPreloadIdentifiers } from "@/lib/metadata-hover";
+import { getVaultRepository } from "@/lib/repository";
 
 // The records list and the detail panel share one converter so any new DB
 // field flows through to both automatically (see `toPanelRecord`). `ConvertedRecord`
@@ -529,6 +530,10 @@ export default function Records() {
           if (loadVersionRef.current !== version) return;
           useEngine = decision.useEngine;
         }
+        // The read engine is a plaintext mirror. Packaged records reads are
+        // served only by the protected repository DTO path below.
+        const packagedProtected = getVaultRepository().kind === 'protected';
+        if (packagedProtected) useEngine = false;
 
         // Dexie default view: resolve the tier values to include dynamically
         // (every distinct stored tier minus the hidden discovery tiers) so
@@ -757,7 +762,7 @@ export default function Records() {
             recordNextAnchor(pageRows as unknown as DbRecord[]);
           }
 
-        } else if (dateAddedActive && !identifierSearch) {
+        } else if (dateAddedActive && !identifierSearch && !packagedProtected) {
           // Date Added sort / "Recently added" window, Dexie fallback (engine
           // not READY/CURRENT or query has residual filters): keyset-paginate on
           // the createdAt index (id tiebreak via index iteration order) with the
@@ -798,7 +803,7 @@ export default function Records() {
             }
           }
 
-        } else if (!filtersActive && includeBlockchainDiscovered) {
+        } else if (!filtersActive && includeBlockchainDiscovered && !packagedProtected) {
           // Await only the lightweight page fetch (keyset when possible). Counts
           // deferred until after render (see runDeferredCounts).
           rawRecords = hasAnchor
@@ -809,7 +814,7 @@ export default function Records() {
           setResultsTruncated(false);
           recordNextAnchor(rawRecords);
 
-        } else if (!filtersActive && !includeBlockchainDiscovered) {
+        } else if (!filtersActive && !includeBlockchainDiscovered && !packagedProtected) {
           // Await only the page fetch (indexed tier queries, fast). Counts
           // deferred until after render (see runDeferredCounts).
           if (hasAnchor) {
@@ -832,7 +837,7 @@ export default function Records() {
           setResultsTruncated(false);
           recordNextAnchor(rawRecords);
 
-        } else if (singleTypeFilter) {
+        } else if (singleTypeFilter && !packagedProtected) {
           const typeVal = singleTypeFilter;
 
           // Await only the page fetch (keyset when possible). Counts deferred
@@ -866,7 +871,13 @@ export default function Records() {
           // inputStringLower (fast) instead of the residual substring scan.
           const built = buildIdentifierSearchCollection(
             identifierSearch,
-            { search, columnFilters, includeBlockchainDiscovered, visibleTierValues: visibleTiers ?? undefined },
+            {
+              search, columnFilters, includeBlockchainDiscovered, visibleTierValues: visibleTiers ?? undefined,
+              addedSince: dateAddedActive ? addedSince ?? undefined : undefined,
+              requireCreatedAt: dateAddedActive || undefined,
+              order: dateAddedActive ? (dateSort === 'oldest' ? 'created-asc' : 'created-desc') : 'id-desc',
+              beforeId: hasAnchor ? beforeIdExclusive : undefined,
+            },
             filterFn,
           );
           const page = await fetchRecordsPage(
@@ -885,7 +896,13 @@ export default function Records() {
 
         } else {
           const built = buildRecordsCollection(
-            { search, columnFilters, includeBlockchainDiscovered, visibleTierValues: visibleTiers ?? undefined },
+            {
+              search, columnFilters, includeBlockchainDiscovered, visibleTierValues: visibleTiers ?? undefined,
+              addedSince: dateAddedActive ? addedSince ?? undefined : undefined,
+              requireCreatedAt: dateAddedActive || undefined,
+              order: dateAddedActive ? (dateSort === 'oldest' ? 'created-asc' : 'created-desc') : 'id-desc',
+              beforeId: hasAnchor ? beforeIdExclusive : undefined,
+            },
             filterFn,
           );
           const page = await fetchRecordsPage(
@@ -920,7 +937,9 @@ export default function Records() {
         // Rows are on screen for the winning version — now kick off the counts.
         // Loads that got superseded before this point returned earlier and never
         // start counts, so superseded reloads add no DB pressure.
-        runDeferredCounts();
+        // The protected DTO page is bounded and supplies its materialized
+        // total. Do not start legacy Dexie count paths in packaged builds.
+        if (!packagedProtected) runDeferredCounts();
         
         if (isTxidSearch) {
           try {

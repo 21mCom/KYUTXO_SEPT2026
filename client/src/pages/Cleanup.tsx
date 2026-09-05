@@ -19,10 +19,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield, XCircle, ChevronLeft, ChevronRight, Unplug } from "lucide-react";
-import { db, Record, RecordOrigin, AddressImportance } from "@/lib/database";
-import { deleteRecord, getParticipantsByTxids, countAttachmentsByRecordIds } from "@/lib/dataFacade";
-import { getRecord, getRecordsPageByTypeAndImportanceTiersKeyset, getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
-import { deleteRecordOriginsByRecordId } from "@/lib/data/record-origins-crud";
+import { Record, RecordOrigin, AddressImportance } from "@/lib/database";
+import { getParticipantsByRecordIds, getParticipantsByTxids, countAttachmentsByRecordIds, deleteCleanupRecordWithOrigins } from "@/lib/dataFacade";
+import { getRecord, getRecordsByDiscoveredFromRecordIds, getRecordsByInputStringAndType, getRecordsPageByTypeAndImportanceTiersKeyset, getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
+import { getRecordOriginsByRecordIds } from "@/lib/data/record-origins-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { yieldToUI } from "@/hooks/use-async-memo";
 
@@ -103,14 +103,8 @@ async function bulkGetOriginsByRecordId(recordIds: Set<number>): Promise<Map<num
   const idsArray = Array.from(recordIds);
   const CHUNK = 200;
   const grouped = new Map<number, RecordOrigin[]>();
-  const key = null;
-
   for (let i = 0; i < idsArray.length; i += CHUNK) {
-    const chunk = idsArray.slice(i, i + CHUNK);
-    const batch = await db.recordOrigins
-      .where('recordId')
-      .anyOf(chunk)
-      .toArray();
+    const batch = await getRecordOriginsByRecordIds(idsArray.slice(i, i + CHUNK));
 
     for (const origin of batch) {
       if (!grouped.has(origin.recordId)) {
@@ -125,15 +119,17 @@ async function bulkGetOriginsByRecordId(recordIds: Set<number>): Promise<Map<num
 async function buildKnownRecordSets(onProgress: (msg: string) => void): Promise<{ knownAddresses: Set<string>; knownRecordIds: Set<number> }> {
   onProgress('Building known address index...');
   await yieldToUI();
-  const knownRecords = await db.records
-    .where('[type+addressImportance]')
-    .anyOf([
-      ['address', 'verified'],
-      ['address', 'manual'],
-      ['address', 'wallet-import'],
-      ['address', 'xpub-derived'],
-    ])
-    .toArray();
+  const knownRecords: Record[] = [];
+  let beforeIdExclusive: number | undefined;
+  do {
+    const batch = await getRecordsPageByTypeAndImportanceTiersKeyset(
+      'address', ['verified', 'manual', 'wallet-import', 'xpub-derived'],
+      { limit: 1000, beforeIdExclusive },
+    );
+    knownRecords.push(...batch);
+    beforeIdExclusive = batch[batch.length - 1]?.id;
+    if (batch.length < 1000) break;
+  } while (beforeIdExclusive !== undefined);
   const knownAddresses = new Set<string>();
   const knownRecordIds = new Set<number>();
   for (const r of knownRecords) {
@@ -164,10 +160,7 @@ async function checkTransactionConnections(
   for (let i = 0; i < candidateRecordIds.length; i += CHUNK) {
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
     const chunk = candidateRecordIds.slice(i, i + CHUNK);
-    const participants = await db.transactionParticipants
-      .where('recordId')
-      .anyOf(chunk)
-      .toArray();
+    const participants = await getParticipantsByRecordIds(chunk);
     for (const p of participants) {
       candidateTxids.add(p.txid);
     }
@@ -393,9 +386,7 @@ export default function Cleanup() {
     setScanProgress('Finding parent address...');
     await yieldToUI();
 
-    const parentRecords = await db.records
-      .filter(r => r.inputString === trimmed && r.type === 'address')
-      .toArray();
+    const parentRecords = await getRecordsByInputStringAndType(trimmed, 'address');
 
     if (parentRecords.length === 0) {
       toast({ title: "Address Not Found", description: "This address is not in your records", variant: "destructive" });
@@ -414,10 +405,7 @@ export default function Cleanup() {
 
     while (currentParentIds.length > 0 && depth < 50) {
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      const children = await db.records
-        .where('discoveredFromRecordId')
-        .anyOf(currentParentIds)
-        .toArray();
+      const children = await getRecordsByDiscoveredFromRecordIds(currentParentIds);
 
       if (children.length === 0) break;
       for (const r of children) allDiscovered.push(r);
@@ -447,12 +435,10 @@ export default function Cleanup() {
         hasOtherConn = true;
       }
       if (!hasOtherConn) {
-        const childrenOutside = await db.records
-          .where('discoveredFromRecordId')
-          .equals(record.id)
-          .filter(r => r.id !== undefined && !discoveryTreeIds.has(r.id))
-          .count();
-        if (childrenOutside > 0) hasOtherConn = true;
+        const children = await getRecordsByDiscoveredFromRecordIds([record.id]);
+        if (children.some((child) => child.id !== undefined && !discoveryTreeIds.has(child.id))) {
+          hasOtherConn = true;
+        }
       }
 
       cleanupCandidates.push({ record, origins, hasOtherConnections: hasOtherConn, connectedToKnown: false });
@@ -626,9 +612,8 @@ export default function Cleanup() {
           deletedTxids.push(record.inputString);
         }
 
-        await deleteRecordOriginsByRecordId(id);
-        await deleteRecord(id);
-        deleted++;
+        if (await deleteCleanupRecordWithOrigins(id)) deleted++;
+        else skipped++;
       }
 
       // Collect participant addresses of any deleted transaction records — these

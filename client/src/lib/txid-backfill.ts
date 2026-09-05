@@ -12,7 +12,6 @@
 // crud-guards validation step.
 
 import {
-  db,
   type Record,
   type TransactionParticipant,
   type ScriptType,
@@ -23,11 +22,17 @@ import {
   MINIMUM_CONFIRMATIONS,
 } from './blockchain-api';
 import {
-  addTransaction,
-  bulkAddParticipants,
+  addTransactionWithParticipants,
   bulkPutParticipants,
   getTransactionByTxid,
+  getTransactionsByTxids,
+  getParticipantsByTxids,
+  getTransactionParticipantsAfterId,
 } from './data/transaction-crud';
+import {
+  getRecordsByInputStrings,
+  getRecordsPageByTypeIdReverseKeyset,
+} from './data/record-crud';
 import { getNodeSettings } from './data/node-settings-crud';
 import { recomputeAddressStats } from './data/address-stats';
 import type { BlockchainProvider, ParsedTransaction } from './blockchain-api';
@@ -232,16 +237,15 @@ export async function detectOrphanedTxRecords(): Promise<{
   recordIds: Map<string, number>;
 }> {
   const SCAN_BATCH = 500;
-  let lastId = 0;
+  let beforeIdExclusive: number | undefined;
   const orphanTxids: string[] = [];
   const txidToRecordId = new Map<string, number>();
 
   for (;;) {
-    const batch: Record[] = await db.records
-      .where('[type+id]')
-      .between(['transaction', lastId], ['transaction', Infinity], false, true)
-      .limit(SCAN_BATCH)
-      .toArray();
+    const batch: Record[] = await getRecordsPageByTypeIdReverseKeyset('transaction', {
+      limit: SCAN_BATCH,
+      beforeIdExclusive,
+    });
 
     if (batch.length === 0) break;
 
@@ -253,15 +257,11 @@ export async function detectOrphanedTxRecords(): Promise<{
         candidateTxids.push(r.inputString!);
         candidateMap.set(r.inputString!, r.id);
       }
-      lastId = r.id ?? lastId;
     }
 
     if (candidateTxids.length > 0) {
       // Check which ones already have a blockchain row
-      const existing = await db.blockchainTransactions
-        .where('txid')
-        .anyOf(candidateTxids)
-        .toArray();
+      const existing = await getTransactionsByTxids(candidateTxids);
       const existingSet = new Set(existing.map(tx => tx.txid));
 
       for (const txid of candidateTxids) {
@@ -273,6 +273,7 @@ export async function detectOrphanedTxRecords(): Promise<{
     }
 
     if (batch.length < SCAN_BATCH) break;
+    beforeIdExclusive = batch[batch.length - 1].id;
 
     // Yield between batches so the UI stays responsive
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -295,8 +296,7 @@ async function writeOnChainData(
   const alreadyExists = await getTransactionByTxid(parsed.txid);
   if (alreadyExists) return false;
 
-  // Write the blockchain transaction row
-  await addTransaction({
+  const transaction = {
     txid: parsed.txid,
     blockHeight: parsed.blockHeight,
     blockTime: parsed.blockTime,
@@ -318,7 +318,7 @@ async function writeOnChainData(
     hasCoinbaseInput: parsed.hasCoinbaseInput,
     hasLowRSig: parsed.hasLowRSig,
     hasMixedWitness: parsed.hasMixedWitness,
-  }, { skipNotification: true });
+  };
 
   // Build participant rows. For each address, look up an existing record by
   // inputString so we can set recordId (links participant to metadata).
@@ -337,10 +337,7 @@ async function writeOnChainData(
   // Batch lookups in chunks of 500
   for (let i = 0; i < dedupedAddresses.length; i += 500) {
     const chunk = dedupedAddresses.slice(i, i + 500);
-    const found = await db.records
-      .where('inputString')
-      .anyOf(chunk)
-      .toArray();
+    const found = await getRecordsByInputStrings(chunk);
     for (const r of found) {
       if (r.id !== undefined && r.inputString) {
         addressToRecordId.set(r.inputString, r.id);
@@ -348,7 +345,7 @@ async function writeOnChainData(
     }
   }
 
-  const participants: Parameters<typeof bulkAddParticipants>[0] = [];
+  const participants: TransactionParticipant[] = [];
 
   for (const inp of parsed.inputs) {
     participants.push({
@@ -375,9 +372,7 @@ async function writeOnChainData(
     });
   }
 
-  if (participants.length > 0) {
-    await bulkAddParticipants(participants, { skipNotification: true });
-  }
+  await addTransactionWithParticipants(transaction, participants, { skipNotification: true });
 
   return true;
 }
@@ -629,11 +624,7 @@ async function resolveBackfillPrevouts(
   for (let i = 0; i < txids.length; i += 500) {
     if (signal?.aborted) return 0;
     const batch = txids.slice(i, i + 500);
-    const inputs = await db.transactionParticipants
-      .where('txid')
-      .anyOf(batch)
-      .and(p => p.role === 'input')
-      .toArray();
+    const inputs = (await getParticipantsByTxids(batch)).filter(p => p.role === 'input');
     for (const p of inputs) {
       if (
         (!p.address || p.address === '') &&
@@ -725,11 +716,7 @@ async function resolveUnresolvedInputs(
   for (let i = 0; i < prevTxidArr.length; i += 500) {
     if (signal?.aborted) return { written: 0, resolvedAddresses: [] };
     const batch = prevTxidArr.slice(i, i + 500);
-    const outputs = await db.transactionParticipants
-      .where('txid')
-      .anyOf(batch)
-      .and(p => p.role === 'output')
-      .toArray();
+    const outputs = (await getParticipantsByTxids(batch)).filter(p => p.role === 'output');
     for (const o of outputs) {
       if (o.vout !== undefined) {
         outputCache.set(`${o.txid}:${o.vout}`, {
@@ -794,10 +781,7 @@ async function resolveUnresolvedInputs(
   const addrArr = Array.from(resolvedAddresses);
   for (let i = 0; i < addrArr.length; i += 500) {
     const batch = addrArr.slice(i, i + 500);
-    const records = await db.records
-      .where('inputString')
-      .anyOf(batch)
-      .toArray();
+    const records = await getRecordsByInputStrings(batch);
     for (const r of records) {
       if (r.id !== undefined && r.inputString) {
         addressToRecordId.set(r.inputString, r.id);
@@ -923,11 +907,7 @@ async function resolveAllBlankPrevouts(
 
   for (;;) {
     if (signal?.aborted) break;
-    const batch = await db.transactionParticipants
-      .where('id')
-      .above(lastId)
-      .limit(SCAN_BATCH)
-      .toArray();
+    const batch = await getTransactionParticipantsAfterId(lastId, SCAN_BATCH);
 
     if (batch.length === 0) break;
 

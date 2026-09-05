@@ -17,7 +17,7 @@
 // tables (tags/categories/owners/walletNames/seedNames/walletSoftware) are not
 // guarded and are read/cleared directly.
 
-import { db } from "@/lib/database";
+import { getVaultRepository, type VaultRows, type VaultTableName } from "@/lib/repository";
 import {
   getTags,
   getCategories,
@@ -103,7 +103,7 @@ import {
 } from "@/lib/quantum-risk";
 import { sanitizeSavedInboxViews } from "@/lib/data/transaction-crud";
 import type { SavedInboxView } from "@/lib/db-types";
-import { validateResidencyRanges } from "@/lib/data/owner-policy";
+import { getOwnerResidencies, validateResidencyRanges } from "@/lib/data/owner-policy";
 
 // Recognized Fund Trail layout values + their human-readable labels, derived
 // from the single source of truth so this allow-list never drifts from the UI.
@@ -339,13 +339,13 @@ export async function restoreSettingsPreferences(rows: any[]): Promise<void> {
 export async function readInlineTables(): Promise<Record<string, unknown[]>> {
   const [tags, categories, owners, ownerResidencies, walletNames, seedNames, walletSoftware] =
     await Promise.all([
-      db.tags.toArray(),
-      db.categories.toArray(),
-      db.owners.toArray(),
-      db.ownerResidencies.toArray(),
-      db.walletNames.toArray(),
-      db.seedNames.toArray(),
-      db.walletSoftware.toArray(),
+      readAllRepositoryRows("tags"),
+      readAllRepositoryRows("categories"),
+      readAllRepositoryRows("owners"),
+      readAllRepositoryRows("ownerResidencies"),
+      readAllRepositoryRows("walletNames"),
+      readAllRepositoryRows("seedNames"),
+      readAllRepositoryRows("walletSoftware"),
     ]);
   const [
     recordOrigins,
@@ -376,11 +376,11 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     getAllDustFlags(),
     getAllSavedPsbts(),
     getAllAdversaryScenarios(),
-    db.entities.toArray(),
-    db.wallets.toArray(),
-    db.addressOwnership.toArray(),
-    db.transactionMetadata.toArray(),
-    db.transactionLegMetadata.toArray(),
+    readAllRepositoryRows("entities"),
+    readAllRepositoryRows("wallets"),
+    readAllRepositoryRows("addressOwnership"),
+    readAllRepositoryRows("transactionMetadata"),
+    readAllRepositoryRows("transactionLegMetadata"),
   ]);
 
   return {
@@ -413,13 +413,16 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
 }
 
 export async function clearInlineTables(): Promise<void> {
-  await db.tags.clear();
-  await db.categories.clear();
-  await db.owners.clear();
-  await db.ownerResidencies.clear();
-  await db.walletNames.clear();
-  await db.seedNames.clear();
-  await db.walletSoftware.clear();
+  const repository = getVaultRepository();
+  await Promise.all([
+    repository.clear("tags"),
+    repository.clear("categories"),
+    repository.clear("owners"),
+    repository.clear("ownerResidencies"),
+    repository.clear("walletNames"),
+    repository.clear("seedNames"),
+    repository.clear("walletSoftware"),
+  ]);
   await clearRecordOrigins({ skipNotification: true });
   await clearCustomFields({ skipNotification: true });
   await clearDerivationTemplates({ skipNotification: true });
@@ -430,12 +433,14 @@ export async function clearInlineTables(): Promise<void> {
   await clearDustFlags({ skipNotification: true });
   await clearSavedPsbts({ skipNotification: true });
   await clearAdversaryScenarios({ skipNotification: true });
-  await db.entities.clear();
-  await db.wallets.clear();
-  await db.addressOwnership.clear();
-  await db.transactionMetadata.clear();
-  await db.transactionLegMetadata.clear();
-  await db.recordModelMigrationState.clear();
+  await Promise.all([
+    repository.clear("entities"),
+    repository.clear("wallets"),
+    repository.clear("addressOwnership"),
+    repository.clear("transactionMetadata"),
+    repository.clear("transactionLegMetadata"),
+    repository.clear("recordModelMigrationState"),
+  ]);
   // NOTE: settings is intentionally not cleared (matches legacy restore).
   // utxoLineage, custodySegments and lineageSnapshots are streamed tables now;
   // the restore orchestrator clears them, not this inline path.
@@ -475,6 +480,7 @@ export async function restoreInlineTables(
   data: Record<string, unknown>,
   restoreMode: RestoreMode = "replace",
 ): Promise<InlineRestoreResult> {
+  const repository = getVaultRepository();
   const arr = (k: string): any[] => (Array.isArray(data[k]) ? (data[k] as any[]) : []);
   const now = Date.now();
   // Validate the complete incoming policy history before touching owner rows.
@@ -577,7 +583,7 @@ export async function restoreInlineTables(
         .filter((row) => row.ownerId === oldOwnerId)
         .map((row) => ({ startDate: row.startDate, endDate: typeof row.endDate === "string" ? row.endDate : undefined }));
       if (incoming.length) validateResidencyRanges([
-        ...(await db.ownerResidencies.where("ownerId").equals(live.id).toArray()),
+        ...(await getOwnerResidencies(live.id)),
         ...incoming,
       ]);
     }
@@ -608,7 +614,7 @@ export async function restoreInlineTables(
     const restored = await getOwners();
     const fallback = restored.find((owner) => owner.name.trim().toLowerCase() === "me") ??
       [...restored].sort((a, b) => a.createdAt - b.createdAt || a.id! - b.id!)[0];
-    if (fallback?.id != null) await db.owners.update(fallback.id, { isDefault: true });
+    if (fallback?.id != null) await repository.update("owners", fallback.id, { isDefault: true });
   }
   // Residencies refer to owner primary keys, which are intentionally remapped
   // during restore just like other inline autoincrement rows.
@@ -616,10 +622,10 @@ export async function restoreInlineTables(
     const ownerId = ownerIdMap.get(residency.ownerId);
     if (ownerId === undefined || typeof residency.startDate !== "string" ||
         typeof residency.jurisdiction !== "string" || typeof residency.matchingMethod !== "string") continue;
-    const duplicate = isMergeMode && await db.ownerResidencies
-      .where('[ownerId+startDate]').equals([ownerId, residency.startDate]).first();
+    const duplicate = isMergeMode && (await getOwnerResidencies(ownerId))
+      .some((row) => row.startDate === residency.startDate);
     if (duplicate) continue;
-    const id = await db.ownerResidencies.add({
+    const id = await repository.add("ownerResidencies", {
       ownerId,
       startDate: residency.startDate,
       endDate: typeof residency.endDate === "string" ? residency.endDate : undefined,
@@ -912,13 +918,13 @@ export async function restoreInlineTables(
       for (const id of meta.adversaryScenarioIds) {
         await deleteAdversaryScenario(id, { skipNotification: true });
       }
-      await db.tags.bulkDelete(meta.tagIds);
-      await db.categories.bulkDelete(meta.categoryIds);
-      await db.owners.bulkDelete(meta.ownerIds);
-      await db.ownerResidencies.bulkDelete(meta.ownerResidencyIds);
-      await db.walletNames.bulkDelete(meta.walletNameIds);
-      await db.seedNames.bulkDelete(meta.seedNameIds);
-      await db.walletSoftware.bulkDelete(meta.walletSoftwareIds);
+      await repository.bulkDelete("tags", meta.tagIds);
+      await repository.bulkDelete("categories", meta.categoryIds);
+      await repository.bulkDelete("owners", meta.ownerIds);
+      await repository.bulkDelete("ownerResidencies", meta.ownerResidencyIds);
+      await repository.bulkDelete("walletNames", meta.walletNameIds);
+      await repository.bulkDelete("seedNames", meta.seedNameIds);
+      await repository.bulkDelete("walletSoftware", meta.walletSoftwareIds);
       return (
         meta.tagIds.length +
         meta.categoryIds.length +
@@ -939,4 +945,18 @@ export async function restoreInlineTables(
   }
 
   return result;
+}
+
+const INLINE_PAGE_SIZE = 1000;
+
+async function readAllRepositoryRows<T extends VaultTableName>(table: T): Promise<VaultRows[T][]> {
+  const repository = getVaultRepository();
+  const rows: VaultRows[T][] = [];
+  let cursor: string | number | undefined;
+  do {
+    const page = await repository.list(table, { cursor, limit: INLINE_PAGE_SIZE });
+    rows.push(...page.rows);
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return rows;
 }

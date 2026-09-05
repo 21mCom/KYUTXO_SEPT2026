@@ -16,6 +16,7 @@ const MESSAGE_TYPES = Object.freeze({
   GET_ROW: 'getRow',
   LIST_ROWS: 'listRows',
   DELETE_ROW: 'deleteRow',
+  REPOSITORY: 'repository',
   WRITE_ATTACHMENT: 'writeAttachment',
   READ_ATTACHMENT: 'readAttachment',
   DELETE_ATTACHMENT: 'deleteAttachment',
@@ -31,7 +32,7 @@ const MESSAGE_TYPES = Object.freeze({
 // Canonical list shared by the worker, migration controller, and task-66
 // repository handoff. New protected repository tables must be added here.
 const PROTECTED_TABLES = Object.freeze([
-  'records', 'attachments', 'tags', 'categories', 'owners', 'walletNames',
+  'records', 'attachments', 'tags', 'categories', 'owners', 'ownerResidencies', 'walletNames',
   'seedNames', 'walletSoftware', 'recordOrigins', 'customFields', 'settings',
   'priceData', 'blockchainTransactions', 'transactionParticipants',
   'addressSyncState', 'nodeSettings', 'derivationTemplates', 'utxoLineage',
@@ -115,7 +116,7 @@ function registerProtectedStoreHandlers(ipcMain, { dataDir, enabled, operationAl
       }
       if (!validate(payload || {})) return { ok: false, error: SAFE_ERROR };
       const result = type === MESSAGE_TYPES.STATUS && !enabled
-        ? { mode: 'plaintext-fallback', available: false, exists: false, unlocked: false, version: 1 }
+        ? { mode: 'plaintext-fallback', available: false, exists: false, unlocked: false, verified: false, ready: false, version: 1 }
         : await client.call(type, payload || {});
       return { ok: true, result };
       } catch {
@@ -159,6 +160,12 @@ function registerProtectedStoreHandlers(ipcMain, { dataDir, enabled, operationAl
       (typeof p.id === 'string' || Number.isSafeInteger(p.id)),
   );
   handle(
+    'protected-store:repository',
+    MESSAGE_TYPES.REPOSITORY,
+    (p) => typeof p.repository === 'string' &&
+      typeof p.collection === 'string' && typeof p.operation === 'string',
+  );
+  handle(
     'protected-store:writeAttachment',
     MESSAGE_TYPES.WRITE_ATTACHMENT,
     (p) => p.bytes instanceof ArrayBuffer || ArrayBuffer.isView(p.bytes),
@@ -188,6 +195,10 @@ function registerProtectedStoreHandlers(ipcMain, { dataDir, enabled, operationAl
       : Promise.reject(new Error(SAFE_ERROR)),
     lock: () => enabled && operationAllowed(MESSAGE_TYPES.LOCK)
       ? client.call(MESSAGE_TYPES.LOCK).catch(() => undefined)
+      : Promise.reject(new Error(SAFE_ERROR)),
+    repository: (repository, collection, operation, payload = {}) => enabled
+      && operationAllowed(MESSAGE_TYPES.REPOSITORY)
+      ? client.call(MESSAGE_TYPES.REPOSITORY, { repository, collection, operation, ...payload })
       : Promise.reject(new Error(SAFE_ERROR)),
     close: () => client.close(),
   };

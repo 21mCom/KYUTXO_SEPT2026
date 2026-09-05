@@ -1,4 +1,6 @@
-import { db, notifyDbChange, type UtxoLineage, type CustodySegment, type CustodyStatus, type LineageSnapshot } from '../database';
+import { notifyDbChange, type UtxoLineage, type CustodySegment, type CustodyStatus, type LineageSnapshot } from '../database';
+import { getVaultRepository } from '../repository';
+import { listVaultRows, queryVaultRows } from './repository-helpers';
 
 export type CreateUtxoLineageData = Omit<UtxoLineage, 'id'>;
 export type CreateCustodySegmentData = Omit<CustodySegment, 'id'>;
@@ -11,7 +13,7 @@ export async function addUtxoLineage(
   data: CreateUtxoLineageData,
   options?: LineageWriteOptions
 ): Promise<number> {
-  const id = await db.utxoLineage.add(data);
+  const id = await getVaultRepository().add('utxoLineage', data);
 
   if (!options?.skipNotification) {
     notifyDbChange('utxoLineage');
@@ -26,7 +28,7 @@ export async function bulkAddUtxoLineage(
 ): Promise<number[]> {
   if (records.length === 0) return [];
 
-  const ids = await db.utxoLineage.bulkAdd(records, { allKeys: true });
+  const ids = await getVaultRepository().bulkPut('utxoLineage', records);
 
   if (!options?.skipNotification) {
     notifyDbChange('utxoLineage');
@@ -43,7 +45,7 @@ export async function bulkDeleteUtxoLineage(
 ): Promise<void> {
   if (ids.length === 0) return;
 
-  await db.utxoLineage.bulkDelete(ids);
+  await getVaultRepository().bulkDelete('utxoLineage', ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('utxoLineage');
@@ -55,7 +57,7 @@ export async function updateUtxoLineage(
   changes: Partial<UtxoLineage>,
   options?: LineageWriteOptions
 ): Promise<void> {
-  await db.utxoLineage.update(id, changes);
+  await getVaultRepository().update('utxoLineage', id, changes);
 
   if (!options?.skipNotification) {
     notifyDbChange('utxoLineage');
@@ -65,7 +67,7 @@ export async function updateUtxoLineage(
 export async function clearUtxoLineage(
   options?: LineageWriteOptions
 ): Promise<void> {
-  await db.utxoLineage.clear();
+  await getVaultRepository().clear('utxoLineage');
 
   if (!options?.skipNotification) {
     notifyDbChange('utxoLineage');
@@ -76,7 +78,7 @@ export async function addCustodySegment(
   data: CreateCustodySegmentData,
   options?: LineageWriteOptions
 ): Promise<number> {
-  const id = await db.custodySegments.add(data);
+  const id = await getVaultRepository().add('custodySegments', data);
 
   if (!options?.skipNotification) {
     notifyDbChange('custodySegments');
@@ -91,7 +93,7 @@ export async function bulkAddCustodySegments(
 ): Promise<number[]> {
   if (records.length === 0) return [];
 
-  const ids = await db.custodySegments.bulkAdd(records, { allKeys: true });
+  const ids = await getVaultRepository().bulkPut('custodySegments', records);
 
   if (!options?.skipNotification) {
     notifyDbChange('custodySegments');
@@ -108,7 +110,7 @@ export async function bulkDeleteCustodySegments(
 ): Promise<void> {
   if (ids.length === 0) return;
 
-  await db.custodySegments.bulkDelete(ids);
+  await getVaultRepository().bulkDelete('custodySegments', ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('custodySegments');
@@ -118,7 +120,7 @@ export async function bulkDeleteCustodySegments(
 export async function clearCustodySegments(
   options?: LineageWriteOptions
 ): Promise<void> {
-  await db.custodySegments.clear();
+  await getVaultRepository().clear('custodySegments');
 
   if (!options?.skipNotification) {
     notifyDbChange('custodySegments');
@@ -128,8 +130,8 @@ export async function clearCustodySegments(
 export async function clearAllLineageData(
   options?: LineageWriteOptions
 ): Promise<void> {
-  await db.utxoLineage.clear();
-  await db.custodySegments.clear();
+  await getVaultRepository().clear('utxoLineage');
+  await getVaultRepository().clear('custodySegments');
 
   if (!options?.skipNotification) {
     notifyDbChange(['utxoLineage', 'custodySegments']);
@@ -142,7 +144,7 @@ export async function addLineageSnapshot(
   data: CreateLineageSnapshotData,
   options?: LineageWriteOptions
 ): Promise<number> {
-  const id = await db.lineageSnapshots.add(data);
+  const id = await getVaultRepository().add('lineageSnapshots', data);
 
   if (!options?.skipNotification) {
     notifyDbChange('lineageSnapshots');
@@ -157,7 +159,7 @@ export async function bulkAddLineageSnapshots(
 ): Promise<number[]> {
   if (records.length === 0) return [];
 
-  const ids = await db.lineageSnapshots.bulkAdd(records, { allKeys: true });
+  const ids = await getVaultRepository().bulkPut('lineageSnapshots', records);
 
   if (!options?.skipNotification) {
     notifyDbChange('lineageSnapshots');
@@ -174,7 +176,7 @@ export async function bulkDeleteLineageSnapshots(
 ): Promise<void> {
   if (ids.length === 0) return;
 
-  await db.lineageSnapshots.bulkDelete(ids);
+  await getVaultRepository().bulkDelete('lineageSnapshots', ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('lineageSnapshots');
@@ -186,7 +188,7 @@ export async function updateLineageSnapshot(
   changes: Partial<LineageSnapshot>,
   options?: LineageWriteOptions
 ): Promise<void> {
-  await db.lineageSnapshots.update(id, changes);
+  await getVaultRepository().update('lineageSnapshots', id, changes);
 
   if (!options?.skipNotification) {
     notifyDbChange('lineageSnapshots');
@@ -197,7 +199,7 @@ export async function deleteLineageSnapshot(
   id: number,
   options?: LineageWriteOptions
 ): Promise<void> {
-  await db.lineageSnapshots.delete(id);
+  await getVaultRepository().delete('lineageSnapshots', id);
 
   if (!options?.skipNotification) {
     notifyDbChange('lineageSnapshots');
@@ -207,7 +209,7 @@ export async function deleteLineageSnapshot(
 export async function clearLineageSnapshots(
   options?: LineageWriteOptions
 ): Promise<void> {
-  await db.lineageSnapshots.clear();
+  await getVaultRepository().clear('lineageSnapshots');
 
   if (!options?.skipNotification) {
     notifyDbChange('lineageSnapshots');
@@ -219,22 +221,17 @@ export async function clearLineageSnapshots(
 // =============================================================================
 
 export async function getAllUtxoLineage(): Promise<UtxoLineage[]> {
-  return db.utxoLineage.toArray();
+  return listVaultRows('utxoLineage');
 }
 
 export async function getUtxoLineageByOutpoints(
   outpoints: Array<{ txid: string; vout: number }>,
 ): Promise<UtxoLineage[]> {
   if (outpoints.length === 0) return [];
-  const keys = outpoints.map(({ txid, vout }) => [txid, vout] as [string, number]);
-  const rows = await db.utxoLineage
-    .where("[spentTxid+spentVout]")
-    .anyOf(keys)
-    .toArray();
-  const created = await db.utxoLineage
-    .where("[createdTxid+createdVout]")
-    .anyOf(keys)
-    .toArray();
+  const rows = (await Promise.all(outpoints.map(({ txid, vout }) =>
+    queryVaultRows<UtxoLineage>('utxoLineage', 'lineage.bySpentOutpoint', [txid, vout], 1000)))).flat();
+  const created = (await Promise.all(outpoints.map(({ txid, vout }) =>
+    queryVaultRows<UtxoLineage>('utxoLineage', 'lineage.byCreatedOutpoint', [txid, vout], 1000)))).flat();
   const seen = new Set<number>();
   return [...rows, ...created].filter((row) => {
     if (row.id === undefined || seen.has(row.id)) return false;
@@ -244,17 +241,19 @@ export async function getUtxoLineageByOutpoints(
 }
 
 export async function getAllCustodySegments(): Promise<CustodySegment[]> {
-  return db.custodySegments.toArray();
+  return listVaultRows('custodySegments');
 }
 
 export async function getCustodySegmentsBySegmentIds(segmentIds: string[]): Promise<CustodySegment[]> {
   if (segmentIds.length === 0) return [];
-  return db.custodySegments.where("segmentId").anyOf(segmentIds).toArray();
+  return (await Promise.all(segmentIds.map((id) =>
+    queryVaultRows<CustodySegment>('custodySegments', 'lineage.bySegmentId', id, 1000)))).flat();
 }
 
 export async function getLineageSnapshotsBySnapshotIds(snapshotIds: string[]): Promise<LineageSnapshot[]> {
   if (snapshotIds.length === 0) return [];
-  return db.lineageSnapshots.where("snapshotId").anyOf(snapshotIds).toArray();
+  return (await Promise.all(snapshotIds.map((id) =>
+    queryVaultRows<LineageSnapshot>('lineageSnapshots', 'lineage.bySnapshotId', id, 1000)))).flat();
 }
 
 // Bounded id-keyset page. Used by the streaming backup export so the whole
@@ -263,7 +262,7 @@ export async function getUtxoLineageAfterId(
   afterId: number,
   limit: number
 ): Promise<UtxoLineage[]> {
-  return db.utxoLineage.where('id').above(afterId).limit(limit).toArray();
+  return (await getVaultRepository().list('utxoLineage', { cursor: afterId, limit })).rows;
 }
 
 // Bounded id-keyset page. Used by the streaming backup export so the whole
@@ -272,7 +271,7 @@ export async function getCustodySegmentsAfterId(
   afterId: number,
   limit: number
 ): Promise<CustodySegment[]> {
-  return db.custodySegments.where('id').above(afterId).limit(limit).toArray();
+  return (await getVaultRepository().list('custodySegments', { cursor: afterId, limit })).rows;
 }
 
 // Newest-first (descending id) bounded page. `beforeId` is exclusive — pass
@@ -282,7 +281,11 @@ export async function getCustodySegmentsBeforeId(
   beforeId: number,
   limit: number
 ): Promise<CustodySegment[]> {
-  return db.custodySegments.where('id').below(beforeId).reverse().limit(limit).toArray();
+  return (await getVaultRepository().list('custodySegments', {
+    cursor: beforeId === Number.MAX_SAFE_INTEGER ? undefined : beforeId,
+    limit,
+    direction: 'desc',
+  })).rows;
 }
 
 // Filters for the Continuity Proof all-segments list. All dimensions combine
@@ -357,11 +360,9 @@ export async function getCustodySegmentsBeforeIdFiltered(
   filter?: CustodySegmentListFilter
 ): Promise<CustodySegment[]> {
   const normalized = normalizeSegmentFilter(filter);
-  const collection = db.custodySegments.where('id').below(beforeId).reverse();
-  if (!normalized) {
-    return collection.limit(limit).toArray();
-  }
-  return collection.filter((segment) => matchesSegmentFilter(segment, normalized)).limit(limit).toArray();
+  return (await getCustodySegmentsBeforeId(beforeId, Number.MAX_SAFE_INTEGER))
+    .filter((segment) => !normalized || matchesSegmentFilter(segment, normalized))
+    .slice(0, limit);
 }
 
 // Count companion to getCustodySegmentsBeforeIdFiltered — must stay in
@@ -372,9 +373,9 @@ export async function countCustodySegmentsFiltered(
 ): Promise<number> {
   const normalized = normalizeSegmentFilter(filter);
   if (!normalized) {
-    return db.custodySegments.count();
+    return getVaultRepository().count('custodySegments');
   }
-  return db.custodySegments.filter((segment) => matchesSegmentFilter(segment, normalized)).count();
+  return (await listVaultRows('custodySegments')).filter((segment) => matchesSegmentFilter(segment, normalized)).length;
 }
 
 // Returns the set of `segmentId` values already present, read via the unique
@@ -382,20 +383,19 @@ export async function countCustodySegmentsFiltered(
 // skip custody segments whose segmentId already exists — appending them would
 // otherwise violate the unique index and abort the whole restore mid-way.
 export async function getExistingSegmentIds(): Promise<Set<string>> {
-  const keys = await db.custodySegments.orderBy('segmentId').keys();
-  return new Set(keys as unknown as string[]);
+  return new Set((await listVaultRows('custodySegments')).map((row) => row.segmentId));
 }
 
 export async function countUtxoLineage(): Promise<number> {
-  return db.utxoLineage.count();
+  return getVaultRepository().count('utxoLineage');
 }
 
 export async function countCustodySegments(): Promise<number> {
-  return db.custodySegments.count();
+  return getVaultRepository().count('custodySegments');
 }
 
 export async function getAllLineageSnapshots(): Promise<LineageSnapshot[]> {
-  return db.lineageSnapshots.toArray();
+  return listVaultRows('lineageSnapshots');
 }
 
 // Bounded id-keyset page. Used by the streaming backup export so the whole
@@ -404,7 +404,7 @@ export async function getLineageSnapshotsAfterId(
   afterId: number,
   limit: number
 ): Promise<LineageSnapshot[]> {
-  return db.lineageSnapshots.where('id').above(afterId).limit(limit).toArray();
+  return (await getVaultRepository().list('lineageSnapshots', { cursor: afterId, limit })).rows;
 }
 
 // Returns the set of `snapshotId` values already present, read via the unique
@@ -412,10 +412,9 @@ export async function getLineageSnapshotsAfterId(
 // skip snapshots whose snapshotId already exists — appending them would
 // otherwise violate the unique index and abort the whole restore mid-way.
 export async function getExistingSnapshotIds(): Promise<Set<string>> {
-  const keys = await db.lineageSnapshots.orderBy('snapshotId').keys();
-  return new Set(keys as unknown as string[]);
+  return new Set((await listVaultRows('lineageSnapshots')).map((row) => row.snapshotId));
 }
 
 export async function countLineageSnapshots(): Promise<number> {
-  return db.lineageSnapshots.count();
+  return getVaultRepository().count('lineageSnapshots');
 }

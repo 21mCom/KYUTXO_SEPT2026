@@ -49,6 +49,7 @@ import { getActivityBus } from '@/lib/activity-bus';
 import { toast } from '@/hooks/use-toast';
 import { db, CURRENT_SCHEMA_VERSION } from '@/lib/database';
 import { getElectronAPISafe } from '@/lib/electron';
+import type { ProtectedStoreStatus } from '@/lib/electron';
 import { syncDesktopLockSettings } from '@/lib/data/settings-crud';
 import {
   subscribeDbUpgradeProgress,
@@ -82,6 +83,9 @@ interface AuthContextType {
   legacyMigrationProgress: LegacyDecryptProgress | null;
   legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean; stillLocked?: number; verificationFailed?: boolean; lockedRecords?: LockedRecordRef[]; lockedRecordsTruncated?: boolean } | null;
   fileDecryptProgress: FileDecryptProgress | null;
+  /** Packaged builds must not use the IndexedDB vault until this is ready. */
+  protectedRepository: 'fallback' | 'checking' | 'locked' | 'ready' | 'error';
+  protectedRepositoryError: string | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -100,10 +104,82 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [fileDecryptProgress, setFileDecryptProgress] = useState<FileDecryptProgress | null>(null);
   const [dbUpgrade, setDbUpgrade] = useState<DbUpgradeProgress | null>(null);
   const [migrationPhase, setMigrationPhase] = useState<string | null>(null);
+  const [protectedRepository, setProtectedRepository] =
+    useState<AuthContextType['protectedRepository']>('checking');
+  const [protectedRepositoryError, setProtectedRepositoryError] = useState<string | null>(null);
+
+  // Development Electron deliberately keeps the existing IndexedDB fallback.
+  // A release renderer must have both the Electron bridge and a protected
+  // store; never silently fall back to plaintext when either is unavailable.
+  const usesProtectedRepository = () =>
+    !import.meta.env.DEV && (
+      getElectronAPISafe() !== null ||
+      (typeof navigator !== 'undefined' && /\bElectron\//.test(navigator.userAgent))
+    );
+
+  const assertProtectedStatus = useCallback((status: ProtectedStoreStatus, requireUnlocked: boolean) => {
+    if (status.mode !== 'protected' || !status.available) {
+      throw new Error('Protected vault storage is unavailable. The vault was not opened.');
+    }
+    if (!status.exists) {
+      throw new Error('Protected vault storage was not created.');
+    }
+    if (requireUnlocked && !status.unlocked) {
+      throw new Error('Protected vault storage remains locked.');
+    }
+    // `ready` is supplied by newer workers. Older workers have an equivalent
+    // verified status and must be verified before data consumers can mount.
+    if (status.ready === false || status.verified !== true) {
+      throw new Error('Protected vault integrity could not be verified.');
+    }
+  }, []);
+
+  const getProtectedStatus = useCallback(async (): Promise<ProtectedStoreStatus> => {
+    const bridge = getElectronAPISafe()?.protectedStore;
+    if (!bridge) throw new Error('Protected vault bridge is unavailable.');
+    const response = await bridge.status();
+    if (!response.ok || !response.result) {
+      throw new Error(response.error || 'Could not read protected vault status.');
+    }
+    return response.result;
+  }, []);
+
+  const verifyProtectedRepository = useCallback(async (requireUnlocked: boolean) => {
+    const bridge = getElectronAPISafe()?.protectedStore;
+    if (!bridge) throw new Error('Protected vault bridge is unavailable.');
+    const integrity = await bridge.integrity();
+    if (!integrity.ok || integrity.result?.ok !== true) {
+      throw new Error(integrity.error || 'Protected vault integrity check failed.');
+    }
+    const status = await getProtectedStatus();
+    assertProtectedStatus(status, requireUnlocked);
+    setProtectedRepository('ready');
+    setProtectedRepositoryError(null);
+  }, [assertProtectedStatus, getProtectedStatus]);
 
   useEffect(() => {
     const checkVault = async () => {
       try {
+        if (usesProtectedRepository()) {
+          const status = await getProtectedStatus();
+          if (status.mode !== 'protected' || !status.available) {
+            throw new Error('Protected vault storage is unavailable. Plaintext storage is disabled in packaged builds.');
+          }
+          // A status request intentionally does not unlock or open Dexie. An
+          // existing repository stays at the login boundary until its password
+          // has unlocked it and the integrity check below succeeds.
+          setIsInitialized(status.exists);
+          if (status.unlocked) {
+            // A status bit is not proof that the already-open native database
+            // remains readable. Re-run integrity before any authenticated tree
+            // can mount after a renderer reload.
+            await verifyProtectedRepository(true);
+          } else {
+            setProtectedRepository('locked');
+          }
+          return;
+        }
+        setProtectedRepository('fallback');
         // Detect a pending one-time schema upgrade BEFORE anything opens the
         // main database. Opening a vault written by an older release runs the
         // whole Dexie upgrade chain (index rebuilds + data walks) before the
@@ -143,14 +219,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsInitialized(initialized);
       } catch (error) {
         console.error('Failed to check vault status:', error);
-        setIsInitialized(false);
+        if (usesProtectedRepository()) {
+          setProtectedRepository('error');
+          setProtectedRepositoryError(error instanceof Error ? error.message : 'Protected vault startup failed.');
+          // Keep this null: AppContent renders a fail-closed startup error,
+          // rather than treating a failed protected-store probe as a new vault.
+          setIsInitialized(null);
+        } else {
+          setIsInitialized(false);
+        }
       } finally {
         setIsLoading(false);
       }
     };
 
     checkVault();
-  }, []);
+  }, [getProtectedStatus, verifyProtectedRepository]);
 
   const runAttachmentPathMigration = useCallback(async () => {
     const alreadyMigrated = await isAttachmentPathsMigrated();
@@ -575,6 +659,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setupPassword = useCallback(async (password: string) => {
     setIsLoading(true);
     try {
+      if (usesProtectedRepository()) {
+        const bridge = getElectronAPISafe()?.protectedStore;
+        if (!bridge) throw new Error('Protected vault bridge is unavailable.');
+        const created = await bridge.create(password);
+        if (!created.ok || created.result?.unlocked !== true || created.result?.verified !== true) {
+          throw new Error(created.error || 'Could not create protected vault.');
+        }
+        await verifyProtectedRepository(true);
+        setIsInitialized(true);
+        setIsAuthenticated(true);
+        return;
+      }
       const salt = generateSalt();
       const saltBase64 = bufferToBase64(salt);
       const hash = await hashPasswordWithParams(password, salt, CURRENT_KDF_PARAMS);
@@ -611,11 +707,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [runStartupMigrations]);
+  }, [runStartupMigrations, verifyProtectedRepository]);
 
   const login = useCallback(async (password: string): Promise<boolean> => {
     setIsLoading(true);
     try {
+      if (usesProtectedRepository()) {
+        const bridge = getElectronAPISafe()?.protectedStore;
+        if (!bridge) throw new Error('Protected vault bridge is unavailable.');
+        const unlocked = await bridge.unlock(password);
+        if (!unlocked.ok || unlocked.result?.unlocked !== true || unlocked.result?.verified !== true) {
+          setProtectedRepository('locked');
+          setProtectedRepositoryError(unlocked.error || null);
+          return false;
+        }
+        try {
+          await verifyProtectedRepository(true);
+        } catch (error) {
+          // Unlocking is not sufficient: a failed integrity/readiness check
+          // must keep every Dexie-backed authenticated consumer unmounted.
+          setProtectedRepository('error');
+          setProtectedRepositoryError(error instanceof Error ? error.message : 'Protected vault verification failed.');
+          return false;
+        }
+        setIsAuthenticated(true);
+        return true;
+      }
       const settings = await getVaultSettings();
       if (!settings) {
         return false;
@@ -656,10 +773,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [runStartupMigrations]);
+  }, [runStartupMigrations, verifyProtectedRepository]);
 
   const logout = useCallback(() => {
     setIsAuthenticated(false);
+    if (usesProtectedRepository()) {
+      setProtectedRepository('locked');
+      void getElectronAPISafe()?.protectedStore.lock();
+    }
     // Do NOT clear isMigrating if a startup migration is still running in the
     // background — keep the gate up so a re-login does not mount the data-heavy
     // app on top of the ongoing migration. The migration's own finally resets it.
@@ -706,6 +827,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         legacyMigrationProgress,
         legacyMigrationResult,
         fileDecryptProgress,
+        protectedRepository,
+        protectedRepositoryError,
       }}
     >
       {children}

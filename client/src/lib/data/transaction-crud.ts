@@ -2,6 +2,12 @@ import { db, notifyDbChange, USER_CURATED_TIERS, type BlockchainTransaction, typ
 import { getAttachmentsByRecordId } from './attachments-crud';
 import { getRecordsByInputStrings } from './record-crud';
 import Dexie from 'dexie';
+import { getVaultRepository, ProtectedVaultRepository } from '../repository';
+
+const protectedTransactionQuery = <T>(table: 'blockchainTransactions' | 'transactionParticipants', name: Parameters<ProtectedVaultRepository['query']>[1], value: unknown, limit?: number) => {
+  const repository = getVaultRepository();
+  return repository instanceof ProtectedVaultRepository ? repository.query<T>(table, name, value, limit) : null;
+};
 
 export type CreateTransactionData = Omit<BlockchainTransaction, 'id'>;
 
@@ -105,7 +111,8 @@ export async function addTransaction(
   data: CreateTransactionData,
   options?: TransactionWriteOptions
 ): Promise<number> {
-  const id = await db.blockchainTransactions.add(data);
+  const repository = getVaultRepository();
+  const id = repository.kind === 'protected' ? await repository.add('blockchainTransactions', data as BlockchainTransaction) : await db.blockchainTransactions.add(data);
 
   if (!options?.skipNotification) {
     notifyDbChange('blockchainTransactions');
@@ -119,7 +126,9 @@ export async function updateTransaction(
   changes: Partial<CreateTransactionData>,
   options?: TransactionWriteOptions
 ): Promise<void> {
-  await db.blockchainTransactions.update(id, changes);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.update('blockchainTransactions', id, changes);
+  else await db.blockchainTransactions.update(id, changes);
 
   if (!options?.skipNotification) {
     notifyDbChange('blockchainTransactions');
@@ -160,6 +169,12 @@ export async function getTransactionCurationState(
 
 /** Count actionable rows; future snoozes remain persisted but are not due. */
 export async function countActionableTransactionCurations(now = Date.now()): Promise<number> {
+  const protectedRows = await protectedTransactionQuery<BlockchainTransaction>(
+    'blockchainTransactions', 'transactions.byCurationState', 'actionable',
+  );
+  if (protectedRows) {
+    return protectedRows.filter(tx => tx.curationState === 'new' || (tx.curationState === 'snoozed' && (tx.snoozedUntil ?? 0) <= now)).length;
+  }
   return db.blockchainTransactions
     .where('curationState')
     .anyOf(['new', 'snoozed'])
@@ -170,6 +185,10 @@ export async function countActionableTransactionCurations(now = Date.now()): Pro
 export async function countTransactionCurations(
   states?: TransactionCurationState[],
 ): Promise<number> {
+  const protectedRows = await protectedTransactionQuery<BlockchainTransaction>(
+    'blockchainTransactions', 'transactions.byCurationState', states ?? 'all',
+  );
+  if (protectedRows) return protectedRows.length;
   if (!states || states.length === 0) {
     return db.blockchainTransactions.where('curationState').above('').count();
   }
@@ -192,7 +211,7 @@ export async function queueTransactionForReview(
   const tx = await getTransactionByTxid(txid);
   if (!tx || tx.curationState) return false;
 
-  const participants = await db.transactionParticipants.where('txid').equals(txid).toArray();
+  const participants = await getParticipantsByTxids([txid]);
   const recordIds = participants
     .map(p => p.recordId)
     .filter((id): id is number => typeof id === 'number');
@@ -263,6 +282,10 @@ export async function getTransactionsByCurationState(
   limit = 100,
   beforeId?: number,
 ): Promise<BlockchainTransaction[]> {
+  const protectedRows = await protectedTransactionQuery<BlockchainTransaction>(
+    'blockchainTransactions', 'transactions.byCurationState', { state, beforeId }, limit,
+  );
+  if (protectedRows) return protectedRows;
   const upperId = beforeId ?? Dexie.maxKey;
   return db.blockchainTransactions
     .where('[curationState+id]')
@@ -278,7 +301,10 @@ export async function bulkAddTransactions(
 ): Promise<number[]> {
   if (transactions.length === 0) return [];
 
-  const ids = await db.blockchainTransactions.bulkAdd(transactions, { allKeys: true });
+  const repository = getVaultRepository();
+  const ids = repository.kind === 'protected'
+    ? await repository.bulkPut('blockchainTransactions', transactions as BlockchainTransaction[])
+    : await db.blockchainTransactions.bulkAdd(transactions, { allKeys: true });
 
   if (!options?.skipNotification) {
     notifyDbChange('blockchainTransactions');
@@ -293,13 +319,41 @@ export async function bulkAddParticipants(
 ): Promise<number[]> {
   if (participants.length === 0) return [];
 
-  const ids = await db.transactionParticipants.bulkAdd(participants, { allKeys: true });
+  const repository = getVaultRepository();
+  const ids = repository.kind === 'protected'
+    ? await repository.bulkPut('transactionParticipants', participants)
+    : await db.transactionParticipants.bulkAdd(participants, { allKeys: true });
 
   if (!options?.skipNotification) {
     notifyDbChange('transactionParticipants');
   }
 
   return ids as number[];
+}
+
+/**
+ * Persist a newly discovered chain transaction and all of its participants as
+ * one commit. Packaged builds dispatch the fixed native worker command; browser
+ * and development builds use a real Dexie transaction.
+ */
+export async function addTransactionWithParticipants(
+  transaction: CreateTransactionData,
+  participants: TransactionParticipant[],
+  options?: TransactionWriteOptions,
+): Promise<{ transactionId: number; participantIds: number[] }> {
+  const repository = getVaultRepository();
+  const result = await repository.saveTransactionWithParticipants({
+    transaction: transaction as BlockchainTransaction,
+    participants,
+    replaceParticipants: true,
+  });
+  if (!options?.skipNotification) {
+    notifyDbChange(['blockchainTransactions', 'transactionParticipants']);
+  }
+  return {
+    transactionId: result.transactionId as number,
+    participantIds: result.participantIds as number[],
+  };
 }
 
 // Bulk delete by primary key. Used by the merge-cancel undo pass in the v3
@@ -311,7 +365,9 @@ export async function bulkDeleteTransactions(
 ): Promise<void> {
   if (ids.length === 0) return;
 
-  await db.blockchainTransactions.bulkDelete(ids);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.bulkDelete('blockchainTransactions', ids);
+  else await db.blockchainTransactions.bulkDelete(ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('blockchainTransactions');
@@ -324,7 +380,9 @@ export async function bulkDeleteParticipants(
 ): Promise<void> {
   if (ids.length === 0) return;
 
-  await db.transactionParticipants.bulkDelete(ids);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.bulkDelete('transactionParticipants', ids);
+  else await db.transactionParticipants.bulkDelete(ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('transactionParticipants');
@@ -335,7 +393,8 @@ export async function addParticipant(
   data: TransactionParticipant,
   options?: TransactionWriteOptions
 ): Promise<number> {
-  const id = await db.transactionParticipants.add(data);
+  const repository = getVaultRepository();
+  const id = repository.kind === 'protected' ? await repository.add('transactionParticipants', data) : await db.transactionParticipants.add(data);
 
   if (!options?.skipNotification) {
     notifyDbChange('transactionParticipants');
@@ -350,7 +409,9 @@ export async function putParticipant(
 ): Promise<void> {
   if (!data.id) throw new Error('Cannot put participant without an id');
 
-  await db.transactionParticipants.put(data);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.put('transactionParticipants', data, data.id);
+  else await db.transactionParticipants.put(data);
 
   if (!options?.skipNotification) {
     notifyDbChange('transactionParticipants');
@@ -363,11 +424,14 @@ export async function bulkPutParticipants(
 ): Promise<void> {
   if (participants.length === 0) return;
 
-  await db.transaction('rw', db.transactionParticipants, async () => {
-    for (const p of participants) {
-      if (p.id) await db.transactionParticipants.put(p);
-    }
-  });
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    await repository.bulkPut('transactionParticipants', participants.filter(p => p.id !== undefined));
+  } else {
+    await db.transaction('rw', db.transactionParticipants, async () => {
+      for (const p of participants) if (p.id) await db.transactionParticipants.put(p);
+    });
+  }
 
   if (!options?.skipNotification) {
     notifyDbChange('transactionParticipants');
@@ -377,7 +441,9 @@ export async function bulkPutParticipants(
 export async function clearTransactions(
   options?: TransactionWriteOptions
 ): Promise<void> {
-  await db.blockchainTransactions.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('blockchainTransactions');
+  else await db.blockchainTransactions.clear();
 
   if (!options?.skipNotification) {
     notifyDbChange('blockchainTransactions');
@@ -387,7 +453,9 @@ export async function clearTransactions(
 export async function clearParticipants(
   options?: TransactionWriteOptions
 ): Promise<void> {
-  await db.transactionParticipants.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('transactionParticipants');
+  else await db.transactionParticipants.clear();
 
   if (!options?.skipNotification) {
     notifyDbChange('transactionParticipants');
@@ -397,6 +465,11 @@ export async function clearParticipants(
 export async function clearAllTransactionData(
   options?: TransactionWriteOptions
 ): Promise<void> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    // Native gap: a cross-collection atomic clear command is required.
+    throw new Error('Protected vault native operation "transactions.clearAll" is required for atomic transaction data clearing');
+  }
   await db.blockchainTransactions.clear();
   await db.transactionParticipants.clear();
 
@@ -410,6 +483,8 @@ export async function clearAllTransactionData(
 // =============================================================================
 
 export async function getAllTransactions(): Promise<BlockchainTransaction[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') throw new Error('Protected vault native query "blockchainTransactions.all" is required; unbounded transaction reads are not permitted');
   return db.blockchainTransactions.toArray();
 }
 
@@ -420,31 +495,40 @@ export async function getTransactionsAfterId(
   afterId: number,
   limit: number
 ): Promise<BlockchainTransaction[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    return repository.query<BlockchainTransaction>('blockchainTransactions', 'transactions.afterId', afterId, limit);
+  }
   return db.blockchainTransactions.where('id').above(afterId).limit(limit).toArray();
 }
 
 export async function getTransactionByTxid(
   txid: string
 ): Promise<BlockchainTransaction | undefined> {
-  return db.blockchainTransactions.where('txid').equals(txid).first();
+  const rows = await protectedTransactionQuery<BlockchainTransaction>('blockchainTransactions', 'transactions.byTxid', txid, 1);
+  return rows ? rows[0] : db.blockchainTransactions.where('txid').equals(txid).first();
 }
 
 export async function getTransactionsByTxids(
   txids: string[]
 ): Promise<BlockchainTransaction[]> {
   if (txids.length === 0) return [];
-  return db.blockchainTransactions.where('txid').anyOf(txids).toArray();
+  const rows = await protectedTransactionQuery<BlockchainTransaction>('blockchainTransactions', 'transactions.byTxids', txids, txids.length);
+  return rows ?? db.blockchainTransactions.where('txid').anyOf(txids).toArray();
 }
 
 export async function bulkGetTransactionsByPrimaryKeys(
   keys: string[]
 ): Promise<(BlockchainTransaction | undefined)[]> {
   if (keys.length === 0) return [];
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') return Promise.all(keys.map(key => repository.get('blockchainTransactions', key)));
   return db.blockchainTransactions.bulkGet(keys);
 }
 
 export async function countTransactions(): Promise<number> {
-  return db.blockchainTransactions.count();
+  const repository = getVaultRepository();
+  return repository.kind === 'protected' ? repository.count('blockchainTransactions') : db.blockchainTransactions.count();
 }
 
 export async function countTransactionsWithOpReturn(): Promise<number> {
@@ -822,10 +906,13 @@ export async function getOrderedTxidsForTxEntityFilterPrefix(
 // =============================================================================
 
 export async function countTransactionParticipants(): Promise<number> {
-  return db.transactionParticipants.count();
+  const repository = getVaultRepository();
+  return repository.kind === 'protected' ? repository.count('transactionParticipants') : db.transactionParticipants.count();
 }
 
 export async function getAllTransactionParticipants(): Promise<TransactionParticipant[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') throw new Error('Protected vault native query "transactionParticipants.all" is required; unbounded participant reads are not permitted');
   return db.transactionParticipants.toArray();
 }
 
@@ -835,18 +922,37 @@ export async function getTransactionParticipantsAfterId(
   afterId: number,
   limit: number
 ): Promise<TransactionParticipant[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    return repository.query<TransactionParticipant>('transactionParticipants', 'participants.afterId', afterId, limit);
+  }
   return db.transactionParticipants.where('id').above(afterId).limit(limit).toArray();
 }
 
 export async function getInputParticipants(): Promise<TransactionParticipant[]> {
-  return db.transactionParticipants.where('role').equals('input').toArray();
+  const repository = getVaultRepository();
+  if (repository.kind !== 'protected') {
+    return db.transactionParticipants.where('role').equals('input').toArray();
+  }
+  const inputs: TransactionParticipant[] = [];
+  let afterId = 0;
+  for (;;) {
+    const page = await getTransactionParticipantsAfterId(afterId, 1000);
+    for (const participant of page) {
+      if (participant.role === 'input') inputs.push(participant);
+    }
+    if (page.length < 1000) break;
+    afterId = page[page.length - 1].id!;
+  }
+  return inputs;
 }
 
 export async function getParticipantsByPrevOutKeys(
   keys: Array<[string, number]>
 ): Promise<TransactionParticipant[]> {
   if (keys.length === 0) return [];
-  return db.transactionParticipants
+  const rows = await protectedTransactionQuery<TransactionParticipant>('transactionParticipants', 'participants.byPrevouts', keys, keys.length);
+  return rows ?? db.transactionParticipants
     .where('[prevTxid+prevVout]')
     .anyOf(keys)
     .toArray();
@@ -856,14 +962,48 @@ export async function getParticipantsByRecordIds(
   recordIds: number[]
 ): Promise<TransactionParticipant[]> {
   if (recordIds.length === 0) return [];
-  return db.transactionParticipants.where('recordId').anyOf(recordIds).toArray();
+  const rows = await protectedTransactionQuery<TransactionParticipant>('transactionParticipants', 'participants.byRecordIds', recordIds, recordIds.length);
+  return rows ?? db.transactionParticipants.where('recordId').anyOf(recordIds).toArray();
 }
 
 export async function getParticipantsByTxids(
   txids: string[]
 ): Promise<TransactionParticipant[]> {
   if (txids.length === 0) return [];
-  return db.transactionParticipants.where('txid').anyOf(txids).toArray();
+  const repository = getVaultRepository();
+  if (repository.kind !== 'protected') {
+    return db.transactionParticipants.where('txid').anyOf(txids).toArray();
+  }
+  const rows: TransactionParticipant[] = [];
+  let afterId = 0;
+  for (;;) {
+    const page = await repository.query<TransactionParticipant>(
+      'transactionParticipants',
+      'participants.byTxidsAfterId',
+      { txids, afterId },
+      1000,
+    );
+    rows.push(...page);
+    if (page.length < 1000) break;
+    afterId = page[page.length - 1].id!;
+  }
+  return rows;
+}
+
+/** Bounded participant address-index lookup used by dust and sync views. */
+export async function getParticipantsByAddresses(
+  addresses: string[],
+  signal?: AbortSignal,
+): Promise<TransactionParticipant[]> {
+  if (addresses.length === 0) return [];
+  signal?.throwIfAborted();
+  const rows = await protectedTransactionQuery<TransactionParticipant>(
+    'transactionParticipants', 'participants.byAddresses', addresses, addresses.length,
+  );
+  signal?.throwIfAborted();
+  const result = rows ?? await db.transactionParticipants.where('address').anyOf(addresses).toArray();
+  signal?.throwIfAborted();
+  return result;
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   type NetworkPrivacyActivityEntry,
   type NetworkPrivacyActivityType,
 } from '../database';
+import { getVaultRepository } from '../repository';
 
 // Keep the local log useful without allowing repeated syncs to grow it forever.
 export const MAX_NETWORK_PRIVACY_ACTIVITY_ENTRIES = 200;
@@ -36,6 +37,17 @@ export async function addNetworkPrivacyActivity(
     action: entry.action,
     ...(addressCount === undefined ? {} : { addressCount }),
   };
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    const id = await repository.add('networkPrivacyActivity', safeEntry);
+    const rows = await getNetworkPrivacyActivity();
+    const excess = rows.length - MAX_NETWORK_PRIVACY_ACTIVITY_ENTRIES;
+    if (excess > 0) {
+      await repository.bulkDelete('networkPrivacyActivity', rows.slice(-excess).map((row) => row.id!));
+    }
+    notifyDbChange('networkPrivacyActivity');
+    return id as number;
+  }
   let id: number;
   await db.transaction('rw', db.networkPrivacyActivity, async () => {
     id = (await db.networkPrivacyActivity.add(safeEntry)) as number;
@@ -53,15 +65,29 @@ export async function addNetworkPrivacyActivity(
 }
 
 export async function getNetworkPrivacyActivity(): Promise<NetworkPrivacyActivityEntry[]> {
-  return db.networkPrivacyActivity.orderBy('timestamp').reverse().toArray();
+  const repository = getVaultRepository();
+  if (repository.kind !== 'protected') return db.networkPrivacyActivity.orderBy('timestamp').reverse().toArray();
+  const rows: NetworkPrivacyActivityEntry[] = [];
+  let cursor: string | number | undefined;
+  do {
+    const page = await repository.list('networkPrivacyActivity', { cursor, limit: 1000 });
+    rows.push(...page.rows);
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return rows.sort((a, b) => b.timestamp - a.timestamp || (b.id ?? 0) - (a.id ?? 0));
 }
 
 export async function getNetworkPrivacyActivityCount(): Promise<number> {
-  return db.networkPrivacyActivity.count();
+  const repository = getVaultRepository();
+  return repository.kind === 'protected'
+    ? repository.count('networkPrivacyActivity')
+    : db.networkPrivacyActivity.count();
 }
 
 export async function clearNetworkPrivacyActivity(): Promise<void> {
-  await db.networkPrivacyActivity.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('networkPrivacyActivity');
+  else await db.networkPrivacyActivity.clear();
   notifyDbChange('networkPrivacyActivity');
 }
 

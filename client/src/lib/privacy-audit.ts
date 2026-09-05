@@ -1,6 +1,7 @@
-import { db } from "@/lib/database";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/db-types";
 import { getParticipantsByAddressesWithOutpointSpends } from "@/lib/data/record-queries";
+import { getAllDustFlags } from "@/lib/data/dust-flags-crud";
+import { queryVaultRows } from "@/lib/data/repository-helpers";
 import { lookupEntities, ENTITY_CATEGORY_TAG_NAMES, ENTITY_CATEGORY_LABELS, ENTITY_CATEGORY_COLORS, type EntityCategory } from "@/lib/privacy-entity-list";
 
 // ─── Severity ────────────────────────────────────────────────────────────────
@@ -279,10 +280,8 @@ async function buildAuditContext(
   const BATCH = 500;
   for (let i = 0; i < txidArray.length; i += BATCH) {
     const batch = txidArray.slice(i, i + BATCH);
-    const batchParticipants = await db.transactionParticipants
-      .where("txid")
-      .anyOf(batch)
-      .toArray();
+    const batchParticipants = (await Promise.all(batch.map((txid) =>
+      queryVaultRows<TransactionParticipant>("transactionParticipants", "participants.byTxid", txid, 1000)))).flat();
     allParticipantsForTxs.push(...batchParticipants);
   }
 
@@ -321,12 +320,13 @@ async function buildAuditContext(
   const txRecords = new Map<string, BlockchainTransaction>();
   for (let i = 0; i < txidArray.length; i += BATCH) {
     const batch = txidArray.slice(i, i + BATCH);
-    const txs = await db.blockchainTransactions.where("txid").anyOf(batch).toArray();
+    const txs = (await Promise.all(batch.map((txid) =>
+      queryVaultRows<BlockchainTransaction>("blockchainTransactions", "transactions.byTxid", txid, 1000)))).flat();
     for (const tx of txs) txRecords.set(tx.txid, tx);
   }
 
   onProgress?.("Loading dust flags...");
-  const dustFlagRows = await db.dustFlags.toArray();
+  const dustFlagRows = await getAllDustFlags();
   const dustFlaggedOutpoints = new Set(dustFlagRows.map((r) => r.outpoint));
 
   return {

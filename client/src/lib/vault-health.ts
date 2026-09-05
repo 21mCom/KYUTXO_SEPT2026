@@ -1,5 +1,5 @@
-import { db } from "@/lib/database";
 import type { Record as VaultRecord, RecordOrigin } from "@/lib/database";
+import { getVaultRepository, type VaultTableName } from "@/lib/repository";
 import { isHiddenDiscoveryTier, isValidImportanceTier } from "@/lib/db-types";
 import { getStaleTypeSpecificFields } from "@/lib/record-type-clears";
 import { isEncryptedPlaceholder } from "@/lib/legacy-decrypt";
@@ -221,12 +221,24 @@ export async function runVaultHealthCheck(options: {
 
   onProgress?.({ phase: "Counting local tables…" });
   const tableCounts: HealthTableCount[] = [];
+  // The repository is the sole packaged database surface. Keep this explicit
+  // rather than discovering Dexie tables at runtime.
+  const tables: VaultTableName[] = [
+    "records", "attachments", "tags", "categories", "owners", "walletNames",
+    "seedNames", "walletSoftware", "recordOrigins", "customFields", "settings",
+    "priceData", "blockchainTransactions", "transactionParticipants",
+    "addressSyncState", "nodeSettings", "derivationTemplates", "utxoLineage",
+    "custodySegments", "lineageSnapshots", "evidence", "evidenceAttachments",
+    "pausedSyncState", "skippedAddresses", "addressBlacklist", "partialExportBundles",
+    "trashedAttachments", "privacyAuditHistory", "dustFlags", "savedPsbts",
+    "adversaryScenarios", "networkPrivacyActivity",
+  ];
   await Promise.all(
-    db.tables.map(async (table) => {
+    tables.map(async (name) => {
       try {
-        tableCounts.push({ name: table.name, count: await table.count(), error: false });
+        tableCounts.push({ name, count: await getVaultRepository().count(name), error: false });
       } catch {
-        tableCounts.push({ name: table.name, count: 0, error: true });
+        tableCounts.push({ name, count: 0, error: true });
       }
     }),
   );

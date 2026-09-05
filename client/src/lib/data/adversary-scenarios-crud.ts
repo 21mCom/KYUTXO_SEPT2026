@@ -1,4 +1,5 @@
 import { db, notifyDbChange, type AdversaryScenario } from '../database';
+import { getVaultRepository } from '../repository';
 
 // All writes to db.adversaryScenarios go through this module (mirrors the
 // other lightweight CRUD modules like saved-psbts-crud / dust-flags-crud).
@@ -42,21 +43,34 @@ export function adversaryScenarioIdentity(row: { name?: unknown; counterpartyNam
 /** Persist a new scenario. Returns the id. */
 export async function saveAdversaryScenario(input: NewAdversaryScenario): Promise<number> {
   const now = Date.now();
-  const id = await db.adversaryScenarios.add({
+  const row: AdversaryScenario = {
     name: cleanName(input.name),
     counterpartyName: cleanCounterparty(input.counterpartyName),
     knownAddresses: cleanStringList(input.knownAddresses),
     knownTxids: cleanStringList(input.knownTxids),
     createdAt: now,
     updatedAt: now,
-  });
+  };
+  const repository = getVaultRepository();
+  const id = repository.kind === 'protected'
+    ? await repository.add('adversaryScenarios', row)
+    : await db.adversaryScenarios.add(row);
   notifyDbChange('adversaryScenarios');
   return id as number;
 }
 
 /** All scenarios, newest first. */
 export async function getAllAdversaryScenarios(): Promise<AdversaryScenario[]> {
-  const rows = await db.adversaryScenarios.toArray();
+  const repository = getVaultRepository();
+  const rows: AdversaryScenario[] = [];
+  if (repository.kind === 'protected') {
+    let cursor: string | number | undefined;
+    do {
+      const page = await repository.list('adversaryScenarios', { cursor, limit: 1000 });
+      rows.push(...page.rows);
+      cursor = page.cursor;
+    } while (cursor !== undefined);
+  } else rows.push(...await db.adversaryScenarios.toArray());
   return rows.sort((a, b) => b.createdAt - a.createdAt || (b.id ?? 0) - (a.id ?? 0));
 }
 
@@ -65,18 +79,23 @@ export async function updateAdversaryScenario(
   id: number,
   input: NewAdversaryScenario,
 ): Promise<void> {
-  await db.adversaryScenarios.update(id, {
+  const changes = {
     name: cleanName(input.name),
     counterpartyName: cleanCounterparty(input.counterpartyName),
     knownAddresses: cleanStringList(input.knownAddresses),
     knownTxids: cleanStringList(input.knownTxids),
     updatedAt: Date.now(),
-  });
+  };
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.update('adversaryScenarios', id, changes);
+  else await db.adversaryScenarios.update(id, changes);
   notifyDbChange('adversaryScenarios');
 }
 
 export async function deleteAdversaryScenario(id: number, options?: AdversaryScenarioWriteOptions): Promise<void> {
-  await db.adversaryScenarios.delete(id);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.delete('adversaryScenarios', id);
+  else await db.adversaryScenarios.delete(id);
   if (!options?.skipNotification) {
     notifyDbChange('adversaryScenarios');
   }
@@ -87,7 +106,9 @@ export interface AdversaryScenarioWriteOptions {
 }
 
 export async function clearAdversaryScenarios(options?: AdversaryScenarioWriteOptions): Promise<void> {
-  await db.adversaryScenarios.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('adversaryScenarios');
+  else await db.adversaryScenarios.clear();
   if (!options?.skipNotification) {
     notifyDbChange('adversaryScenarios');
   }
@@ -121,7 +142,7 @@ export async function restoreAdversaryScenarioRows(
 
   const seen = new Set<string>();
   if (restoreMode === 'merge') {
-    const existing = await db.adversaryScenarios.toArray();
+    const existing = await getAllAdversaryScenarios();
     for (const e of existing) seen.add(adversaryScenarioIdentity(e));
   }
 
@@ -144,9 +165,17 @@ export async function restoreAdversaryScenarioRows(
   }
 
   if (toAdd.length > 0) {
-    const newIds = await db.adversaryScenarios.bulkAdd(toAdd, { allKeys: true });
-    if (collect?.insertedIds) {
-      for (const id of newIds) collect.insertedIds.push(id as number);
+    const repository = getVaultRepository();
+    if (repository.kind === 'protected') {
+      for (const row of toAdd) {
+        const id = await repository.add('adversaryScenarios', row);
+        if (collect?.insertedIds) collect.insertedIds.push(id as number);
+      }
+    } else {
+      const newIds = await db.adversaryScenarios.bulkAdd(toAdd, { allKeys: true });
+      if (collect?.insertedIds) {
+        for (const id of newIds) collect.insertedIds.push(id as number);
+      }
     }
     if (!options?.skipNotification) {
       notifyDbChange('adversaryScenarios');

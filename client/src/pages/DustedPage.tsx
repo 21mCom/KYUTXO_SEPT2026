@@ -17,8 +17,8 @@ import { useSeedNames } from "@/hooks/use-seed-names";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
-import { getParticipantsByPrevOutKeys, getParticipantsByTxids } from "@/lib/data/transaction-crud";
-import { db, type Record as DbRecord, type TransactionParticipant } from "@/lib/database";
+import { getParticipantsByAddresses, getParticipantsByPrevOutKeys, getParticipantsByTxids } from "@/lib/data/transaction-crud";
+import { type Record as DbRecord, type TransactionParticipant } from "@/lib/database";
 import { getGroupKeys, type GroupBy } from "@/lib/balance-grouping";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
@@ -171,10 +171,7 @@ export async function computeDustings(
     if (signal.aborted) return null;
     const batch = addresses.slice(i, i + PARTICIPANT_BATCH);
 
-    const participants = await db.transactionParticipants
-      .where("address")
-      .anyOf(batch)
-      .toArray();
+    const participants = await getParticipantsByAddresses(batch);
 
     for (const p of participants) {
       if (p.role === "input") {

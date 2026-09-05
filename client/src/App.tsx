@@ -293,7 +293,25 @@ function AppContent() {
     migrationPhase,
     legacyMigrationProgress,
     fileDecryptProgress,
+    protectedRepository,
+    protectedRepositoryError,
   } = useAuth();
+
+  // Release Electron is fail-closed. In particular, do not show the setup
+  // screen after a protected-store failure: that would tempt callers into
+  // creating/using the legacy plaintext IndexedDB vault.
+  if (protectedRepository === 'error') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-6">
+        <div className="text-center max-w-md space-y-3" data-testid="protected-repository-error">
+          <div className="text-xl font-semibold text-foreground">Protected vault unavailable</div>
+          <p className="text-muted-foreground">
+            {protectedRepositoryError ?? 'The protected vault could not be verified. Your vault was not opened.'}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // One-time schema upgrade of an older on-disk vault. This runs BEFORE login
   // and can take minutes on a large vault (index rebuilds + table walks), so
@@ -333,7 +351,7 @@ function AppContent() {
   // state, so a wrong password would fail silently with no "Incorrect
   // password" message (packaged-app bug). Only gate on isLoading before the
   // vault status is known or after authentication succeeds.
-  if (isInitialized === null || (isLoading && isAuthenticated)) {
+  if (isInitialized === null || protectedRepository === 'checking' || (isLoading && isAuthenticated)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="text-center">
@@ -346,6 +364,20 @@ function AppContent() {
 
   if (!isAuthenticated) {
     return <LoginScreen />;
+  }
+
+  // This duplicates the AuthContext post-unlock check intentionally: future
+  // auth changes cannot accidentally mount authenticated data consumers before
+  // the packaged repository reaches its verified ready state.
+  if (protectedRepository !== 'fallback' && protectedRepository !== 'ready') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background" data-testid="protected-repository-gate">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
+          <p className="mt-4 text-muted-foreground">Verifying protected vault...</p>
+        </div>
+      </div>
+    );
   }
 
   // While startup migrations are running, do not mount the authenticated app.

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   Activity,
   Download,
@@ -29,10 +29,9 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
-import { useLiveQuery } from "dexie-react-hooks";
-import { db } from "@/lib/database";
 import type { PrivacyAuditHistoryEntry } from "@/lib/database";
-import { clearPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
+import { clearPrivacyAuditHistory, getPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import {
   buildPrivacyHistoryCsv,
   buildPrivacyHistoryPdf,
@@ -51,9 +50,15 @@ export function formatHistoryDate(ts: number): string {
 }
 
 export function PrivacyHistoryCard() {
-  const history = useLiveQuery(
-    () => db.privacyAuditHistory.orderBy("timestamp").toArray(),
-  );
+  const historySignal = useDbChangeSignal(["privacyAuditHistory"]);
+  const [history, setHistory] = useState<PrivacyAuditHistoryEntry[] | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    void getPrivacyAuditHistory().then((entries) => {
+      if (!cancelled) setHistory(entries);
+    });
+    return () => { cancelled = true; };
+  }, [historySignal]);
   const { toast } = useToast();
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());

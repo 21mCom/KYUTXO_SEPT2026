@@ -1,4 +1,6 @@
-import { db, notifyDbChange, type Attachment } from '../database';
+import { notifyDbChange, type Attachment } from '../database';
+import { getVaultRepository } from '../repository';
+import { listVaultRows, queryVaultRows } from './repository-helpers';
 
 export type CreateAttachmentData = Omit<Attachment, 'id' | 'createdAt'> & {
   createdAt?: number;
@@ -17,7 +19,7 @@ export async function addAttachment(
     createdAt: data.createdAt ?? Date.now(),
   };
 
-  const id = await db.attachments.add(attachment);
+  const id = await getVaultRepository().add('attachments', attachment);
 
   if (!options?.skipNotification) {
     notifyDbChange('attachments');
@@ -41,9 +43,7 @@ export async function bulkAddAttachments(
     createdAt: a.createdAt ?? now,
   }));
 
-  const ids = await db.transaction('rw', db.attachments, async () => {
-    return await db.attachments.bulkAdd(rows, { allKeys: true });
-  });
+  const ids = await getVaultRepository().bulkPut('attachments', rows);
 
   if (!options?.skipNotification) {
     notifyDbChange('attachments');
@@ -57,7 +57,7 @@ export async function updateAttachment(
   changes: Partial<Attachment>,
   options?: AttachmentWriteOptions
 ): Promise<void> {
-  await db.attachments.update(id, changes);
+  await getVaultRepository().update('attachments', id, changes);
 
   if (!options?.skipNotification) {
     notifyDbChange('attachments');
@@ -68,7 +68,7 @@ export async function deleteAttachment(
   id: number,
   options?: AttachmentWriteOptions
 ): Promise<void> {
-  await db.attachments.delete(id);
+  await getVaultRepository().delete('attachments', id);
 
   if (!options?.skipNotification) {
     notifyDbChange('attachments');
@@ -83,7 +83,7 @@ export async function bulkDeleteAttachments(
 ): Promise<void> {
   if (ids.length === 0) return;
 
-  await db.attachments.bulkDelete(ids);
+  await getVaultRepository().bulkDelete('attachments', ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('attachments');
@@ -94,7 +94,8 @@ export async function deleteAttachmentsByRecordId(
   recordId: number,
   options?: AttachmentWriteOptions
 ): Promise<void> {
-  await db.attachments.where('recordId').equals(recordId).delete();
+  const ids = (await getAttachmentsByRecordId(recordId)).flatMap((row) => row.id === undefined ? [] : [row.id]);
+  await getVaultRepository().bulkDelete('attachments', ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('attachments');
@@ -104,7 +105,7 @@ export async function deleteAttachmentsByRecordId(
 export async function clearAttachments(
   options?: AttachmentWriteOptions
 ): Promise<void> {
-  await db.attachments.clear();
+  await getVaultRepository().clear('attachments');
 
   if (!options?.skipNotification) {
     notifyDbChange('attachments');
@@ -112,18 +113,19 @@ export async function clearAttachments(
 }
 
 export async function getAttachment(id: number): Promise<Attachment | undefined> {
-  return db.attachments.get(id);
+  return getVaultRepository().get('attachments', id);
 }
 
 export async function getAttachmentsByRecordId(recordId: number): Promise<Attachment[]> {
-  return db.attachments.where('recordId').equals(recordId).toArray();
+  return queryVaultRows<Attachment>('attachments', 'attachments.byRecordId', recordId, 1000);
 }
 
 // Count how many attachment files belong to the given records. Used to warn the
 // user how many files a bulk record deletion will affect.
 export async function countAttachmentsByRecordIds(recordIds: number[]): Promise<number> {
   if (recordIds.length === 0) return 0;
-  return db.attachments.where('recordId').anyOf(recordIds).count();
+  const rows = await Promise.all(recordIds.map((id) => getAttachmentsByRecordId(id)));
+  return rows.reduce((count, attachments) => count + attachments.length, 0);
 }
 
 export async function getAttachmentsByRecordIdOrIdentifier(
@@ -133,18 +135,18 @@ export async function getAttachmentsByRecordIdOrIdentifier(
   // Blank identifiers must not match rows that legitimately stored "" (or be
   // wasted work) — only branch on identifier when one is provided.
   if (!identifier) {
-    return db.attachments.where('recordId').equals(recordId).toArray();
+    return getAttachmentsByRecordId(recordId);
   }
-  return db.attachments
-    .where('recordId')
-    .equals(recordId)
-    .or('identifier')
-    .equals(identifier)
-    .toArray();
+  const [byRecord, byIdentifier] = await Promise.all([
+    getAttachmentsByRecordId(recordId),
+    queryVaultRows<Attachment>('attachments', 'attachments.byIdentifier', identifier, 1000),
+  ]);
+  const seen = new Set<number>();
+  return [...byRecord, ...byIdentifier].filter((row) => row.id === undefined || !seen.has(row.id) && (seen.add(row.id), true));
 }
 
 export async function getAllAttachments(): Promise<Attachment[]> {
-  return db.attachments.toArray();
+  return listVaultRows('attachments');
 }
 
 // Bounded id-keyset page. Used by the streaming backup export so the whole
@@ -153,11 +155,11 @@ export async function getAttachmentsAfterId(
   afterId: number,
   limit: number
 ): Promise<Attachment[]> {
-  return db.attachments.where('id').above(afterId).limit(limit).toArray();
+  return (await getVaultRepository().list('attachments', { cursor: afterId, limit })).rows;
 }
 
 export async function countAttachments(): Promise<number> {
-  return db.attachments.count();
+  return getVaultRepository().count('attachments');
 }
 
 // Sum the byte sizes of every attachment file (from each row's `size`). Used by
@@ -167,10 +169,10 @@ export async function countAttachments(): Promise<number> {
 // a cursor so the whole table is never materialised at once.
 export async function sumAttachmentSizes(): Promise<number> {
   let total = 0;
-  await db.attachments.each((a) => {
+  for (const a of await listVaultRows('attachments')) {
     if (typeof a.size === 'number' && Number.isFinite(a.size) && a.size > 0) {
       total += a.size;
     }
-  });
+  }
   return total;
 }

@@ -246,10 +246,8 @@ export function RecordTable({
   useEffect(() => {
     const loadAttachmentCounts = async () => {
       const recordIds = records.map(r => Number(r.id));
-      const attachments = await db.attachments
-        .where('recordId')
-        .anyOf(recordIds)
-        .toArray();
+      const { getAttachmentsByRecordId } = await import('@/lib/data/attachments-crud');
+      const attachments = (await Promise.all(recordIds.map((id) => getAttachmentsByRecordId(id)))).flat();
       const counts = new Map<string, number>();
       for (const a of attachments) {
         const key = String(a.recordId);

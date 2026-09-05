@@ -38,7 +38,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadAddressRecords, getAddressSourcesFromRecords } from "@/lib/transaction-sync";
 import { getActivityBus } from "@/lib/activity-bus";
 import type { Record as DbRecord, PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
-import { DEFAULT_SYNC_PROTECTION, db } from "@/lib/database";
+import { DEFAULT_SYNC_PROTECTION } from "@/lib/database";
+import { getVaultRepository } from "@/lib/repository";
 import { consumePendingSyncAddresses, partitionTargetedAddresses } from "@/lib/sync/pendingSyncTargets";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
@@ -367,11 +368,9 @@ export default function TransactionSync() {
     const lower = Array.from(new Set(addresses.map((a) => a.trim().toLowerCase()).filter(Boolean)));
     if (lower.length === 0) return 0;
 
-    const matched = await db.records
-      .where('inputStringLower')
-      .anyOf(lower)
-      .filter((r) => r.type === 'address')
-      .toArray();
+    const matched = (await Promise.all(lower.map((value) =>
+      getVaultRepository().query<DbRecord>('records', 'records.byInputStringLower', value, 1),
+    ))).flat().filter((record) => record.type === 'address');
     const recordIds = matched
       .map((r) => r.id)
       .filter((id): id is number => typeof id === 'number');

@@ -1,11 +1,13 @@
 // Provenance Tracking - Flow of Funds Path Finding
 // Traces UTXO origins and connections between addresses
 
-import { db, type Record, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from './database';
+import { type Record, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from './database';
 import { getParticipantsByAddress, getParticipantsByTxid, updateRecord } from './dataFacade';
 import { countAddressSyncState } from './data/address-sync-crud';
 import { canonicalizeRecordIdentifier } from './bitcoin';
 import { addRecordOrigin } from './data/record-origins-crud';
+import { getVaultRepository } from './repository';
+import { queryVaultRows } from './data/repository-helpers';
 
 // Importance tier levels (higher number = higher importance)
 export const IMPORTANCE_TIERS: { [key in AddressImportance]: number } = {
@@ -71,10 +73,7 @@ async function getAddressParticipants(address: string): Promise<TransactionParti
 
 // Get transaction details
 async function getTransaction(txid: string): Promise<BlockchainTransaction | undefined> {
-  return db.blockchainTransactions
-    .where('txid')
-    .equals(txid)
-    .first();
+  return (await queryVaultRows<BlockchainTransaction>('blockchainTransactions', 'transactions.byTxid', txid, 1))[0];
 }
 
 // Get all participants for a transaction
@@ -85,7 +84,7 @@ async function getTransactionParticipants(txid: string): Promise<TransactionPart
 // Build address node with label info and importance tier (using indexed DB lookup)
 async function buildAddressNodeFromDb(address: string): Promise<AddressNode> {
   // Canonicalize the lookup key so it matches canonically stored identifiers.
-  const record = await db.records.where('inputString').equals(canonicalizeRecordIdentifier(address)).first();
+  const record = (await queryVaultRows<Record>('records', 'records.byInputStringLower', canonicalizeRecordIdentifier(address).toLowerCase(), 1))[0];
 
   return {
     address,
@@ -359,10 +358,8 @@ export async function findLabeledConnections(
 ): Promise<ConnectionResult[]> {
   const results: ConnectionResult[] = [];
 
-  const labeledAddresses = await db.records
-    .where('type').equals('address')
-    .filter(r => !!r.label && r.label !== '' && r.owner !== 'Pending Review')
-    .toArray();
+  const labeledAddresses = (await queryVaultRows<Record>('records', 'records.byRecordType', 'address', 1000))
+    .filter(r => !!r.label && r.label !== '' && r.owner !== 'Pending Review');
 
   console.log(`[Provenance] Found ${labeledAddresses.length} labeled addresses`);
 
@@ -416,7 +413,8 @@ export async function getProvenanceChain(
   const recordLookup = new Map<string, Record>();
   for (let i = 0; i < addresses.length; i += BATCH_SIZE) {
     const batch = addresses.slice(i, i + BATCH_SIZE);
-    const found = await db.records.where('inputString').anyOf(batch).toArray();
+    const found = (await Promise.all(batch.map((address) =>
+      queryVaultRows<Record>('records', 'records.byInputStringLower', address.toLowerCase(), 1000)))).flat();
     for (const r of found) {
       if (r.inputString) recordLookup.set(r.inputString, r);
     }
@@ -444,13 +442,11 @@ export async function getProvenanceStats(): Promise<{
   transactionsStored: number;
   potentialConnections: number;
 }> {
-  const labeledAddresses = await db.records
-    .where('type').equals('address')
-    .filter(r => !!r.label && r.label !== '' && r.owner !== 'Pending Review')
-    .count();
+  const labeledAddresses = (await queryVaultRows<Record>('records', 'records.byRecordType', 'address', 1000))
+    .filter(r => !!r.label && r.label !== '' && r.owner !== 'Pending Review').length;
 
   const syncedAddresses = await countAddressSyncState();
-  const transactionsStored = await db.blockchainTransactions.count();
+  const transactionsStored = await getVaultRepository().count('blockchainTransactions');
   
   // Potential connections = pairs of labeled addresses
   const potentialConnections = labeledAddresses > 1 
@@ -502,7 +498,8 @@ export async function exploreAddress(
   const addrArray = Array.from(allNeededAddresses);
   for (let i = 0; i < addrArray.length; i += BATCH_SIZE) {
     const batch = addrArray.slice(i, i + BATCH_SIZE);
-    const found = await db.records.where('inputString').anyOf(batch).toArray();
+    const found = (await Promise.all(batch.map((address) =>
+      queryVaultRows<Record>('records', 'records.byInputStringLower', address.toLowerCase(), 1000)))).flat();
     for (const r of found) {
       if (r.type === 'address' && r.inputString) {
         recordLookup.set(r.inputString, r);
@@ -601,7 +598,7 @@ export async function upgradeAddressImportance(
   newImportance: AddressImportance = 'verified'
 ): Promise<boolean> {
   try {
-    const record = await db.records.get(recordId);
+    const record = await getVaultRepository().get('records', recordId);
     if (!record) {
       console.error(`[Provenance] Record ${recordId} not found`);
       return false;

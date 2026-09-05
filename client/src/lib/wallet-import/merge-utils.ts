@@ -1,6 +1,6 @@
 import type { ParsedRecord, DuplicateInfo, VaultMetadata } from './types';
 import type { Record as DBRecord, AddressImportance } from '../database';
-import { db } from '../database';
+import { getVaultRepository } from '../repository';
 import { IMPORTANCE_TIERS } from '../provenance';
 import { expandLabelTokens } from '../label-tokens';
 import { isUserCuratedImportance } from '../db-types';
@@ -41,29 +41,28 @@ export async function checkForDuplicates(
 ): Promise<DuplicateInfo[]> {
   const BATCH_SIZE = 500;
   const lookupMap = new Map<string, DBRecord>();
+  const repository = getVaultRepository();
   // Canonicalize lookup keys: stored identifiers are canonical, so an
   // uppercase/padded pasted address must still match its existing record.
   const uniqueInputs = [...new Set(parsedRecords.map(r => canonicalizeRecordIdentifier(r.inputString)))];
 
   for (let i = 0; i < uniqueInputs.length; i += BATCH_SIZE) {
     const batch = uniqueInputs.slice(i, i + BATCH_SIZE);
-    const found = await db.records.where('inputString').anyOf(batch).toArray();
-    for (const r of found) {
-      if (r.inputString) {
-        lookupMap.set(r.inputString.trim().toLowerCase(), r);
-      }
-    }
-
-    const unmatchedInBatch = batch.filter(
-      input => !lookupMap.has(input.toLowerCase())
-    );
-    for (const input of unmatchedInBatch) {
-      const caseMatch = await db.records
-        .where('inputString')
-        .equalsIgnoreCase(input)
-        .first();
-      if (caseMatch && caseMatch.inputString) {
-        lookupMap.set(caseMatch.inputString.trim().toLowerCase(), caseMatch);
+    // `inputStringLower` is the canonical, indexed identity. Named repository
+    // queries retain the old case-insensitive duplicate semantics without
+    // leaking a Dexie collection/query builder into packaged renderers.
+    const matches = await Promise.all(batch.map((input) =>
+      repository.queryRecords({
+        name: 'records.byInputStringLower',
+        value: input,
+        limit: BATCH_SIZE,
+      }),
+    ));
+    for (const found of matches) {
+      for (const r of found) {
+        if (r.inputString) {
+          lookupMap.set(r.inputString.trim().toLowerCase(), r);
+        }
       }
     }
   }

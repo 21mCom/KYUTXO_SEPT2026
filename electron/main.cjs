@@ -641,6 +641,27 @@ app.whenReady().then(async () => {
     ]));
   }
   
+  // Development deliberately keeps the browser/Dexie fallback.  A packaged
+  // build must prove that the native repository can be selected before its
+  // renderer (and therefore an authenticated vault route) is mounted.
+  if (!isDev) {
+    return protectedStoreLifecycle.call('status').then((status) => {
+      if (!status || status.mode !== 'protected' || status.available !== true) {
+        throw new Error('Protected store unavailable');
+      }
+      createWindow();
+      vaultLockLifecycle.registerPowerMonitorListeners();
+      vaultLockLifecycle.applyPolicy(vaultLockSettings);
+    }).catch(() => {
+      const blocked = new BrowserWindow({
+        width: 700, height: 360, resizable: false,
+        webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+        backgroundColor: '#1a1a2e',
+      });
+      blocked.loadURL('data:text/html,<body style="background:%231a1a2e;color:white;font-family:sans-serif;padding:40px"><h1>Secure storage unavailable</h1><p>KYUTXO could not load its protected vault storage. Reinstall the application.</p></body>');
+    });
+  }
+
   createWindow();
   
   vaultLockLifecycle.registerPowerMonitorListeners();

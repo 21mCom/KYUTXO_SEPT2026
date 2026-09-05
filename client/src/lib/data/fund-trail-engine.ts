@@ -13,10 +13,10 @@
  * No writes are performed anywhere in this module (CRUD-guard compliant).
  */
 
-import { db } from '../database';
 import type { Record as DbRecord, TransactionParticipant, UtxoLineage } from '../database';
 import { canonicalizeRecordIdentifier } from '../bitcoin';
 import { isUserCuratedImportance } from '../db-types';
+import { listVaultRows, queryVaultRows } from './repository-helpers';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,10 +126,8 @@ async function getRecordsByAddresses(
   const batchSize = 500;
   for (let i = 0; i < addresses.length; i += batchSize) {
     const batch = addresses.slice(i, i + batchSize);
-    const records = await db.records
-      .where('inputString')
-      .anyOf(batch)
-      .toArray();
+    const records = (await Promise.all(batch.map((address) =>
+      queryVaultRows<DbRecord>('records', 'records.byInputStringLower', address.toLowerCase(), 1000)))).flat();
     for (const r of records) {
       if (r.inputString && !result.has(r.inputString)) {
         result.set(r.inputString, r);
@@ -171,7 +169,7 @@ export async function listGroupValues(
   dimension: GroupingDimension,
   options?: ListGroupValuesOptions
 ): Promise<string[]> {
-  const records = await db.records.toArray();
+  const records = await listVaultRows('records');
   const seen = new Set<string>();
   for (const r of records) {
     if (options?.curatedOnly && !isUserCuratedImportance(r.addressImportance)) continue;
@@ -188,7 +186,7 @@ export async function getAddressesForGroup(
   dimension: GroupingDimension,
   groupValue: string
 ): Promise<DbRecord[]> {
-  return db.records.where(dimension).equals(groupValue).toArray();
+  return (await listVaultRows('records')).filter((record) => record[dimension] === groupValue);
 }
 
 /**
@@ -199,7 +197,8 @@ export async function getRecordByAddress(
   address: string
 ): Promise<DbRecord | undefined> {
   // Canonicalize the lookup key so it matches canonically stored identifiers.
-  return db.records.where('inputString').equals(canonicalizeRecordIdentifier(address)).first();
+  const identifier = canonicalizeRecordIdentifier(address);
+  return (await listVaultRows('records')).find((record) => record.inputString === identifier);
 }
 
 // ---------------------------------------------------------------------------
@@ -870,13 +869,18 @@ async function batchedLineageByAddress(
 ): Promise<UtxoLineage[]> {
   if (addresses.length === 0) return [];
   const results: UtxoLineage[] = [];
-  const indexField = role === 'created' ? 'createdAddress' : 'spentAddress';
   const batchSize = 500;
 
   for (let i = 0; i < addresses.length; i += batchSize) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const batch = addresses.slice(i, i + batchSize);
-    const rows = await db.utxoLineage.where(indexField).anyOf(batch).toArray();
+    const rows = (await Promise.all(batch.map((address) =>
+      queryVaultRows<UtxoLineage>(
+        'utxoLineage',
+        role === 'created' ? 'lineage.byCreatedAddress' : 'lineage.bySpentAddress',
+        address,
+        1000,
+      )))).flat();
     results.push(...rows);
     if (i + batchSize < addresses.length) {
       await new Promise(r => setTimeout(r, 0));
@@ -895,7 +899,8 @@ async function batchedParticipantsByAddresses(
   for (let i = 0; i < addresses.length; i += batchSize) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const batch = addresses.slice(i, i + batchSize);
-    const raw = await db.transactionParticipants.where('address').anyOf(batch).toArray();
+    const raw = (await Promise.all(batch.map((address) =>
+      queryVaultRows<TransactionParticipant>('transactionParticipants', 'participants.byAddress', address, 1000)))).flat();
     results.push(...raw);
     if (i + batchSize < addresses.length) {
       await new Promise(r => setTimeout(r, 0));
@@ -914,7 +919,8 @@ async function batchedParticipantsByTxids(
   for (let i = 0; i < txids.length; i += batchSize) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const batch = txids.slice(i, i + batchSize);
-    const raw = await db.transactionParticipants.where('txid').anyOf(batch).toArray();
+    const raw = (await Promise.all(batch.map((txid) =>
+      queryVaultRows<TransactionParticipant>('transactionParticipants', 'participants.byTxid', txid, 1000)))).flat();
     results.push(...raw);
     if (i + batchSize < txids.length) {
       await new Promise(r => setTimeout(r, 0));
@@ -929,7 +935,8 @@ async function loadBlockTimes(txids: string[]): Promise<Map<string, number>> {
   const batchSize = 500;
   for (let i = 0; i < txids.length; i += batchSize) {
     const batch = txids.slice(i, i + batchSize);
-    const txRows = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+    const txRows = (await Promise.all(batch.map((txid) =>
+      queryVaultRows<{ txid: string; blockTime: number }>('blockchainTransactions', 'transactions.byTxid', txid, 1000)))).flat();
     for (const tx of txRows) {
       result.set(tx.txid, tx.blockTime);
     }

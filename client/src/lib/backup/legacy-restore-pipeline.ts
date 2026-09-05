@@ -53,7 +53,7 @@ import { clearNodeSettings } from "@/lib/data/node-settings-crud";
 import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { clearDustFlags, restoreDustFlagRows } from "@/lib/data/dust-flags-crud";
 import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
-import { db } from "@/lib/database";
+import { getVaultRepository } from "@/lib/repository";
 import { runRecordModelMigration } from "@/lib/data/record-model-crud";
 import { BackupCancelledError } from "./sink";
 import { RestoreInterruptedError } from "./restore";
@@ -561,21 +561,34 @@ export async function runLegacyJsonRestore(
   // Preserve every pre-existing normalized row verbatim and put it back after
   // the pass: that permits absent/new rows to be derived while never replacing
   // a user's ownership, transaction defaults, categories, or flow overrides.
+  const repository = getVaultRepository();
+  const readAll = async <T extends "entities" | "wallets" | "addressOwnership" | "transactionMetadata" | "transactionLegMetadata">(
+    table: T,
+  ) => {
+    const rows = [];
+    let cursor: string | number | undefined;
+    do {
+      const page = await repository.list(table, { cursor, limit: 1000 });
+      rows.push(...page.rows);
+      cursor = page.cursor;
+    } while (cursor !== undefined);
+    return rows;
+  };
   const normalizedBeforeMerge = restoreMode === "merge"
     ? await Promise.all([
-        db.entities.toArray(), db.wallets.toArray(), db.addressOwnership.toArray(),
-        db.transactionMetadata.toArray(), db.transactionLegMetadata.toArray(),
+        readAll("entities"), readAll("wallets"), readAll("addressOwnership"),
+        readAll("transactionMetadata"), readAll("transactionLegMetadata"),
       ])
     : null;
-  await db.recordModelMigrationState.clear();
+  await repository.clear("recordModelMigrationState");
   await runRecordModelMigration();
   if (normalizedBeforeMerge) {
     const [entities, wallets, ownership, metadata, legs] = normalizedBeforeMerge;
-    await db.entities.bulkPut(entities);
-    await db.wallets.bulkPut(wallets);
-    await db.addressOwnership.bulkPut(ownership);
-    await db.transactionMetadata.bulkPut(metadata);
-    await db.transactionLegMetadata.bulkPut(legs);
+    await repository.bulkPut("entities", entities);
+    await repository.bulkPut("wallets", wallets);
+    await repository.bulkPut("addressOwnership", ownership);
+    await repository.bulkPut("transactionMetadata", metadata);
+    await repository.bulkPut("transactionLegMetadata", legs);
   }
 
   console.log(

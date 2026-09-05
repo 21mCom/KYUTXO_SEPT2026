@@ -1,4 +1,6 @@
-import { db, notifyDbChange, type Evidence, type EvidenceAttachment } from '../database';
+import { notifyDbChange, type Evidence, type EvidenceAttachment } from '../database';
+import { getVaultRepository } from '../repository';
+import { listVaultRows, queryVaultRows } from './repository-helpers';
 
 export type CreateEvidenceData = Omit<Evidence, 'id' | 'createdAt' | 'updatedAt'>;
 export type CreateEvidenceAttachmentData = Omit<EvidenceAttachment, 'id' | 'createdAt'> & {
@@ -20,7 +22,7 @@ export async function addEvidence(
     updatedAt: now,
   };
 
-  const id = await db.evidence.add(evidence);
+  const id = await getVaultRepository().add('evidence', evidence);
 
   if (!options?.skipNotification) {
     notifyDbChange('evidence');
@@ -35,7 +37,7 @@ export async function bulkAddEvidence(
 ): Promise<number[]> {
   if (records.length === 0) return [];
 
-  const ids = await db.evidence.bulkAdd(records, { allKeys: true });
+  const ids = await getVaultRepository().bulkPut('evidence', records);
 
   if (!options?.skipNotification) {
     notifyDbChange('evidence');
@@ -48,7 +50,7 @@ export async function putEvidence(
   data: Evidence,
   options?: EvidenceWriteOptions
 ): Promise<void> {
-  await db.evidence.put(data);
+  await getVaultRepository().put('evidence', data);
 
   if (!options?.skipNotification) {
     notifyDbChange('evidence');
@@ -60,7 +62,7 @@ export async function updateEvidence(
   changes: Partial<Evidence>,
   options?: EvidenceWriteOptions
 ): Promise<void> {
-  const existing = await db.evidence.get(id);
+  const existing = await getVaultRepository().get('evidence', id);
   if (!existing) throw new Error('Evidence not found');
 
   const updated: Evidence = {
@@ -70,7 +72,7 @@ export async function updateEvidence(
     updatedAt: Date.now(),
   };
 
-  await db.evidence.put(updated);
+  await getVaultRepository().put('evidence', updated);
 
   if (!options?.skipNotification) {
     notifyDbChange('evidence');
@@ -81,15 +83,15 @@ export async function deleteEvidence(
   id: number,
   options?: EvidenceWriteOptions
 ): Promise<void> {
-  const attachments = await db.evidenceAttachments.where('evidenceId').equals(id).toArray();
+  const attachments = await getEvidenceAttachmentsByEvidenceId(id);
 
   for (const attachment of attachments) {
     if (attachment.id) {
-      await db.evidenceAttachments.delete(attachment.id);
+      await getVaultRepository().delete('evidenceAttachments', attachment.id);
     }
   }
 
-  await db.evidence.delete(id);
+  await getVaultRepository().delete('evidence', id);
 
   if (!options?.skipNotification) {
     notifyDbChange(['evidence', 'evidenceAttachments']);
@@ -99,7 +101,7 @@ export async function deleteEvidence(
 export async function clearEvidence(
   options?: EvidenceWriteOptions
 ): Promise<void> {
-  await db.evidence.clear();
+  await getVaultRepository().clear('evidence');
 
   if (!options?.skipNotification) {
     notifyDbChange('evidence');
@@ -115,7 +117,7 @@ export async function addEvidenceAttachment(
     createdAt: data.createdAt ?? Date.now(),
   };
 
-  const id = await db.evidenceAttachments.add(attachment);
+  const id = await getVaultRepository().add('evidenceAttachments', attachment);
 
   if (!options?.skipNotification) {
     notifyDbChange('evidenceAttachments');
@@ -129,7 +131,7 @@ export async function updateEvidenceAttachment(
   changes: Partial<EvidenceAttachment>,
   options?: EvidenceWriteOptions
 ): Promise<void> {
-  await db.evidenceAttachments.update(id, changes);
+  await getVaultRepository().update('evidenceAttachments', id, changes);
 
   if (!options?.skipNotification) {
     notifyDbChange('evidenceAttachments');
@@ -140,7 +142,7 @@ export async function deleteEvidenceAttachment(
   id: number,
   options?: EvidenceWriteOptions
 ): Promise<void> {
-  await db.evidenceAttachments.delete(id);
+  await getVaultRepository().delete('evidenceAttachments', id);
 
   if (!options?.skipNotification) {
     notifyDbChange('evidenceAttachments');
@@ -150,7 +152,7 @@ export async function deleteEvidenceAttachment(
 export async function clearEvidenceAttachments(
   options?: EvidenceWriteOptions
 ): Promise<void> {
-  await db.evidenceAttachments.clear();
+  await getVaultRepository().clear('evidenceAttachments');
 
   if (!options?.skipNotification) {
     notifyDbChange('evidenceAttachments');
@@ -160,8 +162,10 @@ export async function clearEvidenceAttachments(
 export async function clearAllEvidenceData(
   options?: EvidenceWriteOptions
 ): Promise<void> {
-  await db.evidence.clear();
-  await db.evidenceAttachments.clear();
+  // Native multi-collection transaction support is not yet available. Do not
+  // pretend this pair is atomic in packaged builds.
+  await getVaultRepository().clear('evidence');
+  await getVaultRepository().clear('evidenceAttachments');
 
   if (!options?.skipNotification) {
     notifyDbChange(['evidence', 'evidenceAttachments']);
@@ -173,27 +177,27 @@ export async function clearAllEvidenceData(
 // =============================================================================
 
 export async function getAllEvidence(): Promise<Evidence[]> {
-  return db.evidence.toArray();
+  return listVaultRows('evidence');
 }
 
 export async function getAllEvidenceAttachments(): Promise<EvidenceAttachment[]> {
-  return db.evidenceAttachments.toArray();
+  return listVaultRows('evidenceAttachments');
 }
 
 export async function getEvidenceAttachmentsByEvidenceId(
   evidenceId: number
 ): Promise<EvidenceAttachment[]> {
-  return db.evidenceAttachments.where('evidenceId').equals(evidenceId).toArray();
+  return queryVaultRows<EvidenceAttachment>('evidenceAttachments', 'evidenceAttachments.byEvidenceId', evidenceId, 1000);
 }
 
 export async function countEvidenceAttachmentsByEvidenceId(
   evidenceId: number
 ): Promise<number> {
-  return db.evidenceAttachments.where('evidenceId').equals(evidenceId).count();
+  return (await getEvidenceAttachmentsByEvidenceId(evidenceId)).length;
 }
 
 export async function countEvidenceAttachments(): Promise<number> {
-  return db.evidenceAttachments.count();
+  return getVaultRepository().count('evidenceAttachments');
 }
 
 // =============================================================================

@@ -1,4 +1,28 @@
 const { contextBridge, ipcRenderer } = require('electron');
+// Explicit repository commands, not a Dexie/SQL facade. The collection-to-domain
+// mapping is fixed in preload and independently checked by the worker.
+const REPOSITORY_BY_COLLECTION = Object.freeze({
+  records: 'records', attachments: 'records', tags: 'records', categories: 'records',
+  owners: 'records', walletNames: 'records', seedNames: 'records',
+  walletSoftware: 'records', customFields: 'records', recordOrigins: 'records',
+  blockchainTransactions: 'transactions', transactionParticipants: 'transactions',
+  priceData: 'transactions', savedPsbts: 'transactions',
+  addressSyncState: 'sync', nodeSettings: 'sync', pausedSyncState: 'sync',
+  skippedAddresses: 'sync', addressBlacklist: 'sync',
+  derivationTemplates: 'lineage', utxoLineage: 'lineage',
+  custodySegments: 'lineage', lineageSnapshots: 'lineage',
+  evidence: 'evidence', evidenceAttachments: 'evidence',
+  partialExportBundles: 'evidence', trashedAttachments: 'evidence',
+  privacyAuditHistory: 'privacy', dustFlags: 'privacy',
+  adversaryScenarios: 'privacy', networkPrivacyActivity: 'privacy', settings: 'vault',
+});
+const repositoryCall = (collection, operation, payload = {}) => {
+  const repository = REPOSITORY_BY_COLLECTION[collection];
+  if (!repository) return Promise.resolve({ ok: false, error: 'Unsupported protected-store collection' });
+  return ipcRenderer.invoke('protected-store:repository', {
+    repository, collection, operation, ...payload,
+  });
+};
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -17,14 +41,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
     changePassword: (oldPassword, newPassword) =>
       ipcRenderer.invoke('protected-store:changePassword', { oldPassword, newPassword }),
     integrity: () => ipcRenderer.invoke('protected-store:integrity'),
-    putRow: (table, id, row) =>
-      ipcRenderer.invoke('protected-store:putRow', { table, id, row }),
-    getRow: (table, id) =>
-      ipcRenderer.invoke('protected-store:getRow', { table, id }),
-    listRows: (table, after, limit) =>
-      ipcRenderer.invoke('protected-store:listRows', { table, after, limit }),
-    deleteRow: (table, id) =>
-      ipcRenderer.invoke('protected-store:deleteRow', { table, id }),
+    repository: {
+      save: (collection, row) => repositoryCall(collection, 'save', { row }),
+      find: (collection, id) => repositoryCall(collection, 'find', { id }),
+      page: (collection, after, limit, direction) =>
+        repositoryCall(collection, 'page', { after, limit, direction }),
+      remove: (collection, id) => repositoryCall(collection, 'remove', { id }),
+      saveBatch: (collection, rows) => repositoryCall(collection, 'saveBatch', { rows }),
+      removeBatch: (collection, ids) => repositoryCall(collection, 'removeBatch', { ids }),
+      count: (collection) => repositoryCall(collection, 'count'),
+      clear: (collection) => repositoryCall(collection, 'clear'),
+      batch: (collection, operations) => repositoryCall(collection, 'batch', { operations }),
+      query: (collection, name, value, limit) => repositoryCall(collection, 'query', { name, value, limit }),
+      command: (name, value) => {
+        // Commands select their owning repository here rather than accepting a
+        // renderer-provided collection/table name.
+        if (name === 'cleanup.deleteRecordWithOrigins') {
+          return repositoryCall('records', 'command', { name, value });
+        }
+        return Promise.resolve({ ok: false, error: 'Unsupported protected-store command' });
+      },
+      saveTransactionWithParticipants: (transaction, participants, replaceParticipants = true) =>
+        repositoryCall('blockchainTransactions', 'saveTransactionWithParticipants', { transaction, participants, replaceParticipants }),
+      deleteOrArchiveRecords: (command) =>
+        repositoryCall('records', 'deleteOrArchiveRecords', command),
+      saveSettingsWithHistory: (settings, historyEntry, retainHistory) =>
+        repositoryCall('settings', 'saveSettingsWithHistory', { settings, historyEntry, retainHistory }),
+      clearVault: () => repositoryCall('settings', 'clearAll', { confirm: 'clear-vault' }),
+      restoreCommit: (replaceExisting, rows) =>
+        repositoryCall('settings', 'restoreCommit', { replaceExisting, rows }),
+    },
     writeAttachment: (bytes, alias) =>
       ipcRenderer.invoke('protected-store:writeAttachment', { bytes, alias }),
     readAttachment: (name, id) =>

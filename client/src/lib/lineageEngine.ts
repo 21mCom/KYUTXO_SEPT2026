@@ -1,5 +1,4 @@
 import { 
-  db, 
   type UtxoLineage, 
   type CustodySegment, 
   type TransactionParticipant,
@@ -15,6 +14,8 @@ import { getParticipantsByTxid, bulkAddUtxoLineage, addCustodySegment } from './
 import { getActivityBus } from './activity-bus';
 import { format } from 'date-fns';
 import { sanitizePdfText } from './pdfText';
+import { getVaultRepository } from './repository';
+import { queryVaultRows } from './data/repository-helpers';
 
 // Generate a simple UUID for segment IDs
 function generateSegmentId(): string {
@@ -60,10 +61,7 @@ function isOwnedAddress(importance: AddressImportance | undefined): boolean {
 
 // Get record for an address
 async function getRecordForAddress(address: string): Promise<Record | undefined> {
-  const records = await db.records
-    .where('inputString')
-    .equals(address)
-    .toArray();
+  const records = await queryVaultRows<Record>('records', 'records.byInputStringLower', address.toLowerCase(), 1000);
   
   if (records.length === 0) return undefined;
   
@@ -82,10 +80,7 @@ async function getRecordForAddress(address: string): Promise<Record | undefined>
 
 // Build lineage for a specific transaction
 export async function buildLineageForTransaction(txid: string): Promise<UtxoLineage[]> {
-  const transaction = await db.blockchainTransactions
-    .where('txid')
-    .equals(txid)
-    .first();
+  const transaction = (await queryVaultRows<BlockchainTransaction>('blockchainTransactions', 'transactions.byTxid', txid, 1))[0];
   
   if (!transaction) {
     console.warn(`Transaction ${txid} not found in database`);
@@ -122,10 +117,7 @@ export async function buildLineageForTransaction(txid: string): Promise<UtxoLine
       const isChange = inputOwned && outputOwned && output.amount < input.amount;
       
       // Check if this lineage already exists
-      const existing = await db.utxoLineage
-        .where('[createdTxid+createdVout]')
-        .equals([txid, output.vout])
-        .first();
+      const existing = (await queryVaultRows<UtxoLineage>('utxoLineage', 'lineage.byCreatedOutpoint', [txid, output.vout], 1))[0];
       
       if (existing) continue;
       
@@ -169,7 +161,7 @@ export async function buildAllLineage(
   signal?: AbortSignal
 ): Promise<{ processed: number; created: number }> {
   const BATCH_SIZE = 500;
-  const totalCount = await db.blockchainTransactions.count();
+  const totalCount = await getVaultRepository().count('blockchainTransactions');
   let processed = 0;
   let created = 0;
   let lastId = 0;
@@ -190,10 +182,7 @@ export async function buildAllLineage(
         return { processed, created };
       }
 
-      const batch = await db.blockchainTransactions
-        .where('id').above(lastId)
-        .limit(BATCH_SIZE)
-        .toArray();
+      const batch = (await getVaultRepository().list('blockchainTransactions', { cursor: lastId, limit: BATCH_SIZE })).rows;
       if (batch.length === 0) break;
 
       for (const tx of batch) {
@@ -256,11 +245,7 @@ export async function getLineageChainForAddress(
     visited.add(currentAddress);
     
     const remaining = maxResults - chain.length;
-    const incoming = await db.utxoLineage
-      .where('createdAddress')
-      .equals(currentAddress)
-      .limit(remaining + 1)
-      .toArray();
+    const incoming = await queryVaultRows<UtxoLineage>('utxoLineage', 'lineage.byCreatedAddress', currentAddress, remaining + 1);
     
     if (incoming.length > remaining) {
       truncated = true;
@@ -310,11 +295,7 @@ export async function getLineageChainForward(
     visited.add(currentAddress);
     
     const remaining = maxResults - chain.length;
-    const outgoing = await db.utxoLineage
-      .where('spentAddress')
-      .equals(currentAddress)
-      .limit(remaining + 1)
-      .toArray();
+    const outgoing = await queryVaultRows<UtxoLineage>('utxoLineage', 'lineage.bySpentAddress', currentAddress, remaining + 1);
     
     if (outgoing.length > remaining) {
       truncated = true;
@@ -354,20 +335,14 @@ export async function buildCustodySegment(
   originVout: number
 ): Promise<CustodySegment | null> {
   // Check if segment already exists
-  const existing = await db.custodySegments
-    .where('[originTxid+originVout]')
-    .equals([originTxid, originVout])
-    .first();
+  const existing = (await queryVaultRows<CustodySegment>('custodySegments', 'lineage.byOriginOutpoint', [originTxid, originVout], 1))[0];
   
   if (existing) {
     return existing;
   }
   
   // Get the origin transaction
-  const originTx = await db.blockchainTransactions
-    .where('txid')
-    .equals(originTxid)
-    .first();
+  const originTx = (await queryVaultRows<BlockchainTransaction>('blockchainTransactions', 'transactions.byTxid', originTxid, 1))[0];
   
   if (!originTx) return null;
   
@@ -566,14 +541,9 @@ export async function scanOwnedLineageOrigins(
       return uniqueOrigins;
     }
 
-    const batch = await db.utxoLineage
-      .where('id')
-      .above(lastId)
-      .filter(lineage => lineage.createdOwned === true)
-      .limit(ORIGIN_SCAN_BATCH)
-      .toArray();
-
-    if (batch.length === 0) break;
+    const page = await getVaultRepository().list('utxoLineage', { cursor: lastId, limit: ORIGIN_SCAN_BATCH });
+    if (page.rows.length === 0) break;
+    const batch = page.rows.filter(lineage => lineage.createdOwned === true);
 
     for (const lineage of batch) {
       const key = `${lineage.createdTxid}:${lineage.createdVout}`;
@@ -584,12 +554,10 @@ export async function scanOwnedLineageOrigins(
           createdVout: lineage.createdVout
         });
       }
-      if (typeof lineage.id === 'number' && lineage.id > lastId) {
-        lastId = lineage.id;
-      }
     }
-
-    if (batch.length < ORIGIN_SCAN_BATCH) break;
+    const last = page.rows[page.rows.length - 1]?.id;
+    if (typeof last !== 'number' || page.rows.length < ORIGIN_SCAN_BATCH) break;
+    lastId = last;
   }
 
   return uniqueOrigins;
@@ -658,15 +626,10 @@ export async function buildAllCustodySegments(
 
 // Get all segments for an address (as origin or current holder)
 export async function getSegmentsForAddress(address: string): Promise<CustodySegment[]> {
-  const asOrigin = await db.custodySegments
-    .where('originAddress')
-    .equals(address)
-    .toArray();
-  
-  const asCurrent = await db.custodySegments
-    .where('currentAddress')
-    .equals(address)
-    .toArray();
+  const [asOrigin, asCurrent] = await Promise.all([
+    queryVaultRows<CustodySegment>('custodySegments', 'lineage.byOriginAddress', address, 1000),
+    queryVaultRows<CustodySegment>('custodySegments', 'lineage.byCurrentAddress', address, 1000),
+  ]);
   
   // Combine and deduplicate
   const segmentMap = new Map<string, CustodySegment>();
@@ -780,11 +743,7 @@ async function loadSegmentsInBatches(): Promise<CustodySegment[]> {
   const segments: CustodySegment[] = [];
   let lastId = 0;
   while (true) {
-    const batch = await db.custodySegments
-      .where('id')
-      .above(lastId)
-      .limit(SEGMENT_BATCH_SIZE)
-      .toArray();
+    const batch = (await getVaultRepository().list('custodySegments', { cursor: lastId, limit: SEGMENT_BATCH_SIZE })).rows;
     if (batch.length === 0) break;
     segments.push(...batch);
     lastId = batch[batch.length - 1].id!;
@@ -803,8 +762,8 @@ async function getLineageForSegment(segment: CustodySegment): Promise<UtxoLineag
   const addressList = Array.from(addresses);
 
   const [byCreated, bySpent] = await Promise.all([
-    db.utxoLineage.where('createdAddress').anyOf(addressList).toArray(),
-    db.utxoLineage.where('spentAddress').anyOf(addressList).toArray(),
+    Promise.all(addressList.map((address) => queryVaultRows<UtxoLineage>('utxoLineage', 'lineage.byCreatedAddress', address, 1000))).then((rows) => rows.flat()),
+    Promise.all(addressList.map((address) => queryVaultRows<UtxoLineage>('utxoLineage', 'lineage.bySpentAddress', address, 1000))).then((rows) => rows.flat()),
   ]);
 
   const seen = new Set<number>();
@@ -833,7 +792,7 @@ export async function generateEvidenceBundle(
   signal?: AbortSignal
 ): Promise<EvidenceBundle> {
   const segments = options.selectedSegmentIds
-    ? await db.custodySegments.where('segmentId').anyOf(options.selectedSegmentIds).toArray()
+    ? (await Promise.all(options.selectedSegmentIds.map((id) => queryVaultRows<CustodySegment>('custodySegments', 'lineage.bySegmentId', id, 1000)))).flat()
     : await loadSegmentsInBatches();
 
   const { totalDays, earliestOrigin, latestActivity } = getCustodyDuration(segments);

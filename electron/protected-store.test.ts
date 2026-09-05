@@ -25,18 +25,23 @@ function makeClient() {
 }
 
 describe("protected store", () => {
+  it("keeps the preload delete/archive bridge on the typed command DTO", () => {
+    const preload = fs.readFileSync(path.join(__dirname, "preload.cjs"), "utf8");
+    expect(preload).toContain("deleteOrArchiveRecords: (command) =>");
+    expect(preload).toContain("repositoryCall('records', 'deleteOrArchiveRecords', command)");
+  });
+
   it("encrypts rows and attachment chunks, locks closed, and re-wraps the VDK", async () => {
     const { root, client } = makeClient();
     const rowPlaintext = "recognizable-row-plaintext";
     const attachmentPlaintext = Buffer.from("recognizable-attachment-plaintext");
     try {
-      await client.call(MESSAGE_TYPES.CREATE, {
-        password: "correct horse battery staple",
-      });
-      await client.call(MESSAGE_TYPES.PUT_ROW, {
-        table: "records",
-        id: "42",
-        row: { note: rowPlaintext },
+      await client.call(MESSAGE_TYPES.CREATE, { password: "correct horse battery staple" });
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records",
+        collection: "records",
+        operation: "save",
+        row: { id: 42, note: rowPlaintext, nullable: null },
       });
       const object = await client.call(MESSAGE_TYPES.WRITE_ATTACHMENT, {
         bytes: attachmentPlaintext,
@@ -65,23 +70,177 @@ describe("protected store", () => {
         newPassword: "a different strong password",
       });
       await client.call(MESSAGE_TYPES.LOCK);
-      await expect(
-        client.call(MESSAGE_TYPES.GET_ROW, { table: "records", id: "42" }),
-      ).rejects.toThrow();
-      await expect(
-        client.call(MESSAGE_TYPES.UNLOCK, {
-          password: "correct horse battery staple",
-        }),
-      ).rejects.toThrow();
-      await client.call(MESSAGE_TYPES.UNLOCK, {
-        password: "a different strong password",
+      await expect(client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "find", id: 42,
+      })).rejects.toThrow();
+      await expect(client.call(MESSAGE_TYPES.UNLOCK, { password: "correct horse battery staple" })).rejects.toThrow();
+      await client.call(MESSAGE_TYPES.UNLOCK, { password: "a different strong password" });
+      expect(await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "find", id: 42,
+      })).toEqual({ id: 42, note: rowPlaintext, nullable: null });
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
+  it("uses bounded typed repository pages with numeric ID order", async () => {
+    const { client } = makeClient();
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "test password" });
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "saveBatch",
+        rows: [{ id: 10, label: "ten" }, { id: 2, label: "two" }, { id: 30, label: "thirty" }],
       });
-      expect(
-        await client.call(MESSAGE_TYPES.GET_ROW, {
-          table: "records",
-          id: "42",
-        }),
-      ).toEqual({ note: rowPlaintext });
+      const first = await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "page", limit: 2,
+      });
+      expect(first.items.map((row: { id: number }) => row.id)).toEqual([2, 10]);
+      const second = await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "page", after: first.next, limit: 2,
+      });
+      expect(second.items.map((row: { id: number }) => row.id)).toEqual([30]);
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
+  it("applies the bounded named records filter DTO without exposing a query builder", async () => {
+    const { client } = makeClient();
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "test password" });
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "saveBatch",
+        rows: [
+          { id: 1, type: "address", inputString: "bc1qfirst", label: "Cold wallet", tags: ["vault"], addressImportance: "verified", createdAt: 20 },
+          { id: 2, type: "address", inputString: "bc1qsecond", label: "Discovered", tags: ["vault"], addressImportance: "blockchain-discovered", createdAt: 30 },
+          { id: 3, type: "transaction", label: "Cold spend", tags: ["spend"], addressImportance: "manual", createdAt: 10 },
+        ],
+      });
+      const result = await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "query",
+        name: "records.filtered", limit: 100,
+        value: {
+          search: "cold",
+          filters: [{ field: "tags", operator: "includes", value: "vault" }],
+          includeBlockchainDiscovered: false,
+          order: "created-desc",
+        },
+      });
+      expect(result.items.map((row: { id: number }) => row.id)).toEqual([1]);
+      const byIdentifiers = await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "query",
+        name: "records.byInputStrings", limit: 2,
+        value: ["bc1qfirst", "bc1qsecond"],
+      });
+      expect(byIdentifiers.items.map((row: { id: number }) => row.id)).toEqual([1, 2]);
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
+  it("pages stats and dormant-scan named queries at bounded keyset boundaries", async () => {
+    const { client } = makeClient();
+    const request = (
+      repository: string,
+      collection: string,
+      name: string,
+      value: unknown,
+      limit: number,
+    ) => client.call(MESSAGE_TYPES.REPOSITORY, {
+      repository, collection, operation: "query", name, value, limit,
+    });
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "test password" });
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "saveBatch",
+        rows: [
+          { id: 1, type: "address", inputString: "bc1first" },
+          { id: 2, type: "transaction", inputString: "a".repeat(64) },
+          { id: 3, type: "address", inputString: "bc1second" },
+        ],
+      });
+      const addresses = await request(
+        "records", "records", "records.byTypeIdForwardKeyset",
+        { type: "address", afterIdExclusive: 1 }, 1,
+      );
+      expect(addresses.items.map((row: { id: number }) => row.id)).toEqual([3]);
+      expect((await request("records", "records", "records.countByType", "address", 1)).items)
+        .toEqual([{ count: 2 }]);
+
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "transactions", collection: "transactionParticipants", operation: "saveBatch",
+        rows: Array.from({ length: 1000 }, (_, index) => ({
+          id: index + 1, txid: `tx-${index}`, role: index % 2 ? "input" : "output",
+          address: "busy-address", amount: index,
+        })),
+      });
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "transactions", collection: "transactionParticipants", operation: "save",
+        row: { id: 1001, txid: "tx-1000", role: "output", address: "busy-address", amount: 1000 },
+      });
+      const firstPage = await request(
+        "transactions", "transactionParticipants", "participants.afterId", 0, 1000,
+      );
+      expect(firstPage.items).toHaveLength(1000);
+      expect(firstPage.items[0].id).toBe(1);
+      const finalPage = await request(
+        "transactions", "transactionParticipants", "participants.afterId", 999, 1000,
+      );
+      expect(finalPage.items.map((row: { id: number }) => row.id)).toEqual([1000, 1001]);
+      const busyFirst = await request(
+        "transactions", "transactionParticipants", "participants.byAddressesAfterId",
+        { addresses: ["busy-address"], afterId: 0 }, 1000,
+      );
+      expect(busyFirst.items).toHaveLength(1000);
+      const busySecond = await request(
+        "transactions", "transactionParticipants", "participants.byAddressesAfterId",
+        { addresses: ["busy-address"], afterId: busyFirst.items[999].id }, 1000,
+      );
+      expect(busySecond.items.map((row: { id: number }) => row.id)).toEqual([1001]);
+
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "lineage", collection: "utxoLineage", operation: "saveBatch",
+        rows: [
+          { id: 1, createdTxid: "fund-a", createdVout: 0, isChange: true },
+          { id: 2, createdTxid: "fund-b", createdVout: 1, isChange: false },
+        ],
+      });
+      const lineage = await request(
+        "lineage", "utxoLineage", "lineage.byCreatedOutpoints",
+        [["fund-b", 1], ["missing", 0]], 2,
+      );
+      expect(lineage.items.map((row: { id: number }) => row.id)).toEqual([2]);
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
+  it("keeps string cursors opaque, allocates IDs, and atomically applies batches", async () => {
+    const { client } = makeClient();
+    const request = (operation: string, payload: Record<string, unknown> = {}) =>
+      client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "privacy", collection: "networkPrivacyActivity", operation, ...payload,
+      });
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "test password" });
+      const saved = await request("save", { row: { label: "native allocated" } });
+      expect(saved.id).toBe(1);
+      await request("saveBatch", { rows: [{ id: "a", value: 1 }, { id: "z", value: 2 }] });
+      const strings = await request("page", { after: "a", limit: 1 });
+      expect(strings.next).toBe("z");
+      expect(strings.items.map((row: { id: string | number }) => row.id)).toEqual(["z"]);
+      const result = await request("batch", {
+        operations: [
+          { operation: "save", row: { id: "b", value: 3 } },
+          { operation: "remove", id: "a" },
+        ],
+      });
+      expect(result.results).toEqual([
+        { operation: "save", id: "b" },
+        { operation: "remove", deleted: true },
+      ]);
+      expect(await request("find", { id: "a" })).toBeNull();
+      expect(await request("find", { id: "b" })).toEqual({ id: "b", value: 3 });
     } finally {
       await client.close();
     }
@@ -178,107 +337,128 @@ describe("protected store", () => {
     }
   }, 30_000);
 
-  it("keeps every v44 normalized record-model row encrypted across a protected reopen", async () => {
+  it("rolls back native transaction and participant commits on a mid-command failure", async () => {
+    const { client } = makeClient();
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "test password" });
+      const txid = "a".repeat(64);
+      await expect(client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "transactions",
+        collection: "blockchainTransactions",
+        operation: "saveTransactionWithParticipants",
+        transaction: { id: 77, txid, blockTime: 1 },
+        participants: [
+          { id: 88, txid, role: "output", address: "ok", amount: 1, vout: 0 },
+          { id: 89, txid, role: "output", address: "too-large", amount: 1, note: "x".repeat(17 * 1024 * 1024) },
+        ],
+      })).rejects.toThrow("Protected store operation failed");
+
+      expect(await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "transactions", collection: "blockchainTransactions", operation: "find", id: 77,
+      })).toBeNull();
+      expect(await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "transactions", collection: "transactionParticipants", operation: "find", id: 88,
+      })).toBeNull();
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
+  it("keyset-pages participants for bounded txid queries", async () => {
+    const { client } = makeClient();
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "test password" });
+      const txid = "b".repeat(64);
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "transactions",
+        collection: "blockchainTransactions",
+        operation: "saveTransactionWithParticipants",
+        transaction: { id: 7, txid, blockTime: 1 },
+        participants: [0, 1, 2].map((vout) => ({
+          txid, role: "output", address: `address-${vout}`, amount: 1, vout,
+        })),
+      });
+      const first = await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "transactions", collection: "transactionParticipants",
+        operation: "query", name: "participants.byTxidsAfterId",
+        value: { txids: [txid], afterId: 0 }, limit: 2,
+      });
+      expect(first.items.map((row: { id: number }) => row.id)).toEqual([1, 2]);
+      const second = await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "transactions", collection: "transactionParticipants",
+        operation: "query", name: "participants.byTxidsAfterId",
+        value: { txids: [txid], afterId: 2 }, limit: 2,
+      });
+      expect(second.items.map((row: { id: number }) => row.id)).toEqual([3]);
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
+  it("rolls back a native replacement restore when any row cannot be saved", async () => {
+    const { client } = makeClient();
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "test password" });
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "save",
+        row: { id: 1, label: "existing" },
+      });
+      await expect(client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "vault",
+        collection: "settings",
+        operation: "restoreCommit",
+        replaceExisting: true,
+        rows: {
+          records: [
+            { id: 2, label: "replacement" },
+            { id: 3, label: "x".repeat(17 * 1024 * 1024) },
+          ],
+        },
+      })).rejects.toThrow("Protected store operation failed");
+
+      expect(await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "find", id: 1,
+      })).toEqual({ id: 1, label: "existing" });
+      expect(await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records", collection: "records", operation: "find", id: 2,
+      })).toBeNull();
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
+  it("keeps normalized record-model rows encrypted across a protected reopen", async () => {
     const { root, client } = makeClient();
     const password = "v44 protected migration password";
     const rows = [
-      [
-        "entities",
-        "entity-1",
-        {
-          naturalKey: "person:alice",
-          name: "KYUTXO_V44_ENTITY_1f32a",
-          kind: "person",
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
-      [
-        "wallets",
-        "wallet-1",
-        {
-          naturalKey: "wallet:alice:cold",
-          name: "KYUTXO_V44_WALLET_2d45b",
-          entityId: 1,
-          seedName: "KYUTXO_V44_SEED_3e56c",
-          walletSoftware: "KYUTXO_V44_SOFTWARE_4f67d",
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
-      [
-        "addressOwnership",
-        "ownership-1",
-        {
-          recordId: 42,
-          state: "assigned",
-          entityId: 1,
-          walletId: 1,
-          confidence: "manual",
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
-      [
-        "transactionMetadata",
-        "metadata-1",
-        {
-          txid: "KYUTXO_V44_TXID_5a78e",
-          flowType: "received",
-          categories: ["KYUTXO_V44_CATEGORY_6b89f"],
-          tags: ["KYUTXO_V44_TAG_7c90a"],
-          notes: "KYUTXO_V44_NOTE_8d01b",
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
-      [
-        "transactionLegMetadata",
-        "leg-1",
-        {
-          txid: "KYUTXO_V44_TXID_5a78e",
-          legKey: "output:0",
-          direction: "incoming",
-          entityId: 1,
-          walletId: 1,
-          notes: "KYUTXO_V44_LEG_NOTE_9e12c",
-          hasFlowOverride: true,
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
+      ["entities", { id: 1, naturalKey: "person:alice", name: "KYUTXO_V44_ENTITY_1f32a", kind: "person", createdAt: 1, updatedAt: 1 }],
+      ["wallets", { id: 1, naturalKey: "wallet:alice:cold", name: "KYUTXO_V44_WALLET_2d45b", entityId: 1, createdAt: 1, updatedAt: 1 }],
+      ["addressOwnership", { id: 1, recordId: 42, state: "assigned", entityId: 1, createdAt: 1, updatedAt: 1 }],
+      ["transactionMetadata", { id: 1, txid: "KYUTXO_V44_TXID_5a78e", notes: "KYUTXO_V44_NOTE_8d01b", createdAt: 1, updatedAt: 1 }],
+      ["transactionLegMetadata", { id: 1, txid: "KYUTXO_V44_TXID_5a78e", legKey: "output:0", direction: "incoming", notes: "KYUTXO_V44_LEG_NOTE_9e12c", createdAt: 1, updatedAt: 1 }],
     ] as const;
     try {
       await client.call(MESSAGE_TYPES.CREATE, { password });
-      for (const [table, id, row] of rows) {
-        await client.call(MESSAGE_TYPES.PUT_ROW, { table, id, row });
+      for (const [collection, row] of rows) {
+        await client.call(MESSAGE_TYPES.REPOSITORY, {
+          repository: "records", collection, operation: "save", row,
+        });
       }
-
-      const encryptedBytes = fs.readFileSync(
-        path.join(root, "protected-store.sqlite"),
-      );
+      const encryptedBytes = fs.readFileSync(path.join(root, "protected-store.sqlite"));
       for (const token of [
-        "KYUTXO_V44_ENTITY_1f32a",
-        "KYUTXO_V44_WALLET_2d45b",
-        "KYUTXO_V44_SEED_3e56c",
-        "KYUTXO_V44_SOFTWARE_4f67d",
-        "KYUTXO_V44_TXID_5a78e",
-        "KYUTXO_V44_CATEGORY_6b89f",
-        "KYUTXO_V44_TAG_7c90a",
-        "KYUTXO_V44_NOTE_8d01b",
+        "KYUTXO_V44_ENTITY_1f32a", "KYUTXO_V44_WALLET_2d45b",
+        "KYUTXO_V44_TXID_5a78e", "KYUTXO_V44_NOTE_8d01b",
         "KYUTXO_V44_LEG_NOTE_9e12c",
-      ]) {
-        expect(encryptedBytes.includes(token)).toBe(false);
-      }
+      ]) expect(encryptedBytes.includes(token)).toBe(false);
 
       await client.close();
       const reopened = new ProtectedStoreClient({ dataDir: root });
       try {
         await reopened.call(MESSAGE_TYPES.UNLOCK, { password });
-        for (const [table, id, row] of rows) {
-          expect(
-            await reopened.call(MESSAGE_TYPES.GET_ROW, { table, id }),
-          ).toEqual(row);
+        for (const [collection, row] of rows) {
+          expect(await reopened.call(MESSAGE_TYPES.REPOSITORY, {
+            repository: "records", collection, operation: "find", id: row.id,
+          })).toEqual(row);
         }
       } finally {
         await reopened.close();

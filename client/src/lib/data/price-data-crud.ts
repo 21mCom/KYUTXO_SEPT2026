@@ -1,4 +1,10 @@
 import { db, notifyDbChange, type PriceData } from '../database';
+import { getVaultRepository, ProtectedVaultRepository } from '../repository';
+
+const protectedQuery = <T>(name: Parameters<ProtectedVaultRepository['query']>[1], value: unknown, limit?: number) => {
+  const repository = getVaultRepository();
+  return repository instanceof ProtectedVaultRepository ? repository.query<T>('priceData', name, value, limit) : null;
+};
 
 export type CreatePriceData = Omit<PriceData, 'id'>;
 
@@ -10,7 +16,8 @@ export async function addPriceData(
   data: CreatePriceData,
   options?: PriceDataWriteOptions
 ): Promise<number> {
-  const id = await db.priceData.add(data as PriceData);
+  const repository = getVaultRepository();
+  const id = repository.kind === 'protected' ? await repository.add('priceData', data as PriceData) : await db.priceData.add(data as PriceData);
 
   if (!options?.skipNotification) {
     notifyDbChange('priceData');
@@ -24,7 +31,9 @@ export async function updatePriceData(
   changes: Partial<PriceData>,
   options?: PriceDataWriteOptions
 ): Promise<void> {
-  await db.priceData.update(id, changes);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.update('priceData', id, changes);
+  else await db.priceData.update(id, changes);
 
   if (!options?.skipNotification) {
     notifyDbChange('priceData');
@@ -34,7 +43,9 @@ export async function updatePriceData(
 export async function clearPriceData(
   options?: PriceDataWriteOptions
 ): Promise<void> {
-  await db.priceData.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('priceData');
+  else await db.priceData.clear();
 
   if (!options?.skipNotification) {
     notifyDbChange('priceData');
@@ -46,13 +57,16 @@ export async function getPriceDataByKey(
   currency: string,
   asset: string
 ): Promise<PriceData | undefined> {
-  return db.priceData
+  const rows = await protectedQuery<PriceData>('price.byDateCurrencyAsset', [date, currency, asset], 1);
+  return rows ? rows[0] : db.priceData
     .where('[date+currency+asset]')
     .equals([date, currency, asset])
     .first();
 }
 
 export async function getAllPriceData(): Promise<PriceData[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') throw new Error('Protected vault native query "priceData.all" is required; unbounded price reads are not permitted');
   return db.priceData.toArray();
 }
 
@@ -60,6 +74,8 @@ export async function getPriceDataByAsset(
   asset: string,
   currency?: string
 ): Promise<PriceData[]> {
+  const rows = await protectedQuery<PriceData>('price.byAsset', { asset, currency });
+  if (rows) return rows;
   const query = db.priceData.where('asset').equals(asset);
   if (currency) {
     return query.filter(p => p.currency === currency).toArray();
@@ -68,7 +84,8 @@ export async function getPriceDataByAsset(
 }
 
 export async function countPriceData(): Promise<number> {
-  return db.priceData.count();
+  const repository = getVaultRepository();
+  return repository.kind === 'protected' ? repository.count('priceData') : db.priceData.count();
 }
 
 export async function getLatestPriceOnOrBefore(
@@ -76,7 +93,8 @@ export async function getLatestPriceOnOrBefore(
   currency: string,
   asset: string
 ): Promise<PriceData | undefined> {
-  return db.priceData
+  const rows = await protectedQuery<PriceData>('price.latestOnOrBefore', { date, currency, asset }, 1);
+  return rows ? rows[0] : db.priceData
     .where('date')
     .belowOrEqual(date)
     .and(p => p.currency === currency && p.asset === asset)
@@ -84,7 +102,8 @@ export async function getLatestPriceOnOrBefore(
 }
 
 export async function getBtcUsdPriceData(): Promise<PriceData[]> {
-  return db.priceData
+  const rows = await protectedQuery<PriceData>('price.byAsset', { asset: 'BTC', currency: 'USD' });
+  return rows ?? db.priceData
     .where('asset').equals('BTC')
     .filter(p => p.currency === 'USD')
     .toArray();
@@ -94,7 +113,8 @@ export async function getPriceDataByDateCurrencyAssetKeys(
   keys: [string, string, string][]
 ): Promise<PriceData[]> {
   if (keys.length === 0) return [];
-  return db.priceData
+  const rows = await protectedQuery<PriceData>('price.byDateCurrencyAssetKeys', keys);
+  return rows ?? db.priceData
     .where('[date+currency+asset]')
     .anyOf(keys)
     .toArray();
@@ -135,7 +155,9 @@ export async function bulkDeletePriceData(
   options?: PriceDataWriteOptions
 ): Promise<void> {
   if (ids.length === 0) return;
-  await db.priceData.bulkDelete(ids);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.bulkDelete('priceData', ids);
+  else await db.priceData.bulkDelete(ids);
   if (!options?.skipNotification) {
     notifyDbChange('priceData');
   }

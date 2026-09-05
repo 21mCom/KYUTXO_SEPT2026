@@ -1,5 +1,6 @@
 import Dexie from 'dexie';
 import { db, notifyDbChange, isUserCuratedImportance, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type DerivationTemplate, type AddressImportance } from '../database';
+import { getVaultRepository } from '../repository';
 import { isValidImportanceTier, isHiddenDiscoveryTier, HIDDEN_DISCOVERY_TIERS } from '../db-types';
 import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from './vocabulary-crud';
 import { canonicalizeRecordIdentifier } from '../bitcoin';
@@ -23,6 +24,11 @@ import {
 } from './record-search-index';
 
 async function getRecordSearchIndexFingerprint(): Promise<RecordSearchIndexFingerprint> {
+  if (getVaultRepository().kind === 'protected') {
+    // The derived Dexie search index is disabled for protected vaults.
+    const recordCount = await getVaultRepository().count('records');
+    return { recordCount, maxId: 0, maxUpdatedAt: 0 };
+  }
   const [recordCount, newestById, newestByUpdatedAt] = await Promise.all([
     db.records.count(),
     db.records.orderBy('id').reverse().first(),
@@ -36,6 +42,7 @@ async function getRecordSearchIndexFingerprint(): Promise<RecordSearchIndexFinge
 }
 
 async function safelySyncRecordSearchIndex(record: Record): Promise<void> {
+  if (getVaultRepository().kind === 'protected') return;
   try {
     const current = record.id == null ? undefined : await db.records.get(record.id);
     if (current) await syncRecordSearchIndex(current);
@@ -54,6 +61,7 @@ async function safelySyncRecordSearchIndex(record: Record): Promise<void> {
 }
 
 async function safelySyncRecordSearchIndexBatch(records: Record[]): Promise<void> {
+  if (getVaultRepository().kind === 'protected') return;
   try {
     const ids = records.map((record) => record.id).filter((id): id is number => id != null);
     const current = (await db.records.bulkGet(ids)).filter((record): record is Record => !!record);
@@ -70,6 +78,7 @@ async function safelySyncRecordSearchIndexBatch(records: Record[]): Promise<void
 }
 
 async function safelyRemoveRecordsFromSearchIndex(ids: number[]): Promise<void> {
+  if (getVaultRepository().kind === 'protected') return;
   try {
     await removeRecordsFromSearchIndex(ids);
     await completeRecordSearchIndexMutation(await getRecordSearchIndexFingerprint());
@@ -314,7 +323,7 @@ export async function createRecord(
   }
   
   await beginRecordSearchIndexMutation();
-  const id = await db.records.add(record);
+  const id = await getVaultRepository().add('records', record);
   record.id = id as number;
   await safelySyncRecordSearchIndex(record);
 
@@ -365,9 +374,7 @@ export async function bulkCreateRecords(
     } catch {}
 
     await beginRecordSearchIndexMutation();
-    const ids = await db.transaction('rw', db.records, async () => {
-      return await db.records.bulkAdd(fullRecords, { allKeys: true });
-    });
+    const ids = await getVaultRepository().bulkPut('records', fullRecords);
     fullRecords.forEach((record, index) => {
       record.id = ids[index] as number;
     });
@@ -427,7 +434,7 @@ export async function updateRecord(
   updates: Partial<Record>,
   options?: UpdateRecordOptions
 ): Promise<void> {
-  const existing = await db.records.get(id);
+  const existing = await getVaultRepository().get('records', id);
   if (!existing) throw new Error('Record not found');
 
   const merged = {
@@ -454,7 +461,7 @@ export async function updateRecord(
   }
 
   await beginRecordSearchIndexMutation();
-  await db.records.put(updated);
+  await getVaultRepository().put('records', updated);
   await safelySyncRecordSearchIndex(updated);
 
   // Drop the hover-metadata cache so the orange FileText indicator / tooltip on
@@ -540,7 +547,7 @@ export async function bulkUpdateRecords(
   
   try {
     const ids = updates.map(u => u.id);
-    const existingRecords = await db.records.where('id').anyOf(ids).toArray();
+    const existingRecords = (await Promise.all(ids.map((id) => getVaultRepository().get('records', id)))).filter((row): row is Record => !!row);
     try {
       getActivityBus().publishTask({
         id: 'bulk-update-records',
@@ -595,9 +602,7 @@ export async function bulkUpdateRecords(
     }
     
     await beginRecordSearchIndexMutation();
-    await db.transaction('rw', db.records, async () => {
-      await db.records.bulkPut(recordsToSave);
-    });
+    await getVaultRepository().bulkPut('records', recordsToSave);
     await safelySyncRecordSearchIndexBatch(recordsToSave);
     
     if (!options?.skipVocabularySync) {
@@ -671,7 +676,7 @@ export async function bulkUpdateAddressStats(
   if (updates.length === 0) return 0;
 
   const ids = updates.map(u => u.id);
-  const existing = await db.records.where('id').anyOf(ids).toArray();
+  const existing = (await Promise.all(ids.map((id) => getVaultRepository().get('records', id)))).filter((row): row is Record => !!row);
   const existingMap = new Map<number, Record>();
   for (const r of existing) {
     if (r.id != null) existingMap.set(r.id, r);
@@ -704,9 +709,7 @@ export async function bulkUpdateAddressStats(
 
   if (toSave.length === 0) return 0;
 
-  await db.transaction('rw', db.records, async () => {
-    await db.records.bulkPut(toSave);
-  });
+  await getVaultRepository().bulkPut('records', toSave);
 
   // NOTE: intentionally no hover-cache invalidation here. This path only writes
   // the per-address stats cache fields (cachedBalanceSats, cachedTxCount,
@@ -733,9 +736,12 @@ export async function bulkDeleteRecords(
 ): Promise<void> {
   if (ids.length === 0) return;
 
-  const existing = await db.records.bulkGet(ids);
+  const existing = await Promise.all(ids.map((id) => getVaultRepository().get('records', id)));
   await beginRecordSearchIndexMutation();
-  await db.records.bulkDelete(ids);
+  await getVaultRepository().deleteOrArchiveRecords({
+    recordIds: ids,
+    mode: 'delete',
+  });
   await safelyRemoveRecordsFromSearchIndex(ids);
 
   // Drop hover-metadata cache entries so any visible AddressLink/TxidLink for
@@ -769,8 +775,16 @@ export async function bulkDeleteRecordsWithArchiving(
   if (ids.length === 0) return;
 
   const { archiveAttachments } = await import('./trash-crud');
-  const existing = await db.records.bulkGet(ids);
-  const attachments = await db.attachments.where('recordId').anyOf(ids).toArray();
+  const existing = await Promise.all(ids.map((id) => getVaultRepository().get('records', id)));
+  const wantedRecordIds = new Set(ids);
+  const attachmentRows: Attachment[] = [];
+  let attachmentCursor: string | number | undefined;
+  do {
+    const page = await getVaultRepository().list('attachments', { cursor: attachmentCursor, limit: 500 });
+    attachmentRows.push(...page.rows.filter((attachment) => wantedRecordIds.has(attachment.recordId)));
+    attachmentCursor = page.cursor;
+  } while (attachmentCursor !== undefined);
+  const attachments = attachmentRows;
 
   // Archiving happens before any rows are removed; if it throws we abort so
   // nothing becomes unrecoverable (same ordering as deleteRecord).
@@ -778,9 +792,12 @@ export async function bulkDeleteRecordsWithArchiving(
     await archiveAttachments(attachments, 'record-delete', { skipNotification: true });
   }
 
-  await db.attachments.where('recordId').anyOf(ids).delete();
+  await getVaultRepository().bulkDelete('attachments', attachments.map((attachment) => attachment.id!).filter((id) => id !== undefined));
   await beginRecordSearchIndexMutation();
-  await db.records.bulkDelete(ids);
+  await getVaultRepository().deleteOrArchiveRecords({
+    recordIds: ids,
+    mode: 'delete',
+  });
   await safelyRemoveRecordsFromSearchIndex(ids);
 
   // Drop the hover-metadata cache for every deleted record so a visible
@@ -803,7 +820,7 @@ export async function bulkDeleteRecordsWithArchiving(
 export async function deleteRecord(id: number, options?: DeleteRecordOptions): Promise<void> {
   const { getAttachmentsByRecordId, deleteAttachmentsByRecordId } = await import('./attachments-crud');
   const { archiveAttachments } = await import('./trash-crud');
-  const existing = await db.records.get(id);
+  const existing = await getVaultRepository().get('records', id);
   const attachments = await getAttachmentsByRecordId(id);
 
   // Deleting a record must NOT destroy its attachment files. Instead we archive
@@ -818,7 +835,10 @@ export async function deleteRecord(id: number, options?: DeleteRecordOptions): P
 
   await deleteAttachmentsByRecordId(id, { skipNotification: true });
   await beginRecordSearchIndexMutation();
-  await db.records.delete(id);
+  await getVaultRepository().deleteOrArchiveRecords({
+    recordIds: [id],
+    mode: 'delete',
+  });
   await safelyRemoveRecordsFromSearchIndex([id]);
 
   // Drop the hover-metadata cache so a deleted record's orange FileText
@@ -845,7 +865,7 @@ export async function bulkSetDiscoveredFromRecordId(
 ): Promise<void> {
   if (updates.length === 0) return;
   const ids = updates.map((u) => u.id);
-  const existing = await db.records.bulkGet(ids);
+  const existing = await Promise.all(ids.map((id) => getVaultRepository().get('records', id)));
   const toPut: Record[] = [];
   for (let i = 0; i < updates.length; i++) {
     const row = existing[i];
@@ -853,7 +873,7 @@ export async function bulkSetDiscoveredFromRecordId(
     toPut.push({ ...row, discoveredFromRecordId: updates[i].discoveredFromRecordId });
   }
   if (toPut.length === 0) return;
-  await db.records.bulkPut(toPut);
+  await getVaultRepository().bulkPut('records', toPut);
   if (!options?.skipNotification) {
     notifyDbChange('records');
   }
@@ -864,7 +884,7 @@ export interface ClearAllRecordsOptions {
 }
 
 export async function clearAllRecords(options?: ClearAllRecordsOptions): Promise<void> {
-  await db.records.clear();
+  await getVaultRepository().clear('records');
   try {
     await clearRecordSearchIndex();
   } catch (error) {
@@ -885,20 +905,27 @@ export async function clearAllRecords(options?: ClearAllRecordsOptions): Promise
 // -----------------------------------------------------------------------------
 
 export async function getRecord(id: number): Promise<Record | undefined> {
-  return db.records.get(id);
+  return getVaultRepository().get('records', id);
 }
 
 export async function bulkGetRecords(ids: number[]): Promise<(Record | undefined)[]> {
-  return db.records.bulkGet(ids);
+  return Promise.all(ids.map((id) => getVaultRepository().get('records', id)));
 }
 
 export async function getRecordsByIds(ids: number[]): Promise<Record[]> {
   if (ids.length === 0) return [];
-  return db.records.where('id').anyOf(ids).toArray();
+  return (await bulkGetRecords(ids)).filter((row): row is Record => !!row);
 }
 
 export async function getAllRecords(): Promise<Record[]> {
-  return db.records.toArray();
+  const records: Record[] = [];
+  let cursor: string | number | undefined;
+  do {
+    const page = await getVaultRepository().list('records', { cursor, limit: 500 });
+    records.push(...page.rows);
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return records;
 }
 
 /**
@@ -1467,18 +1494,35 @@ export async function countRecordsByImportanceTiers(tiers: AddressImportance[]):
 }
 
 export async function getRecordsByType(type: string): Promise<Record[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    // Keep the packaged renderer on the finite native query vocabulary. This
+    // finder is intentionally bounded by the repository's 1,000-row maximum;
+    // callers that need to walk a complete table must use a keyset CRUD helper.
+    return repository.query<Record>('records', 'records.byRecordType', type, 1000);
+  }
   return db.records.where('type').equals(type).toArray();
 }
 
 export async function getRecordsByInputString(inputString: string): Promise<Record[]> {
   // Canonicalize the lookup key: stored identifiers are canonical, so a
   // padded / differently-cased query must match them.
-  return db.records.where('inputString').equals(canonicalizeRecordIdentifier(inputString)).toArray();
+  const value = canonicalizeRecordIdentifier(inputString);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    return repository.query<Record>('records', 'records.byInputStringLower', value.toLowerCase(), 100);
+  }
+  return db.records.where('inputString').equals(value).toArray();
 }
 
 export async function getRecordsByInputStrings(values: string[]): Promise<Record[]> {
   if (values.length === 0) return [];
-  return db.records.where('inputString').anyOf(values.map(canonicalizeRecordIdentifier)).toArray();
+  const canonical = values.map(canonicalizeRecordIdentifier);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    return repository.query<Record>('records', 'records.byInputStrings', canonical, Math.min(canonical.length, 1000));
+  }
+  return db.records.where('inputString').anyOf(canonical).toArray();
 }
 
 export async function getAddressRecordsByImportanceTiers(
@@ -1813,6 +1857,12 @@ export async function getRecordsPageByTypeIdReverseKeyset(
   opts: RecordsKeysetPageOptions
 ): Promise<Record[]> {
   const { limit, beforeIdExclusive } = opts;
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    return repository.query<Record>('records', 'records.byTypeIdReverseKeyset', {
+      type, beforeIdExclusive,
+    }, limit);
+  }
   return db.records
     .where('[type+id]')
     .between(
@@ -1833,6 +1883,12 @@ export async function getRecordsPageByTypeAndImportanceTiersKeyset(
 ): Promise<Record[]> {
   if (tiers.length === 0) return [];
   const { limit, beforeIdExclusive } = opts;
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    return repository.query<Record>('records', 'records.byTypeAndImportanceTiersKeyset', {
+      type, tiers, beforeIdExclusive,
+    }, limit);
+  }
   // The [type+addressImportance] index can't keyset by id (it has no id
   // component), so walk the [type+id] index id-desc from the boundary and keep
   // only rows in the requested tiers, stopping once we have a full page.
@@ -1849,6 +1905,31 @@ export async function getRecordsPageByTypeAndImportanceTiersKeyset(
     .and((r) => r.addressImportance != null && tierSet.has(r.addressImportance))
     .limit(limit)
     .toArray();
+}
+
+/** Bounded exact lookup used by discovery-origin cleanup. */
+export async function getRecordsByInputStringAndType(
+  inputString: string,
+  type: string,
+): Promise<Record[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    return repository.query<Record>('records', 'records.byInputStringAndType', { inputString, type }, 1000);
+  }
+  return db.records.where('inputString').equals(inputString).and((record) => record.type === type).toArray();
+}
+
+/** Bounded child lookup used while walking a discovery tree. */
+export async function getRecordsByDiscoveredFromRecordIds(
+  parentRecordIds: number[],
+  limit = 1000,
+): Promise<Record[]> {
+  if (parentRecordIds.length === 0) return [];
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    return repository.query<Record>('records', 'records.byDiscoveredFromRecordIds', parentRecordIds, limit);
+  }
+  return db.records.where('discoveredFromRecordId').anyOf(parentRecordIds).limit(limit).toArray();
 }
 
 // ---------------------------------------------------------------------------
@@ -2090,10 +2171,14 @@ export async function getRecordsByTypeFilteredAll(
 export async function getRecordsByFilter(
   filter: (r: Record) => boolean
 ): Promise<Record[]> {
+  if (getVaultRepository().kind === 'protected') return (await getAllRecords()).filter(filter);
   return db.records.filter(filter).toArray();
 }
 
 export async function getRecordsAfterId(afterId: number, limit: number): Promise<Record[]> {
+  if (getVaultRepository().kind === 'protected') {
+    return (await getVaultRepository().list('records', { cursor: afterId, limit: Math.min(limit, 1000) })).rows;
+  }
   return db.records.where('id').above(afterId).limit(limit).toArray();
 }
 
@@ -2101,6 +2186,9 @@ export async function getRecordsByOffsetLimit(
   offset: number,
   limit: number
 ): Promise<Record[]> {
+  if (getVaultRepository().kind === 'protected') {
+    return (await getAllRecords()).slice(offset, offset + limit);
+  }
   return db.records.offset(offset).limit(limit).toArray();
 }
 
@@ -2112,6 +2200,16 @@ export async function getRecordsByOffsetLimit(
 export async function eachRecord(
   callback: (record: Record) => void
 ): Promise<void> {
+  if (getVaultRepository().kind === 'protected') {
+    let cursor = 0;
+    for (;;) {
+      const rows = await getRecordsAfterId(cursor, 500);
+      if (!rows.length) break;
+      rows.forEach(callback);
+      cursor = rows[rows.length - 1].id ?? cursor;
+    }
+    return;
+  }
   return db.records.each(callback);
 }
 
@@ -2120,6 +2218,10 @@ export async function eachRecord(
 export async function eachAddressRecord(
   callback: (record: Record) => void
 ): Promise<void> {
+  if (getVaultRepository().kind === 'protected') {
+    await eachRecord((record) => { if (record.type === 'address') callback(record); });
+    return;
+  }
   return db.records.where('type').equals('address').each(callback);
 }
 

@@ -1,4 +1,6 @@
-import { db, notifyDbChange, type DerivationTemplate } from '../database';
+import { notifyDbChange, type DerivationTemplate } from '../database';
+import { getVaultRepository } from '../repository';
+import { listVaultRows } from './repository-helpers';
 
 export type CreateDerivationTemplateData = Omit<DerivationTemplate, 'id' | 'createdAt' | 'updatedAt'> & {
   createdAt?: number;
@@ -20,7 +22,7 @@ export async function addDerivationTemplate(
     updatedAt: data.updatedAt ?? now,
   };
 
-  const id = await db.derivationTemplates.add(template);
+  const id = await getVaultRepository().add('derivationTemplates', template);
 
   if (!options?.skipNotification) {
     notifyDbChange('derivationTemplates');
@@ -33,7 +35,7 @@ export async function deleteDerivationTemplate(
   id: number,
   options?: DerivationTemplateWriteOptions
 ): Promise<void> {
-  await db.derivationTemplates.delete(id);
+  await getVaultRepository().delete('derivationTemplates', id);
 
   if (!options?.skipNotification) {
     notifyDbChange('derivationTemplates');
@@ -43,7 +45,7 @@ export async function deleteDerivationTemplate(
 export async function clearDerivationTemplates(
   options?: DerivationTemplateWriteOptions
 ): Promise<void> {
-  await db.derivationTemplates.clear();
+  await getVaultRepository().clear('derivationTemplates');
 
   if (!options?.skipNotification) {
     notifyDbChange('derivationTemplates');
@@ -51,9 +53,9 @@ export async function clearDerivationTemplates(
 }
 
 export async function getAllDerivationTemplates(): Promise<DerivationTemplate[]> {
-  return db.derivationTemplates.toArray();
+  return listVaultRows('derivationTemplates');
 }
 
 export async function countDerivationTemplates(): Promise<number> {
-  return db.derivationTemplates.count();
+  return getVaultRepository().count('derivationTemplates');
 }

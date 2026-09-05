@@ -1,5 +1,24 @@
-import { db, type Attachment, type EvidenceAttachment, type TransactionParticipant } from '../database';
+import { type Attachment, type EvidenceAttachment, type TransactionParticipant } from '../database';
+import { getVaultRepository, type ProtectedRepositoryQueryName, type VaultRows, type VaultTableName } from '../repository';
 import { addAttachment, getAttachmentsByRecordId } from './attachments-crud';
+
+const PAGE_SIZE = 500;
+
+async function participantRows(name: ProtectedRepositoryQueryName, value: unknown, limit?: number): Promise<TransactionParticipant[]> {
+  return getVaultRepository().query<TransactionParticipant>('transactionParticipants', name, value, limit);
+}
+
+async function listRows<T extends VaultTableName>(table: T): Promise<VaultRows[T][]> {
+  const repository = getVaultRepository();
+  const rows: VaultRows[T][] = [];
+  let cursor: string | number | undefined;
+  do {
+    const page = await repository.list(table, { cursor, limit: PAGE_SIZE });
+    rows.push(...page.rows);
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return rows;
+}
 
 export async function createAttachment(
   data: Omit<Attachment, 'id' | 'createdAt'>
@@ -12,29 +31,32 @@ export async function getAttachments(recordId: number): Promise<Attachment[]> {
 }
 
 export async function getEvidenceAttachments(evidenceId: number): Promise<EvidenceAttachment[]> {
-  return db.evidenceAttachments.where('evidenceId').equals(evidenceId).toArray();
+  return (await listRows('evidenceAttachments')).filter((row) => row.evidenceId === evidenceId);
 }
 
 export async function getAllParticipants(): Promise<TransactionParticipant[]> {
-  return db.transactionParticipants.toArray();
+  if (getVaultRepository().kind === 'protected') {
+    throw new Error('Protected vault native query "transactionParticipants.all" is required; unbounded participant reads are not permitted');
+  }
+  return listRows('transactionParticipants');
 }
 
 export async function getParticipantsByTxid(txid: string): Promise<TransactionParticipant[]> {
-  return db.transactionParticipants.where('txid').equals(txid).toArray();
+  return participantRows('participants.byTxid', txid);
 }
 
 export async function getParticipantsByAddress(address: string): Promise<TransactionParticipant[]> {
-  return db.transactionParticipants.where('address').equals(address).toArray();
+  return participantRows('participants.byAddress', address);
 }
 
-export async function getParticipantsByAddresses(addresses: string[], signal?: AbortSignal): Promise<TransactionParticipant[]> {
+export async function getRecordParticipantsByAddresses(addresses: string[], signal?: AbortSignal): Promise<TransactionParticipant[]> {
   if (addresses.length === 0) return [];
   const results: TransactionParticipant[] = [];
   const batchSize = 500;
   for (let i = 0; i < addresses.length; i += batchSize) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const batch = addresses.slice(i, i + batchSize);
-    const raw = await db.transactionParticipants.where('address').anyOf(batch).toArray();
+    const raw = await participantRows('participants.byAddresses', batch, batch.length);
     results.push(...raw);
     if (i + batchSize < addresses.length) {
       await new Promise(r => setTimeout(r, 0));
@@ -60,7 +82,7 @@ export async function getSpendInputsByOutpoints(
   for (let i = 0; i < outpoints.length; i += batchSize) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const batch = outpoints.slice(i, i + batchSize);
-    const raw = await db.transactionParticipants.where('[prevTxid+prevVout]').anyOf(batch).toArray();
+    const raw = await participantRows('participants.byPrevouts', batch, batch.length);
     for (const p of raw) {
       if (p.role === 'input') results.push(p);
     }
@@ -86,7 +108,7 @@ export async function getParticipantsByAddressesWithOutpointSpends(
   addresses: string[],
   signal?: AbortSignal,
 ): Promise<TransactionParticipant[]> {
-  const participants = await getParticipantsByAddresses(addresses, signal);
+  const participants = await getRecordParticipantsByAddresses(addresses, signal);
   if (participants.length === 0) return participants;
 
   const seenIds = new Set<number>();
@@ -108,5 +130,5 @@ export async function getParticipantsByAddressesWithOutpointSpends(
 }
 
 export async function getParticipantsByRecordId(recordId: number): Promise<TransactionParticipant[]> {
-  return db.transactionParticipants.where('recordId').equals(recordId).toArray();
+  return participantRows('participants.byRecordId', recordId);
 }

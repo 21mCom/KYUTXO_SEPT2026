@@ -27,7 +27,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { db } from "@/lib/database";
+import { getVaultRepository } from "@/lib/repository";
 import { countAttachments } from "@/lib/data/attachments-crud";
 import { countDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { countRecords, getRecordsAfterId } from "@/lib/data/record-crud";
@@ -319,12 +319,11 @@ export default function ExportPage() {
       try {
         const records = await countRecords();
         const attachments = await countAttachments();
-        const tags = await db.tags.count();
-        const categories = await db.categories.count();
-        const owners = await db.owners.count();
-        const walletNames = await db.walletNames.count();
-        const seedNames = await db.seedNames.count();
-        const walletSoftware = await db.walletSoftware.count();
+        const repository = getVaultRepository();
+        const [tags, categories, owners, walletNames, seedNames, walletSoftware] = await Promise.all([
+          repository.count("tags"), repository.count("categories"), repository.count("owners"),
+          repository.count("walletNames"), repository.count("seedNames"), repository.count("walletSoftware"),
+        ]);
         const derivationTemplates = await countDerivationTemplates();
         setRecordCount(records);
         setAttachmentCount(attachments);

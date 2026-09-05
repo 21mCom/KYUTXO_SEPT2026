@@ -54,7 +54,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
-import { db } from "@/lib/database";
+import { getVaultRepository, type VaultTableName } from "@/lib/repository";
 import { isValidImportanceTier, isHiddenDiscoveryTier } from "@/lib/db-types";
 import {
   repairInputStringLower,
@@ -63,6 +63,7 @@ import {
   repairStaleTypeSpecificFields,
   getRecordsByIds,
   deleteRecord,
+  getRecordsAfterId,
 } from "@/lib/data/record-crud";
 import { getStaleTypeSpecificFields } from "@/lib/record-type-clears";
 import type { Record as VaultRecord } from "@/lib/db-types";
@@ -296,12 +297,22 @@ export default function DatabaseDoctor() {
       // 2. Per-table counts for every table in the vault.
       setProgress("Counting rows in every table…");
       const tableCounts: TableCount[] = [];
-      for (const table of db.tables) {
+      const tableNames: VaultTableName[] = [
+        'records', 'attachments', 'tags', 'categories', 'owners', 'walletNames',
+        'seedNames', 'walletSoftware', 'recordOrigins', 'customFields', 'settings',
+        'priceData', 'blockchainTransactions', 'transactionParticipants',
+        'addressSyncState', 'nodeSettings', 'derivationTemplates', 'utxoLineage',
+        'custodySegments', 'lineageSnapshots', 'evidence', 'evidenceAttachments',
+        'pausedSyncState', 'skippedAddresses', 'addressBlacklist', 'partialExportBundles',
+        'trashedAttachments', 'privacyAuditHistory', 'dustFlags', 'savedPsbts',
+        'adversaryScenarios', 'networkPrivacyActivity',
+      ];
+      for (const name of tableNames) {
         try {
-          const count = await table.count();
-          tableCounts.push({ name: table.name, count, error: false });
+          const count = await getVaultRepository().count(name);
+          tableCounts.push({ name, count, error: false });
         } catch {
-          tableCounts.push({ name: table.name, count: 0, error: true });
+          tableCounts.push({ name, count: 0, error: true });
         }
       }
       tableCounts.sort((a, b) => a.name.localeCompare(b.name));
@@ -337,11 +348,7 @@ export default function DatabaseDoctor() {
       while (hasMore) {
         let chunk: RawRow[];
         try {
-          chunk = (await db.records
-            .where("id")
-            .above(lastId)
-            .limit(BATCH_SIZE)
-            .toArray()) as unknown as RawRow[];
+          chunk = (await getRecordsAfterId(lastId, BATCH_SIZE)) as unknown as RawRow[];
         } catch (err) {
           throw new Error(
             `Failed reading the records table: ${err instanceof Error ? err.message : String(err)}`,
@@ -456,11 +463,7 @@ export default function DatabaseDoctor() {
         setProgress("Collecting duplicate identifier details…");
         let collisionLastId = 0;
         for (;;) {
-          const chunk = (await db.records
-            .where("id")
-            .above(collisionLastId)
-            .limit(BATCH_SIZE)
-            .toArray()) as unknown as RawRow[];
+          const chunk = (await getRecordsAfterId(collisionLastId, BATCH_SIZE)) as unknown as RawRow[];
           if (chunk.length === 0) break;
           collisionLastId = Number(chunk[chunk.length - 1].id);
 

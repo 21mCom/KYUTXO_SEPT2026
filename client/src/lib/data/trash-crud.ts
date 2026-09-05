@@ -1,4 +1,6 @@
-import { db, notifyDbChange, type Attachment, type TrashedAttachment } from '../database';
+import { notifyDbChange, type Attachment, type TrashedAttachment } from '../database';
+import { getVaultRepository } from '../repository';
+import { listVaultRows } from './repository-helpers';
 
 export interface TrashWriteOptions {
   skipNotification?: boolean;
@@ -28,7 +30,7 @@ export async function archiveAttachments(
     source,
   }));
 
-  await db.trashedAttachments.bulkAdd(rows);
+  await getVaultRepository().bulkPut('trashedAttachments', rows);
 
   if (!options?.skipNotification) {
     notifyDbChange('trashedAttachments');
@@ -36,18 +38,18 @@ export async function archiveAttachments(
 }
 
 export async function getTrashedAttachments(): Promise<TrashedAttachment[]> {
-  return db.trashedAttachments.orderBy('deletedAt').reverse().toArray();
+  return (await listVaultRows('trashedAttachments')).sort((a, b) => b.deletedAt - a.deletedAt);
 }
 
 export async function getTrashedAttachment(id: number): Promise<TrashedAttachment | undefined> {
-  return db.trashedAttachments.get(id);
+  return getVaultRepository().get('trashedAttachments', id);
 }
 
 export async function deleteTrashedAttachment(
   id: number,
   options?: TrashWriteOptions,
 ): Promise<void> {
-  await db.trashedAttachments.delete(id);
+  await getVaultRepository().delete('trashedAttachments', id);
 
   if (!options?.skipNotification) {
     notifyDbChange('trashedAttachments');
@@ -55,7 +57,7 @@ export async function deleteTrashedAttachment(
 }
 
 export async function clearTrashedAttachments(options?: TrashWriteOptions): Promise<void> {
-  await db.trashedAttachments.clear();
+  await getVaultRepository().clear('trashedAttachments');
 
   if (!options?.skipNotification) {
     notifyDbChange('trashedAttachments');
@@ -63,5 +65,5 @@ export async function clearTrashedAttachments(options?: TrashWriteOptions): Prom
 }
 
 export async function countTrashedAttachments(): Promise<number> {
-  return db.trashedAttachments.count();
+  return getVaultRepository().count('trashedAttachments');
 }

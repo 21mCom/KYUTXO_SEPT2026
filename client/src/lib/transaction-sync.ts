@@ -1,16 +1,15 @@
 // Transaction Sync Service
 // Syncs blockchain transaction data for addresses in the local database
 
-import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
+import { notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
 import { validateAddress, canonicalizeRecordIdentifier } from './bitcoin';
 import {
   createRecord,
   createRecordOrigin,
   updateRecord,
-  addTransaction,
+  addTransactionWithParticipants,
   updateTransaction,
-  bulkAddParticipants,
   bulkPutParticipants,
   addSkippedAddress,
   updateSkippedAddress,
@@ -32,6 +31,17 @@ import {
   getLatestAddressSyncState,
   getNodeSettings,
   queueTransactionForReview,
+  getRecord,
+  getRecordsByIds,
+  getRecordsByInputString,
+  getRecordsByInputStrings,
+  getRecordsByInputStringAndType,
+  getRecordsPageByTypeIdReverseKeyset,
+  getTransactionByTxid,
+  getTransactionsByTxids,
+  getParticipantsByTxids,
+  getInputParticipants,
+  countTransactions,
 } from './dataFacade';
 import { recomputeAddressStats } from './data/address-stats';
 import {
@@ -139,10 +149,7 @@ function safeAppend<T>(target: T[], source: T[]): void {
 }
 
 async function loadAddressRecordsAtDepth(depth: number): Promise<Record[]> {
-  return db.records
-    .where('type').equals('address')
-    .filter(r => (r.syncDepth ?? 0) === depth)
-    .toArray();
+  return (await loadAddressRecords()).filter(r => (r.syncDepth ?? 0) === depth);
 }
 
 
@@ -204,7 +211,7 @@ export class TransactionSyncService {
   private async getParentMetadata(recordId: number): Promise<ParentMetadata | undefined> {
     const cached = this.parentMetadataCache.get(recordId);
     if (cached) return cached;
-    const record = await db.records.get(recordId);
+    const record = await getRecord(recordId);
     if (!record) return undefined;
     const metadata: ParentMetadata = {
       walletName: record.walletName,
@@ -470,10 +477,7 @@ export class TransactionSyncService {
         addressesProcessed: 0,
       });
 
-      const existingRecord = await db.records
-        .where('inputString')
-        .equals(address)
-        .first();
+      const existingRecord = (await getRecordsByInputString(address))[0];
       const recordId = existingRecord?.id;
 
       if (!recordId) {
@@ -828,7 +832,7 @@ export class TransactionSyncService {
       // 2. Then sync all addresses that were discovered from that record (depth = record.syncDepth + 1)
       if (specificRecordIds && specificRecordIds.length > 0) {
         // Get the starting depth from the first specified record - use targeted query
-        const targetRawRecords = await db.records.bulkGet(specificRecordIds);
+        const targetRawRecords = await getRecordsByIds(specificRecordIds);
         const validTargetRaw = targetRawRecords.filter((r): r is Record => !!r && r.type === 'address');
         const targetRecords = validTargetRaw;
 
@@ -1115,10 +1119,8 @@ export class TransactionSyncService {
       this.connectedOnlyMode = !!options.connectedOnly;
       this.addressesFilteredCount = 0;
       if (this.connectedOnlyMode) {
-        const allCuratedRecords = await db.records
-          .where('type').equals('address')
-          .filter(r => r.source !== 'blockchain-sync')
-          .toArray();
+        const allCuratedRecords = (await loadAddressRecords())
+          .filter(r => r.source !== 'blockchain-sync');
         this.knownAddressSet = new Set(allCuratedRecords.map(r => r.inputString));
         console.log(`[TransactionSync] Connected-only mode: ${this.knownAddressSet.size} known addresses loaded`);
       } else {
@@ -1502,7 +1504,7 @@ export class TransactionSyncService {
         // fingerprint data onto rows that were synced before fingerprint
         // capture existed, so Privacy Audit stops showing "re-sync needed".
         if (parsed.rawFingerprintCaptured) {
-          const existingTx = await db.blockchainTransactions.where('txid').equals(parsed.txid).first();
+          const existingTx = await getTransactionByTxid(parsed.txid);
           if (await this.backfillFingerprint(existingTx, parsed)) {
             this.statsTouchedAddresses.add(address);
             stats.updated++;
@@ -1516,7 +1518,7 @@ export class TransactionSyncService {
         continue;
       }
 
-      const existingTx = await db.blockchainTransactions.where('txid').equals(parsed.txid).first();
+      const existingTx = await getTransactionByTxid(parsed.txid);
 
       if (existingTx) {
         // Tx already imported (e.g. seen via another address): backfill
@@ -1532,7 +1534,7 @@ export class TransactionSyncService {
         continue;
       }
 
-      await addTransaction({
+      const transactionToSave = {
         txid: parsed.txid,
         blockHeight: parsed.blockHeight,
         blockTime: parsed.blockTime,
@@ -1546,8 +1548,7 @@ export class TransactionSyncService {
         opReturnData: parsed.opReturnData.length > 0 ? parsed.opReturnData : undefined,
         // Wallet fingerprinting fields (populated when the API returns version/locktime/sequence)
         ...this.fingerprintFields(parsed),
-      }, { skipNotification: true });
-      stats.imported++;
+      };
 
       const txSyncDepth = Math.max(0, newAddressDepth - 1);
       const { isNew: isTxRecordNew } = await this.findOrCreateTransactionRecord(parsed.txid, parsed.blockTime, txSyncDepth, recordId);
@@ -1619,10 +1620,14 @@ export class TransactionSyncService {
         });
       }
 
-      // Encrypt and batch insert all participants for this transaction at once
-      if (participantsBatch.length > 0) {
-        await bulkAddParticipants(participantsBatch, { skipNotification: true });
-      }
+      // Commit the transaction and every participant atomically. Packaged
+      // builds execute the fixed SQLCipher command; browser/dev use Dexie.
+      await addTransactionWithParticipants(
+        transactionToSave,
+        participantsBatch,
+        { skipNotification: true },
+      );
+      stats.imported++;
       if (await queueTransactionForReview(parsed.txid, { skipNotification: true })) {
         stats.queued++;
         this.deferNotification('blockchainTransactions');
@@ -1690,9 +1695,7 @@ export class TransactionSyncService {
     const restrictToRecordIds = options?.restrictToRecordIds;
     const stats = { resolved: 0, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] as string[], cancelled: false };
 
-    const allInputs = await db.transactionParticipants
-      .where('role').equals('input')
-      .toArray();
+    const allInputs = await getInputParticipants();
 
     const unresolvedInputs = allInputs.filter(
       p => (!p.address || p.address === '') && p.prevTxid !== undefined && p.prevVout !== undefined
@@ -1713,10 +1716,7 @@ export class TransactionSyncService {
     const prevTxidArr = Array.from(prevTxids);
     for (let i = 0; i < prevTxidArr.length; i += 500) {
       const batch = prevTxidArr.slice(i, i + 500);
-      const rawOutputs = await db.transactionParticipants
-        .where('txid').anyOf(batch)
-        .and(p => p.role === 'output')
-        .toArray();
+      const rawOutputs = (await getParticipantsByTxids(batch)).filter(p => p.role === 'output');
       for (const o of rawOutputs) {
         if (o.vout !== undefined) {
           localOutputCache.set(`${o.txid}:${o.vout}`, {
@@ -1821,9 +1821,7 @@ export class TransactionSyncService {
     const addrArr = Array.from(resolvedAddressSet);
     for (let i = 0; i < addrArr.length; i += 500) {
       const batch = addrArr.slice(i, i + 500);
-      const records = await db.records
-        .where('inputString').anyOf(batch)
-        .toArray();
+      const records = await getRecordsByInputStrings(batch);
       for (const r of records) {
         if (r.id && r.inputString) {
           addressToRecordId.set(r.inputString, r.id);
@@ -1907,7 +1905,7 @@ export class TransactionSyncService {
     // Canonicalize the lookup key: stored identifiers are canonical, so a
     // manually created record matches even if it was originally typed padded
     // or uppercase (and repaired to canonical form).
-    const existing = await db.records.where('inputString').equals(canonicalizeRecordIdentifier(address)).first();
+    const existing = (await getRecordsByInputString(canonicalizeRecordIdentifier(address)))[0];
     
     if (existing && existing.id) {
       return { recordId: existing.id, isNew: false };
@@ -1992,7 +1990,7 @@ export class TransactionSyncService {
   // Update an address record's firstSeenBlockTime if this transaction is older
   // Only updates if blockTime is earlier than current value (or if not set)
   private async updateFirstSeenBlockTime(recordId: number, blockTime: number): Promise<void> {
-    const record = await db.records.get(recordId);
+    const record = await getRecord(recordId);
     if (!record) return;
 
     // Only update if this transaction is older than current firstSeenBlockTime
@@ -2015,10 +2013,10 @@ export class TransactionSyncService {
   ): Promise<{ recordId: number; isNew: boolean }> {
     // Check if a transaction record already exists for this txid
     // Scope to type='transaction' to avoid collisions with address records
-    const existing = await db.records
-      .where('inputString').equals(canonicalizeRecordIdentifier(txid))
-      .and(r => r.type === 'transaction')
-      .first();
+    const existing = (await getRecordsByInputStringAndType(
+      canonicalizeRecordIdentifier(txid),
+      'transaction',
+    ))[0];
     
     if (existing && existing.id) {
       return { recordId: existing.id, isNew: false };
@@ -2082,9 +2080,9 @@ export class TransactionSyncService {
     totalTransactions: number;
     lastSyncTime: number | null;
   }> {
-    const totalAddresses = await db.records.where('type').equals('address').count();
+    const totalAddresses = (await loadAddressRecords()).length;
     const syncedAddresses = await countAddressSyncState();
-    const totalTransactions = await db.blockchainTransactions.count();
+    const totalTransactions = await countTransactions();
     
     const lastSync = await getLatestAddressSyncState();
     
@@ -2110,11 +2108,12 @@ export class TransactionSyncService {
       amount: number;
     }> = [];
 
+    const transactions = await getTransactionsByTxids(
+      Array.from(new Set(participants.map(participant => participant.txid))),
+    );
+    const transactionsByTxid = new Map(transactions.map(tx => [tx.txid, tx]));
     for (const participant of participants) {
-      const tx = await db.blockchainTransactions
-        .where('txid')
-        .equals(participant.txid)
-        .first();
+      const tx = transactionsByTxid.get(participant.txid);
       
       if (tx) {
         results.push({
@@ -2131,10 +2130,7 @@ export class TransactionSyncService {
   }
 
   async getPendingReviewAddresses(): Promise<Record[]> {
-    return db.records
-      .where('owner')
-      .equals('Pending Review')
-      .toArray();
+    return (await loadAddressRecords()).filter(record => record.owner === 'Pending Review');
   }
 
   /**
@@ -2234,7 +2230,18 @@ function extractBaseWalletName(source: string): string {
 }
 
 export async function loadAddressRecords(): Promise<Record[]> {
-  return db.records.where('type').equals('address').toArray();
+  const records: Record[] = [];
+  let beforeIdExclusive: number | undefined;
+  for (;;) {
+    const batch = await getRecordsPageByTypeIdReverseKeyset('address', {
+      limit: 500,
+      beforeIdExclusive,
+    });
+    records.push(...batch);
+    if (batch.length < 500) break;
+    beforeIdExclusive = batch[batch.length - 1].id;
+  }
+  return records;
 }
 
 export function getAddressSourcesFromRecords(allRecords: Record[]): SourceCategory[] {

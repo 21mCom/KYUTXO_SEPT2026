@@ -1,5 +1,19 @@
-import { db, BlockchainTransaction, TransactionParticipant, Record } from './database';
+import { BlockchainTransaction, TransactionParticipant, Record } from './database';
 import { getParticipantsByTxid, getParticipantsByAddressesWithOutpointSpends } from './dataFacade';
+import { getVaultRepository } from './repository';
+import { getTransactionByTxid } from './data/transaction-crud';
+
+async function listAddressRecords(): Promise<Record[]> {
+  const repository = getVaultRepository();
+  const rows: Record[] = [];
+  let cursor: string | number | undefined;
+  do {
+    const page = await repository.list('records', { cursor, limit: 500 });
+    rows.push(...page.rows.filter((record) => record.type === 'address'));
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return rows;
+}
 
 // Lightning Channel Classification Types
 export type LightningClassification = 
@@ -431,7 +445,7 @@ export async function detectLightningActivity(
   txid: string
 ): Promise<LightningDetectionResult | null> {
   // Fetch transaction and participants
-  const tx = await db.blockchainTransactions.where('txid').equals(txid).first();
+  const tx = await getTransactionByTxid(txid);
   if (!tx) return null;
 
   const participants = await getParticipantsByTxid(txid);
@@ -439,7 +453,7 @@ export async function detectLightningActivity(
   const outputs = participants.filter(p => p.role === 'output');
 
   // Get all tracked addresses for known-address detection
-  const records = await db.records.where('type').equals('address').toArray();
+  const records = await listAddressRecords();
   const knownAddresses = new Set(records.map(r => r.inputString));
 
   // Get linked records for this transaction
@@ -518,8 +532,7 @@ export async function scanForLightningActivity(
   const { owner, walletName, minProbability = 30, signal } = options;
 
   // Get relevant records based on filters
-  let recordsQuery = db.records.where('type').equals('address');
-  let records = await recordsQuery.toArray();
+  let records = await listAddressRecords();
 
   // Apply owner/wallet filters
   if (owner) {

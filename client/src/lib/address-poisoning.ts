@@ -1,5 +1,5 @@
-import { db } from "./database";
 import { getRecordsPageByTypeIdReverseKeyset } from "./data/record-crud";
+import { getRecordParticipantsByAddresses, getParticipantsByTxid as getRecordParticipantsByTxid } from "./data/record-queries";
 import { getGroupKeys, type GroupBy } from "./balance-grouping";
 import type { Record as DbRecord } from "./database";
 
@@ -233,10 +233,7 @@ export async function scanAddressPoisoning(
   for (let i = 0; i < scopedList.length; i += PARTICIPANT_BATCH) {
     if (signal.aborted) return null;
     const batch = scopedList.slice(i, i + PARTICIPANT_BATCH);
-    const participants = await db.transactionParticipants
-      .where("address")
-      .anyOf(batch)
-      .toArray();
+    const participants = await getRecordParticipantsByAddresses(batch, signal);
 
     for (const p of participants) {
       if (p.role !== "output") continue;
@@ -279,10 +276,7 @@ export async function scanAddressPoisoning(
   for (let i = 0; i < txids.length; i += TXID_BATCH) {
     if (signal.aborted) return null;
     const batch = txids.slice(i, i + TXID_BATCH);
-    const participants = await db.transactionParticipants
-      .where("txid")
-      .anyOf(batch)
-      .toArray();
+    const participants = (await Promise.all(batch.map((txid) => getRecordParticipantsByTxid(txid)))).flat();
 
     // Group each tx's counterparty addresses (everything except the dust
     // recipient itself — that includes the user's other addresses, which the
@@ -394,10 +388,7 @@ export async function scanAddressPoisoning(
   for (let i = 0; i < uniqueSuspects.length; i += COUNTERPARTY_BATCH) {
     if (signal.aborted) return null;
     const batch = uniqueSuspects.slice(i, i + COUNTERPARTY_BATCH);
-    const rows = await db.transactionParticipants
-      .where("address")
-      .anyOf(batch)
-      .toArray();
+    const rows = await getRecordParticipantsByAddresses(batch, signal);
     for (const p of rows) {
       txidsBySuspect.get(p.address)?.add(p.txid);
     }

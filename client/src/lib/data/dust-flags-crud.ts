@@ -1,4 +1,19 @@
 import { db, notifyDbChange, type DustFlag } from '../database';
+import { getVaultRepository } from '../repository';
+import { getParticipantsByPrevOutKeys } from './transaction-crud';
+
+async function listDustFlags(): Promise<DustFlag[]> {
+  const repository = getVaultRepository();
+  if (repository.kind !== 'protected') return db.dustFlags.toArray();
+  const rows: DustFlag[] = [];
+  let cursor: string | number | undefined;
+  do {
+    const page = await repository.list('dustFlags', { cursor, limit: 1000 });
+    rows.push(...page.rows);
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return rows;
+}
 
 // All writes to db.dustFlags go through this module (mirrors the other
 // lightweight CRUD modules like sync-protection-crud).
@@ -40,14 +55,19 @@ export async function markOutpointsAsDust(entries: DustFlagInput[]): Promise<num
   }
 
   const outpoints = Array.from(byOutpoint.keys());
-  const existing = await db.dustFlags.where('outpoint').anyOf(outpoints).toArray();
+  const repository = getVaultRepository();
+  const existing = repository.kind === 'protected'
+    ? (await listDustFlags()).filter((row) => byOutpoint.has(row.outpoint))
+    : await db.dustFlags.where('outpoint').anyOf(outpoints).toArray();
   for (const row of existing) {
     byOutpoint.delete(row.outpoint);
   }
 
   const toAdd = Array.from(byOutpoint.values());
   if (toAdd.length > 0) {
-    await db.dustFlags.bulkAdd(toAdd);
+    if (repository.kind === 'protected') {
+      for (const row of toAdd) await repository.add('dustFlags', row);
+    } else await db.dustFlags.bulkAdd(toAdd);
     notifyDbChange('dustFlags');
   }
   return toAdd.length;
@@ -58,15 +78,24 @@ export async function markOutpointsAsDust(entries: DustFlagInput[]): Promise<num
  */
 export async function unmarkDustOutpoints(outpoints: string[]): Promise<number> {
   if (outpoints.length === 0) return 0;
-  const removed = await db.dustFlags.where('outpoint').anyOf(outpoints).delete();
-  if (removed > 0) {
+  const repository = getVaultRepository();
+  const removed = repository.kind === 'protected'
+    ? (await listDustFlags()).filter((row) => outpoints.includes(row.outpoint))
+    : [];
+  if (repository.kind === 'protected' && removed.length) {
+    await repository.bulkDelete('dustFlags', removed.map((row) => row.id!));
+  }
+  const removedCount = repository.kind === 'protected'
+    ? removed.length
+    : await db.dustFlags.where('outpoint').anyOf(outpoints).delete();
+  if (removedCount > 0) {
     notifyDbChange('dustFlags');
   }
-  return removed;
+  return removedCount;
 }
 
 export async function getAllDustFlags(): Promise<DustFlag[]> {
-  return db.dustFlags.toArray();
+  return listDustFlags();
 }
 
 export interface DustFlagWriteOptions {
@@ -74,7 +103,9 @@ export interface DustFlagWriteOptions {
 }
 
 export async function clearDustFlags(options?: DustFlagWriteOptions): Promise<void> {
-  await db.dustFlags.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('dustFlags');
+  else await db.dustFlags.clear();
   if (!options?.skipNotification) {
     notifyDbChange('dustFlags');
   }
@@ -111,7 +142,7 @@ export async function restoreDustFlagRows(
 
   const seen = new Set<string>();
   if (restoreMode === 'merge') {
-    const existing = await db.dustFlags.toArray();
+    const existing = await listDustFlags();
     for (const e of existing) seen.add(e.outpoint);
   }
 
@@ -139,9 +170,18 @@ export async function restoreDustFlagRows(
   }
 
   if (toAdd.length > 0) {
-    await db.dustFlags.bulkAdd(toAdd);
-    if (collect?.insertedOutpoints) {
-      for (const r of toAdd) collect.insertedOutpoints.push(r.outpoint);
+    const repository = getVaultRepository();
+    if (repository.kind === 'protected') {
+      for (const row of toAdd) {
+        const id = await repository.add('dustFlags', row);
+        if (collect?.insertedOutpoints) collect.insertedOutpoints.push(row.outpoint);
+        void id;
+      }
+    } else {
+      await db.dustFlags.bulkAdd(toAdd);
+      if (collect?.insertedOutpoints) {
+        for (const r of toAdd) collect.insertedOutpoints.push(r.outpoint);
+      }
     }
     if (!options?.skipNotification) {
       notifyDbChange('dustFlags');
@@ -154,7 +194,7 @@ export async function restoreDustFlagRows(
  * The complete set of dust-flagged outpoints ("txid:vout") for fast lookups.
  */
 export async function getDustFlaggedOutpointSet(): Promise<Set<string>> {
-  const rows = await db.dustFlags.toArray();
+  const rows = await listDustFlags();
   return new Set(rows.map((r) => r.outpoint));
 }
 
@@ -176,15 +216,11 @@ export interface UnspentDustByAddress {
  * balance. Pure local read.
  */
 export async function getUnspentDustByAddress(): Promise<UnspentDustByAddress> {
-  const rows = await db.dustFlags.toArray();
+  const rows = await listDustFlags();
   const byAddress = new Map<string, { sats: number; count: number }>();
   for (const row of rows) {
     if (!row.address) continue;
-    const spent = await db.transactionParticipants
-      .where('[prevTxid+prevVout]')
-      .equals([row.txid, row.vout])
-      .count();
-    if (spent > 0) continue;
+    if ((await getParticipantsByPrevOutKeys([[row.txid, row.vout]])).length > 0) continue;
     const agg = byAddress.get(row.address) ?? { sats: 0, count: 0 };
     agg.sats += row.amountSats;
     agg.count += 1;

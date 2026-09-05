@@ -1,10 +1,24 @@
 import {
-  db,
   notifyDbChange,
   type Record,
   type RecordOrigin,
   type RecordOriginType,
 } from '../database';
+import { getVaultRepository } from '../repository';
+
+const PAGE_SIZE = 500;
+
+async function listOrigins(): Promise<RecordOrigin[]> {
+  const repository = getVaultRepository();
+  const rows: RecordOrigin[] = [];
+  let cursor: string | number | undefined;
+  do {
+    const page = await repository.list('recordOrigins', { cursor, limit: PAGE_SIZE });
+    rows.push(...page.rows);
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return rows;
+}
 
 export type CreateRecordOriginData = Omit<RecordOrigin, 'id' | 'createdAt'> & {
   createdAt?: number;
@@ -26,7 +40,7 @@ export async function addRecordOrigin(
     createdAt: data.createdAt ?? Date.now(),
   };
 
-  const id = await db.recordOrigins.add(origin);
+  const id = await getVaultRepository().add('recordOrigins', origin);
 
   if (!options?.skipNotification) {
     notifyDbChange('recordOrigins');
@@ -46,7 +60,7 @@ export async function bulkAddRecordOrigins(
     createdAt: data.createdAt ?? now,
   }));
 
-  const ids = await db.recordOrigins.bulkAdd(origins, { allKeys: true });
+  const ids = await getVaultRepository().bulkPut('recordOrigins', origins);
 
   if (!options?.skipNotification) {
     notifyDbChange('recordOrigins');
@@ -58,7 +72,11 @@ export async function deleteRecordOriginsByRecordId(
   recordId: number,
   options?: RecordOriginWriteOptions
 ): Promise<void> {
-  await db.recordOrigins.where('recordId').equals(recordId).delete();
+  const ids = (await listOrigins())
+    .filter((origin) => origin.recordId === recordId)
+    .map((origin) => origin.id)
+    .filter((id): id is number => id !== undefined);
+  await getVaultRepository().bulkDelete('recordOrigins', ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('recordOrigins');
@@ -68,7 +86,7 @@ export async function deleteRecordOriginsByRecordId(
 export async function clearRecordOrigins(
   options?: RecordOriginWriteOptions
 ): Promise<void> {
-  await db.recordOrigins.clear();
+  await getVaultRepository().clear('recordOrigins');
 
   if (!options?.skipNotification) {
     notifyDbChange('recordOrigins');
@@ -76,27 +94,41 @@ export async function clearRecordOrigins(
 }
 
 export async function getRecordOriginsByRecordId(recordId: number): Promise<RecordOrigin[]> {
-  return db.recordOrigins.where('recordId').equals(recordId).toArray();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    return repository.query<RecordOrigin>('recordOrigins', 'origins.byRecordIds', [recordId], 1000);
+  }
+  return (await listOrigins()).filter((origin) => origin.recordId === recordId);
 }
 
 export async function getRecordOriginsByRecordIds(
   recordIds: number[]
 ): Promise<RecordOrigin[]> {
   if (recordIds.length === 0) return [];
-  return db.recordOrigins
-    .where('recordId')
-    .anyOf(recordIds)
-    .toArray();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    const rows: RecordOrigin[] = [];
+    for (let index = 0; index < recordIds.length; index += 1000) {
+      rows.push(...await repository.query<RecordOrigin>(
+        'recordOrigins', 'origins.byRecordIds', recordIds.slice(index, index + 1000), 1000,
+      ));
+    }
+    return rows;
+  }
+  const wanted = new Set(recordIds);
+  return (await listOrigins()).filter((origin) => wanted.has(origin.recordId));
 }
 
 export async function getRecordOriginsAfterId(
   afterId: number,
   limit: number
 ): Promise<RecordOrigin[]> {
-  return db.recordOrigins.where('id').above(afterId).limit(limit).toArray();
+  // Page by primary key rather than materializing an unbounded collection.
+  const page = await getVaultRepository().list('recordOrigins', { cursor: afterId, limit });
+  return page.rows;
 }
 export async function getAllRecordOrigins(): Promise<RecordOrigin[]> {
-  return db.recordOrigins.toArray();
+  return listOrigins();
 }
 
 // Singular string fields an origin row can carry (mirrors RecordOrigin).
@@ -224,10 +256,7 @@ export async function captureMergeOrigin(
     if (!recordId) return;
     if (!hasAnyOriginMetadata(incoming)) return;
 
-    const existingOrigins = await db.recordOrigins
-      .where('recordId')
-      .equals(recordId)
-      .toArray();
+    const existingOrigins = await getRecordOriginsByRecordId(recordId);
 
     const now = Date.now();
 
@@ -248,7 +277,7 @@ export async function captureMergeOrigin(
       .sort((a, b) => b.createdAt - a.createdAt || (b.id ?? 0) - (a.id ?? 0));
     const latestSameSource = sameSourceOrigins[0];
     if (latestSameSource?.id && originValuesEqual(latestSameSource, incoming)) {
-      await db.recordOrigins.update(latestSameSource.id, {
+      await getVaultRepository().update('recordOrigins', latestSameSource.id, {
         createdAt: incoming.createdAt ?? now,
         // Keep the displayed source in step with the latest run when only
         // the embedded run timestamp differs.
@@ -312,7 +341,7 @@ export async function bulkDeleteRecordOrigins(
   options?: RecordOriginWriteOptions
 ): Promise<void> {
   if (ids.length === 0) return;
-  await db.recordOrigins.bulkDelete(ids);
+  await getVaultRepository().bulkDelete('recordOrigins', ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('recordOrigins');

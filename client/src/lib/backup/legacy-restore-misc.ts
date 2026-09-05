@@ -82,8 +82,9 @@ import {
   type CreateCustodySegmentData,
   type CreateLineageSnapshotData,
 } from "@/lib/data/lineage-crud";
-import { db, type OwnerMatchingMethod } from "@/lib/database";
-import { validateResidencyRanges } from "@/lib/data/owner-policy";
+import type { OwnerMatchingMethod } from "@/lib/database";
+import { getOwnerResidencies, validateResidencyRanges } from "@/lib/data/owner-policy";
+import { getVaultRepository } from "@/lib/repository";
 
 export type RestoreMode = "merge" | "replace";
 
@@ -109,6 +110,7 @@ export async function restoreLegacyVocabulary(
   },
   restoreMode: RestoreMode,
 ): Promise<{ tagsAdded: number; categoriesAdded: number; vocabularyAdded: number }> {
+  const repository = getVaultRepository();
   const now = Date.now();
   const matchingMethods = new Set(["fifo", "lifo", "hifo", "specific-identification", "proportional"]);
   const histories = new Map<number, Array<{ startDate: string; endDate?: string }>>();
@@ -154,7 +156,7 @@ export async function restoreLegacyVocabulary(
       const incoming = (data.ownerResidencies ?? []).filter((row) => row.ownerId === oldId)
         .map((row) => ({ startDate: row.startDate, endDate: typeof row.endDate === "string" ? row.endDate : undefined }));
       if (incoming.length) validateResidencyRanges([
-        ...(await db.ownerResidencies.where("ownerId").equals(live.id).toArray()),
+        ...(await getOwnerResidencies(live.id)),
         ...incoming,
       ]);
     }
@@ -201,7 +203,7 @@ export async function restoreLegacyVocabulary(
     const restored = await getOwners();
     const fallback = restored.find((owner) => owner.name.trim().toLowerCase() === "me") ??
       [...restored].sort((a, b) => a.createdAt - b.createdAt || a.id! - b.id!)[0];
-    if (fallback?.id != null) await db.owners.update(fallback.id, { isDefault: true });
+    if (fallback?.id != null) await repository.update("owners", fallback.id, { isDefault: true });
   }
 
   // Legacy JSON backups carry small tables together. Owner primary keys are
@@ -216,10 +218,10 @@ export async function restoreLegacyVocabulary(
     if (!name || typeof row.startDate !== "string" || typeof row.jurisdiction !== "string") continue;
     const owner = (await getOwners()).find((candidate) => candidate.name === name);
     if (!owner?.id || typeof row.matchingMethod !== "string") continue;
-    const exists = restoreMode === "merge" && await db.ownerResidencies
-      .where("[ownerId+startDate]").equals([owner.id, row.startDate]).first();
+    const exists = restoreMode === "merge" && (await getOwnerResidencies(owner.id))
+      .some((residency) => residency.startDate === row.startDate);
     if (exists) continue;
-    await db.ownerResidencies.add({
+    await repository.add("ownerResidencies", {
       ownerId: owner.id,
       startDate: row.startDate,
       endDate: typeof row.endDate === "string" ? row.endDate : undefined,

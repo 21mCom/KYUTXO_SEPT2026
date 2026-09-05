@@ -23,6 +23,7 @@ import * as bitcoin from 'bitcoinjs-lib';
 import BIP32Factory from 'bip32';
 import bs58check from 'bs58check';
 import { db, type Record as DbRecord, type DerivationTemplate } from './database';
+import { getVaultRepository } from './repository';
 import { validateAddress } from './bitcoin';
 import { deriveAddressesForChain, deriveTaprootAddressesForChain } from './xpub';
 import { bytesToHex, type PsbtDerivationInfo, type PsbtInputScriptType } from './psbt';
@@ -305,15 +306,13 @@ export async function suggestFreshChangeAddress(
       return undefined;
     }
     for (const d of derived) {
-      const existing = await db.records
-        .where('inputStringLower')
-        .equals(d.address.toLowerCase())
-        .first();
+      const existing = (await getVaultRepository().query<DbRecord>(
+        'records', 'records.byInputStringLower', d.address.toLowerCase(), 1,
+      ))[0];
       if (existing) continue;
-      const activity = await db.transactionParticipants
-        .where('address')
-        .equals(d.address)
-        .count();
+      const activity = (await getVaultRepository().query(
+        'transactionParticipants', 'participants.byAddress', d.address,
+      )).length;
       if (activity > 0) continue;
       return d.address;
     }

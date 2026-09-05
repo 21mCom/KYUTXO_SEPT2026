@@ -1,5 +1,6 @@
 import { db, notifyDbChange, type PrivacyAuditHistoryEntry } from '../database';
 import { getSettings } from './settings-crud';
+import { getVaultRepository } from '../repository';
 
 // Default number of audit snapshots to keep. Users can override this via
 // Settings > Privacy Audit (settings.privacyHistoryLimit).
@@ -29,7 +30,10 @@ async function getPrivacyHistoryLimit(): Promise<number> {
  * many runs a retention-limit change would remove before committing it.
  */
 export async function getPrivacyAuditHistoryCount(): Promise<number> {
-  return db.privacyAuditHistory.count();
+  const repository = getVaultRepository();
+  return repository.kind === 'protected'
+    ? repository.count('privacyAuditHistory')
+    : db.privacyAuditHistory.count();
 }
 
 /**
@@ -42,6 +46,14 @@ export async function trimPrivacyAuditHistory(
   options?: PrivacyHistoryWriteOptions
 ): Promise<number> {
   const limit = retentionLimit ?? (await getPrivacyHistoryLimit());
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    const rows = await getPrivacyAuditHistory();
+    const removed = Math.max(0, rows.length - limit);
+    if (removed) await repository.bulkDelete('privacyAuditHistory', rows.slice(0, removed).map((row) => row.id!));
+    if (removed && !options?.skipNotification) notifyDbChange('privacyAuditHistory');
+    return removed;
+  }
   const total = await db.privacyAuditHistory.count();
   let removed = 0;
   if (total > limit) {
@@ -80,6 +92,21 @@ export async function addPrivacyAuditHistoryEntry(
   // the limit itself rarely changes mid-operation).
   const limit = await getPrivacyHistoryLimit();
 
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    const settings = await repository.get('settings', 'default');
+    if (!settings) throw new Error('Cannot save privacy history: settings are unavailable');
+    const result = await repository.saveSettingsWithHistory({
+      settings,
+      historyEntry: entry as PrivacyAuditHistoryEntry,
+      retainHistory: limit,
+    });
+    if (!options?.skipNotification) notifyDbChange('privacyAuditHistory');
+    if (typeof result.historyId !== 'number') {
+      throw new Error('Privacy history commit did not return a saved row');
+    }
+    return result.historyId;
+  }
   let newId: number;
   await db.transaction('rw', db.privacyAuditHistory, async () => {
     newId = (await db.privacyAuditHistory.add(entry as PrivacyAuditHistoryEntry)) as number;
@@ -117,13 +144,16 @@ export async function setPrivacyAuditHistoryAdversary(
   adversary: NonNullable<PrivacyAuditHistoryEntry['adversary']>,
   options?: PrivacyHistoryWriteOptions
 ): Promise<boolean> {
-  const updated = await db.privacyAuditHistory.update(id, { adversary });
+  const repository = getVaultRepository();
+  const updated = repository.kind === 'protected'
+    ? await repository.update('privacyAuditHistory', id, { adversary })
+    : (await db.privacyAuditHistory.update(id, { adversary })) > 0;
 
-  if (updated > 0 && !options?.skipNotification) {
+  if (updated && !options?.skipNotification) {
     notifyDbChange('privacyAuditHistory');
   }
 
-  return updated > 0;
+  return updated;
 }
 
 /**
@@ -133,6 +163,18 @@ export async function setPrivacyAuditHistoryAdversary(
 export async function getPrivacyAuditHistory(
   limit?: number
 ): Promise<PrivacyAuditHistoryEntry[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    const rows: PrivacyAuditHistoryEntry[] = [];
+    let cursor: string | number | undefined;
+    do {
+      const page = await repository.list('privacyAuditHistory', { cursor, limit: 1000 });
+      rows.push(...page.rows);
+      cursor = page.cursor;
+    } while (cursor !== undefined);
+    rows.sort((a, b) => a.timestamp - b.timestamp || (a.id ?? 0) - (b.id ?? 0));
+    return limit != null ? rows.slice(-limit) : rows;
+  }
   if (limit != null) {
     // Take the most recent `limit` entries, then return them oldest → newest.
     const recent = await db.privacyAuditHistory
@@ -151,7 +193,9 @@ export async function getPrivacyAuditHistory(
 export async function clearPrivacyAuditHistory(
   options?: PrivacyHistoryWriteOptions
 ): Promise<void> {
-  await db.privacyAuditHistory.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('privacyAuditHistory');
+  else await db.privacyAuditHistory.clear();
 
   if (!options?.skipNotification) {
     notifyDbChange('privacyAuditHistory');

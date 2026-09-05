@@ -12,7 +12,6 @@ import {
   type ConnectionNode,
   type TransactionEdge 
 } from '@/lib/provenance';
-import { db } from '@/lib/database';
 
 export interface FlowNode {
   id: string;

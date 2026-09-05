@@ -2,6 +2,16 @@ import Dexie, { type Table } from 'dexie';
 
 // Re-export all types and constants from db-types
 export * from './db-types';
+// Storage operations live behind this contract.  Runtime selection is exposed
+// from `lib/repository` to avoid a database <-> adapter import cycle.
+export type {
+  VaultRepository,
+  VaultRows,
+  VaultTableName,
+  VaultKey,
+  VaultPage,
+  VaultListOptions,
+} from './repository/contracts';
 
 // Value import: used at runtime to seed the default settings row.
 import { createDefaultSettings, USER_CURATED_TIERS, type AddressImportance } from './db-types';
@@ -1402,6 +1412,11 @@ export class KYUTXODatabase extends Dexie {
 }
 
 export const db = new KYUTXODatabase();
+
+// `db` is the legacy Dexie schema owner used by browser/development builds.
+// Packaged code must select storage through `getVaultRepository()` instead of
+// opening this database.  Keeping the schema export preserves migrations and
+// browser test fixtures while the repository boundary has a single backend.
 
 // Initialize default settings
 db.on('ready', async () => {

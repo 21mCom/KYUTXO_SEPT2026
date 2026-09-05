@@ -9,6 +9,7 @@ import {
   type DesktopLockSettings,
 } from '../desktop-lock-settings';
 import { getElectronAPISafe } from '../electron';
+import { getVaultRepository } from '../repository';
 
 export interface SettingsWriteOptions {
   skipNotification?: boolean;
@@ -26,7 +27,10 @@ function enqueueDesktopLockOperation<T>(operation: () => Promise<T>): Promise<T>
 }
 
 export async function getSettings(id: string = 'default'): Promise<Settings | undefined> {
-  return db.settings.get(id);
+  const repository = getVaultRepository();
+  return repository.kind === 'protected'
+    ? repository.get('settings', id)
+    : db.settings.get(id);
 }
 
 // Return the settings row, creating a canonical default row first if it is
@@ -37,11 +41,13 @@ export async function ensureSettings(
   id: string = 'default',
   options?: SettingsWriteOptions
 ): Promise<Settings> {
-  const existing = await db.settings.get(id);
+  const existing = await getSettings(id);
   if (existing) return existing;
 
   const created = createDefaultSettings(id);
-  await db.settings.put(created);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.put('settings', created);
+  else await db.settings.put(created);
 
   if (!options?.skipNotification) {
     notifyDbChange('settings');
@@ -51,14 +57,26 @@ export async function ensureSettings(
 }
 
 export async function getAllSettings(): Promise<Settings[]> {
-  return db.settings.toArray();
+  const repository = getVaultRepository();
+  if (repository.kind !== 'protected') return db.settings.toArray();
+  const rows: Settings[] = [];
+  let cursor: string | number | undefined;
+  do {
+    const page = await repository.list('settings', { cursor, limit: 1000 });
+    rows.push(...page.rows);
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return rows;
 }
 
 export async function addSettings(
   data: Settings,
   options?: SettingsWriteOptions
 ): Promise<string> {
-  const id = await db.settings.add(data);
+  const repository = getVaultRepository();
+  const id = repository.kind === 'protected'
+    ? await repository.add('settings', data)
+    : await db.settings.add(data);
 
   if (!options?.skipNotification) {
     notifyDbChange('settings');
@@ -71,7 +89,9 @@ export async function putSettings(
   data: Settings,
   options?: SettingsWriteOptions
 ): Promise<void> {
-  await db.settings.put(data);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.put('settings', data);
+  else await db.settings.put(data);
 
   if (!options?.skipNotification) {
     notifyDbChange('settings');
@@ -83,7 +103,9 @@ export async function updateSettings(
   changes: Partial<Settings>,
   options?: SettingsWriteOptions
 ): Promise<void> {
-  await db.settings.update(id, changes);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.update('settings', id, changes);
+  else await db.settings.update(id, changes);
 
   if (!options?.skipNotification) {
     notifyDbChange('settings');
@@ -96,7 +118,17 @@ export async function mutateSettings(
   options?: SettingsWriteOptions
 ): Promise<Settings | undefined> {
   let updated: Settings | undefined;
-  await db.transaction('rw', db.settings, async () => {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    const current = await repository.get('settings', id);
+    if (current) {
+      const changes = mutate(current);
+      if (changes) {
+        await repository.put('settings', { ...current, ...changes }, id);
+        updated = { ...current, ...changes };
+      }
+    }
+  } else await db.transaction('rw', db.settings, async () => {
     const current = await db.settings.get(id);
     if (!current) return;
     const changes = mutate(current);
@@ -113,7 +145,9 @@ export async function mutateSettings(
 export async function clearSettings(
   options?: SettingsWriteOptions
 ): Promise<void> {
-  await db.settings.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('settings');
+  else await db.settings.clear();
 
   if (!options?.skipNotification) {
     notifyDbChange('settings');

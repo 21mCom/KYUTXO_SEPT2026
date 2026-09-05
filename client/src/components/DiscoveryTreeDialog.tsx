@@ -12,8 +12,8 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
-import { db } from "@/lib/database";
 import type { Record } from "@/lib/database";
+import { getRecordsByDiscoveredFromIds } from "@/lib/data/record-crud";
 
 const PREVIEW_COUNT = 4;
 const ROW_HEIGHT = 36;
@@ -36,13 +36,9 @@ async function fetchDiscoveryTree(parentRecordId: number): Promise<DiscoveredRec
   let depth = 1;
 
   while (currentParentIds.length > 0) {
-    const children: Record[] = [];
-    for (const pid of currentParentIds) {
-      const batch = await db.records
-        .filter((r) => r.discoveredFromRecordId === pid)
-        .toArray();
-      for (const item of batch) children.push(item);
-    }
+    // The repository query is bounded and works for both protected and Dexie
+    // stores; do not open the legacy IndexedDB table in packaged Electron.
+    const children: Record[] = await getRecordsByDiscoveredFromIds(currentParentIds);
 
     if (children.length === 0) break;
 

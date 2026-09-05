@@ -36,8 +36,8 @@ import {
 } from '@/components/ui/select';
 import { MultiSelectCombobox } from '@/components/ui/multi-select-combobox';
 import { useToast } from '@/hooks/use-toast';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '@/lib/database';
+import { useTags } from '@/hooks/use-tags';
+import { useCategories } from '@/hooks/use-categories';
 import { useSeedNames, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
 import { useOwners } from '@/hooks/use-owners';
 import { useWalletNames } from '@/hooks/use-wallet-names';
@@ -129,19 +129,10 @@ export default function MobileWalletImport() {
   const owners = rawOwners.map(o => o.name).filter(n => n);
   const walletNames = rawWalletNames.map(w => w.name).filter(n => n);
   
-  const rawTags = useLiveQuery(() => db.tags.toArray(), []);
-  const rawCategories = useLiveQuery(() => db.categories.toArray(), []);
-  const [tags, setTags] = useState<string[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  
-  useEffect(() => {
-    if (rawTags) {
-      setTags(rawTags.map(t => t.name));
-    }
-    if (rawCategories) {
-      setCategories(rawCategories.map(c => c.name));
-    }
-  }, [rawTags, rawCategories]);
+  const { tags: rawTags } = useTags();
+  const { categories: rawCategories } = useCategories();
+  const tags = rawTags.map(t => t.name);
+  const categories = rawCategories.map(c => c.name);
   
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;

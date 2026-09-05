@@ -1,4 +1,12 @@
 import { db, notifyDbChange, type AddressSyncState } from '../database';
+import { getVaultRepository, ProtectedVaultRepository } from '../repository';
+
+const protectedQuery = <T>(name: Parameters<ProtectedVaultRepository['query']>[1], value: unknown, limit?: number) => {
+  const repository = getVaultRepository();
+  return repository instanceof ProtectedVaultRepository
+    ? repository.query<T>('addressSyncState', name, value, limit)
+    : null;
+};
 
 export type CreateAddressSyncStateData = Omit<AddressSyncState, 'id'>;
 
@@ -10,7 +18,10 @@ export async function addAddressSyncState(
   data: CreateAddressSyncStateData,
   options?: AddressSyncStateWriteOptions
 ): Promise<number> {
-  const id = await db.addressSyncState.add(data as AddressSyncState);
+  const repository = getVaultRepository();
+  const id = repository.kind === 'protected'
+    ? await repository.add('addressSyncState', data as AddressSyncState)
+    : await db.addressSyncState.add(data as AddressSyncState);
 
   if (!options?.skipNotification) {
     notifyDbChange('addressSyncState');
@@ -25,9 +36,10 @@ export async function bulkAddAddressSyncState(
 ): Promise<number[]> {
   if (data.length === 0) return [];
 
-  const ids = await db.addressSyncState.bulkAdd(data as AddressSyncState[], {
-    allKeys: true,
-  });
+  const repository = getVaultRepository();
+  const ids = repository.kind === 'protected'
+    ? await Promise.all(data.map(row => repository.add('addressSyncState', row as AddressSyncState)))
+    : await db.addressSyncState.bulkAdd(data as AddressSyncState[], { allKeys: true });
 
   if (!options?.skipNotification) {
     notifyDbChange('addressSyncState');
@@ -44,7 +56,9 @@ export async function bulkDeleteAddressSyncState(
 ): Promise<void> {
   if (ids.length === 0) return;
 
-  await db.addressSyncState.bulkDelete(ids);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.bulkDelete('addressSyncState', ids);
+  else await db.addressSyncState.bulkDelete(ids);
 
   if (!options?.skipNotification) {
     notifyDbChange('addressSyncState');
@@ -56,7 +70,9 @@ export async function updateAddressSyncState(
   changes: Partial<AddressSyncState>,
   options?: AddressSyncStateWriteOptions
 ): Promise<void> {
-  await db.addressSyncState.update(id, changes);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.update('addressSyncState', id, changes);
+  else await db.addressSyncState.update(id, changes);
 
   if (!options?.skipNotification) {
     notifyDbChange('addressSyncState');
@@ -66,7 +82,9 @@ export async function updateAddressSyncState(
 export async function clearAddressSyncState(
   options?: AddressSyncStateWriteOptions
 ): Promise<void> {
-  await db.addressSyncState.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('addressSyncState');
+  else await db.addressSyncState.clear();
 
   if (!options?.skipNotification) {
     notifyDbChange('addressSyncState');
@@ -76,10 +94,15 @@ export async function clearAddressSyncState(
 export async function getAddressSyncStateByAddress(
   address: string
 ): Promise<AddressSyncState | undefined> {
-  return db.addressSyncState.where('address').equals(address).first();
+  const protectedRows = await protectedQuery<AddressSyncState>('sync.byAddress', address, 1);
+  return protectedRows ? protectedRows[0] : db.addressSyncState.where('address').equals(address).first();
 }
 
 export async function getAllAddressSyncState(): Promise<AddressSyncState[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    throw new Error('Protected vault native query "addressSyncState.all" is required; unbounded address-sync reads are not permitted');
+  }
   return db.addressSyncState.toArray();
 }
 
@@ -89,13 +112,20 @@ export async function getAddressSyncStateAfterId(
   afterId: number,
   limit: number
 ): Promise<AddressSyncState[]> {
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    const page = await repository.list('addressSyncState', { cursor: afterId, limit });
+    return page.rows;
+  }
   return db.addressSyncState.where('id').above(afterId).limit(limit).toArray();
 }
 
 export async function countAddressSyncState(): Promise<number> {
-  return db.addressSyncState.count();
+  const repository = getVaultRepository();
+  return repository.kind === 'protected' ? repository.count('addressSyncState') : db.addressSyncState.count();
 }
 
 export async function getLatestAddressSyncState(): Promise<AddressSyncState | undefined> {
-  return db.addressSyncState.orderBy('lastSyncedAt').reverse().first();
+  const protectedRows = await protectedQuery<AddressSyncState>('sync.byLastSyncedAt', 'latest', 1);
+  return protectedRows ? protectedRows[0] : db.addressSyncState.orderBy('lastSyncedAt').reverse().first();
 }

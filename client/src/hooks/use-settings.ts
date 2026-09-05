@@ -4,12 +4,14 @@ import {
   type Settings,
   type CustomField,
 } from '@/lib/database';
+import { getVaultRepository } from '@/lib/repository';
 import { normalizeDesktopLockSettings } from '@/lib/desktop-lock-settings';
 import {
   getSettings as getStoredSettings,
   updateSettings as updateStoredSettings,
   ensureSettings as ensureStoredSettings,
 } from '@/lib/data/settings-crud';
+import { useDbChangeSignal } from './use-db-change-signal';
 import {
   addCustomField as addStoredCustomField,
   updateCustomField as updateStoredCustomField,
@@ -47,6 +49,7 @@ const defaultFieldVisibility = {
 import { DEFAULT_CANCEL_CONFIRM_THRESHOLD } from '@/lib/buildProgress';
 import {
   DEFAULT_PRIVACY_HISTORY_LIMIT,
+  getPrivacyAuditHistoryCount,
   trimPrivacyAuditHistory,
 } from '@/lib/data/privacy-history-crud';
 import { DEFAULT_TX_LIMIT } from '@/lib/data/fund-trail-engine';
@@ -65,10 +68,11 @@ export function useSettings() {
   // react-hooks undefined sentinel meaning "still loading" — otherwise a
   // missing settings row looks indistinguishable from a loading state and the
   // component stays in the loading spinner forever.
+  const changeSignal = useDbChangeSignal(['settings']);
   const settings = useLiveQuery(async () => {
     const s = await getStoredSettings('default');
     return s ?? null;
-  });
+  }, [changeSignal]);
   
   return {
     settings: settings ?? null,
@@ -209,6 +213,16 @@ export async function updatePrivacyHistoryLimit(value: number): Promise<number> 
   // the limit write is rolled back too, never leaving the limit saved while the
   // on-disk history stays oversized (or vice-versa). Either both apply or
   // neither does.
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    const before = await getPrivacyAuditHistoryCount();
+    const updated = { ...settings, privacyHistoryLimit: value };
+    const result = await repository.saveSettingsWithHistory({
+      settings: updated,
+      retainHistory: value,
+    });
+    return Math.max(0, before - result.retainedHistory);
+  }
   return await db.transaction(
     'rw',
     db.settings,

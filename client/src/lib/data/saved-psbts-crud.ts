@@ -1,4 +1,5 @@
 import { db, notifyDbChange, type SavedPsbt } from '../database';
+import { getVaultRepository, ProtectedVaultRepository } from '../repository';
 
 // All writes to db.savedPsbts go through this module (mirrors the other
 // lightweight CRUD modules like dust-flags-crud).
@@ -8,29 +9,38 @@ export type NewSavedPsbt = Omit<SavedPsbt, 'id' | 'createdAt' | 'updatedAt'>;
 /** Persist a built unsigned PSBT with its decoded components. Returns the id. */
 export async function savePsbt(input: NewSavedPsbt): Promise<number> {
   const now = Date.now();
-  const id = await db.savedPsbts.add({
+  const row = {
     ...input,
     name: input.name.trim() || 'Untitled PSBT',
     createdAt: now,
     updatedAt: now,
-  });
+  };
+  const repository = getVaultRepository();
+  const id = repository.kind === 'protected' ? await repository.add('savedPsbts', row) : await db.savedPsbts.add(row);
   notifyDbChange('savedPsbts');
   return id as number;
 }
 
 /** All saved PSBTs, newest first. */
 export async function getAllSavedPsbts(): Promise<SavedPsbt[]> {
-  const rows = await db.savedPsbts.toArray();
+  const repository = getVaultRepository();
+  const rows = repository instanceof ProtectedVaultRepository
+    ? await repository.query<SavedPsbt>('savedPsbts', 'savedPsbts.byCreatedAt', 'desc')
+    : await db.savedPsbts.toArray();
   return rows.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export async function renameSavedPsbt(id: number, name: string): Promise<void> {
-  await db.savedPsbts.update(id, { name: name.trim() || 'Untitled PSBT', updatedAt: Date.now() });
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.update('savedPsbts', id, { name: name.trim() || 'Untitled PSBT', updatedAt: Date.now() });
+  else await db.savedPsbts.update(id, { name: name.trim() || 'Untitled PSBT', updatedAt: Date.now() });
   notifyDbChange('savedPsbts');
 }
 
 export async function deleteSavedPsbt(id: number): Promise<void> {
-  await db.savedPsbts.delete(id);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.delete('savedPsbts', id);
+  else await db.savedPsbts.delete(id);
   notifyDbChange('savedPsbts');
 }
 
@@ -39,7 +49,9 @@ export interface SavedPsbtWriteOptions {
 }
 
 export async function clearSavedPsbts(options?: SavedPsbtWriteOptions): Promise<void> {
-  await db.savedPsbts.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('savedPsbts');
+  else await db.savedPsbts.clear();
   if (!options?.skipNotification) {
     notifyDbChange('savedPsbts');
   }
@@ -87,7 +99,10 @@ export async function restoreSavedPsbtRows(
 
   const seen = new Set<string>();
   if (restoreMode === 'merge') {
-    const existing = await db.savedPsbts.toArray();
+    const repository = getVaultRepository();
+    const existing = repository instanceof ProtectedVaultRepository
+      ? await repository.query<SavedPsbt>('savedPsbts', 'savedPsbts.byCreatedAt', 'desc')
+      : await db.savedPsbts.toArray();
     for (const e of existing) seen.add(e.psbtBase64);
   }
 
@@ -140,7 +155,10 @@ export async function restoreSavedPsbtRows(
   }
 
   if (toAdd.length > 0) {
-    const newIds = await db.savedPsbts.bulkAdd(toAdd, { allKeys: true });
+    const repository = getVaultRepository();
+    const newIds = repository instanceof ProtectedVaultRepository
+      ? await repository.saveBatch('savedPsbts', toAdd)
+      : await db.savedPsbts.bulkAdd(toAdd, { allKeys: true });
     if (collect?.insertedIds) {
       for (const id of newIds) collect.insertedIds.push(id as number);
     }

@@ -34,8 +34,8 @@ import {
 } from '@/components/ui/select';
 import { MultiSelectCombobox } from '@/components/ui/multi-select-combobox';
 import { useToast } from '@/hooks/use-toast';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '@/lib/database';
+import { useTags } from '@/hooks/use-tags';
+import { useCategories } from '@/hooks/use-categories';
 import { useSeedNames, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
 import { useOwners } from '@/hooks/use-owners';
 import { useWalletNames } from '@/hooks/use-wallet-names';
@@ -147,20 +147,10 @@ export default function WalletImport() {
   ].filter(Boolean)));
   
   
-  const encryptedTags = useLiveQuery(() => db.tags.toArray());
-  const encryptedCategories = useLiveQuery(() => db.categories.toArray());
-  const [availableTags, setAvailableTags] = useState<string[]>([]);
-  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
-  
-  useEffect(() => {
-    if (encryptedTags) {
-      setAvailableTags(encryptedTags.map(t => t.name));
-    }
-    
-    if (encryptedCategories) {
-      setAvailableCategories(encryptedCategories.map(c => c.name));
-    }
-  }, [encryptedTags, encryptedCategories]);
+  const { tags: encryptedTags } = useTags();
+  const { categories: encryptedCategories } = useCategories();
+  const availableTags = encryptedTags.map(t => t.name);
+  const availableCategories = encryptedCategories.map(c => c.name);
   
   const supportedWallets = getSupportedWallets();
   

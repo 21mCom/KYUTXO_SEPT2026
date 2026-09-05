@@ -20,7 +20,7 @@ import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
 import { clearPriceData } from "@/lib/data/price-data-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
 import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
-import { db } from "@/lib/database";
+import { getVaultRepository } from "@/lib/repository";
 import { getVaultSettings, verifyVaultPassword } from "@/lib/vault";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
@@ -67,8 +67,9 @@ export function ClearDatabaseFlow() {
       }
 
       await clearAllRecords({ skipNotification: true });
-      await db.tags.clear();
-      await db.categories.clear();
+      const repository = getVaultRepository();
+      await repository.clear("tags");
+      await repository.clear("categories");
       await clearAttachments({ skipNotification: true });
       await clearRecordOrigins({ skipNotification: true });
       await clearCustomFields({ skipNotification: true });
@@ -79,10 +80,12 @@ export function ClearDatabaseFlow() {
       await clearAddressSyncState({ skipNotification: true });
       
       // Clear vocabulary tables
-      await db.owners.clear();
-      await db.walletNames.clear();
-      await db.seedNames.clear();
-      await db.walletSoftware.clear();
+      await Promise.all([
+        repository.clear("owners"),
+        repository.clear("walletNames"),
+        repository.clear("seedNames"),
+        repository.clear("walletSoftware"),
+      ]);
       
       // Clear price data
       await clearPriceData({ skipNotification: true });

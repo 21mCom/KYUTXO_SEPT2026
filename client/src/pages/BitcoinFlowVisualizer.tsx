@@ -25,8 +25,12 @@ import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
-import { db } from "@/lib/database";
-import { getParticipantsByAddresses, getSpendInputsByOutpoints } from "@/lib/dataFacade";
+import {
+  getParticipantsByAddresses,
+  getSpendInputsByOutpoints,
+  getRecordsByType,
+  getTransactionsByTxids,
+} from "@/lib/dataFacade";
 import type { TransactionParticipant } from "@/lib/database";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -323,10 +327,7 @@ export async function computeAddressFlowStats(
   const txMap = new Map<string, number>();
   for (let i = 0; i < txids.length; i += 500) {
     const batch = txids.slice(i, i + 500);
-    const txs = await db.blockchainTransactions
-      .where('txid')
-      .anyOf(batch)
-      .toArray();
+    const txs = await getTransactionsByTxids(batch);
     txs.forEach(tx => txMap.set(tx.txid, tx.blockTime));
   }
 
@@ -407,10 +408,10 @@ export default function BitcoinFlowVisualizer() {
     const loadFilteredAddresses = async () => {
       setFinderLoading(true);
       try {
-        let records = await db.records
-          .where('type')
-          .equals('address')
-          .toArray();
+        // The CRUD boundary uses the named, bounded records.byRecordType
+        // repository query in packaged builds. Browser/development retains its
+        // existing indexed Dexie lookup behind that boundary.
+        const records = await getRecordsByType('address');
 
         let filtered = records.filter(r => r.inputString);
 

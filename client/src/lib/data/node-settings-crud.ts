@@ -1,22 +1,34 @@
 import { db, notifyDbChange, type NodeSettings } from '../database';
+import { getVaultRepository } from '../repository';
 
 export interface NodeSettingsWriteOptions {
   skipNotification?: boolean;
 }
 
 export async function getNodeSettings(id: string = 'default'): Promise<NodeSettings | undefined> {
-  return db.nodeSettings.get(id);
+  const repository = getVaultRepository();
+  return repository.kind === 'protected' ? repository.get('nodeSettings', id) : db.nodeSettings.get(id);
 }
 
 export async function getAllNodeSettings(): Promise<NodeSettings[]> {
-  return db.nodeSettings.toArray();
+  const repository = getVaultRepository();
+  if (repository.kind !== 'protected') return db.nodeSettings.toArray();
+  const rows: NodeSettings[] = [];
+  let cursor: string | number | undefined;
+  do {
+    const page = await repository.list('nodeSettings', { cursor, limit: 1000 });
+    rows.push(...page.rows);
+    cursor = page.cursor;
+  } while (cursor !== undefined);
+  return rows;
 }
 
 export async function addNodeSettings(
   data: NodeSettings,
   options?: NodeSettingsWriteOptions
 ): Promise<string> {
-  const id = await db.nodeSettings.add(data);
+  const repository = getVaultRepository();
+  const id = repository.kind === 'protected' ? await repository.add('nodeSettings', data) : await db.nodeSettings.add(data);
 
   if (!options?.skipNotification) {
     notifyDbChange('nodeSettings');
@@ -29,7 +41,9 @@ export async function putNodeSettings(
   data: NodeSettings,
   options?: NodeSettingsWriteOptions
 ): Promise<void> {
-  await db.nodeSettings.put(data);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.put('nodeSettings', data);
+  else await db.nodeSettings.put(data);
 
   if (!options?.skipNotification) {
     notifyDbChange('nodeSettings');
@@ -41,7 +55,9 @@ export async function updateNodeSettings(
   changes: Partial<NodeSettings>,
   options?: NodeSettingsWriteOptions
 ): Promise<void> {
-  await db.nodeSettings.update(id, changes);
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.update('nodeSettings', id, changes);
+  else await db.nodeSettings.update(id, changes);
 
   if (!options?.skipNotification) {
     notifyDbChange('nodeSettings');
@@ -51,7 +67,9 @@ export async function updateNodeSettings(
 export async function clearNodeSettings(
   options?: NodeSettingsWriteOptions
 ): Promise<void> {
-  await db.nodeSettings.clear();
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') await repository.clear('nodeSettings');
+  else await db.nodeSettings.clear();
 
   if (!options?.skipNotification) {
     notifyDbChange('nodeSettings');

@@ -1,6 +1,8 @@
 import type Dexie from "dexie";
 import type { ColumnFilter } from "@/components/RecordFilters";
 import { db, type Record as DbRecord, type AddressImportance } from "@/lib/database";
+import { getAllRecords } from "@/lib/data/record-crud";
+import { getVaultRepository } from "@/lib/repository";
 import { isHiddenDiscoveryTier } from "@/lib/db-types";
 import { canonicalizeRecordIdentifier } from "@/lib/bitcoin";
 
@@ -36,6 +38,15 @@ export const USER_TIERS: AddressImportance[] = [
  */
 export async function resolveVisibleTierValues(): Promise<string[]> {
   try {
+    if (getVaultRepository().kind === 'protected') {
+      const values = new Set<string>(USER_TIERS);
+      // The authoritative protected backend is paged by the CRUD layer. This
+      // is a finite distinct-value pass, never an IndexedDB read.
+      for (const record of await getAllRecords()) {
+        if (record.addressImportance && !isHiddenDiscoveryTier(record.addressImportance)) values.add(record.addressImportance);
+      }
+      return [...values];
+    }
     const keys = await db.records.orderBy("addressImportance").uniqueKeys();
     const values = new Set<string>(USER_TIERS);
     for (const k of keys) {
@@ -195,6 +206,11 @@ export interface BuildRecordsQueryParams {
   search: string;
   columnFilters: ColumnFilter[];
   includeBlockchainDiscovered: boolean;
+  /** Native DTO date window/order (browser adapter observes the same fields). */
+  addedSince?: number;
+  requireCreatedAt?: boolean;
+  order?: 'id-desc' | 'created-asc' | 'created-desc';
+  beforeId?: number;
   /**
    * Tier values the default view's addressImportance narrowing should include
    * (from resolveVisibleTierValues). Optional: omitted (e.g. legacy callers /
@@ -214,6 +230,51 @@ export interface RecordsQueryStrategy {
 export interface BuildRecordsQueryResult {
   collection: Dexie.Collection<DbRecord, number>;
   strategy: RecordsQueryStrategy;
+}
+
+/**
+ * The protected backend has no renderer-side Collection.  This deliberately
+ * tiny iterator shape is enough for fetchRecordsPage and is backed by the
+ * finite `records.filtered` DTO.  It is intentionally private: callers cannot
+ * compose it into a query language.
+ */
+function protectedCollection(
+  params: BuildRecordsQueryParams,
+  residualPredicate: (record: DbRecord) => boolean,
+  identifier?: string,
+): Dexie.Collection<DbRecord, number> {
+  const filters = identifier
+    ? [{ field: 'inputString', operator: 'equals', value: canonicalizeRecordIdentifier(identifier) }, ...params.columnFilters]
+    : params.columnFilters;
+  const iterator = {
+    until(stop: () => boolean) {
+      return {
+        async each(visitor: (record: DbRecord) => void) {
+          // MAX_MATERIALIZE is part of the query contract, not just a UI
+          // safeguard: native never returns an unbounded result set.
+          const rows = await getVaultRepository().queryRecords({
+            name: 'records.filtered',
+            value: {
+              search: identifier ? undefined : params.search,
+              filters: filters.map(({ field, operator, value }) => ({ field, operator, value })),
+              includeBlockchainDiscovered: params.includeBlockchainDiscovered,
+              visibleTiers: params.visibleTierValues,
+              addedSince: params.addedSince,
+              requireCreatedAt: params.requireCreatedAt,
+              order: params.order ?? 'id-desc',
+              beforeId: params.beforeId,
+            },
+            limit: MAX_MATERIALIZE,
+          });
+          for (const row of rows) {
+            if (stop()) break;
+            if (residualPredicate(row)) visitor(row);
+          }
+        },
+      };
+    },
+  };
+  return iterator as unknown as Dexie.Collection<DbRecord, number>;
 }
 
 /**
@@ -274,6 +335,12 @@ export function buildRecordsCollection(
     includeBlockchainDiscovered,
     visibleTierValues,
   );
+
+  // A packaged renderer must not open IndexedDB or construct a Dexie
+  // Collection. Browser/development continues below through Dexie unchanged.
+  if (getVaultRepository().kind === 'protected') {
+    return { collection: protectedCollection(params, residualPredicate), strategy };
+  }
 
   let collection: Dexie.Collection<DbRecord, number>;
 
@@ -365,6 +432,15 @@ export function buildIdentifierSearchCollection(
     operator: "equals",
     value: identifier,
   };
+  if (getVaultRepository().kind === 'protected') {
+    const strategy = pickPrimaryNarrowing(
+      identifier,
+      [synthetic, ...params.columnFilters],
+      params.includeBlockchainDiscovered,
+      params.visibleTierValues,
+    );
+    return { collection: protectedCollection(params, residualPredicate, identifier), strategy };
+  }
   return buildRecordsCollection(
     { ...params, columnFilters: [synthetic, ...params.columnFilters] },
     residualPredicate,

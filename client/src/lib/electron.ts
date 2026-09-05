@@ -288,6 +288,11 @@ export interface ProtectedStoreStatus {
   exists: boolean;
   unlocked: boolean;
   verified?: boolean;
+  /**
+   * Optional explicit readiness bit for newer protected-store workers. Older
+   * workers express the same condition with available/unlocked/verified.
+   */
+  ready?: boolean;
   version: number;
 }
 export interface DemoVaultCheckResult {
@@ -450,10 +455,32 @@ export interface ProtectedStoreBridge {
   lock: () => Promise<EngineEnvelope<{ unlocked: false }>>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<EngineEnvelope<{ changed: true }>>;
   integrity: () => Promise<EngineEnvelope<{ ok: true }>>;
-  putRow: (table: string, id: string, row: unknown) => Promise<EngineEnvelope<{ id: string }>>;
-  getRow: (table: string, id: string) => Promise<EngineEnvelope<unknown | null>>;
-  listRows: (table: string, after?: string, limit?: number) => Promise<EngineEnvelope<Array<{ id: string; row: unknown }>>>;
-  deleteRow: (table: string, id: string) => Promise<EngineEnvelope<{ deleted: true }>>;
+  repository: {
+    save: (collection: string, row: unknown) => Promise<EngineEnvelope<{ id: string | number }>>;
+    find: (collection: string, id: string | number) => Promise<EngineEnvelope<unknown | null>>;
+    page: (
+      collection: string,
+      after: string | number | undefined,
+      limit: number,
+      direction?: 'asc' | 'desc',
+    ) => Promise<EngineEnvelope<{ items: unknown[]; next: string | number | null }>>;
+    remove: (collection: string, id: string | number) => Promise<EngineEnvelope<{ deleted: boolean }>>;
+    saveBatch: (collection: string, rows: unknown[]) => Promise<EngineEnvelope<{ ids: Array<string | number> }>>;
+    removeBatch: (collection: string, ids: Array<string | number>) => Promise<EngineEnvelope<{ deleted: number }>>;
+    count: (collection: string) => Promise<EngineEnvelope<{ count: number }>>;
+    clear: (collection: string) => Promise<EngineEnvelope<{ deleted: number }>>;
+    batch: (
+      collection: string,
+      operations: Array<{ operation: 'save'; row: unknown } | { operation: 'remove'; id: string | number }>,
+    ) => Promise<EngineEnvelope<{ results: Array<{ operation: string; id?: string | number; deleted?: boolean }> }>>;
+    query: (collection: string, name: string, value: unknown, limit?: number) => Promise<EngineEnvelope<{ items: unknown[] }>>;
+    command: (name: string, value: unknown) => Promise<EngineEnvelope<unknown>>;
+    deleteOrArchiveRecords: (command: { recordIds: number[]; mode: 'delete' | 'archive'; archivedAt?: number; archiveReason?: string }) => Promise<EngineEnvelope<{ deleted: number; archived: number }>>;
+    saveTransactionWithParticipants: (transaction: unknown, participants: unknown[], replaceParticipants?: boolean) => Promise<EngineEnvelope<{ transactionId: string | number; participantIds: Array<string | number> }>>;
+    saveSettingsWithHistory: (settings: unknown, historyEntry?: unknown, retainHistory?: number) => Promise<EngineEnvelope<{ settingsId: string | number; historyId?: string | number; retainedHistory: number }>>;
+    clearVault: () => Promise<EngineEnvelope<{ deleted: number }>>;
+    restoreCommit: (replaceExisting: boolean, rows: object) => Promise<EngineEnvelope<{ saved: number }>>;
+  };
   writeAttachment: (bytes: ArrayBuffer, alias?: string) => Promise<EngineEnvelope<{ id: string; name: string; alias?: string; size: number }>>;
   readAttachment: (name: string, id: string) => Promise<EngineEnvelope<ArrayBuffer>>;
   deleteAttachment: (name: string) => Promise<EngineEnvelope<{ deleted: true }>>;

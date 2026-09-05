@@ -35,6 +35,7 @@ import {
 import { BackupCancelledError } from "./sink";
 import { deriveKeyWithParams, decrypt, base64ToBuffer } from "@/lib/crypto";
 import { rearmSearchVisibilityRepair } from "@/lib/vault";
+import { getVaultRepository } from "@/lib/repository";
 import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import {
   bulkCreateRecords,
@@ -628,15 +629,20 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   // destructive clear and to reset to a known-empty state if the user cancels
   // mid-restore after that clear has already happened.
   async function clearVault(): Promise<void> {
-    await clearAllRecords({ skipNotification: true });
-    await clearAttachments({ skipNotification: true });
-    await clearParticipants({ skipNotification: true });
-    await clearTransactions({ skipNotification: true });
-    await clearAddressSyncState({ skipNotification: true });
-    await clearUtxoLineage({ skipNotification: true });
-    await clearCustodySegments({ skipNotification: true });
-    await clearLineageSnapshots({ skipNotification: true });
-    await clearInlineFn();
+    const repository = getVaultRepository();
+    if (repository.kind === 'protected') {
+      await repository.clearVault();
+    } else {
+      await clearAllRecords({ skipNotification: true });
+      await clearAttachments({ skipNotification: true });
+      await clearParticipants({ skipNotification: true });
+      await clearTransactions({ skipNotification: true });
+      await clearAddressSyncState({ skipNotification: true });
+      await clearUtxoLineage({ skipNotification: true });
+      await clearCustodySegments({ skipNotification: true });
+      await clearLineageSnapshots({ skipNotification: true });
+      await clearInlineFn();
+    }
     // Drop any persisted Privacy Audit / Adversary View session — it was
     // computed from the vault that was just wiped, so restoring it after this
     // point would show results about data that no longer exists. Best-effort:

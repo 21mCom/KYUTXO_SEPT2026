@@ -38,6 +38,7 @@ import {
 import {
   clearAllRecords,
   bulkCreateRecords,
+  countRecords,
   getAllRecords,
 } from "@/lib/data/record-crud";
 import { clearAttachments, getAllAttachments } from "@/lib/data/attachments-crud";
@@ -623,7 +624,7 @@ describe("runLegacyJsonRestore: invalid backups", () => {
     await expect(runLegacyJsonRestore(file, "", "replace", cb)).rejects.toThrow(
       "Invalid legacy backup data",
     );
-    expect(await db.records.count()).toBe(1);
+    expect(await countRecords()).toBe(1);
     expect(events.some((event) => event.kind === "cleared")).toBe(false);
   });
 

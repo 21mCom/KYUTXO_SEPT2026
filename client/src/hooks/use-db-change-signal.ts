@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { subscribeToDbChanges, type DbChangeMeta } from '@/lib/database';
+import * as database from '@/lib/database';
+import type { DbChangeMeta } from '@/lib/database';
 
 export interface UseDbChangeSignalOptions {
   /**
@@ -26,7 +27,11 @@ export function useDbChangeSignal(
   filterRef.current = options?.filter;
 
   useEffect(() => {
-    const unsubscribe = subscribeToDbChanges((changedTables, meta) => {
+    // Some isolated hook tests provide a minimal database mock. Production
+    // always exports this notifier; treating an absent test-only notifier as
+    // an inert subscription keeps repository-backed readers usable there.
+    if (!('subscribeToDbChanges' in database)) return;
+    const unsubscribe = database.subscribeToDbChanges((changedTables, meta) => {
       const tableMatches =
         changedTables.length === 0 || changedTables.some(t => stableTables.includes(t));
       if (!tableMatches) return;

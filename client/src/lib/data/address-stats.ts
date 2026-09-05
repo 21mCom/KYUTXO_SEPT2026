@@ -1,6 +1,7 @@
-import Dexie from 'dexie';
-import { db, notifyDbChange, type TransactionParticipant } from '../database';
+import { notifyDbChange, type Record, type TransactionParticipant, type AddressSyncState } from '../database';
 import { getSpendInputsByOutpoints } from './record-queries';
+import { getTransactionParticipantsAfterId, getTransactionsAfterId, getTransactionsByTxids } from './transaction-crud';
+import { getVaultRepository } from '../repository';
 import { bulkUpdateAddressStats, type AddressStatsCacheValues } from './record-crud';
 import { getSettings, updateSettings } from './settings-crud';
 import {
@@ -12,9 +13,10 @@ import {
 /**
  * Local-only per-address stats recompute.
  *
- * Everything here is a pure read of transaction data already stored in
- * IndexedDB (participant rows + cached transaction block times). NOTHING in this
- * module ever contacts the node, Electrum, or any network source. It is used for:
+ * Everything here is a pure read of transaction data already stored in the
+ * selected vault repository (protected storage when packaged, Dexie in the
+ * browser/development fallback). NOTHING in this module ever contacts the node,
+ * Electrum, or any network source. It is used for:
  *   - the one-time backfill of existing data,
  *   - the manual "recompute stats" lever,
  *   - post-deletion corrections (e.g. after Database Cleanup),
@@ -127,17 +129,13 @@ export async function detectStaleCachedBalances(opts: {
   // In full-table mode, report a denominator so callers can show real progress.
   let total: number | undefined;
   if (checkAll) {
-    total = await db.records.where('type').equals('address').count();
+    total = await countAddressRows();
   }
 
   while (sampled < limit) {
     if (isAborted(opts.signal)) return { sampled, staleCount, staleAddresses, checkedAll: checkAll, cancelled: true };
 
-    const batch = await db.records
-      .where('[type+id]')
-      .between(['address', lastId], ['address', Dexie.maxKey], false, true)
-      .limit(BATCH)
-      .toArray();
+    const batch = await getAddressRecordsAfterId(lastId, BATCH);
 
     if (batch.length === 0) break;
     lastId = batch[batch.length - 1].id!;
@@ -232,6 +230,60 @@ function yieldToEventLoop(): Promise<void> {
  * once-per-page yields.
  */
 const ROW_YIELD_INTERVAL = 50;
+
+async function getAddressRecordsAfterId(afterIdExclusive: number, limit: number): Promise<Record[]> {
+  return getVaultRepository().query<Record>(
+    'records',
+    'records.byTypeIdForwardKeyset',
+    { type: 'address', afterIdExclusive },
+    limit,
+  );
+}
+
+async function countAddressRows(): Promise<number> {
+  const rows = await getVaultRepository().query<{ count: number }>(
+    'records', 'records.countByType', 'address', 1,
+  );
+  return rows[0]?.count ?? 0;
+}
+
+async function getAddressRecordsByIds(ids: number[]): Promise<Record[]> {
+  if (ids.length === 0) return [];
+  return getVaultRepository().query<Record>('records', 'records.byIds', ids, ids.length);
+}
+
+async function getAddressRecordsByInputStrings(addresses: string[]): Promise<Record[]> {
+  if (addresses.length === 0) return [];
+  return getVaultRepository().query<Record>('records', 'records.byInputStrings', addresses, addresses.length);
+}
+
+async function getSyncStatesByAddresses(addresses: string[]): Promise<AddressSyncState[]> {
+  if (addresses.length === 0) return [];
+  return getVaultRepository().query<AddressSyncState>('addressSyncState', 'sync.byAddresses', addresses, addresses.length);
+}
+
+async function getSyncStatesAfterId(afterId: number, limit: number): Promise<AddressSyncState[]> {
+  return getVaultRepository().query<AddressSyncState>('addressSyncState', 'sync.afterId', afterId, limit);
+}
+
+/** Bounded address-index lookup; the repository keeps this a named native query. */
+async function getParticipantsByAddressesForStats(addresses: string[]): Promise<TransactionParticipant[]> {
+  if (addresses.length === 0) return [];
+  const rows: TransactionParticipant[] = [];
+  let afterId = 0;
+  while (true) {
+    const page = await getVaultRepository().query<TransactionParticipant>(
+      'transactionParticipants',
+      'participants.byAddressesAfterId',
+      { addresses, afterId },
+      1000,
+    );
+    rows.push(...page);
+    if (page.length < 1000) break;
+    afterId = page[page.length - 1].id ?? afterId;
+  }
+  return rows;
+}
 
 /**
  * Compute the count and summed value of unspent outputs for a single address.
@@ -390,11 +442,15 @@ export async function getHeuristicMatchedAddresses(signal?: AbortSignal): Promis
  */
 async function buildHasPrevoutByAddress(signal?: AbortSignal): Promise<Map<string, boolean>> {
   const hasPrevoutByAddress = new Map<string, boolean>();
-  await db.transactionParticipants
-    .where('role').equals('input')
-    .each((p) => {
+  let afterId = 0;
+  const BATCH = 1000;
+  while (!isAborted(signal)) {
+    const batch = await getTransactionParticipantsAfterId(afterId, BATCH);
+    if (batch.length === 0) break;
+    for (const p of batch) {
+      if (p.role !== 'input') continue;
       const addr = p.address?.trim();
-      if (!addr) return;
+      if (!addr) continue;
       const thisHasPrevout = p.prevTxid !== undefined && p.prevVout !== undefined;
       const prior = hasPrevoutByAddress.get(addr);
       if (prior === undefined) {
@@ -402,7 +458,11 @@ async function buildHasPrevoutByAddress(signal?: AbortSignal): Promise<Map<strin
       } else if (thisHasPrevout && !prior) {
         hasPrevoutByAddress.set(addr, true);
       }
-    });
+    }
+    afterId = batch[batch.length - 1].id ?? afterId;
+    await yieldToEventLoop();
+    if (batch.length < BATCH) break;
+  }
   return hasPrevoutByAddress;
 }
 
@@ -410,7 +470,7 @@ async function loadBlockTimes(txids: string[]): Promise<Map<string, number>> {
   const txMap = new Map<string, number>();
   for (let i = 0; i < txids.length; i += 500) {
     const batch = txids.slice(i, i + 500);
-    const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+    const txs = await getTransactionsByTxids(batch);
     for (const tx of txs) {
       txMap.set(tx.txid, tx.blockTime);
     }
@@ -435,7 +495,7 @@ export async function computeStatsForAddresses(
   for (let i = 0; i < addresses.length; i += 500) {
     if (isAborted(signal)) return out;
     const batch = addresses.slice(i, i + 500);
-    const raw = await db.transactionParticipants.where('address').anyOf(batch).toArray();
+    const raw = await getParticipantsByAddressesForStats(batch);
     participants.push(...raw);
   }
 
@@ -535,7 +595,7 @@ export async function computeStatsForAddresses(
 export const FULL_SCAN_ROW_LIMIT = 2_000_000;
 
 /** Page size for the full-table streaming scans. */
-const FULL_SCAN_BATCH = 5_000;
+const FULL_SCAN_BATCH = 1_000;
 
 /**
  * A FILTERED recompute (recordIds/addresses) also reuses the streaming
@@ -575,9 +635,10 @@ const FILTERED_SCAN_MIN_REQUESTED = 1_000;
 async function computeStatsForAllAddressesByScan(
   signal?: AbortSignal,
 ): Promise<Map<string, { balanceSats: number; lastActivityTime: number; txCount: number; utxoCount: number }> | null> {
+  const repository = getVaultRepository();
   const [participantCount, txCount] = await Promise.all([
-    db.transactionParticipants.count(),
-    db.blockchainTransactions.count(),
+    repository.count('transactionParticipants'),
+    repository.count('blockchainTransactions'),
   ]);
   if (participantCount + txCount > FULL_SCAN_ROW_LIMIT) return null;
   if (isAborted(signal)) return null;
@@ -593,11 +654,7 @@ async function computeStatsForAllAddressesByScan(
   // eslint-disable-next-line no-constant-condition
   while (true) {
     if (isAborted(signal)) return null;
-    const batch = await db.transactionParticipants
-      .where(':id')
-      .above(lastPid)
-      .limit(FULL_SCAN_BATCH)
-      .toArray();
+    const batch = await getTransactionParticipantsAfterId(lastPid, FULL_SCAN_BATCH);
     if (batch.length === 0) break;
     lastPid = batch[batch.length - 1].id!;
 
@@ -656,11 +713,7 @@ async function computeStatsForAllAddressesByScan(
   // eslint-disable-next-line no-constant-condition
   while (true) {
     if (isAborted(signal)) return null;
-    const batch = await db.blockchainTransactions
-      .where(':id')
-      .above(lastTid)
-      .limit(FULL_SCAN_BATCH)
-      .toArray();
+    const batch = await getTransactionsAfterId(lastTid, FULL_SCAN_BATCH);
     if (batch.length === 0) break;
     lastTid = batch[batch.length - 1].id!;
     for (const tx of batch) txMap.set(tx.txid, tx.blockTime);
@@ -702,13 +755,16 @@ async function computeStatsForAllAddressesByScan(
 async function* iterateAddressRecordBatches(
   options: RecomputeOptions
 ): AsyncGenerator<Array<{ id: number; inputString: string }>> {
-  const batchSize = options.batchSize ?? 500;
+  // Native named queries deliberately cap every page at 1,000 rows. Keep the
+  // browser adapter on the same boundary so a caller-supplied larger batch
+  // cannot make the keyset loop mistake a capped page for the final page.
+  const batchSize = Math.min(1000, Math.max(1, options.batchSize ?? 500));
 
   if (options.recordIds && options.recordIds.length > 0) {
     const ids = options.recordIds;
     for (let i = 0; i < ids.length; i += batchSize) {
       const slice = ids.slice(i, i + batchSize);
-      const recs = await db.records.where('id').anyOf(slice).toArray();
+      const recs = await getAddressRecordsByIds(slice);
       yield recs
         .filter(r => r.type === 'address' && r.inputString && r.id != null)
         .map(r => ({ id: r.id!, inputString: r.inputString }));
@@ -720,7 +776,7 @@ async function* iterateAddressRecordBatches(
     const addrs = options.addresses;
     for (let i = 0; i < addrs.length; i += batchSize) {
       const slice = addrs.slice(i, i + batchSize);
-      const recs = await db.records.where('inputString').anyOf(slice).toArray();
+      const recs = await getAddressRecordsByInputStrings(slice);
       yield recs
         .filter(r => r.type === 'address' && r.inputString && r.id != null)
         .map(r => ({ id: r.id!, inputString: r.inputString }));
@@ -732,11 +788,7 @@ async function* iterateAddressRecordBatches(
   let lastId = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const batch = await db.records
-      .where('[type+id]')
-      .between(['address', lastId], ['address', Dexie.maxKey], false, true)
-      .limit(batchSize)
-      .toArray();
+    const batch = await getAddressRecordsAfterId(lastId, batchSize);
     if (batch.length === 0) return;
     lastId = batch[batch.length - 1].id!;
     yield batch
@@ -748,7 +800,7 @@ async function* iterateAddressRecordBatches(
 async function countAddressRecords(options: RecomputeOptions): Promise<number> {
   if (options.recordIds && options.recordIds.length > 0) return options.recordIds.length;
   if (options.addresses && options.addresses.length > 0) return options.addresses.length;
-  return db.records.where('type').equals('address').count();
+  return countAddressRows();
 }
 
 /**
@@ -782,7 +834,7 @@ export async function recomputeAddressStats(
   // the stats are computed, never which rows are written.
   let useScan = fullRecompute;
   if (!fullRecompute && total >= FILTERED_SCAN_MIN_REQUESTED) {
-    const vaultAddressCount = await db.records.where('type').equals('address').count();
+    const vaultAddressCount = await countAddressRows();
     if (vaultAddressCount > 0 && total >= vaultAddressCount * FILTERED_SCAN_VAULT_FRACTION) {
       useScan = true;
     }
@@ -794,7 +846,14 @@ export async function recomputeAddressStats(
     precomputedStats = await computeStatsForAllAddressesByScan(options.signal);
     if (precomputedStats && !isAborted(options.signal)) {
       const synced = new Set<string>();
-      await db.addressSyncState.each(s => { synced.add(s.address); });
+      let afterId = 0;
+      while (true) {
+        const states = await getSyncStatesAfterId(afterId, 1000);
+        if (states.length === 0) break;
+        for (const state of states) synced.add(state.address);
+        afterId = states[states.length - 1].id ?? afterId;
+        if (states.length < 1000) break;
+      }
       precomputedSynced = synced;
     }
   }
@@ -819,7 +878,7 @@ export async function recomputeAddressStats(
       syncedSet = new Set<string>();
       for (let i = 0; i < addressStrings.length; i += 500) {
         const slice = addressStrings.slice(i, i + 500);
-        const states = await db.addressSyncState.where('address').anyOf(slice).toArray();
+        const states = await getSyncStatesByAddresses(slice);
         for (const s of states) syncedSet.add(s.address);
       }
     }
@@ -914,12 +973,12 @@ export async function computeBehaviorTally(
 ): Promise<BehaviorTallyResult> {
   const counts = emptyBehaviorTally();
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const batchSize = options.batchSize ?? 1000;
+  const batchSize = Math.min(1000, Math.max(1, options.batchSize ?? 1000));
   let addressCount = 0;
   let syncedCount = 0;
   let lastId = 0;
 
-  const total = await db.records.where('type').equals('address').count();
+  const total = await countAddressRows();
   options.onProgress?.(0, total);
 
   // eslint-disable-next-line no-constant-condition
@@ -928,11 +987,7 @@ export async function computeBehaviorTally(
       return { counts, addressCount, syncedCount, cancelled: true };
     }
 
-    const batch = await db.records
-      .where('[type+id]')
-      .between(['address', lastId], ['address', Dexie.maxKey], false, true)
-      .limit(batchSize)
-      .toArray();
+    const batch = await getAddressRecordsAfterId(lastId, batchSize);
 
     if (batch.length === 0) break;
     lastId = batch[batch.length - 1].id!;
@@ -978,10 +1033,16 @@ async function persistBehaviorTally(result: BehaviorTallyResult): Promise<void> 
  */
 export async function backfillMissingSyncStats(): Promise<{ backfilled: number }> {
   // Collect the set of addresses that have ever completed a sync.
-  const syncStates = await db.addressSyncState.toArray();
-  if (syncStates.length === 0) return { backfilled: 0 };
-
-  const syncedAddresses = new Set<string>(syncStates.map(s => s.address));
+  const syncedAddresses = new Set<string>();
+  let syncAfterId = 0;
+  while (true) {
+    const syncStates = await getSyncStatesAfterId(syncAfterId, 1000);
+    if (syncStates.length === 0) break;
+    for (const state of syncStates) syncedAddresses.add(state.address);
+    syncAfterId = syncStates[syncStates.length - 1].id ?? syncAfterId;
+    if (syncStates.length < 1000) break;
+  }
+  if (syncedAddresses.size === 0) return { backfilled: 0 };
 
   // Page through address records to find those missing statsComputedAt.
   const stuckAddresses: string[] = [];
@@ -990,11 +1051,7 @@ export async function backfillMissingSyncStats(): Promise<{ backfilled: number }
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const batch = await db.records
-      .where('[type+id]')
-      .between(['address', lastId], ['address', Dexie.maxKey], false, true)
-      .limit(BATCH)
-      .toArray();
+    const batch = await getAddressRecordsAfterId(lastId, BATCH);
     if (batch.length === 0) break;
     lastId = batch[batch.length - 1].id!;
     for (const rec of batch) {

@@ -51,7 +51,7 @@ vi.mock("@/lib/database", async () => {
   return { ...actual, db: testDb };
 });
 
-const { mergeRecordDataWithReport, mergeRecordData } = await import(
+const { mergeRecordDataWithReport, mergeRecordData, checkForDuplicates } = await import(
   "./merge-utils"
 );
 const { executeImport } = await import("./import-manager");
@@ -182,6 +182,28 @@ describe("mergeRecordDataWithReport — shared merge policy + kept/applied repor
     expect(mergeRecordData(existing, parsed, OPTIONS)).toEqual(
       mergeRecordDataWithReport(existing, parsed, OPTIONS).data,
     );
+  });
+});
+
+describe("checkForDuplicates — repository lookup", () => {
+  it("uses the canonical indexed identity for case-insensitive existing records", async () => {
+    const inputString = `bc1qduplicate${"q".repeat(30)}`;
+    await createRecord({
+      type: "address",
+      inputString,
+      label: "Existing",
+      tags: [],
+      categories: [],
+      source: "manual",
+    } as any);
+
+    const [duplicate] = await checkForDuplicates([
+      inputParsed(inputString.toUpperCase()),
+    ]);
+
+    expect(duplicate.isNew).toBe(false);
+    expect(duplicate.willMerge).toBe(true);
+    expect(duplicate.existingRecord?.inputString).toBe(inputString);
   });
 });
 
