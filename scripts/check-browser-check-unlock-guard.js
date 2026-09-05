@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Guard: check scripts must not hardcode the LoginScreen/migration-overlay
-// unlock testids — they must go through scripts/browser-check-utils.mjs.
+// Guard: check scripts must not hardcode LoginScreen, migration-overlay, or
+// generic fresh-vault onboarding testids — they must go through
+// scripts/browser-check-utils.mjs.
 //
 // WHY: every scripts/check-*.mjs script that drives a real browser needs to
 // get past the lock screen. Before this guard existed, ~80 scripts each
@@ -14,9 +15,9 @@
 // reintroduce the duplication.
 //
 // Rule: no scripts/*.mjs or scripts/*.js file (other than
-// browser-check-utils.mjs itself and the ALLOWLIST below) may contain a
-// string literal for one of the UNLOCK_TESTIDS. Route through the shared
-// helpers instead.
+// browser-check-utils.mjs itself and the explicit allowlists below) may
+// contain a string literal for one of the guarded testids. Route generic
+// checks through the shared helpers instead.
 
 import fs from 'fs';
 import path from 'path';
@@ -30,6 +31,7 @@ const SCRIPTS_DIR = __dirname;
 const SOURCE_FILES = [
   path.join(SCRIPTS_DIR, '..', 'client/src/components/LoginScreen.tsx'),
   path.join(SCRIPTS_DIR, '..', 'client/src/components/LegacyMigrationOverlay.tsx'),
+  path.join(SCRIPTS_DIR, '..', 'client/src/components/NetworkPrivacyOnboarding.tsx'),
 ];
 
 const UTILS_FILE = path.join(SCRIPTS_DIR, 'browser-check-utils.mjs');
@@ -46,17 +48,38 @@ const UNLOCK_TESTIDS = [
   'button-dismiss-migration',
 ];
 
+const ONBOARDING_TESTIDS = [
+  'network-onboarding-source',
+  'choice-network-public-direct',
+  'button-save-network-choice',
+  'network-onboarding-import',
+  'button-onboarding-finish',
+];
+
 // Files that legitimately need direct testid access because they test the
 // LoginScreen/migration-overlay's own behavior (wrong-password rejection,
 // stuck-fill detection, etc.) rather than merely getting past it to test
 // something else.
-const ALLOWLIST = new Set([
+const UNLOCK_ALLOWLIST = new Set([
+  path.join(SCRIPTS_DIR, 'check-packaged-vault-lock-native.mjs'),
   path.join(SCRIPTS_DIR, 'check-wrong-password-packaged.mjs'),
+]);
+
+// This check owns the first-run onboarding journey itself, including proving
+// that an existing vault never sees the wizard, so direct selector access is
+// intentional. Generic fresh-vault checks must use the shared helper.
+const ONBOARDING_ALLOWLIST = new Set([
+  path.join(SCRIPTS_DIR, 'check-first-run-network-privacy-browser.mjs'),
 ]);
 
 // Self-check: fail loudly if a hardcoded reference no longer exists, so a
 // rename/move doesn't silently disable this guard.
-const missing = [...SOURCE_FILES, UTILS_FILE, ...ALLOWLIST].filter((f) => !fs.existsSync(f));
+const missing = [
+  ...SOURCE_FILES,
+  UTILS_FILE,
+  ...UNLOCK_ALLOWLIST,
+  ...ONBOARDING_ALLOWLIST,
+].filter((f) => !fs.existsSync(f));
 if (missing.length > 0) {
   console.error(
     'check-browser-check-unlock-guard self-check failed: expected file(s) missing:\n' +
@@ -66,7 +89,8 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-const TESTID_PATTERN = new RegExp(`['"](${UNLOCK_TESTIDS.join('|')})['"]`);
+const GUARDED_TESTIDS = [...UNLOCK_TESTIDS, ...ONBOARDING_TESTIDS];
+const TESTID_PATTERN = new RegExp(`['"](${GUARDED_TESTIDS.join('|')})['"]`);
 
 const SELF_FILE = path.basename(__filename);
 
@@ -89,13 +113,15 @@ const failures = [];
 
 for (const file of files) {
   const full = path.join(SCRIPTS_DIR, file);
-  if (ALLOWLIST.has(full)) continue;
 
   const lines = fs.readFileSync(full, 'utf8').split('\n');
   const hits = [];
   lines.forEach((line, i) => {
     const m = line.match(TESTID_PATTERN);
-    if (m) {
+    const allowed =
+      (UNLOCK_TESTIDS.includes(m?.[1]) && UNLOCK_ALLOWLIST.has(full)) ||
+      (ONBOARDING_TESTIDS.includes(m?.[1]) && ONBOARDING_ALLOWLIST.has(full));
+    if (m && !allowed) {
       hits.push({ line: i + 1, testid: m[1], text: line.trim() });
     }
   });
@@ -107,7 +133,7 @@ for (const file of files) {
 if (failures.length > 0) {
   console.error(
     '\x1b[31m%s\x1b[0m',
-    `Found ${failures.length} check script(s) hardcoding unlock testids instead of using scripts/browser-check-utils.mjs:\n`,
+    `Found ${failures.length} check script(s) hardcoding unlock/onboarding testids instead of using scripts/browser-check-utils.mjs:\n`,
   );
   for (const { file, hits } of failures) {
     for (const hit of hits) {
@@ -115,14 +141,14 @@ if (failures.length > 0) {
       console.error(`    ${hit.text}`);
     }
     console.error(
-      "    -> Import { unlockIfNeeded, dismissMigrationOverlayIfPresent, waitForLoginScreenVisible } from './browser-check-utils.mjs' instead.\n",
+      "    -> Import the relevant unlock or completeFreshVaultOnboardingIfPresent helper from './browser-check-utils.mjs' instead.\n",
     );
   }
   process.exit(1);
 } else {
   console.log(
     '\x1b[32m%s\x1b[0m',
-    'All check scripts clean: no hardcoded unlock testids found outside browser-check-utils.mjs.',
+    'All check scripts clean: no hardcoded unlock/onboarding testids found outside explicit allowlists.',
   );
-  console.log(`  Scanned: ${files.length} file(s). Guarded testids: ${UNLOCK_TESTIDS.join(', ')}`);
+  console.log(`  Scanned: ${files.length} file(s). Guarded testids: ${GUARDED_TESTIDS.join(', ')}`);
 }

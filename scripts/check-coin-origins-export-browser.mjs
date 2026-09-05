@@ -16,7 +16,10 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { unlockIfNeeded } from './browser-check-utils.mjs';
+import {
+  completeFreshVaultOnboardingIfPresent,
+  unlockIfNeeded,
+} from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -311,18 +314,6 @@ async function selectWallet(page, walletName) {
   await page.getByRole('option', { name: walletName, exact: true }).click();
 }
 
-async function completeNetworkOnboardingIfNeeded(page) {
-  const onboarding = page.getByTestId('network-onboarding-source');
-  const visible = await onboarding.waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!visible) return;
-  await page.getByTestId('choice-network-public-direct').click();
-  await page.getByTestId('button-save-network-choice').click();
-  await page.getByTestId('network-onboarding-import').waitFor({ state: 'visible' });
-  await page.getByTestId('button-onboarding-finish').click();
-}
-
 async function main() {
   const executablePath = resolveChromium();
   console.log(`[coin-origins-export-browser] chromium: ${executablePath}`);
@@ -366,7 +357,9 @@ async function main() {
 
     await page.goto(COIN_ORIGINS_URL, { waitUntil: 'load', timeout: 60_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
-    await completeNetworkOnboardingIfNeeded(page);
+    await completeFreshVaultOnboardingIfPresent(page, {
+      label: 'coin-origins-export-browser',
+    });
 
     const seeded = await page.evaluate(
       async ({

@@ -27,7 +27,10 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { unlockIfNeeded } from './browser-check-utils.mjs';
+import {
+  completeFreshVaultOnboardingIfPresent,
+  unlockIfNeeded,
+} from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -198,24 +201,6 @@ async function waitForCuration(page, txid, predicate, timeoutMs = 30_000) {
   return state;
 }
 
-async function finishNetworkPrivacyOnboardingIfPresent(page) {
-  const sourceStep = page.getByTestId('network-onboarding-source');
-  const appeared = await sourceStep
-    .waitFor({ state: 'visible', timeout: 5_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) return false;
-
-  await page.getByTestId('choice-network-public-direct').click();
-  await page.getByTestId('button-save-network-choice').click();
-  await page.getByTestId('network-onboarding-import').waitFor({
-    state: 'visible',
-    timeout: 10_000,
-  });
-  await page.getByTestId('button-onboarding-finish').click();
-  return true;
-}
-
 async function main() {
   const exe = resolveChromium();
   console.log(`[transaction-inbox-browser] chromium: ${exe}`);
@@ -270,7 +255,9 @@ async function main() {
       appearTimeoutMs: 30_000,
       dismissMigration: false,
     });
-    if (await finishNetworkPrivacyOnboardingIfPresent(page)) {
+    if (await completeFreshVaultOnboardingIfPresent(page, {
+      label: 'transaction-inbox-browser',
+    })) {
       await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
       await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
     }
