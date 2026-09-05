@@ -19,13 +19,38 @@ const LEGACY_PACKAGED_BROWSER_CHECKS = new Set([
   'check-wrong-password-packaged.mjs',
   'check-packaged-vault-migration.mjs',
 ]);
+const PACKAGED_NON_BROWSER_CHECKS = new Set([
+  // These validate packaged internals without launching a renderer under
+  // Electron/Xvfb, so the browser-check filename convention does not apply.
+  'check-packaged-native-engine.mjs',
+  'check-packaged-vault-lock-native.mjs',
+]);
+const PACKAGED_BROWSER_CHECK_PATTERN = /^check-packaged-.+-browser\.mjs$/;
 
 function discoverPackagedBrowserChecks(filenames) {
   return filenames
     .filter((filename) =>
-      /^check-packaged-.+-browser\.mjs$/.test(filename) ||
+      PACKAGED_BROWSER_CHECK_PATTERN.test(filename) ||
       LEGACY_PACKAGED_BROWSER_CHECKS.has(filename))
     .sort();
+}
+
+function assertRegisteredPackagedCheckNames(registrationSources) {
+  for (const [sourceName, source] of Object.entries(registrationSources)) {
+    const registeredChecks = source.matchAll(
+      /\bnode\s+scripts\/(?<filename>check-(?:[\w-]+-)?packaged(?:-[\w-]+)?\.mjs)\b/g,
+    );
+    for (const match of registeredChecks) {
+      const filename = match.groups.filename;
+      assert.ok(
+        PACKAGED_BROWSER_CHECK_PATTERN.test(filename) ||
+          LEGACY_PACKAGED_BROWSER_CHECKS.has(filename) ||
+          PACKAGED_NON_BROWSER_CHECKS.has(filename),
+        `${sourceName} registers unrecognized packaged check ${filename}; ` +
+          'packaged Electron browser checks must be named check-packaged-*-browser.mjs',
+      );
+    }
+  }
 }
 
 function assertUsesSharedBinaryDiscovery(filename, source) {
@@ -65,6 +90,32 @@ test('a newly added packaged browser check cannot escape shared discovery assert
       "function findNixBinary() { return '/nix/store/*-electron-private/bin/electron'; }\n",
     ),
     /check-packaged-future-feature-browser\.mjs must import the shared discovery helper/,
+  );
+});
+
+test('release and validation registrations enforce packaged browser check filenames', () => {
+  assertRegisteredPackagedCheckNames({
+    'scripts/electron-build.sh': fs.readFileSync(
+      path.join(SCRIPTS_DIR, 'electron-build.sh'),
+      'utf8',
+    ),
+    '.github/workflows/build.yml': fs.readFileSync(
+      path.join(ROOT, '.github', 'workflows', 'build.yml'),
+      'utf8',
+    ),
+    '.replit': fs.readFileSync(path.join(ROOT, '.replit'), 'utf8'),
+  });
+});
+
+test('rejects an unconventional newly registered packaged browser check without launching it', () => {
+  assert.throws(
+    () => assertRegisteredPackagedCheckNames({
+      fixture: [
+        '- name: Verify future packaged Electron browser behavior',
+        '  run: node scripts/check-future-packaged-electron.mjs',
+      ].join('\n'),
+    }),
+    /fixture registers unrecognized packaged check check-future-packaged-electron\.mjs; .*check-packaged-\*-browser\.mjs/,
   );
 });
 
