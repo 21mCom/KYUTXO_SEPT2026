@@ -196,7 +196,12 @@ export function assertEqualSnapshot(actual, expected, label) {
 export function assertFailureRecoveryReport(report, scenario) {
   const plaintextMigrationFailure =
     scenario.startsWith('migration-failure:') || scenario === 'disk-full-migration';
-  if (plaintextMigrationFailure && report.recoveryAction !== 'source-preserved') {
+  const cleanupResume =
+    scenario === 'migration-failure:generation-swap.cleanup' ||
+    scenario.startsWith('migration-failure:cleanup.') ||
+    scenario === 'migration-failure:complete';
+  if (plaintextMigrationFailure && !cleanupResume &&
+      report.recoveryAction !== 'source-preserved') {
     fail(`${scenario} did not preserve the plaintext source`);
   }
   if (scenario.startsWith('crash-') && report.recoveryAction === 'source-preserved') {

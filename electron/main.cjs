@@ -22,6 +22,10 @@ const {
   createVaultLockLifecycle,
 } = require('./vault-lock-settings.cjs');
 const { registerProtectedStoreHandlers } = require('./protected-store.cjs');
+const {
+  ProtectedVaultMigrationController,
+  runProtectedVaultScenario,
+} = require('./protected-vault-migration.cjs');
 
 const {
   isExternalOpenAllowed,
@@ -68,10 +72,15 @@ let vaultLockSettings = {
 };
 
 async function lockRenderer(reason) {
-  await protectedStoreLifecycle.lock();
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    console.log(`[KYUTXO] Vault lock signal: ${reason}`);
-    mainWindow.webContents.send('vault-lock', { reason });
+  try {
+    await protectedStoreLifecycle.lock();
+  } finally {
+    // OS lifecycle locking must always cross the renderer boundary, even if a
+    // worker is unavailable. LOCK itself is never forbidden by migration.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      console.log(`[KYUTXO] Vault lock signal: ${reason}`);
+      mainWindow.webContents.send('vault-lock', { reason });
+    }
   }
 }
 
@@ -275,10 +284,38 @@ function createWindow() {
 
 // Register before the renderer is created. Packaged builds expose the protected
 // worker; browser/Electron development remains the explicit plaintext fallback.
+// Recovery is main-owned and registered before renderer data requests. Task 66
+// will supply the IndexedDB adapter/session; until then this controller can
+// recover durable markers but has no authority to delete a plaintext source.
+const protectedMigrationController = new ProtectedVaultMigrationController({ root: dataDir });
+const protectedMigrationRecovery = protectedMigrationController.recover();
 const protectedStoreLifecycle = registerProtectedStoreHandlers(ipcMain, {
   dataDir,
   enabled: !isDev,
+  operationAllowed: (type) => protectedMigrationController.operationAllowed(type),
 });
+// This bridge exists only in the disposable packaged release-gate process.
+// The scenario runner creates its own main-owned source and protected stores;
+// no production renderer can select a filesystem location or invoke it.
+if (process.env.KYUTXO_PROTECTED_VAULT_TEST === '1') {
+  ipcMain.handle('protected-vault-test:run-scenario', async (_event, payload) => {
+    try {
+      if (!payload || typeof payload.scenario !== 'string' ||
+          !Array.isArray(payload.fixtureTokens) ||
+          !payload.fixtureTokens.every((value) => typeof value === 'string' && value.length > 0 && value.length <= 512)) {
+        throw new Error('invalid protected vault test request');
+      }
+      return await runProtectedVaultScenario({
+        root: process.cwd(),
+        scenario: payload.scenario,
+        fixtureTokens: payload.fixtureTokens,
+      });
+    } catch {
+      // Test API callers receive no paths, keys, password, or source data.
+      return { scenario: payload && payload.scenario, status: 'failed', locked: true };
+    }
+  });
+}
 registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir, portableMode });
 registerElectrumHandlers(ipcMain, { dataDir });
 registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow: () => mainWindow });
@@ -560,7 +597,13 @@ function registerPackagedRendererProtocol() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Recovery without a password safely discards only unverified stages. A
+  // verified publication remains frozen and awaits the trusted task-66 unlock
+  // handoff; marker state alone is never accepted as proof.
+  await protectedMigrationRecovery.catch(() => {
+    // Fail closed: recover() leaves the controller frozen for ambiguous state.
+  });
   if (!isDev) {
     registerPackagedRendererProtocol();
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {

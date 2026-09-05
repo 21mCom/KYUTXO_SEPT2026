@@ -2,6 +2,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
+  ...(process.env.KYUTXO_PROTECTED_VAULT_TEST === '1' ? {
+    // Deliberately omitted in normal packaged and development builds.
+    protectedVaultTest: {
+      runScenario: ({ scenario, fixtureTokens }) =>
+        ipcRenderer.invoke('protected-vault-test:run-scenario', { scenario, fixtureTokens }),
+    },
+  } : {}),
   protectedStore: {
     status: () => ipcRenderer.invoke('protected-store:status'),
     create: (password) => ipcRenderer.invoke('protected-store:create', { password }),

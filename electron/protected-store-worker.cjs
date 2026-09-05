@@ -4,6 +4,8 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
+const readline = require('readline');
+const { PROTECTED_TABLES } = require('./protected-store.cjs');
 
 const ROOT = workerData && workerData.dataDir;
 if (typeof ROOT !== 'string' || !ROOT) throw new Error('protected store configuration invalid');
@@ -14,20 +16,8 @@ const FORMAT = 1;
 const CHUNK_SIZE = 64 * 1024;
 const MAX_VALUE_BYTES = 16 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
-const TABLES = new Set([
-  'records', 'attachments', 'tags', 'categories', 'owners', 'walletNames',
-  'seedNames', 'walletSoftware', 'recordOrigins', 'customFields', 'settings',
-  'priceData', 'blockchainTransactions', 'transactionParticipants',
-  'addressSyncState', 'nodeSettings', 'derivationTemplates', 'utxoLineage',
-  'custodySegments', 'lineageSnapshots', 'evidence', 'evidenceAttachments',
-  'pausedSyncState', 'skippedAddresses', 'addressBlacklist',
-  'partialExportBundles', 'trashedAttachments', 'privacyAuditHistory',
-  'dustFlags', 'savedPsbts', 'adversaryScenarios', 'vault',
-  // v44 normalized record-model projection. These rows have the same encrypted
-  // protected_rows boundary as legacy records; never route them to a sidecar.
-  'entities', 'wallets', 'addressOwnership', 'transactionMetadata',
-  'transactionLegMetadata', 'recordModelMigrationState',
-]);
+const TABLES = new Set(PROTECTED_TABLES);
+const attachmentWrites = new Map();
 
 let db = null;
 let vdk = null;
@@ -144,7 +134,21 @@ async function atomicWrite(file, bytes) {
   }
 }
 function validTable(table) { return typeof table === 'string' && TABLES.has(table); }
-function validId(id) { return typeof id === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(id); }
+function validId(id) {
+  return (typeof id === 'string' && id.length > 0 && id.length <= 512 &&
+    !id.includes('\0')) || Number.isSafeInteger(id);
+}
+function rowKey(id) {
+  if (!validId(id)) fail();
+  return typeof id === 'number'
+    ? `n:${(BigInt(id) + 9007199254740991n).toString().padStart(17, '0')}`
+    : `s:${id}`;
+}
+function idFromKey(key) {
+  return key.startsWith('n:')
+    ? Number(BigInt(key.slice(2)) - 9007199254740991n)
+    : key.slice(2);
+}
 function validAlias(alias) {
   return typeof alias === 'string' && alias.length > 0 && alias.length <= 512 &&
     !alias.includes('..') && !path.isAbsolute(alias) && !alias.includes('\0');
@@ -232,6 +236,132 @@ async function writeAttachment({ bytes, alias }) {
   }
   return { id: objectId, name, alias, size: plain.length };
 }
+
+async function beginAttachment({ alias }) {
+  locked();
+  if (!validAlias(alias) || attachmentWrites.size >= 4) fail();
+  const token = random(24).toString('hex');
+  const objectId = random(24).toString('base64url');
+  const name = random(24).toString('hex');
+  const tmp = path.join(OBJECTS, `.${name}.${token}.tmp`);
+  const handle = await fsp.open(tmp, 'wx', 0o600);
+  const headerAuth = aesEncrypt(keys.attachment, Buffer.alloc(0), objectAad(objectId, -1, 0));
+  await handle.writeFile(Buffer.from(JSON.stringify({
+    version: FORMAT, objectId, chunkSize: CHUNK_SIZE, headerAuth,
+  }) + '\n'));
+  attachmentWrites.set(token, { alias, objectId, name, tmp, handle, index: 0, size: 0 });
+  return { token };
+}
+
+async function appendAttachment({ token, bytes }) {
+  locked();
+  const state = attachmentWrites.get(token);
+  const plain = Buffer.from(bytes || []);
+  if (!state || plain.length > CHUNK_SIZE ||
+      state.size + plain.length > MAX_ATTACHMENT_BYTES) fail();
+  const sealed = aesEncrypt(
+    keys.attachment, plain, objectAad(state.objectId, state.index, plain.length),
+  );
+  await state.handle.writeFile(Buffer.from(JSON.stringify(sealed) + '\n'));
+  state.index++;
+  state.size += plain.length;
+  return { size: state.size };
+}
+
+async function abortAttachment({ token }) {
+  const state = attachmentWrites.get(token);
+  if (!state) return { aborted: true };
+  attachmentWrites.delete(token);
+  await state.handle.close().catch(() => {});
+  await fsp.unlink(state.tmp).catch(() => {});
+  return { aborted: true };
+}
+
+async function finishAttachment({ token }) {
+  locked();
+  const state = attachmentWrites.get(token);
+  if (!state) fail();
+  attachmentWrites.delete(token);
+  try {
+    await state.handle.sync();
+    await state.handle.close();
+    await fsp.rename(state.tmp, path.join(OBJECTS, state.name));
+    const dir = await fsp.open(OBJECTS, 'r');
+    await dir.sync();
+    await dir.close();
+    const old = db.prepare(
+      'SELECT object_name FROM protected_attachment_refs WHERE alias=?',
+    ).get(state.alias);
+    db.prepare(`
+      INSERT INTO protected_attachment_refs(alias,object_id,object_name,plaintext_size)
+      VALUES (?,?,?,?)
+      ON CONFLICT(alias) DO UPDATE SET object_id=excluded.object_id,
+        object_name=excluded.object_name,plaintext_size=excluded.plaintext_size
+    `).run(state.alias, state.objectId, state.name, state.size);
+    if (old && old.object_name !== state.name) {
+      await fsp.unlink(path.join(OBJECTS, old.object_name)).catch(() => {});
+    }
+    return { id: state.objectId, name: state.name, alias: state.alias, size: state.size };
+  } catch (error) {
+    await state.handle.close().catch(() => {});
+    await fsp.unlink(state.tmp).catch(() => {});
+    throw error;
+  }
+}
+
+async function verifyAttachments({ after = '', limit = 100 } = {}) {
+  locked();
+  limit = Number.isInteger(limit) && limit > 0 && limit <= 1000 ? limit : 100;
+  if (typeof after !== 'string' || !validAlias(after) && after !== '') fail();
+  const refs = db.prepare(
+    `SELECT alias,object_id,object_name,plaintext_size
+       FROM protected_attachment_refs WHERE alias>? ORDER BY alias LIMIT ?`,
+  ).all(after, limit);
+  const files = [];
+  for (const ref of refs) {
+    const input = fs.createReadStream(path.join(OBJECTS, ref.object_name), {
+      encoding: 'utf8', highWaterMark: CHUNK_SIZE,
+    });
+    const lines = readline.createInterface({ input, crlfDelay: Infinity });
+    const hash = crypto.createHash('sha256');
+    let objectHeader = null;
+    let index = 0;
+    let bytes = 0;
+    try {
+      for await (const line of lines) {
+        if (!objectHeader) {
+          objectHeader = JSON.parse(line);
+          if (objectHeader.version !== FORMAT ||
+              objectHeader.objectId !== ref.object_id ||
+              objectHeader.chunkSize !== CHUNK_SIZE) fail();
+          aesDecrypt(
+            keys.attachment, objectHeader.headerAuth,
+            objectAad(ref.object_id, -1, 0),
+          );
+          continue;
+        }
+        const sealed = JSON.parse(line);
+        const length = fromB64(sealed.ciphertext).length;
+        if (length > CHUNK_SIZE) fail();
+        const plain = aesDecrypt(
+          keys.attachment, sealed, objectAad(ref.object_id, index++, length),
+        );
+        bytes += plain.length;
+        hash.update(plain);
+      }
+    } catch {
+      input.destroy();
+      fail();
+    }
+    if (!objectHeader || bytes !== ref.plaintext_size) fail();
+    files.push({
+      id: ref.alias,
+      bytes,
+      digest: hash.digest('hex'),
+    });
+  }
+  return files;
+}
 async function readAttachment({ name, id, alias }) {
   locked();
   if (alias !== undefined) {
@@ -277,33 +407,50 @@ async function handle(type, message) {
   };
   if (type === 'create') return create(message);
   if (type === 'unlock') return unlock(message);
-  if (type === 'lock') { closeUnlocked(); return { unlocked: false }; }
+  if (type === 'lock') {
+    for (const token of [...attachmentWrites.keys()]) await abortAttachment({ token });
+    closeUnlocked();
+    return { unlocked: false };
+  }
   if (type === 'changePassword') return changePassword(message);
-  if (type === 'integrity') { locked(); const result = db.pragma('integrity_check', { simple: true }); if (result !== 'ok') fail(); return { ok: true }; }
+  if (type === 'integrity') {
+    locked();
+    const cipherRows = db.pragma('cipher_integrity_check');
+    if (Array.isArray(cipherRows) && cipherRows.some((row) =>
+      Object.values(row).some((value) => String(value).toLowerCase() !== 'ok'))) fail();
+    const result = db.pragma('integrity_check', { simple: true });
+    if (result !== 'ok') fail();
+    return { ok: true, cipher: 'ok' };
+  }
   if (type === 'putRow') {
     locked(); if (!validTable(message.table) || !validId(message.id)) fail();
     const value = JSON.stringify(message.row);
     if (value === undefined || Buffer.byteLength(value) > MAX_VALUE_BYTES) fail();
-    db.prepare('INSERT INTO protected_rows(table_name,row_id,value_json) VALUES (?,?,?) ON CONFLICT(table_name,row_id) DO UPDATE SET value_json=excluded.value_json').run(message.table, message.id, value);
+    db.prepare('INSERT INTO protected_rows(table_name,row_id,value_json) VALUES (?,?,?) ON CONFLICT(table_name,row_id) DO UPDATE SET value_json=excluded.value_json').run(message.table, rowKey(message.id), value);
     return { id: message.id };
   }
   if (type === 'getRow') {
     locked(); if (!validTable(message.table) || !validId(message.id)) fail();
-    const row = db.prepare('SELECT value_json FROM protected_rows WHERE table_name=? AND row_id=?').get(message.table, message.id);
+    const row = db.prepare('SELECT value_json FROM protected_rows WHERE table_name=? AND row_id=?').get(message.table, rowKey(message.id));
     return row ? JSON.parse(row.value_json) : null;
   }
   if (type === 'listRows') {
     locked(); if (!validTable(message.table)) fail();
     const limit = Number.isInteger(message.limit) && message.limit > 0 && message.limit <= 1000 ? message.limit : 100;
-    const after = message.after === undefined ? '' : message.after;
-    if (typeof after !== 'string' || (after && !validId(after))) fail();
-    return db.prepare('SELECT row_id,value_json FROM protected_rows WHERE table_name=? AND row_id>? ORDER BY row_id LIMIT ?').all(message.table, after, limit).map((r) => ({ id: r.row_id, row: JSON.parse(r.value_json) }));
+    const after = message.after === undefined || message.after === null
+      ? '' : rowKey(message.after);
+    return db.prepare('SELECT row_id,value_json FROM protected_rows WHERE table_name=? AND row_id>? ORDER BY row_id LIMIT ?').all(message.table, after, limit).map((r) => ({ id: idFromKey(r.row_id), row: JSON.parse(r.value_json) }));
   }
   if (type === 'deleteRow') {
     locked(); if (!validTable(message.table) || !validId(message.id)) fail();
-    db.prepare('DELETE FROM protected_rows WHERE table_name=? AND row_id=?').run(message.table, message.id); return { deleted: true };
+    db.prepare('DELETE FROM protected_rows WHERE table_name=? AND row_id=?').run(message.table, rowKey(message.id)); return { deleted: true };
   }
   if (type === 'writeAttachment') return writeAttachment(message);
+  if (type === 'beginAttachment') return beginAttachment(message);
+  if (type === 'appendAttachment') return appendAttachment(message);
+  if (type === 'finishAttachment') return finishAttachment(message);
+  if (type === 'abortAttachment') return abortAttachment(message);
+  if (type === 'verifyAttachments') return verifyAttachments(message);
   if (type === 'readAttachment') return readAttachment(message);
   if (type === 'deleteAttachment') {
     locked();

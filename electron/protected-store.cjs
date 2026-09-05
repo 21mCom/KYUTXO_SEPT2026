@@ -21,7 +21,30 @@ const MESSAGE_TYPES = Object.freeze({
   DELETE_ATTACHMENT: 'deleteAttachment',
   LIST_ATTACHMENTS: 'listAttachments',
   RENAME_ATTACHMENT: 'renameAttachment',
+  BEGIN_ATTACHMENT: 'beginAttachment',
+  APPEND_ATTACHMENT: 'appendAttachment',
+  FINISH_ATTACHMENT: 'finishAttachment',
+  ABORT_ATTACHMENT: 'abortAttachment',
+  VERIFY_ATTACHMENTS: 'verifyAttachments',
 });
+
+// Canonical list shared by the worker, migration controller, and task-66
+// repository handoff. New protected repository tables must be added here.
+const PROTECTED_TABLES = Object.freeze([
+  'records', 'attachments', 'tags', 'categories', 'owners', 'walletNames',
+  'seedNames', 'walletSoftware', 'recordOrigins', 'customFields', 'settings',
+  'priceData', 'blockchainTransactions', 'transactionParticipants',
+  'addressSyncState', 'nodeSettings', 'derivationTemplates', 'utxoLineage',
+  'custodySegments', 'lineageSnapshots', 'evidence', 'evidenceAttachments',
+  'pausedSyncState', 'skippedAddresses', 'addressBlacklist',
+  'partialExportBundles', 'trashedAttachments', 'privacyAuditHistory',
+  'dustFlags', 'savedPsbts', 'adversaryScenarios', 'networkPrivacyActivity',
+  'recordSearchIndex', 'recordSearchIndexState', 'vault',
+  // v44 normalized record-model projection. These rows use the same encrypted
+  // protected_rows boundary as legacy records; never route them to a sidecar.
+  'entities', 'wallets', 'addressOwnership', 'transactionMetadata',
+  'transactionLegMetadata', 'recordModelMigrationState',
+]);
 
 const SAFE_ERROR = 'Protected store operation failed';
 
@@ -82,12 +105,12 @@ class ProtectedStoreClient {
   }
 }
 
-function registerProtectedStoreHandlers(ipcMain, { dataDir, enabled }) {
+function registerProtectedStoreHandlers(ipcMain, { dataDir, enabled, operationAllowed = () => true }) {
   const client = new ProtectedStoreClient({ dataDir });
   const handle = (channel, type, validate = () => true) => {
     ipcMain.handle(channel, async (_event, payload) => {
       try {
-      if (!enabled && type !== MESSAGE_TYPES.STATUS) {
+       if ((!enabled || !operationAllowed(type)) && type !== MESSAGE_TYPES.STATUS) {
         return { ok: false, error: SAFE_ERROR };
       }
       if (!validate(payload || {})) return { ok: false, error: SAFE_ERROR };
@@ -115,12 +138,14 @@ function registerProtectedStoreHandlers(ipcMain, { dataDir, enabled }) {
   handle(
     'protected-store:putRow',
     MESSAGE_TYPES.PUT_ROW,
-    (p) => typeof p.table === 'string' && typeof p.id === 'string',
+    (p) => typeof p.table === 'string' &&
+      (typeof p.id === 'string' || Number.isSafeInteger(p.id)),
   );
   handle(
     'protected-store:getRow',
     MESSAGE_TYPES.GET_ROW,
-    (p) => typeof p.table === 'string' && typeof p.id === 'string',
+    (p) => typeof p.table === 'string' &&
+      (typeof p.id === 'string' || Number.isSafeInteger(p.id)),
   );
   handle(
     'protected-store:listRows',
@@ -130,7 +155,8 @@ function registerProtectedStoreHandlers(ipcMain, { dataDir, enabled }) {
   handle(
     'protected-store:deleteRow',
     MESSAGE_TYPES.DELETE_ROW,
-    (p) => typeof p.table === 'string' && typeof p.id === 'string',
+    (p) => typeof p.table === 'string' &&
+      (typeof p.id === 'string' || Number.isSafeInteger(p.id)),
   );
   handle(
     'protected-store:writeAttachment',
@@ -157,16 +183,19 @@ function registerProtectedStoreHandlers(ipcMain, { dataDir, enabled }) {
   );
 
   return {
-    call: (type, payload) => enabled
+    call: (type, payload) => enabled && operationAllowed(type)
       ? client.call(type, payload)
       : Promise.reject(new Error(SAFE_ERROR)),
-    lock: () => enabled ? client.call(MESSAGE_TYPES.LOCK).catch(() => undefined) : Promise.resolve(),
+    lock: () => enabled && operationAllowed(MESSAGE_TYPES.LOCK)
+      ? client.call(MESSAGE_TYPES.LOCK).catch(() => undefined)
+      : Promise.reject(new Error(SAFE_ERROR)),
     close: () => client.close(),
   };
 }
 
 module.exports = {
   MESSAGE_TYPES,
+  PROTECTED_TABLES,
   ProtectedStoreClient,
   registerProtectedStoreHandlers,
 };
