@@ -14,7 +14,11 @@ test('pull requests and all packages are gated by typecheck and the documented f
   assert.match(workflow, /pull_request:\s*\n\s+branches:/);
   assert.match(workflow, /name: Type-check\s*\n\s+run: npm run check/);
   assert.match(workflow, /name: Run fast test tier\s*\n\s+run: npm run test:fast/);
-  assert.ok(packageJson.scripts['test:fast']);
+  assert.equal(
+    packageJson.scripts['test:fast'],
+    'node scripts/check-release-fixtures.mjs -- npm run test:fast:unguarded',
+  );
+  assert.ok(packageJson.scripts['test:fast:unguarded']);
   assert.match(packageJson.scripts['test:unit'], /--maxWorkers=1/);
   assert.equal(packageJson.scripts['test:scripts'], 'node scripts/run-node-tests.mjs');
 });
@@ -33,6 +37,8 @@ test('tagged and explicitly requested releases run the full suite before packagi
     packageJson.scripts['test:full'],
     'node scripts/check-release-fixtures.mjs -- npm run test:full:unguarded',
   );
+  assert.doesNotMatch(packageJson.scripts['test:full:unguarded'], /\btest:fast\b/);
+  assert.doesNotMatch(packageJson.scripts['test:full:unguarded'], /check-release-fixtures/);
 });
 
 test('manual releases are bound to an existing version tag at the validated commit', () => {
