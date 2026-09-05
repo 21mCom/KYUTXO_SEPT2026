@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { BackupScheduleSettings } from "@/lib/db-types";
 
 const mocks = vi.hoisted(() => ({
@@ -75,8 +75,16 @@ async function renderConfiguredSchedule() {
   await screen.findByText(DESTINATION.path);
 }
 
+function rapidlyActivateSaveTwice() {
+  const button = screen.getByTestId("button-save-backup-schedule");
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
 describe("backup destination cancellation", () => {
-  it("does not cancel an active backup for an unsaved removal, then cancels exactly once after persistence succeeds", async () => {
+  it("ignores a repeated Save activation while persistence is pending, then cancels each removed active backup exactly once", async () => {
     let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
     const saveHeld = new Promise<{ backupSchedule: BackupScheduleSettings }>((resolve) => {
       finishSave = resolve;
@@ -95,7 +103,7 @@ describe("backup destination cancellation", () => {
     expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
     expect(mocks.mutateSettings).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+    rapidlyActivateSaveTwice();
 
     await waitFor(() => expect(mocks.mutateSettings).toHaveBeenCalledTimes(1));
     expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
@@ -110,17 +118,25 @@ describe("backup destination cancellation", () => {
     });
   });
 
-  it("does not cancel an active backup when saving the removal fails", async () => {
+  it("ignores a repeated Save activation while failed persistence is pending and cancels none", async () => {
+    let failSave!: (error: Error) => void;
+    const saveHeld = new Promise<never>((_resolve, reject) => {
+      failSave = reject;
+    });
     mocks.mutateSettings.mockImplementation(async (_id, updater) => {
       updater({ backupSchedule: configuredSchedule });
-      throw new Error("settings write failed");
+      return saveHeld;
     });
 
     await renderConfiguredSchedule();
     fireEvent.click(screen.getByRole("button", { name: `Remove ${DESTINATION.label}` }));
-    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+    rapidlyActivateSaveTwice();
 
     await waitFor(() => expect(mocks.mutateSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+
+    failSave(new Error("settings write failed"));
+    await waitFor(() => expect(screen.getByTestId("button-save-backup-schedule").textContent).toBe("Save backup schedule"));
     expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
   });
 

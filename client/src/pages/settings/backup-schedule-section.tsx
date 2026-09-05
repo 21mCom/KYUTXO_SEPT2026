@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CalendarClock, FolderOpen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ export function BackupScheduleSection() {
   const [schedule, setSchedule] = useState<BackupScheduleSettings>(DEFAULT_BACKUP_SCHEDULE);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const saveInFlightRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +55,8 @@ export function BackupScheduleSection() {
   };
 
   const save = async () => {
+    if (saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
     setSaving(true);
     try {
       const normalized = normalizeBackupSchedule(schedule);
@@ -83,6 +86,7 @@ export function BackupScheduleSection() {
         description: error instanceof Error ? error.message : "Could not save the backup schedule.",
       });
     } finally {
+      saveInFlightRef.current = false;
       setSaving(false);
     }
   };
