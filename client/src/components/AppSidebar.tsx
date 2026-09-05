@@ -1,6 +1,5 @@
 import { ChevronDown } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
-import { version as APP_VERSION } from "../../../package.json";
 import {
   Sidebar,
   SidebarContent,
@@ -133,7 +132,7 @@ export function AppSidebar() {
         <div className="text-xs text-muted-foreground mt-2">
           <p>Offline-first PWA</p>
           <p className="mt-1">All data stored locally</p>
-          <p className="mt-1">v{APP_VERSION}</p>
+          <p className="mt-1">v{__APP_VERSION__}</p>
         </div>
       </SidebarFooter>
     </Sidebar>

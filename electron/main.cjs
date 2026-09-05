@@ -149,6 +149,7 @@ function ensureDirectories() {
 
 function createWindow() {
   ensureDirectories();
+  const { version: appVersion } = require('../package.json');
 
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -166,7 +167,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
     },
     icon: path.join(__dirname, '../client/public/icon.png'),
-    title: 'KYUTXO - Bitcoin Metadata Manager',
+    title: `KYUTXO v${appVersion} - Bitcoin Metadata Manager`,
     backgroundColor: '#1a1a2e',
     show: false,
   });

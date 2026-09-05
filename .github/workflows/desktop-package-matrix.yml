@@ -49,6 +49,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Read package version
+        id: version
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - name: Verify target matrix and protected-claim gate
         shell: bash
         run: |
@@ -84,7 +89,7 @@ jobs:
       - name: Upload verified package
         uses: actions/upload-artifact@v4
         with:
-          name: KYUTXO-${{ matrix.platform }}-${{ matrix.arch }}
+          name: KYUTXO-${{ steps.version.outputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             release/*.exe
             release/*.dmg

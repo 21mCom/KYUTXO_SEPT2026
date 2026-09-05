@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/build.yml'), 'utf8');
+const matrixWorkflow = fs.readFileSync(path.join(ROOT, '.github/workflows/desktop-package-matrix.yml'), 'utf8');
+const builder = JSON.parse(fs.readFileSync(path.join(ROOT, 'electron-builder.json'), 'utf8'));
 const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 test('pull requests and all packages are gated by typecheck and the documented fast tier', () => {
@@ -74,5 +76,18 @@ test('the exact packaged executable and checksum are uploaded and released toget
   assert.match(
     workflow,
     /gh release create "\$RELEASE_TAG" "\$\{EXES\[@\]\}" "\$\{SUMS\[@\]\}"/,
+  );
+});
+
+test('package filenames and workflow artifacts carry the canonical package version', () => {
+  assert.equal(packageJson.version, '1.1.69');
+  for (const target of ['win', 'mac', 'linux']) {
+    assert.match(builder[target].artifactName, /\$\{version\}/);
+  }
+  assert.match(workflow, /name: KYUTXO-\$\{\{ steps\.version\.outputs\.version \}\}-Portable-/);
+  assert.match(matrixWorkflow, /name: Read package version[\s\S]*require\('\.\/package\.json'\)\.version/);
+  assert.match(
+    matrixWorkflow,
+    /name: KYUTXO-\$\{\{ steps\.version\.outputs\.version \}\}-\$\{\{ matrix\.platform \}\}-\$\{\{ matrix\.arch \}\}/,
   );
 });

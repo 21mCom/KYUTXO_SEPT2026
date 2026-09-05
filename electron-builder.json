@@ -48,11 +48,13 @@
   "mac": {
     "target": ["dmg", "zip"],
     "icon": "client/public/icon.png",
-    "category": "public.app-category.finance"
+    "category": "public.app-category.finance",
+    "artifactName": "${productName}-${version}-${arch}.${ext}"
   },
   "linux": {
     "target": ["AppImage"],
     "icon": "client/public/icon.png",
-    "category": "Finance"
+    "category": "Finance",
+    "artifactName": "${productName}-${version}-${arch}.${ext}"
   }
 }

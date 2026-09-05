@@ -7,7 +7,15 @@ const require = createRequire(import.meta.url);
 const { version: pkgVersion } = require("./package.json") as { version: string };
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: "app-version-html",
+      transformIndexHtml(html) {
+        return html.replaceAll("__APP_VERSION__", pkgVersion);
+      },
+    },
+  ],
   define: {
     // Keep the packaged renderer aligned with the normal Vite build. Without
     // this replacement, the bare compile-time identifier throws before React

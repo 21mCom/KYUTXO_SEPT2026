@@ -30,6 +30,8 @@ const SCAN_EXTS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs']);
 // This intentionally does NOT flag usages like  `v${KYUTXO_APP_VERSION}`.
 const VERSION_LITERAL_RE = /KYUTXO_APP_VERSION\s*=\s*["']\d+\.\d+\.\d+/;
 const VITE_CONFIGS = ['vite.config.ts', 'vite.config.electron.ts'];
+const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+const packageLock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
 
 function walkDir(dir, files = []) {
   if (!fs.existsSync(dir)) return files;
@@ -64,11 +66,47 @@ for (const configName of VITE_CONFIGS) {
   const content = fs.readFileSync(configPath, 'utf8');
   if (
     !content.includes('__APP_VERSION__: JSON.stringify(pkgVersion)') ||
-    !content.includes('require("./package.json")')
+    !content.includes('require("./package.json")') ||
+    !content.includes('html.replaceAll("__APP_VERSION__", pkgVersion)')
   ) {
     violations.push(
       `  ${configName}: must inject __APP_VERSION__ from package.json so every renderer build has the version constant`,
     );
+  }
+}
+
+if (
+  packageLock.version !== packageJson.version ||
+  packageLock.packages?.['']?.version !== packageJson.version
+) {
+  violations.push('  package-lock.json: root versions must match package.json');
+}
+
+const requiredPatterns = [
+  ['client/index.html', '<title>KYUTXO v__APP_VERSION__ - Bitcoin Metadata Manager</title>'],
+  ['client/src/components/AppSidebar.tsx', 'v{__APP_VERSION__}'],
+  ['electron/main.cjs', 'title: `KYUTXO v${appVersion} - Bitcoin Metadata Manager`'],
+];
+for (const [file, pattern] of requiredPatterns) {
+  if (!fs.readFileSync(path.join(ROOT, file), 'utf8').includes(pattern)) {
+    violations.push(`  ${file}: missing package-derived visible version surface`);
+  }
+}
+
+const builder = JSON.parse(fs.readFileSync(path.join(ROOT, 'electron-builder.json'), 'utf8'));
+for (const target of ['win', 'mac', 'linux']) {
+  if (!builder[target]?.artifactName?.includes('${version}')) {
+    violations.push(`  electron-builder.json: ${target}.artifactName must include \${version}`);
+  }
+}
+
+for (const workflowName of ['.github/workflows/build.yml', '.github/workflows/desktop-package-matrix.yml']) {
+  const workflow = fs.readFileSync(path.join(ROOT, workflowName), 'utf8');
+  if (
+    !workflow.includes('name: Read package version') ||
+    !workflow.includes('steps.version.outputs.version')
+  ) {
+    violations.push(`  ${workflowName}: uploaded package artifacts must derive their version from package.json`);
   }
 }
 

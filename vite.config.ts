@@ -10,6 +10,12 @@ const { version: pkgVersion } = require("./package.json") as { version: string }
 export default defineConfig({
   plugins: [
     react(),
+    {
+      name: "app-version-html",
+      transformIndexHtml(html) {
+        return html.replaceAll("__APP_VERSION__", pkgVersion);
+      },
+    },
     runtimeErrorOverlay(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
