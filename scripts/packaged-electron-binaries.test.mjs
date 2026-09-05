@@ -161,6 +161,49 @@ test('the packaged browser gate launches the generated Windows portable renderer
   assert.match(workflow, /generated Portable\.exe release asset/);
 });
 
+test('the packaged network activity forced shutdown cannot become graceful', () => {
+  const source = fs.readFileSync(
+    path.join(SCRIPTS_DIR, 'check-packaged-network-privacy-activity-browser.mjs'),
+    'utf8',
+  );
+  const forcedHelper = source.match(
+    /async function forceStopPackagedProcess\(child\) \{(?<body>[\s\S]*?)\n\}/,
+  )?.groups?.body;
+  assert.ok(forcedHelper, 'forced shutdown helper must remain independently testable in source');
+
+  assert.match(
+    forcedHelper,
+    /if \(IS_WINDOWS\) \{\s*killWindowsProcessTree\(child, true\);\s*return;/,
+    'Windows forced shutdown must use the forced process-tree branch',
+  );
+  assert.match(
+    source,
+    /const args = \['\/PID', String\(child\.pid\), '\/T'\];\s*if \(force\) args\.push\('\/F'\);/,
+    'Windows forced shutdown must pass both /T and /F to taskkill',
+  );
+  assert.match(
+    forcedHelper,
+    /process\.kill\(-child\.pid, 'SIGKILL'\)/,
+    'POSIX forced shutdown must SIGKILL the detached process group',
+  );
+  assert.doesNotMatch(
+    forcedHelper,
+    /SIGTERM|browser\.close|page\.close/,
+    'forced shutdown must not send SIGTERM or close CDP',
+  );
+
+  const forcedScenario = source.match(
+    /\/\/ Do not close CDP first or send SIGTERM:(?<body>[\s\S]*?)if \(!\(await waitForCdpDown/,
+  )?.groups?.body;
+  assert.ok(forcedScenario, 'forced termination scenario must retain its explicit ordering guard');
+  assert.match(forcedScenario, /await forceStopPackagedProcess\(child\)/);
+  assert.doesNotMatch(
+    forcedScenario,
+    /browser\.close|page\.close|stopPackagedProcess|SIGTERM/,
+    'the forced scenario must terminate before any graceful CDP or process shutdown',
+  );
+});
+
 test('the packaged Coin Passport gate is release-wired after the native worker check', () => {
   const script = fs.readFileSync(
     path.join(SCRIPTS_DIR, 'check-packaged-coin-passport-browser.mjs'),
