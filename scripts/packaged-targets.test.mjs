@@ -16,6 +16,7 @@ import {
   expectedArtifactName,
   expectedArtifactNames,
   inspectInternalVersion,
+  METADATA_COMMAND_TIMEOUT_MS,
   parseAppImageDesktopVersion,
 } from './check-packaged-app-version.mjs';
 
@@ -168,6 +169,7 @@ test('reads and validates Windows ProductVersion output through the injected run
   assert.equal(calls[0][0], 'powershell.exe');
   assert.deepEqual(calls[0][1].slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
   assert.match(calls[0][1][3], /VersionInfo\.ProductVersion/);
+  assert.equal(calls[0][2].timeout, METADATA_COMMAND_TIMEOUT_MS);
   assert.throws(() => assertVersionAgreement({
     packageVersion: '1.2.4',
     artifactPath: '/release/KYUTXO-1.2.4-Portable.exe',
@@ -181,7 +183,8 @@ test('discovers macOS ZIP app metadata and removes its temporary plist', () => w
   const artifactPath = path.join(tempDir, 'KYUTXO-1.2.3-x64.zip');
   fs.writeFileSync(artifactPath, 'fixture');
   let plistPath;
-  const version = inspectInternalVersion('darwin', artifactPath, (command, args) => {
+  const version = inspectInternalVersion('darwin', artifactPath, (command, args, options) => {
+    assert.equal(options.timeout, METADATA_COMMAND_TIMEOUT_MS);
     if (command === 'unzip' && args[0] === '-Z1') {
       return 'KYUTXO.app/Contents/Info.plist\nKYUTXO.app/Contents/MacOS/KYUTXO\n';
     }
@@ -204,7 +207,8 @@ test('cleans up a mounted macOS DMG when metadata reading fails', () => withTemp
   fs.writeFileSync(artifactPath, 'fixture');
   let mountPoint;
   let detached = false;
-  assert.throws(() => inspectInternalVersion('darwin', artifactPath, (command, args) => {
+  assert.throws(() => inspectInternalVersion('darwin', artifactPath, (command, args, options) => {
+    assert.equal(options.timeout, METADATA_COMMAND_TIMEOUT_MS);
     if (command === 'hdiutil' && args[0] === 'attach') {
       mountPoint = args.at(-1);
       fs.mkdirSync(path.join(mountPoint, 'KYUTXO.app', 'Contents'), { recursive: true });
@@ -225,6 +229,94 @@ test('cleans up a mounted macOS DMG when metadata reading fails', () => withTemp
   assert.equal(fs.existsSync(mountPoint), false);
 }));
 
+test('removes a DMG mount directory when detach itself times out', () => withTempDir((tempDir) => {
+  const artifactPath = path.join(tempDir, 'KYUTXO-1.2.3-x64.dmg');
+  fs.writeFileSync(artifactPath, 'fixture');
+  let mountPoint;
+  assert.throws(() => inspectInternalVersion('darwin', artifactPath, (command, args, options) => {
+    assert.equal(options.timeout, METADATA_COMMAND_TIMEOUT_MS);
+    if (command === 'hdiutil' && args[0] === 'attach') {
+      mountPoint = args.at(-1);
+      fs.mkdirSync(path.join(mountPoint, 'KYUTXO.app', 'Contents'), { recursive: true });
+      fs.writeFileSync(path.join(mountPoint, 'KYUTXO.app', 'Contents', 'Info.plist'), 'fixture');
+      return '';
+    }
+    if (command === 'plutil') return '1.2.3\n';
+    if (command === 'hdiutil' && args[0] === 'detach') {
+      const error = new Error('fixture detach timeout');
+      error.code = 'ETIMEDOUT';
+      throw error;
+    }
+    throw new Error(`Unexpected command: ${command}`);
+  }), /darwin artifact KYUTXO-1\.2\.3-x64\.dmg during DMG detach/);
+
+  assert.ok(mountPoint);
+  assert.equal(fs.existsSync(mountPoint), false);
+}));
+
+test('reports a sanitized Windows metadata timeout with platform, artifact, and phase', () => {
+  const artifactPath = '/sensitive/build/path/KYUTXO-1.2.3-Portable.exe';
+  assert.throws(
+    () => inspectInternalVersion('win', artifactPath, (_command, _args, options) => {
+      assert.equal(options.timeout, METADATA_COMMAND_TIMEOUT_MS);
+      const error = new Error(`spawn timed out at ${artifactPath}`);
+      error.code = 'ETIMEDOUT';
+      throw error;
+    }),
+    (error) => {
+      assert.match(error.message, /win artifact KYUTXO-1\.2\.3-Portable\.exe/);
+      assert.match(error.message, /PowerShell version metadata read/);
+      assert.doesNotMatch(error.message, /sensitive\/build\/path/);
+      return true;
+    },
+  );
+});
+
+test('detaches a DMG and removes its mount directory after a metadata timeout', () => withTempDir((tempDir) => {
+  const artifactPath = path.join(tempDir, 'KYUTXO-1.2.3-x64.dmg');
+  fs.writeFileSync(artifactPath, 'fixture');
+  let mountPoint;
+  let detached = false;
+  assert.throws(() => inspectInternalVersion('darwin', artifactPath, (command, args, options) => {
+    assert.equal(options.timeout, METADATA_COMMAND_TIMEOUT_MS);
+    if (command === 'hdiutil' && args[0] === 'attach') {
+      mountPoint = args.at(-1);
+      fs.mkdirSync(path.join(mountPoint, 'KYUTXO.app', 'Contents'), { recursive: true });
+      fs.writeFileSync(path.join(mountPoint, 'KYUTXO.app', 'Contents', 'Info.plist'), 'fixture');
+      return '';
+    }
+    if (command === 'plutil') {
+      const error = new Error('fixture timeout with a sensitive path');
+      error.code = 'ETIMEDOUT';
+      throw error;
+    }
+    if (command === 'hdiutil' && args[0] === 'detach') {
+      detached = true;
+      return '';
+    }
+    throw new Error(`Unexpected command: ${command}`);
+  }), /darwin artifact KYUTXO-1\.2\.3-x64\.dmg during DMG plist version read/);
+
+  assert.equal(detached, true);
+  assert.ok(mountPoint);
+  assert.equal(fs.existsSync(mountPoint), false);
+}));
+
+test('removes the AppImage extraction directory after an extraction timeout', () => withTempDir((tempDir) => {
+  const artifactPath = path.join(tempDir, 'KYUTXO-1.2.3-x64.AppImage');
+  fs.writeFileSync(artifactPath, 'fixture');
+  let extractDir;
+  assert.throws(() => inspectInternalVersion('linux', artifactPath, (_command, _args, options) => {
+    assert.equal(options.timeout, METADATA_COMMAND_TIMEOUT_MS);
+    extractDir = options.cwd;
+    const error = new Error('fixture timeout');
+    error.killed = true;
+    throw error;
+  }), /linux artifact KYUTXO-1\.2\.3-x64\.AppImage during AppImage desktop metadata extraction/);
+  assert.ok(extractDir);
+  assert.equal(fs.existsSync(extractDir), false);
+}));
+
 test('extracts Linux AppImage desktop metadata through the injected runner', () => withTempDir((tempDir) => {
   const artifactPath = path.join(tempDir, 'KYUTXO-1.2.3-x64.AppImage');
   fs.writeFileSync(artifactPath, 'fixture');
@@ -232,6 +324,7 @@ test('extracts Linux AppImage desktop metadata through the injected runner', () 
   const version = inspectInternalVersion('linux', artifactPath, (command, args, options) => {
     assert.equal(command, artifactPath);
     assert.deepEqual(args, ['--appimage-extract', '*.desktop']);
+    assert.equal(options.timeout, METADATA_COMMAND_TIMEOUT_MS);
     assert.equal(options.env.APPIMAGE_EXTRACT_AND_RUN, '1');
     extractDir = options.cwd;
     const desktopDir = path.join(extractDir, 'squashfs-root');

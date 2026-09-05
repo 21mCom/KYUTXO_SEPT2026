@@ -7,6 +7,33 @@ import { fileURLToPath } from 'node:url';
 import { getPackagedTarget } from './packaged-targets.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const METADATA_COMMAND_TIMEOUT_MS = 60_000;
+
+function runMetadataCommand({
+  exec,
+  platform,
+  artifactPath,
+  phase,
+  command,
+  args,
+  options = {},
+}) {
+  try {
+    return exec(command, args, {
+      ...options,
+      timeout: METADATA_COMMAND_TIMEOUT_MS,
+    });
+  } catch (error) {
+    if (error?.code === 'ETIMEDOUT' || error?.killed === true) {
+      throw new Error(
+        `Timed out checking ${platform} artifact ${path.basename(artifactPath)} ` +
+          `during ${phase} after ${METADATA_COMMAND_TIMEOUT_MS}ms`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
 
 export function expectedArtifactName(platform, arch, version) {
   getPackagedTarget(platform, arch);
@@ -46,28 +73,51 @@ export function assertVersionAgreement({
 
 function readWindowsVersion(artifactPath, exec = execFileSync) {
   const escaped = artifactPath.replaceAll("'", "''");
-  return exec(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command',
+  return runMetadataCommand({
+    exec,
+    platform: 'win',
+    artifactPath,
+    phase: 'PowerShell version metadata read',
+    command: 'powershell.exe',
+    args: ['-NoProfile', '-NonInteractive', '-Command',
       `(Get-Item -LiteralPath '${escaped}').VersionInfo.ProductVersion`],
-    { encoding: 'utf8' },
-  ).trim();
+    options: { encoding: 'utf8' },
+  }).trim();
 }
 
 function readMacVersion(artifactPath, exec = execFileSync) {
   if (path.extname(artifactPath) === '.zip') {
-    const entries = exec('unzip', ['-Z1', artifactPath], { encoding: 'utf8' }).split(/\r?\n/);
+    const entries = runMetadataCommand({
+      exec,
+      platform: 'darwin',
+      artifactPath,
+      phase: 'ZIP entry listing',
+      command: 'unzip',
+      args: ['-Z1', artifactPath],
+      options: { encoding: 'utf8' },
+    }).split(/\r?\n/);
     const plistEntry = entries.find((entry) => /^[^/]+\.app\/Contents\/Info\.plist$/.test(entry));
     if (!plistEntry) throw new Error(`No .app Info.plist found in ${path.basename(artifactPath)}`);
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-version-zip-'));
     const plistPath = path.join(tempDir, 'Info.plist');
     try {
-      fs.writeFileSync(plistPath, exec('unzip', ['-p', artifactPath, plistEntry]));
-      return exec(
-        'plutil',
-        ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', plistPath],
-        { encoding: 'utf8' },
-      ).trim();
+      fs.writeFileSync(plistPath, runMetadataCommand({
+        exec,
+        platform: 'darwin',
+        artifactPath,
+        phase: 'ZIP plist extraction',
+        command: 'unzip',
+        args: ['-p', artifactPath, plistEntry],
+      }));
+      return runMetadataCommand({
+        exec,
+        platform: 'darwin',
+        artifactPath,
+        phase: 'ZIP plist version read',
+        command: 'plutil',
+        args: ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', plistPath],
+        options: { encoding: 'utf8' },
+      }).trim();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -75,19 +125,41 @@ function readMacVersion(artifactPath, exec = execFileSync) {
   const mountPoint = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-version-dmg-'));
   let mounted = false;
   try {
-    exec('hdiutil', ['attach', artifactPath, '-readonly', '-nobrowse', '-mountpoint', mountPoint], {
-      encoding: 'utf8',
+    runMetadataCommand({
+      exec,
+      platform: 'darwin',
+      artifactPath,
+      phase: 'DMG attach',
+      command: 'hdiutil',
+      args: ['attach', artifactPath, '-readonly', '-nobrowse', '-mountpoint', mountPoint],
+      options: { encoding: 'utf8' },
     });
     mounted = true;
     const app = fs.readdirSync(mountPoint).find((name) => name.endsWith('.app'));
     if (!app) throw new Error(`No .app bundle found in ${path.basename(artifactPath)}`);
     const plist = path.join(mountPoint, app, 'Contents', 'Info.plist');
-    return exec('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', plist], {
-      encoding: 'utf8',
+    return runMetadataCommand({
+      exec,
+      platform: 'darwin',
+      artifactPath,
+      phase: 'DMG plist version read',
+      command: 'plutil',
+      args: ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', plist],
+      options: { encoding: 'utf8' },
     }).trim();
   } finally {
     try {
-      if (mounted) exec('hdiutil', ['detach', mountPoint], { encoding: 'utf8' });
+      if (mounted) {
+        runMetadataCommand({
+          exec,
+          platform: 'darwin',
+          artifactPath,
+          phase: 'DMG detach',
+          command: 'hdiutil',
+          args: ['detach', mountPoint],
+          options: { encoding: 'utf8' },
+        });
+      }
     } finally {
       fs.rmSync(mountPoint, { recursive: true, force: true });
     }
@@ -104,10 +176,18 @@ function readLinuxVersion(artifactPath, exec = execFileSync) {
   const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-version-appimage-'));
   try {
     fs.chmodSync(artifactPath, 0o755);
-    exec(artifactPath, ['--appimage-extract', '*.desktop'], {
-      cwd: extractDir,
-      encoding: 'utf8',
-      env: { ...process.env, APPIMAGE_EXTRACT_AND_RUN: '1' },
+    runMetadataCommand({
+      exec,
+      platform: 'linux',
+      artifactPath,
+      phase: 'AppImage desktop metadata extraction',
+      command: artifactPath,
+      args: ['--appimage-extract', '*.desktop'],
+      options: {
+        cwd: extractDir,
+        encoding: 'utf8',
+        env: { ...process.env, APPIMAGE_EXTRACT_AND_RUN: '1' },
+      },
     });
     const desktopDir = path.join(extractDir, 'squashfs-root');
     const desktop = fs.readdirSync(desktopDir).find((name) => name.endsWith('.desktop'));
