@@ -56,6 +56,51 @@ function extractRunnerTargets(workflow, jobName) {
     );
 }
 
+function assertCompatibleBuilderFlags(workflow, jobName) {
+  const compatibleFlags = new Map([
+    ['win', '--win'],
+    ['darwin', '--mac'],
+    ['linux', '--linux'],
+  ]);
+  const jobMatch = workflow.match(
+    new RegExp(
+      `^  ${jobName}:\\n([\\s\\S]*?)(?=^  [a-zA-Z0-9_-]+:\\n|(?![\\s\\S]))`,
+      'm',
+    ),
+  );
+  assert.ok(jobMatch, `missing workflow job: ${jobName}`);
+
+  const matrixMatch = jobMatch[1].match(
+    /^\s{6}matrix:\s*\n\s{8}include:\s*\n([\s\S]*?)(?=^\s{4}\S)/m,
+  );
+  assert.ok(matrixMatch, `missing include matrix in workflow job: ${jobName}`);
+
+  let current;
+  const targets = [];
+  for (const line of matrixMatch[1].split('\n')) {
+    const platform = line.match(/^\s{10}- platform:\s*(\S+)\s*$/);
+    if (platform) {
+      current = { platform: platform[1] };
+      targets.push(current);
+      continue;
+    }
+
+    const builderFlag = line.match(/^\s{12}builder_flag:\s*(\S+)\s*$/);
+    if (builderFlag && current) current.builderFlag = builderFlag[1];
+  }
+
+  assert.ok(targets.length > 0, `missing release targets in workflow job: ${jobName}`);
+  for (const target of targets) {
+    const expectedFlag = compatibleFlags.get(target.platform);
+    assert.ok(expectedFlag, `unsupported release platform: ${target.platform}`);
+    assert.equal(
+      target.builderFlag,
+      expectedFlag,
+      `incompatible builder flag for ${target.platform}`,
+    );
+  }
+}
+
 test('readiness target arguments require a supported OS and architecture', () => {
   assert.deepEqual(parseExpectedTarget(['--platform', 'linux', '--arch', 'arm64']), {
     platform: 'linux',
@@ -81,6 +126,29 @@ test('scheduled readiness targets and dedicated labels match the release gate', 
   assert.deepEqual(
     extractRunnerTargets(readinessWorkflow, 'check-runner'),
     extractRunnerTargets(releaseWorkflow, 'native-power-smoke'),
+  );
+});
+
+test('release targets use compatible electron-builder platform flags', () => {
+  const workflow = readWorkflow('build.yml');
+  assert.doesNotThrow(() => assertCompatibleBuilderFlags(workflow, 'native-power-smoke'));
+
+  const unknownPlatform = workflow.replace(
+    '          - platform: win\n',
+    '          - platform: freebsd\n',
+  );
+  assert.throws(
+    () => assertCompatibleBuilderFlags(unknownPlatform, 'native-power-smoke'),
+    /unsupported release platform: freebsd/,
+  );
+
+  const incompatibleFlag = workflow.replace(
+    '            builder_flag: --win\n',
+    '            builder_flag: --linux\n',
+  );
+  assert.throws(
+    () => assertCompatibleBuilderFlags(incompatibleFlag, 'native-power-smoke'),
+    /incompatible builder flag for win/,
   );
 });
 
