@@ -52,7 +52,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { unlockIfNeeded } from './browser-check-utils.mjs';
+import {
+  completeFreshVaultOnboardingIfPresent,
+  unlockIfNeeded,
+} from './browser-check-utils.mjs';
 import { buildEngineBridgeInitScript } from './engine-bridge-mock.mjs';
 
 await acquireBrowserCheckLock();
@@ -369,6 +372,7 @@ async function main() {
       }
       if (!loaded) throw new Error('app never loaded (context A)');
       await unlockIfNeeded(page, SETUP_PASSWORD_A);
+      await completeFreshVaultOnboardingIfPresent(page, { label: 'evidence-stream-browser' });
 
       console.log(`[evidence-stream] seeding ${attachmentCountLabel()} ...`);
       const seed = await seedOversizedEvidence(page, {
@@ -539,6 +543,7 @@ async function main() {
       }
       if (!loaded) throw new Error('app never loaded (context B)');
       await unlockIfNeeded(page, SETUP_PASSWORD_B);
+      await completeFreshVaultOnboardingIfPresent(page, { label: 'evidence-stream-electron' });
 
       const seed = await seedOversizedEvidence(page, {
         title: 'Streaming fixture (electron)',
