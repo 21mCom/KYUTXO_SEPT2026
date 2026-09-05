@@ -8,14 +8,15 @@
 //   3. changes the search and amount filters, saves the same name again, and
 //      verifies that the existing view is updated rather than duplicated;
 //   4. creates and deletes a second view, exports a password-encrypted real
-//      backup, injects stale
-//      local view state, and restores through the Settings dialog into the
-//      fresh vault;
-//   5. verifies the restored view has the updated filters exactly once, the
+//      backup, and injects stale local view state;
+//   5. attempts the real Settings restore with a wrong password and proves the
+//      stale live view plus both transactions remain byte-for-byte unchanged;
+//   6. retries with the correct password and verifies the restored view has the
+//      updated filters exactly once, the
 //      deleted view is absent, and both underlying transactions remain intact;
-//   6. reloads, unlocks again, selects the restored view, and verifies that its
+//   7. reloads, unlocks again, selects the restored view, and verifies that its
 //      tab, search, date, and amount filters are restored;
-//   7. snoozes one row with the one-week preset and the other with the native
+//   8. snoozes one row with the one-week preset and the other with the native
 //      custom date input, then verifies the persisted state/timestamps.
 //
 // Everything runs offline against local IndexedDB.
@@ -35,6 +36,7 @@ const BASE_URL = `http://localhost:${PORT}/`;
 const PAGE_URL = `${BASE_URL}transaction-inbox`;
 const SETUP_PASSWORD = 'transaction-inbox-check-123';
 const BACKUP_PASSWORD = 'transaction-inbox-backup-456';
+const WRONG_BACKUP_PASSWORD = 'transaction-inbox-backup-wrong';
 const VIEW_NAME = 'Inbox review today';
 const DELETED_VIEW_NAME = 'Deleted before backup';
 
@@ -533,6 +535,21 @@ async function main() {
       deletedViewName: DELETED_VIEW_NAME,
     });
 
+    const beforeWrongPassword = await page.evaluate(async ({ txPreset, txCustom }) => {
+      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
+      const txCrud = await import('/src/lib/data/transaction-crud.ts');
+      const settings = await settingsCrud.getSettings('default');
+      const transactions = await Promise.all([
+        txCrud.getTransactionByTxid(txPreset),
+        txCrud.getTransactionByTxid(txCustom),
+      ]);
+      return {
+        savedInboxViews: settings?.savedInboxViews,
+        transactionCount: await txCrud.countTransactions(),
+        transactions,
+      };
+    }, { txPreset: TX_PRESET, txCustom: TX_CUSTOM });
+
     // Drive the actual replace restore dialog, not just restoreSettingsPreferences
     // in a module test. This is the fresh-vault backup boundary under test.
     await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
@@ -557,8 +574,54 @@ async function main() {
       await continueRestore.isDisabled(),
       'Continue is disabled until the backup password is entered',
     );
-    await restorePassword.fill(BACKUP_PASSWORD);
     await page.getByTestId('radio-replace').click();
+
+    // The configure-stage preview decrypts the encrypted inline settings before
+    // restoreV3Backup can reach its destructive clear. Prove that a wrong
+    // password stays on this stage and leaves both portable preferences and
+    // unrelated transaction rows exactly as they were.
+    await restorePassword.fill(WRONG_BACKUP_PASSWORD);
+    await continueRestore.click();
+    await page.getByText('Could not read backup', { exact: true }).first().waitFor({
+      state: 'visible',
+      timeout: 20_000,
+    });
+    const confirmPreviewAfterWrongPassword = await page
+      .getByTestId('restore-preferences-preview')
+      .isVisible()
+      .catch(() => false);
+    const afterWrongPassword = await page.evaluate(async ({ txPreset, txCustom }) => {
+      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
+      const txCrud = await import('/src/lib/data/transaction-crud.ts');
+      const settings = await settingsCrud.getSettings('default');
+      const transactions = await Promise.all([
+        txCrud.getTransactionByTxid(txPreset),
+        txCrud.getTransactionByTxid(txCustom),
+      ]);
+      return {
+        savedInboxViews: settings?.savedInboxViews,
+        transactionCount: await txCrud.countTransactions(),
+        transactions,
+      };
+    }, { txPreset: TX_PRESET, txCustom: TX_CUSTOM });
+    record(
+      'wrong-password-non-destructive',
+      !confirmPreviewAfterWrongPassword &&
+        JSON.stringify(afterWrongPassword.savedInboxViews) ===
+          JSON.stringify(beforeWrongPassword.savedInboxViews) &&
+        afterWrongPassword.transactionCount === beforeWrongPassword.transactionCount &&
+        JSON.stringify(afterWrongPassword.transactions) ===
+          JSON.stringify(beforeWrongPassword.transactions),
+      `preview=${confirmPreviewAfterWrongPassword} viewsUnchanged=${
+        JSON.stringify(afterWrongPassword.savedInboxViews) ===
+        JSON.stringify(beforeWrongPassword.savedInboxViews)
+      } txCount=${afterWrongPassword.transactionCount} transactionsUnchanged=${
+        JSON.stringify(afterWrongPassword.transactions) ===
+        JSON.stringify(beforeWrongPassword.transactions)
+      }`,
+    );
+
+    await restorePassword.fill(BACKUP_PASSWORD);
     await continueRestore.click();
     await page.getByTestId('restore-preferences-preview').waitFor({
       state: 'visible',
