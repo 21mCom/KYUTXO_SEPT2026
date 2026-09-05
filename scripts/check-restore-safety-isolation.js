@@ -18,6 +18,10 @@ const dotReplitRelative = '.replit';
 const guardWorkflow = 'restore-safety-isolation-guard';
 const focusedWorkflow = 'encrypted-backup-restore-safety-browser-check';
 const failures = [];
+const localImportPattern =
+  /\b(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+const coupledPattern =
+  /\b(?:backup|restore)\w*\b|JSZip|input-restore|button-open-restore/i;
 
 function readRequired(relative) {
   const absolute = path.join(root, relative);
@@ -38,21 +42,75 @@ function workflowBlock(source, name) {
   return match?.[0] ?? '';
 }
 
-const inbox = readRequired(inboxRelative);
+function resolveLocalImport(importerRelative, specifier) {
+  if (!specifier.startsWith('.')) return null;
+
+  const base = path.resolve(root, path.dirname(importerRelative), specifier);
+  const relativeBase = path.relative(root, base);
+  if (relativeBase.startsWith('..') || path.isAbsolute(relativeBase)) {
+    failures.push(`${importerRelative} imports a local file outside the project root: ${specifier}`);
+    return null;
+  }
+
+  const extensions = ['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'];
+  const candidates = path.extname(base)
+    ? [base]
+    : [
+        base,
+        ...extensions.map((extension) => `${base}${extension}`),
+        ...extensions.map((extension) => path.join(base, `index${extension}`)),
+      ];
+  const resolved = candidates.find((candidate) => {
+    try {
+      return fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  });
+  if (!resolved) {
+    failures.push(`${importerRelative} imports missing local helper ${specifier}.`);
+    return null;
+  }
+  return path.relative(root, resolved).split(path.sep).join('/');
+}
+
+function inboxJourneyFiles(entryRelative) {
+  const pending = [entryRelative];
+  const visited = new Set();
+  const files = [];
+
+  while (pending.length > 0) {
+    const relative = pending.pop();
+    if (visited.has(relative)) continue;
+    visited.add(relative);
+
+    const source = readRequired(relative);
+    files.push({ relative, source });
+    for (const match of source.matchAll(localImportPattern)) {
+      const resolved = resolveLocalImport(relative, match[1] ?? match[2]);
+      if (resolved && !visited.has(resolved)) pending.push(resolved);
+    }
+  }
+  return files;
+}
+
+const inboxFiles = inboxJourneyFiles(inboxRelative);
 readRequired(focusedRelative);
 const dotReplit = readRequired(dotReplitRelative);
 
 // Intentionally broad: this journey has no reason to name or import backup or
 // restore concepts. Catching comments and fixture names prevents old coupled
 // steps from being left behind as misleading scaffolding.
-const coupledLines = inbox
-  .split('\n')
-  .map((line, index) => ({ line, number: index + 1 }))
-  .filter(({ line }) => /\b(?:backup|restore)\w*\b|JSZip|input-restore|button-open-restore/i.test(line));
-for (const hit of coupledLines) {
-  failures.push(
-    `${inboxRelative}:${hit.number} references restore/backup behavior: ${hit.line.trim()}`,
-  );
+for (const { relative, source } of inboxFiles) {
+  const coupledLines = source
+    .split('\n')
+    .map((line, index) => ({ line, number: index + 1 }))
+    .filter(({ line }) => coupledPattern.test(line));
+  for (const hit of coupledLines) {
+    failures.push(
+      `${relative}:${hit.number} references restore/backup behavior: ${hit.line.trim()}`,
+    );
+  }
 }
 
 const focusedBlock = workflowBlock(dotReplit, focusedWorkflow);

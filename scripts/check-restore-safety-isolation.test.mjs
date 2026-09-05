@@ -37,7 +37,11 @@ isValidation = true
 `;
 }
 
-function runFixture({ inbox = '// inbox-only journey\n', replit = validReplit() } = {}) {
+function runFixture({
+  inbox = '// inbox-only journey\n',
+  helpers = {},
+  replit = validReplit(),
+} = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'restore-isolation-'));
   fs.mkdirSync(path.join(root, 'scripts'));
   fs.writeFileSync(
@@ -48,6 +52,11 @@ function runFixture({ inbox = '// inbox-only journey\n', replit = validReplit() 
     path.join(root, 'scripts/check-encrypted-backup-restore-safety-browser.mjs'),
     '// focused proof\n',
   );
+  for (const [relative, source] of Object.entries(helpers)) {
+    const absolute = path.join(root, relative);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, source);
+  }
   fs.writeFileSync(path.join(root, '.replit'), replit);
   try {
     return spawnSync(process.execPath, [guard], {
@@ -77,6 +86,36 @@ test('rejects backup imports and restore selectors in the inbox check', () => {
   assert.match(result.stderr, /check-transaction-inbox-saved-view-snooze-browser\.mjs:1/);
   assert.match(result.stderr, /check-transaction-inbox-saved-view-snooze-browser\.mjs:2/);
   assert.match(result.stderr, /check-transaction-inbox-saved-view-snooze-browser\.mjs:3/);
+});
+
+test('accepts a clean local helper imported by the inbox check', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './inbox-helpers.mjs';\nawait openInbox();\n",
+    helpers: {
+      'scripts/inbox-helpers.mjs': 'export function openInbox() {}\n',
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OK/);
+});
+
+test('rejects restore coupling reached through transitive local helpers', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './inbox-helpers.mjs';\nawait openInbox();\n",
+    helpers: {
+      'scripts/inbox-helpers.mjs': "export { openInbox } from './journeys/open-inbox.js';\n",
+      'scripts/journeys/open-inbox.js': [
+        'export async function openInbox() {',
+        "  await import('../../client/src/lib/backup/export.ts');",
+        '}',
+      ].join('\n'),
+      'client/src/lib/backup/export.ts':
+        "export const openRestore = (page) => page.getByTestId('input-restore-file');\n",
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /scripts\/journeys\/open-inbox\.js:2/);
+  assert.match(result.stderr, /client\/src\/lib\/backup\/export\.ts:1/);
 });
 
 test('rejects a focused restore check that is no longer validation', () => {
