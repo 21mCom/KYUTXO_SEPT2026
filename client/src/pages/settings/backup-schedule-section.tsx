@@ -78,6 +78,12 @@ export function BackupScheduleSection() {
       const saved = normalizeBackupSchedule(updated?.backupSchedule ?? normalized);
       setSchedule(saved);
       toast({ title: "Backup schedule saved", description: normalized.enabled ? "KYUTXO will check whether a backup is due after each unlock." : "Scheduled backups are off." });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Backup schedule not saved",
+        description: error instanceof Error ? error.message : "Could not save the backup schedule.",
+      });
     } finally {
       setSaving(false);
     }
