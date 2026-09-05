@@ -41,7 +41,7 @@ function makeUnlockGuardFixture() {
 }
 
 describe('browser-check unlock guard', () => {
-  it('rejects literal and concatenated onboarding selectors while allowing the dedicated first-run journey', () => {
+  it('rejects statically assembled onboarding selectors while allowing the dedicated first-run journey', () => {
     const { root, fixtureScriptsDir } = makeUnlockGuardFixture();
     try {
       fs.writeFileSync(
@@ -49,6 +49,10 @@ describe('browser-check unlock guard', () => {
         [
           'page.getByTestId(`network-onboarding-source`);',
           "page.getByTestId('button-' + \"onboarding-\" + `finish`);",
+          "const choice = 'choice-network-';",
+          "page.getByTestId(`${choice}offline`);",
+          "const parts = ['button', 'save', 'network', 'choice'];",
+          "page.getByTestId(parts.join('-'));",
           '',
         ].join('\n'),
       );
@@ -57,6 +61,8 @@ describe('browser-check unlock guard', () => {
         [
           'page.getByTestId(`button-onboarding-finish`);',
           "page.getByTestId('network-' + 'onboarding-source');",
+          "const choice = 'choice-network-';",
+          "page.getByTestId(`${choice}offline`);",
           '',
         ].join('\n'),
       );
@@ -73,6 +79,8 @@ describe('browser-check unlock guard', () => {
       assert.equal(result.status, 1);
       assert.match(result.stderr, /check-generic-browser\.mjs:1\s+\[network-onboarding-source\]/);
       assert.match(result.stderr, /check-generic-browser\.mjs:2\s+\[button-onboarding-finish\]/);
+      assert.match(result.stderr, /check-generic-browser\.mjs:4\s+\[choice-network-offline\]/);
+      assert.match(result.stderr, /check-generic-browser\.mjs:6\s+\[button-save-network-choice\]/);
       assert.doesNotMatch(result.stderr, /check-first-run-network-privacy-browser\.mjs:/);
       assert.match(result.stderr, /completeFreshVaultOnboardingIfPresent/);
     } finally {

@@ -22,6 +22,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import ts from 'typescript';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,6 +104,96 @@ const STRING_LITERAL_PATTERN = new RegExp(STRING_LITERAL_SOURCE, 'g');
 
 const SELF_FILE = path.basename(__filename);
 
+function evaluateStaticString(node, bindings, seen = new Set()) {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text;
+  }
+  if (ts.isParenthesizedExpression(node)) {
+    return evaluateStaticString(node.expression, bindings, seen);
+  }
+  if (ts.isIdentifier(node)) {
+    if (seen.has(node.text)) return undefined;
+    const initializer = bindings.get(node.text);
+    if (!initializer) return undefined;
+    return evaluateStaticString(initializer, bindings, new Set([...seen, node.text]));
+  }
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const left = evaluateStaticString(node.left, bindings, seen);
+    const right = evaluateStaticString(node.right, bindings, seen);
+    return left === undefined || right === undefined ? undefined : left + right;
+  }
+  if (ts.isTemplateExpression(node)) {
+    let value = node.head.text;
+    for (const span of node.templateSpans) {
+      const expression = evaluateStaticString(span.expression, bindings, seen);
+      if (expression === undefined) return undefined;
+      value += expression + span.literal.text;
+    }
+    return value;
+  }
+  if (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === 'join'
+  ) {
+    let arrayNode = node.expression.expression;
+    if (ts.isIdentifier(arrayNode)) {
+      if (seen.has(arrayNode.text)) return undefined;
+      arrayNode = bindings.get(arrayNode.text);
+      if (!arrayNode) return undefined;
+      seen = new Set([...seen, node.expression.expression.text]);
+    }
+    if (!ts.isArrayLiteralExpression(arrayNode)) return undefined;
+    const separator =
+      node.arguments.length === 0 ? ',' : evaluateStaticString(node.arguments[0], bindings, seen);
+    if (separator === undefined) return undefined;
+    const values = arrayNode.elements.map((element) =>
+      evaluateStaticString(element, bindings, seen),
+    );
+    return values.some((value) => value === undefined) ? undefined : values.join(separator);
+  }
+  return undefined;
+}
+
+function findComputedTestidHits(source, file, full) {
+  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const bindings = new Map();
+  const hits = [];
+
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      node.parent &&
+      (node.parent.flags & ts.NodeFlags.Const) !== 0
+    ) {
+      bindings.set(node.name.text, node.initializer);
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === 'getByTestId' &&
+      node.arguments.length > 0
+    ) {
+      const testid = evaluateStaticString(node.arguments[0], bindings);
+      if (GUARDED_TESTIDS.includes(testid)) {
+        const allowed =
+          (UNLOCK_TESTIDS.includes(testid) && UNLOCK_ALLOWLIST.has(full)) ||
+          (ONBOARDING_TESTIDS.includes(testid) && ONBOARDING_ALLOWLIST.has(full));
+        if (!allowed) {
+          const line = sourceFile.getLineAndCharacterOfPosition(node.arguments[0].getStart(sourceFile)).line + 1;
+          hits.push({ line, testid });
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return hits;
+}
+
 const files = fs
   .readdirSync(SCRIPTS_DIR)
   .filter(
@@ -147,6 +238,11 @@ for (const file of files) {
     const line = source.slice(0, match.index).split('\n').length;
     if (!hits.some((hit) => hit.line === line && hit.testid === testid)) {
       hits.push({ line, testid, text: lines[line - 1].trim() });
+    }
+  }
+  for (const hit of findComputedTestidHits(source, file, full)) {
+    if (!hits.some((existing) => existing.line === hit.line && existing.testid === hit.testid)) {
+      hits.push({ ...hit, text: lines[hit.line - 1].trim() });
     }
   }
   if (hits.length > 0) {
