@@ -86,6 +86,13 @@ jobs:
           --arch ${{ matrix.arch }}
           --require-electron
 
+      - name: Verify package filename and installed app version
+        shell: bash
+        run: >-
+          node scripts/check-packaged-app-version.mjs
+          --platform ${{ matrix.platform }}
+          --arch ${{ matrix.arch }}
+
       - name: Upload verified package
         uses: actions/upload-artifact@v4
         with:

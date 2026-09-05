@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   SUPPORTED_PACKAGED_TARGETS,
   electronBuilderTargetArgs,
@@ -7,6 +10,12 @@ import {
   getPackagedTarget,
   parsePackagedTargetArgs,
 } from './packaged-targets.mjs';
+import {
+  assertVersionAgreement,
+  expectedArtifactName,
+  expectedArtifactNames,
+  parseAppImageDesktopVersion,
+} from './check-packaged-app-version.mjs';
 
 test('declares one explicit native verification target per supported package', () => {
   assert.deepEqual(
@@ -91,4 +100,60 @@ test('host-derived fallback requires an unmistakable local diagnostic mode', () 
     () => parsePackagedTargetArgs(['--local-diagnostic', '--platform', 'linux', '--arch', 'x64']),
     /cannot be combined/,
   );
+});
+
+test('release artifact names bind every platform to package.json version', () => {
+  assert.equal(expectedArtifactName('win', 'x64', '1.2.3'), 'KYUTXO-1.2.3-Portable.exe');
+  assert.equal(expectedArtifactName('darwin', 'arm64', '1.2.3'), 'KYUTXO-1.2.3-arm64.dmg');
+  assert.equal(expectedArtifactName('linux', 'x64', '1.2.3'), 'KYUTXO-1.2.3-x64.AppImage');
+  assert.deepEqual(expectedArtifactNames('darwin', 'x64', '1.2.3'), [
+    'KYUTXO-1.2.3-x64.dmg',
+    'KYUTXO-1.2.3-x64.zip',
+  ]);
+});
+
+test('version agreement rejects filename and internal metadata drift independently', () => {
+  assert.doesNotThrow(() => assertVersionAgreement({
+    packageVersion: '1.2.3',
+    artifactPath: '/release/KYUTXO-1.2.3-x64.AppImage',
+    internalVersion: '1.2.3',
+    platform: 'linux',
+    arch: 'x64',
+  }));
+  assert.throws(() => assertVersionAgreement({
+    packageVersion: '1.2.3',
+    artifactPath: '/release/KYUTXO-1.2.2-x64.AppImage',
+    internalVersion: '1.2.3',
+    platform: 'linux',
+    arch: 'x64',
+  }), /filename version mismatch/);
+  assert.throws(() => assertVersionAgreement({
+    packageVersion: '1.2.3',
+    artifactPath: '/release/KYUTXO-1.2.3-x64.AppImage',
+    internalVersion: '1.2.2',
+    platform: 'linux',
+    arch: 'x64',
+  }), /Internal app version mismatch/);
+});
+
+test('reads the AppImage version from installed desktop metadata', () => {
+  assert.equal(
+    parseAppImageDesktopVersion('[Desktop Entry]\nName=KYUTXO\nX-AppImage-Version=1.2.3\n'),
+    '1.2.3',
+  );
+  assert.throws(() => parseAppImageDesktopVersion('[Desktop Entry]\nName=KYUTXO\n'), /no X-AppImage-Version/);
+});
+
+test('desktop package matrix verifies internal version before upload', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const workflow = fs.readFileSync(
+    path.join(root, '.github', 'workflows', 'desktop-package-matrix.yml'),
+    'utf8',
+  );
+  const checkIndex = workflow.indexOf('node scripts/check-packaged-app-version.mjs');
+  const uploadIndex = workflow.indexOf('- name: Upload verified package');
+  assert.ok(checkIndex !== -1, 'matrix must run the packaged app version verifier');
+  assert.ok(uploadIndex !== -1 && checkIndex < uploadIndex, 'version verifier must block upload');
+  assert.match(workflow, /--platform \$\{\{ matrix\.platform \}\}/);
+  assert.match(workflow, /--arch \$\{\{ matrix\.arch \}\}/);
 });
