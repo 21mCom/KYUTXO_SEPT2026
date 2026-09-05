@@ -48,6 +48,7 @@ interface CapturedLine {
 // Every string drawn via doc.text(), with the width jsPDF measured for it at
 // draw time. Declared before vi.mock so the (hoisted) factory closes over it.
 const captured: CapturedLine[] = [];
+const savedFileNames: string[] = [];
 
 vi.mock("jspdf", async () => {
   const actual = await vi.importActual<typeof import("jspdf")>("jspdf");
@@ -69,6 +70,12 @@ vi.mock("jspdf", async () => {
         captured.push({ text: String(t), width });
       }
       return origText(text, ...rest);
+    };
+    // Keep the real jsPDF layout and output behavior exercised, but isolate the
+    // final browser save boundary so validation never writes into the repo.
+    doc.save = (fileName: string) => {
+      savedFileNames.push(fileName);
+      return doc;
     };
     return doc;
   }
@@ -110,6 +117,7 @@ vi.mock("@/lib/signatureVerify", async (importOriginal) => {
 describe("ProofOfFundsDeclaration — long identity values wrap within the PDF page", () => {
   beforeEach(() => {
     captured.length = 0;
+    savedFileNames.length = 0;
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn(async () => {}) },
     });
@@ -165,6 +173,9 @@ describe("ProofOfFundsDeclaration — long identity values wrap within the PDF p
     await waitFor(() => {
       expect(captured.some((c) => c.text.startsWith("Full Name:"))).toBe(true);
     });
+    expect(savedFileNames).toEqual([
+      "proof-of-funds-Alice_Example-2026-06-30.pdf",
+    ]);
 
     // Locate the residential block: from its label line up to the next
     // declarant label ("Declaration Date:").
