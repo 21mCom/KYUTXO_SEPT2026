@@ -41,16 +41,24 @@ function makeUnlockGuardFixture() {
 }
 
 describe('browser-check unlock guard', () => {
-  it('rejects template-string onboarding selectors while allowing the dedicated first-run journey', () => {
+  it('rejects literal and concatenated onboarding selectors while allowing the dedicated first-run journey', () => {
     const { root, fixtureScriptsDir } = makeUnlockGuardFixture();
     try {
       fs.writeFileSync(
         path.join(fixtureScriptsDir, 'check-generic-browser.mjs'),
-        'page.getByTestId(`network-onboarding-source`);\n',
+        [
+          'page.getByTestId(`network-onboarding-source`);',
+          "page.getByTestId('button-' + \"onboarding-\" + `finish`);",
+          '',
+        ].join('\n'),
       );
       fs.writeFileSync(
         path.join(fixtureScriptsDir, 'check-first-run-network-privacy-browser.mjs'),
-        'page.getByTestId(`button-onboarding-finish`);\n',
+        [
+          'page.getByTestId(`button-onboarding-finish`);',
+          "page.getByTestId('network-' + 'onboarding-source');",
+          '',
+        ].join('\n'),
       );
 
       const result = spawnSync(process.execPath, [unlockGuardPath], {
@@ -64,6 +72,7 @@ describe('browser-check unlock guard', () => {
 
       assert.equal(result.status, 1);
       assert.match(result.stderr, /check-generic-browser\.mjs:1\s+\[network-onboarding-source\]/);
+      assert.match(result.stderr, /check-generic-browser\.mjs:2\s+\[button-onboarding-finish\]/);
       assert.doesNotMatch(result.stderr, /check-first-run-network-privacy-browser\.mjs:/);
       assert.match(result.stderr, /completeFreshVaultOnboardingIfPresent/);
     } finally {

@@ -94,6 +94,12 @@ if (missing.length > 0) {
 
 const GUARDED_TESTIDS = [...UNLOCK_TESTIDS, ...ONBOARDING_TESTIDS];
 const TESTID_PATTERN = new RegExp("[\"'`](" + GUARDED_TESTIDS.join('|') + ")[\"'`]");
+const STRING_LITERAL_SOURCE = String.raw`["'\x60]([a-z0-9-]*)["'\x60]`;
+const CONCATENATED_STRING_PATTERN = new RegExp(
+  `${STRING_LITERAL_SOURCE}(?:\\s*\\+\\s*${STRING_LITERAL_SOURCE})+`,
+  'g',
+);
+const STRING_LITERAL_PATTERN = new RegExp(STRING_LITERAL_SOURCE, 'g');
 
 const SELF_FILE = path.basename(__filename);
 
@@ -117,7 +123,8 @@ const failures = [];
 for (const file of files) {
   const full = path.join(SCRIPTS_DIR, file);
 
-  const lines = fs.readFileSync(full, 'utf8').split('\n');
+  const source = fs.readFileSync(full, 'utf8');
+  const lines = source.split('\n');
   const hits = [];
   lines.forEach((line, i) => {
     const m = line.match(TESTID_PATTERN);
@@ -128,6 +135,20 @@ for (const file of files) {
       hits.push({ line: i + 1, testid: m[1], text: line.trim() });
     }
   });
+  for (const match of source.matchAll(CONCATENATED_STRING_PATTERN)) {
+    const testid = [...match[0].matchAll(STRING_LITERAL_PATTERN)]
+      .map((literalMatch) => literalMatch[1])
+      .join('');
+    if (!GUARDED_TESTIDS.includes(testid)) continue;
+    const allowed =
+      (UNLOCK_TESTIDS.includes(testid) && UNLOCK_ALLOWLIST.has(full)) ||
+      (ONBOARDING_TESTIDS.includes(testid) && ONBOARDING_ALLOWLIST.has(full));
+    if (allowed) continue;
+    const line = source.slice(0, match.index).split('\n').length;
+    if (!hits.some((hit) => hit.line === line && hit.testid === testid)) {
+      hits.push({ line, testid, text: lines[line - 1].trim() });
+    }
+  }
   if (hits.length > 0) {
     failures.push({ file, hits });
   }
