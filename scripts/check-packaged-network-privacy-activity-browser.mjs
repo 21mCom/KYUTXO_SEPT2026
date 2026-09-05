@@ -5,7 +5,8 @@
 // restart exercises the desktop profile/lifecycle boundary as well. This gate
 // seeds representative activity in the packaged renderer's own IndexedDB,
 // closes and reopens the packaged app against the same isolated profile, then
-// verifies the activity UI, raw rows, and provider settings.
+// commits another entry, force-kills Electron without its graceful-close path,
+// and verifies the activity UI, raw rows, and provider settings after reopening.
 //
 // Usage:
 //   node scripts/check-packaged-network-privacy-activity-browser.mjs
@@ -170,6 +171,23 @@ async function stopPackagedProcess(child) {
   }
 }
 
+async function forceStopPackagedProcess(child) {
+  if (!child?.pid) return;
+  if (IS_WINDOWS) {
+    killWindowsProcessTree(child, true);
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // The process may already have exited.
+    }
+  }
+}
+
 async function readActivityState(page) {
   return page.evaluate(async () => {
     const requestResult = (request) => new Promise((resolve, reject) => {
@@ -213,8 +231,30 @@ async function seedActivityState(page, { settings, activity }) {
   }, { settings, activity });
 }
 
-function assertActivityRows(rows, label) {
-  assert.equal(rows.length, 3, `${label}: expected three persisted activity entries`);
+async function appendCommittedActivity(page, activity) {
+  await page.evaluate(async (activity) => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('KYUTXODatabase');
+      request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
+      request.onsuccess = () => resolve(request.result);
+    });
+    const transaction = database.transaction('networkPrivacyActivity', 'readwrite');
+    transaction.objectStore('networkPrivacyActivity').add(activity);
+    await new Promise((resolve, reject) => {
+      transaction.onerror = () => reject(transaction.error || new Error('IndexedDB write failed'));
+      transaction.onabort = () => reject(transaction.error || new Error('IndexedDB write aborted'));
+      transaction.oncomplete = resolve;
+    });
+    database.close();
+  }, activity);
+}
+
+function assertActivityRows(rows, expectedCount, label) {
+  assert.equal(
+    rows.length,
+    expectedCount,
+    `${label}: expected ${expectedCount} persisted activity entries`,
+  );
   for (const row of rows) {
     const keys = Object.keys(row).sort();
     const validKeys = row.addressCount === undefined
@@ -376,7 +416,7 @@ async function main() {
     ];
     await seedActivityState(page, { settings, activity });
     const seeded = await readActivityState(page);
-    assertActivityRows(seeded.activity, 'before desktop restart');
+    assertActivityRows(seeded.activity, activity.length, 'before desktop restart');
     assert.deepEqual(seeded.settings, settings, 'seeded provider settings were not stored');
 
     await browser.close();
@@ -400,7 +440,7 @@ async function main() {
     });
 
     const reopened = await readActivityState(page);
-    assertActivityRows(reopened.activity, 'after desktop restart');
+    assertActivityRows(reopened.activity, activity.length, 'after graceful desktop restart');
     assert.deepEqual(
       reopened.activity.map(({ id, ...row }) => row),
       activity,
@@ -410,6 +450,62 @@ async function main() {
       reopened.settings,
       settings,
       'provider settings changed across the desktop restart',
+    );
+
+    const postRestartActivity = {
+      timestamp: now,
+      providerClass: 'public-tor',
+      action: 'price-source',
+    };
+    await appendCommittedActivity(page, postRestartActivity);
+    const beforeForcedTermination = await readActivityState(page);
+    assertActivityRows(
+      beforeForcedTermination.activity,
+      activity.length + 1,
+      'before forced desktop termination',
+    );
+    assert.deepEqual(
+      beforeForcedTermination.settings,
+      settings,
+      'provider settings changed before forced desktop termination',
+    );
+
+    // Do not close CDP first or send SIGTERM: kill the whole detached process
+    // group so Electron cannot run before-quit or Chromium's graceful shutdown.
+    await forceStopPackagedProcess(child);
+    child = null;
+    browser = null;
+    if (!(await waitForCdpDown(30_000))) {
+      throw new Error(`${TAG} packaged Electron CDP endpoint stayed up after forced termination`);
+    }
+
+    launchPackagedProcess();
+    if (!(await waitForCdp(90_000))) {
+      throw new Error(`${TAG} packaged Electron CDP endpoint did not return after forced termination`);
+    }
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    page = await waitForRendererPage(browser);
+    attachPageDiagnostics(page);
+    await unlockIfNeeded(page, PASSWORD, {
+      appearTimeoutMs: 60_000,
+      label: 'packaged-network-privacy-activity-forced-reopen',
+    });
+
+    const forceReopened = await readActivityState(page);
+    assertActivityRows(
+      forceReopened.activity,
+      activity.length + 1,
+      'after forced desktop termination',
+    );
+    assert.deepEqual(
+      forceReopened.activity.map(({ id, ...row }) => row),
+      [...activity, postRestartActivity],
+      'fully committed activity entries changed across forced desktop termination',
+    );
+    assert.deepEqual(
+      forceReopened.settings,
+      settings,
+      'provider settings changed across forced desktop termination',
     );
 
     await page.getByTestId('button-network-privacy-activity').click();
@@ -422,6 +518,7 @@ async function main() {
       'Sync',
       'Address check',
       'Provider test',
+      'Price source',
       '3',
       '2',
       'not included in backups',
@@ -438,7 +535,9 @@ async function main() {
       settings,
       'clearing activity changed provider settings',
     );
-    console.log(`${TAG} packaged desktop restart, sensitive-data, and clear-isolation checks passed`);
+    console.log(
+      `${TAG} graceful restart, forced-termination persistence, sensitive-data, and clear-isolation checks passed`,
+    );
   } finally {
     await browser?.close().catch(() => {});
     await stopPackagedProcess(child);
