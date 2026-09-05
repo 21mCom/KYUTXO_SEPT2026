@@ -102,6 +102,49 @@ function assertCompatibleBuilderFlags(workflow, jobName) {
   }
 }
 
+const GITHUB_ACTIONS_CRON_FIELD_RANGES = [
+  [0, 59],
+  [0, 23],
+  [1, 31],
+  [1, 12],
+  [0, 6],
+];
+
+function isValidCronValue(value, minimum, maximum) {
+  return /^\d+$/.test(value) && Number(value) >= minimum && Number(value) <= maximum;
+}
+
+function isValidCronPart(part, minimum, maximum) {
+  const [range, step, ...extra] = part.split('/');
+  if (extra.length > 0 || (step !== undefined && (!/^\d+$/.test(step) || Number(step) < 1))) {
+    return false;
+  }
+  if (range === '*') return true;
+
+  const bounds = range.split('-');
+  if (bounds.length === 1) {
+    return isValidCronValue(bounds[0], minimum, maximum);
+  }
+  return (
+    bounds.length === 2 &&
+    isValidCronValue(bounds[0], minimum, maximum) &&
+    isValidCronValue(bounds[1], minimum, maximum) &&
+    Number(bounds[0]) <= Number(bounds[1])
+  );
+}
+
+function isValidGitHubActionsCron(expression) {
+  if (typeof expression !== 'string') return false;
+  const fields = expression.trim().split(/\s+/);
+  return (
+    fields.length === GITHUB_ACTIONS_CRON_FIELD_RANGES.length &&
+    fields.every((field, index) => {
+      const [minimum, maximum] = GITHUB_ACTIONS_CRON_FIELD_RANGES[index];
+      return field.split(',').every((part) => isValidCronPart(part, minimum, maximum));
+    })
+  );
+}
+
 function assertReadinessWorkflowPolicy(workflow) {
   const document = parseWorkflow(workflow, 'readiness policy');
   const triggers = document.on;
@@ -117,8 +160,7 @@ function assertReadinessWorkflowPolicy(workflow) {
           entry &&
           typeof entry === 'object' &&
           !Array.isArray(entry) &&
-          typeof entry.cron === 'string' &&
-          entry.cron.trim().length > 0,
+          isValidGitHubActionsCron(entry.cron),
       ),
     'missing or malformed readiness schedule',
   );
@@ -293,6 +335,57 @@ jobs:
 `;
 
   assert.doesNotThrow(() => assertReadinessWorkflowPolicy(workflow));
+});
+
+test('readiness policy accepts GitHub Actions cron operators', () => {
+  const workflow = `
+on:
+  schedule:
+    - cron: "0/15 6-18 * * 1,3,5"
+  workflow_dispatch:
+jobs:
+  check-runner:
+    timeout-minutes: 10
+    steps:
+      - run: node scripts/check-release-runner-readiness.mjs
+`;
+
+  assert.doesNotThrow(() => assertReadinessWorkflowPolicy(workflow));
+});
+
+test('readiness policy rejects invalid GitHub Actions cron expressions', () => {
+  const validWorkflow = `
+on:
+  schedule:
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+jobs:
+  check-runner:
+    timeout-minutes: 10
+    steps:
+      - run: node scripts/check-release-runner-readiness.mjs
+`;
+  const parsed = yaml.load(validWorkflow);
+  const checkCronInvalid = (cron) => {
+    const fixture = structuredClone(parsed);
+    fixture.on.schedule = [{ cron }];
+    assert.throws(
+      () => assertReadinessWorkflowPolicy(yaml.dump(fixture)),
+      /missing or malformed readiness schedule/,
+      cron,
+    );
+  };
+
+  checkCronInvalid('17 13 * *');
+  checkCronInvalid('17 13 * * 1 extra');
+  checkCronInvalid('60 13 * * 1');
+  checkCronInvalid('17 24 * * 1');
+  checkCronInvalid('17 13 0 * 1');
+  checkCronInvalid('17 13 * 13 1');
+  checkCronInvalid('17 13 * * 7');
+  checkCronInvalid('*/0 13 * * 1');
+  checkCronInvalid('17-5 13 * * 1');
+  checkCronInvalid('17 nope * * 1');
 });
 
 test('readiness policy fails closed for missing or malformed fields', () => {
