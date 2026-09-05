@@ -9,7 +9,8 @@ function workflowUrl({ owner, repo }) {
 
 function completedAt(run) {
   if (run.status !== 'completed') return undefined;
-  return run.updated_at || run.run_started_at || run.created_at;
+  return [run.updated_at, run.run_started_at, run.created_at]
+    .find((timestamp) => timestamp && Number.isFinite(Date.parse(timestamp)));
 }
 
 function isSilent(run, now = Date.now(), silenceMinutes = SILENCE_MINUTES) {

@@ -408,6 +408,52 @@ test('watchdog with no run history links the monitor workflow Actions page', asy
   assert.match(created.request.body, /No completed run was found/);
 });
 
+test('watchdog treats malformed completion timestamps as missing and opens an alert', async () => {
+  const { calls, invocation } = watchdogHarness({
+    runs: [{
+      status: 'completed',
+      updated_at: 'not-a-timestamp',
+      html_url: 'https://example.test/runs/malformed',
+    }],
+  });
+
+  await watchdog.run(invocation);
+
+  const created = calls.find((call) => call.type === 'create');
+  assert.ok(created);
+  assert.match(created.request.body, /runs\/malformed/);
+  assert.match(created.request.body, /Last completion: No completed run was found/);
+  assert.equal(calls.filter((call) => call.type === 'failed').length, 1);
+});
+
+test('watchdog treats completed runs with missing timestamp fields as silent', async () => {
+  const { calls, invocation } = watchdogHarness({
+    runs: [{
+      status: 'completed',
+      html_url: 'https://example.test/runs/missing-timestamp',
+    }],
+  });
+
+  await watchdog.run(invocation);
+
+  const created = calls.find((call) => call.type === 'create');
+  assert.ok(created);
+  assert.match(created.request.body, /Last completion: No completed run was found/);
+  assert.equal(calls.filter((call) => call.type === 'failed').length, 1);
+});
+
+test('watchdog skips a malformed preferred timestamp when a valid fallback exists', async () => {
+  const run = {
+    status: 'completed',
+    updated_at: 'not-a-timestamp',
+    run_started_at: '2026-09-05T12:05:00Z',
+    created_at: '2026-09-05T12:00:00Z',
+  };
+
+  assert.equal(watchdog.completedAt(run), '2026-09-05T12:05:00Z');
+  assert.equal(watchdog.isSilent(run, Date.parse('2026-09-05T12:30:00Z')), false);
+});
+
 test('watchdog links a newer in-progress run but measures silence from the older completion', async () => {
   const { calls, invocation } = watchdogHarness({
     runs: [
