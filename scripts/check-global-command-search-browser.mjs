@@ -7,7 +7,10 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { unlockIfNeeded } from './browser-check-utils.mjs';
+import {
+  completeFreshVaultOnboardingIfPresent,
+  unlockIfNeeded,
+} from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -66,6 +69,7 @@ async function main() {
     const page = await context.newPage();
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 30_000, label: LABEL });
+    await completeFreshVaultOnboardingIfPresent(page, { label: LABEL });
     await page.getByTestId('button-command-search').waitFor({ state: 'visible', timeout: 30_000 });
 
     const seeded = await page.evaluate(async ({ visibleTxid, hiddenTxid, needle }) => {

@@ -17,7 +17,10 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { unlockIfNeeded } from './browser-check-utils.mjs';
+import {
+  completeFreshVaultOnboardingIfPresent,
+  unlockIfNeeded,
+} from './browser-check-utils.mjs';
 
 const LABEL = 'record-search-index-recovery-browser';
 const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
@@ -86,19 +89,6 @@ async function searchFor(page, query) {
   await page.waitForTimeout(700);
 }
 
-async function finishFreshVaultOnboarding(page) {
-  const sourceStep = page.getByTestId('network-onboarding-source');
-  const visible = await sourceStep.isVisible().catch(() => false);
-  if (!visible) return;
-
-  // Saving a provider choice does not make a request. The harness performs no
-  // sync/provider action, so all tested storage behavior remains local.
-  await page.getByTestId('choice-network-public-direct').click();
-  await page.getByTestId('button-save-network-choice').click();
-  await page.getByTestId('network-onboarding-import').waitFor({ state: 'visible' });
-  await page.getByTestId('button-onboarding-finish').click();
-}
-
 async function main() {
   let devProc = null;
   let startedServer = false;
@@ -133,7 +123,9 @@ async function main() {
 
     await page.goto(BASE_URL, { waitUntil: 'load', timeout: 60_000 });
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 30_000, label: LABEL });
-    await finishFreshVaultOnboarding(page);
+    // Saving a provider choice does not make a request. The harness performs no
+    // sync/provider action, so all tested storage behavior remains local.
+    await completeFreshVaultOnboardingIfPresent(page, { label: LABEL });
     await page.getByTestId('button-command-search').waitFor({
       state: 'visible',
       timeout: 30_000,

@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  completeFreshVaultOnboardingIfPresent,
   dismissMigrationOverlayIfPresent,
   unlockIfNeeded,
   waitForExistingVaultLoginScreen,
@@ -18,6 +19,7 @@ function makePage({
   overlay = false,
   overlayVisible = false,
   overlayError,
+  onboarding = false,
 } = {}) {
   const calls = [];
   const password = {
@@ -53,6 +55,26 @@ function makePage({
     isVisible: async () => false,
     click: async () => calls.push(['dismiss.click']),
   };
+  const onboardingSource = {
+    waitFor: async (options) => {
+      calls.push(['onboardingSource.waitFor', options]);
+      if (options.state === 'visible' && !onboarding) {
+        throw timeoutError('fresh-vault onboarding did not appear');
+      }
+    },
+  };
+  const networkChoice = {
+    click: async () => calls.push(['networkChoice.click']),
+  };
+  const saveNetworkChoice = {
+    click: async () => calls.push(['saveNetworkChoice.click']),
+  };
+  const onboardingImport = {
+    waitFor: async (options) => calls.push(['onboardingImport.waitFor', options]),
+  };
+  const finishOnboarding = {
+    click: async () => calls.push(['finishOnboarding.click']),
+  };
 
   return {
     calls,
@@ -63,6 +85,11 @@ function makePage({
         'button-submit': submit,
         'legacy-migration-overlay': migration,
         'button-dismiss-migration': dismiss,
+        'network-onboarding-source': onboardingSource,
+        'choice-network-public-direct': networkChoice,
+        'button-save-network-choice': saveNetworkChoice,
+        'network-onboarding-import': onboardingImport,
+        'button-onboarding-finish': finishOnboarding,
       }[testId];
     },
     waitForTimeout: async () => calls.push(['waitForTimeout']),
@@ -70,6 +97,34 @@ function makePage({
 }
 
 describe('browser-check unlock helper', () => {
+  it('completes fresh-vault onboarding when it appears', async () => {
+    const page = makePage({ onboarding: true });
+
+    assert.equal(
+      await completeFreshVaultOnboardingIfPresent(page, { label: 'fresh-vault-check' }),
+      true,
+    );
+    assert.deepEqual(
+      page.calls.map(([name]) => name),
+      [
+        'onboardingSource.waitFor',
+        'networkChoice.click',
+        'saveNetworkChoice.click',
+        'onboardingImport.waitFor',
+        'finishOnboarding.click',
+        'onboardingSource.waitFor',
+      ],
+    );
+    assert.equal(page.calls.at(-1)[1].state, 'detached');
+  });
+
+  it('leaves a fresh-vault check alone when onboarding does not appear', async () => {
+    const page = makePage();
+
+    assert.equal(await completeFreshVaultOnboardingIfPresent(page), false);
+    assert.deepEqual(page.calls.map(([name]) => name), ['onboardingSource.waitFor']);
+  });
+
   it('sets up a new vault through the confirmation form', async () => {
     const page = makePage({ setup: true });
 

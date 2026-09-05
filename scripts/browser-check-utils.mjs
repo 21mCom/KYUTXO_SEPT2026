@@ -16,8 +16,12 @@
 // check-*.mjs script hardcodes these testids instead of importing from here.
 //
 // Usage (top of a check script):
-//   import { unlockIfNeeded } from './browser-check-utils.mjs';
+//   import {
+//     completeFreshVaultOnboardingIfPresent,
+//     unlockIfNeeded,
+//   } from './browser-check-utils.mjs';
 //   await unlockIfNeeded(page, SETUP_PASSWORD);
+//   await completeFreshVaultOnboardingIfPresent(page);
 
 export const DEFAULT_APPEAR_TIMEOUT_MS = 15_000;
 export const DEFAULT_SUBMIT_TIMEOUT_MS = 30_000;
@@ -117,6 +121,49 @@ export async function waitForExistingVaultLoginScreen(
  */
 export async function isLoginScreenVisible(page) {
   return page.getByTestId('input-password').isVisible().catch(() => false);
+}
+
+/**
+ * Completes the network-source and empty-vault onboarding that can follow a
+ * newly-created vault. Safe for fresh-vault checks across app versions: it
+ * returns `false` when onboarding does not appear and `true` after completing
+ * it.
+ *
+ * Do not call this from existing-vault checks. Unexpected onboarding is a
+ * regression for those journeys and must remain visible to their assertions.
+ */
+export async function completeFreshVaultOnboardingIfPresent(
+  page,
+  { label, appearTimeoutMs = 5_000, stepTimeoutMs = DEFAULT_SUBMIT_TIMEOUT_MS } = {},
+) {
+  const sourceStep = page.getByTestId('network-onboarding-source');
+  const appeared = await sourceStep
+    .waitFor({ state: 'visible', timeout: appearTimeoutMs })
+    .then(() => true)
+    .catch((error) => {
+      if (isTimeoutError(error)) return false;
+      throw phaseError(label, 'fresh-vault onboarding detection', error);
+    });
+  if (!appeared) return false;
+
+  await runPhase(label, 'network source selection', () =>
+    page.getByTestId('choice-network-public-direct').click(),
+  );
+  await runPhase(label, 'network source submission', () =>
+    page.getByTestId('button-save-network-choice').click(),
+  );
+  await runPhase(label, 'empty-vault onboarding arrival', () =>
+    page
+      .getByTestId('network-onboarding-import')
+      .waitFor({ state: 'visible', timeout: stepTimeoutMs }),
+  );
+  await runPhase(label, 'empty-vault onboarding completion', () =>
+    page.getByTestId('button-onboarding-finish').click(),
+  );
+  await runPhase(label, 'fresh-vault onboarding dismissal', () =>
+    sourceStep.waitFor({ state: 'detached', timeout: stepTimeoutMs }),
+  );
+  return true;
 }
 
 /**
