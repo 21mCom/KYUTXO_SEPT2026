@@ -20,6 +20,7 @@ const PACKAGED_BROWSER_CHECKS = [
   'check-packaged-coin-passport-browser.mjs',
   'check-packaged-coin-origins-browser.mjs',
   'check-packaged-vault-migration.mjs',
+  'check-packaged-network-privacy-activity-browser.mjs',
 ];
 
 test('all packaged browser checks use the shared binary discovery module', () => {
