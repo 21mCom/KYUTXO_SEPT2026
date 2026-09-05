@@ -128,11 +128,8 @@ function makePage({
       }
     },
   };
-  const networkChoice = {
-    click: async () => calls.push(['networkChoice.click']),
-  };
-  const saveNetworkChoice = {
-    click: async () => calls.push(['saveNetworkChoice.click']),
+  const offlineChoice = {
+    click: async () => calls.push(['offlineChoice.click']),
   };
   const onboardingImport = {
     waitFor: async (options) => calls.push(['onboardingImport.waitFor', options]),
@@ -151,8 +148,7 @@ function makePage({
         'legacy-migration-overlay': migration,
         'button-dismiss-migration': dismiss,
         'network-onboarding-source': onboardingSource,
-        'choice-network-public-direct': networkChoice,
-        'button-save-network-choice': saveNetworkChoice,
+        'choice-network-offline': offlineChoice,
         'network-onboarding-import': onboardingImport,
         'button-onboarding-finish': finishOnboarding,
       }[testId];
@@ -173,8 +169,7 @@ describe('browser-check unlock helper', () => {
       page.calls.map(([name]) => name),
       [
         'onboardingSource.waitFor',
-        'networkChoice.click',
-        'saveNetworkChoice.click',
+        'offlineChoice.click',
         'onboardingImport.waitFor',
         'finishOnboarding.click',
         'onboardingSource.waitFor',

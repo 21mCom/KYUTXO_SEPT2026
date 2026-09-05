@@ -15,7 +15,7 @@ import {
 export const NETWORK_BLOCKED_MESSAGE =
   'Network access is offline. Use the privacy control in the header to enable it.';
 export const NETWORK_CHOICE_REQUIRED_MESSAGE =
-  'Choose a network source before contacting the Bitcoin network.';
+  'No network source is configured. Configure and enable one in Node Settings before contacting the Bitcoin network.';
 export const FIRST_SYNC_CONFIRMATION_REQUIRED_MESSAGE =
   'Review and confirm the first-sync privacy disclosure before syncing.';
 

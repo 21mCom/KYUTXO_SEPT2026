@@ -158,7 +158,13 @@ export function NetworkPrivacyControl() {
             setIsUpdating(false);
           }
         }}
-        title={enabled ? 'Go offline now' : 'Restore the configured network connection'}
+        title={
+          !choiceMade
+            ? 'Configure a network source in Node Settings'
+            : enabled
+              ? 'Go offline now'
+              : 'Restore the configured network connection'
+        }
         data-testid="button-network-privacy"
         aria-pressed={!enabled}
       >

@@ -146,11 +146,8 @@ export async function completeFreshVaultOnboardingIfPresent(
     });
   if (!appeared) return false;
 
-  await runPhase(label, 'network source selection', () =>
-    page.getByTestId('choice-network-public-direct').click(),
-  );
-  await runPhase(label, 'network source submission', () =>
-    page.getByTestId('button-save-network-choice').click(),
+  await runPhase(label, 'offline onboarding selection', () =>
+    page.getByTestId('choice-network-offline').click(),
   );
   await runPhase(label, 'empty-vault onboarding arrival', () =>
     page

@@ -57,6 +57,11 @@ const FULL_NODE_SETTINGS: NodeSettings = {
   electrumServerType: "fulcrum",
   lastConnectedAt: 1_750_000_000_000,
   lastConnectionStatus: "Connected",
+  networkPrivacyMode: "own-node",
+  networkAccessEnabled: false,
+  networkOnboardingStage: "complete",
+  networkPrivacyChosenAt: 1_750_000_000_100,
+  firstSyncConfirmedAt: 1_750_000_000_200,
 };
 
 // In-memory attachment store (no files needed for these tests).
@@ -139,6 +144,26 @@ describe("nodeSettings backup round-trip", () => {
 
     // The table stays empty; nothing spurious is created.
     expect(await getAllNodeSettings()).toHaveLength(0);
+  });
+
+  it("preserves an intentionally unconfigured offline vault", async () => {
+    const offlineSettings: NodeSettings = {
+      id: "default",
+      providerType: "mempool-space",
+      useTor: false,
+      requestTimeout: 30_000,
+      network: "mainnet",
+      allowLocalNetwork: false,
+      trustedLocalHosts: [],
+      networkAccessEnabled: false,
+      networkOnboardingStage: "complete",
+      networkPrivacyChosenAt: 1_750_000_000_300,
+    };
+    await putNodeSettings(offlineSettings, { skipNotification: true });
+
+    await roundTrip();
+
+    expect(await getNodeSettings("default")).toEqual(offlineSettings);
   });
 
   it("does not duplicate the singleton row when restored twice", async () => {

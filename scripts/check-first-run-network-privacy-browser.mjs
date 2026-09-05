@@ -60,23 +60,28 @@ try {
   await unlockIfNeeded(page, PASSWORD, { label: 'network-privacy-resume' });
   await page.getByTestId('network-onboarding-source').waitFor({ state: 'visible' });
 
-  await page.getByTestId('choice-network-public-direct').click();
-  await page.getByTestId('button-save-network-choice').click();
+  const offlineChoice = page.getByTestId('choice-network-offline');
+  await offlineChoice.waitFor({ state: 'visible' }).catch(async (error) => {
+    const sourceText = await page.getByTestId('network-onboarding-source').textContent().catch(() => '');
+    throw new Error(`offline onboarding choice did not render; source text: ${sourceText}`, { cause: error });
+  });
+  await offlineChoice.click();
   await page.getByTestId('network-onboarding-import').waitFor({ state: 'visible' });
   await page.getByTestId('button-onboarding-finish').click();
   await page.getByTestId('text-network-privacy-state').waitFor({ state: 'visible' });
-  if ((await page.getByTestId('text-network-privacy-state').textContent()) !== 'Direct public') {
-    throw new Error('header did not show Direct public');
+  if ((await page.getByTestId('text-network-privacy-state').textContent()) !== 'Offline') {
+    throw new Error('header did not show Offline');
   }
+  if (externalRequests.length) throw new Error(`offline onboarding contacted: ${externalRequests.join(', ')}`);
 
-  // One click goes offline without erasing the selected provider; the state
-  // survives lock/reload.
-  await page.getByTestId('button-network-privacy').click();
-  await page.getByTestId('text-network-privacy-state').getByText('Offline').waitFor();
+  // The unconfigured offline choice survives lock/reload and cannot be toggled
+  // online until a complete source is deliberately saved in Node Settings.
+  if (await page.getByTestId('button-network-privacy').isEnabled()) {
+    throw new Error('unconfigured offline header control was enabled');
+  }
   await page.reload({ waitUntil: 'domcontentloaded' });
   await unlockIfNeeded(page, PASSWORD, { label: 'network-privacy-offline' });
   await page.getByTestId('text-network-privacy-state').getByText('Offline').waitFor();
-  await page.getByTestId('button-network-privacy').click();
 
   await page.evaluate(async (address) => {
     const records = await import('/src/lib/data/record-crud.ts');
@@ -92,14 +97,31 @@ try {
     });
   }, ADDRESS);
   await page.goto(`${BASE_URL}transaction-sync`, { waitUntil: 'domcontentloaded' });
-  await unlockIfNeeded(page, PASSWORD, { label: 'network-privacy-first-sync' });
+  await unlockIfNeeded(page, PASSWORD, { label: 'network-privacy-blocked-sync' });
   const start = page.getByTestId('button-sync');
+  await start.waitFor({ state: 'visible' });
+  await start.click();
+  await page
+    .getByText('No network source is configured. Configure and enable one in Node Settings before contacting the Bitcoin network.')
+    .first()
+    .waitFor();
+  if (externalRequests.length) throw new Error(`blocked offline action contacted: ${externalRequests.join(', ')}`);
+
+  // Saving the complete default public source in Node Settings is a deliberate
+  // transition out of the unconfigured state.
+  await page.goto(`${BASE_URL}node-settings`, { waitUntil: 'domcontentloaded' });
+  await unlockIfNeeded(page, PASSWORD, { label: 'network-privacy-configure' });
+  await page.getByTestId('radio-provider-blockstream').click();
+  await page.getByTestId('button-enable-selected-source').click();
+  await page.getByTestId('text-network-privacy-state').getByText('Direct public').waitFor();
+  await page.goto(`${BASE_URL}transaction-sync`, { waitUntil: 'domcontentloaded' });
+  await unlockIfNeeded(page, PASSWORD, { label: 'network-privacy-first-sync' });
   await start.waitFor({ state: 'visible' });
   await start.click();
   const dialog = page.getByTestId('dialog-first-sync-disclosure');
   await dialog.waitFor({ state: 'visible' });
   const disclosure = await dialog.textContent();
-  if (!disclosure?.includes('1 address') || !disclosure.includes('mempool.space directly')) {
+  if (!disclosure?.includes('1 address') || !disclosure.includes('blockstream.info directly')) {
     throw new Error(`first-sync disclosure was not provider/count exact: ${disclosure}`);
   }
   await page.getByRole('button', { name: 'Cancel' }).click();

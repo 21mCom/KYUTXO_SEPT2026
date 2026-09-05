@@ -10,7 +10,10 @@ const nodeSettingsCrudMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("dexie-react-hooks", () => ({
-  useLiveQuery: (fn: () => unknown) => mockQueryReturn,
+  useLiveQuery: (fn: () => unknown) =>
+    mockQueryReturn === undefined
+      ? undefined
+      : { settings: mockQueryReturn === null ? undefined : mockQueryReturn },
 }));
 
 vi.mock("@/lib/database", () => ({
@@ -69,6 +72,11 @@ describe("useNodeSettings", () => {
     });
 
     expect(result.current.isLoading).toBe(false);
+    expect(result.current.nodeSettings.networkAccessEnabled).toBe(false);
+    expect(result.current.nodeSettings.networkOnboardingStage).toBe("source");
+    expect(() => assertNetworkAccessAllowed(result.current.nodeSettings)).toThrow(
+      "No network source is configured",
+    );
   });
 
   it("merges loaded settings with defaults", () => {
@@ -115,6 +123,15 @@ describe("useNodeSettings", () => {
     mockQueryReturn = { id: "default", providerType: "mempool-space" };
     const { result } = renderHook(() => useNodeSettings());
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it("treats a confirmed missing legacy row as loaded legacy defaults", () => {
+    mockQueryReturn = null;
+    const { result } = renderHook(() => useNodeSettings());
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.nodeSettings.networkOnboardingStage).toBeUndefined();
+    expect(() => assertNetworkAccessAllowed(result.current.nodeSettings)).not.toThrow();
   });
 
   it("exposes updateSettings, resetToDefaults, and setConnectionStatus functions", () => {

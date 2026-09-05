@@ -387,12 +387,20 @@ export default function NodeSettings() {
     }
   };
   
-  const handleSaveSettings = async () => {
+  const handleSaveSettings = async (activateNetworkSource = false) => {
     if (isSavingSettings) return;
     if (hasCustomProvider && !currentSettings.customUrl?.trim()) {
       toast({
         title: "Missing URL",
         description: "Please enter a server URL for your custom node",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (currentSettings.useElectrum && !currentSettings.electrumHost?.trim()) {
+      toast({
+        title: "Missing Host",
+        description: "Please enter an Electrum server host",
         variant: "destructive",
       });
       return;
@@ -420,10 +428,21 @@ export default function NodeSettings() {
           .replace(/\/+$/, '')
           .trim();
       }
-      settingsToSave.networkPrivacyMode = deriveNetworkPrivacyMode({
-        ...currentSettings,
-        ...settingsToSave,
-      });
+      if (nodeSettings.networkPrivacyMode !== undefined || activateNetworkSource) {
+        settingsToSave.networkPrivacyMode = deriveNetworkPrivacyMode({
+          ...currentSettings,
+          ...settingsToSave,
+        });
+      }
+      // Activation is separate from ordinary preference saves: an offline vault
+      // cannot silently gain a public source, and a legacy vault keeps its
+      // pre-onboarding behavior until the user makes an explicit choice.
+      if (activateNetworkSource) {
+        settingsToSave.networkAccessEnabled = true;
+        settingsToSave.networkOnboardingStage = 'complete';
+        settingsToSave.networkPrivacyChosenAt = Date.now();
+        settingsToSave.firstSyncConfirmedAt = undefined;
+      }
       if (Object.keys(settingsToSave).length > 0) {
         await updateSettings(settingsToSave);
       }
@@ -747,9 +766,27 @@ export default function NodeSettings() {
       {!isNetworkAccessEnabled(currentSettings) && (
         <Alert>
           <WifiOff className="h-4 w-4" />
-          <AlertTitle>Network access is offline</AlertTitle>
+          <AlertTitle>
+            {nodeSettings.networkPrivacyMode === undefined && nodeSettings.networkOnboardingStage !== undefined
+              ? 'No network source configured'
+              : 'Network access is offline'}
+          </AlertTitle>
           <AlertDescription>
-            Your provider settings are preserved. Use the privacy control in the header before testing or syncing.
+            {nodeSettings.networkPrivacyMode === undefined && nodeSettings.networkOnboardingStage !== undefined ? (
+              <div className="space-y-3">
+                <p>Choose and complete a source below, then explicitly enable it. Until then, network features stay blocked.</p>
+                <Button
+                  size="sm"
+                  onClick={() => handleSaveSettings(true)}
+                  disabled={isSavingSettings}
+                  data-testid="button-enable-selected-source"
+                >
+                  Use selected source and enable network
+                </Button>
+              </div>
+            ) : (
+              'Your provider settings are preserved. Use the privacy control in the header before testing or syncing.'
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -1637,7 +1674,7 @@ export default function NodeSettings() {
       {/* Save / Reset Buttons */}
       <div className="flex items-center gap-3">
         <Button
-          onClick={handleSaveSettings}
+          onClick={() => handleSaveSettings(false)}
           disabled={!hasPendingChanges || isSavingSettings}
           className="flex-1"
           data-testid="button-save-settings"

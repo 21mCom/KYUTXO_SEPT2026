@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Globe2, HardDrive, LockKeyhole, Server, Shield, Upload, WalletCards } from 'lucide-react';
+import { Globe2, HardDrive, LockKeyhole, Server, Shield, Upload, WalletCards, WifiOff } from 'lucide-react';
 
 function moveTo(path: string): void {
   if (isElectronFileMode()) {
@@ -59,7 +59,7 @@ const privacyCards: Array<{
 
 export function NetworkPrivacyOnboarding() {
   const { nodeSettings, updateSettings } = useNodeSettings();
-  const [selected, setSelected] = useState<NetworkPrivacyMode>('public-tor');
+  const [selected, setSelected] = useState<NetworkPrivacyMode | undefined>();
   const [customUrl, setCustomUrl] = useState('');
   const [electrumHost, setElectrumHost] = useState('');
   const [error, setError] = useState('');
@@ -124,6 +124,17 @@ export function NetworkPrivacyOnboarding() {
     }
   };
 
+  const stayOffline = async () => {
+    setError('');
+    await updateSettings({
+      networkAccessEnabled: false,
+      networkOnboardingStage: 'import',
+      networkPrivacyMode: undefined,
+      networkPrivacyChosenAt: Date.now(),
+      firstSyncConfirmedAt: undefined,
+    });
+  };
+
   const finish = async (path: string) => {
     await updateSettings({ networkOnboardingStage: 'complete' });
     moveTo(path);
@@ -175,6 +186,22 @@ export function NetworkPrivacyOnboarding() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
+          <button
+            type="button"
+            onClick={stayOffline}
+            className="w-full text-left rounded-lg border border-primary/40 bg-primary/5 p-4 transition-colors hover:bg-primary/10"
+            data-testid="choice-network-offline"
+          >
+            <div className="flex gap-3">
+              <WifiOff className="h-5 w-5 mt-0.5" />
+              <div>
+                <p className="font-semibold">Stay offline — configure later</p>
+                <p className="text-sm text-muted-foreground">
+                  Continue with local vault features without choosing or contacting a blockchain provider.
+                </p>
+              </div>
+            </div>
+          </button>
           <div className="grid gap-3 md:grid-cols-2">
             {privacyCards.map(({ mode, title, summary, impact, icon: Icon }) => {
               const unavailable = mode === 'electrum' && !isElectron();
@@ -224,7 +251,7 @@ export function NetworkPrivacyOnboarding() {
           </Alert>
           <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="text-center"><DemoVaultLoader /></div>
-            <Button onClick={chooseSource} data-testid="button-save-network-choice">Save choice and continue</Button>
+            <Button onClick={chooseSource} disabled={!selected} data-testid="button-save-network-choice">Save source and continue</Button>
           </div>
         </CardContent>
       </Card>

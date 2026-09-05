@@ -17,6 +17,7 @@ vi.mock('./data/network-privacy-activity-crud', () => activityCrud);
 import {
   FIRST_SYNC_CONFIRMATION_REQUIRED_MESSAGE,
   NETWORK_BLOCKED_MESSAGE,
+  NETWORK_CHOICE_REQUIRED_MESSAGE,
   assertFirstSyncConfirmed,
   assertNetworkAccessAllowed,
   getNetworkPrivacyLabel,
@@ -59,7 +60,19 @@ describe('network privacy policy', () => {
     };
     setRuntimeNetworkSettings(fresh);
     expect(isNetworkAccessEnabled(fresh)).toBe(false);
-    expect(() => assertNetworkAccessAllowed(fresh)).toThrow();
+    expect(() => assertNetworkAccessAllowed(fresh)).toThrow(NETWORK_CHOICE_REQUIRED_MESSAGE);
+    expect(NETWORK_CHOICE_REQUIRED_MESSAGE).toContain('Node Settings');
+  });
+
+  it('distinguishes intentionally unconfigured offline vaults from disabled configured sources', () => {
+    const unconfigured = {
+      ...legacy,
+      networkAccessEnabled: false,
+      networkOnboardingStage: 'complete' as const,
+      networkPrivacyChosenAt: 123,
+    };
+    expect(getNetworkPrivacyLabel(unconfigured)).toBe('Offline');
+    expect(() => assertNetworkAccessAllowed(unconfigured)).toThrow(NETWORK_CHOICE_REQUIRED_MESSAGE);
   });
 
   it('keeps the configured source while the kill switch is offline', () => {

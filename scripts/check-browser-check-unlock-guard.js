@@ -52,6 +52,7 @@ const UNLOCK_TESTIDS = [
 
 const ONBOARDING_TESTIDS = [
   'network-onboarding-source',
+  'choice-network-offline',
   'choice-network-public-direct',
   'button-save-network-choice',
   'network-onboarding-import',
