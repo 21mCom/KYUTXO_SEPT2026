@@ -1,55 +1,67 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import yaml from 'js-yaml';
 
 import { hostTarget, parseExpectedTarget } from './check-release-runner-readiness.mjs';
 
 const readWorkflow = (filename) =>
   fs.readFileSync(new URL(`../.github/workflows/${filename}`, import.meta.url), 'utf8');
 
-function extractRunnerTargets(workflow, jobName) {
-  const jobMatch = workflow.match(
-    new RegExp(
-      `^  ${jobName}:\\n([\\s\\S]*?)(?=^  [a-zA-Z0-9_-]+:\\n|(?![\\s\\S]))`,
-      'm',
-    ),
+function parseJobMatrix(workflow, jobName) {
+  let document;
+  assert.doesNotThrow(
+    () => {
+      document = yaml.load(workflow);
+    },
+    undefined,
+    `malformed workflow YAML for job: ${jobName}`,
   );
-  assert.ok(jobMatch, `missing workflow job: ${jobName}`);
 
-  const matrixMatch = jobMatch[1].match(
-    /^\s{6}matrix:\s*\n\s{8}include:\s*\n([\s\S]*?)(?=^\s{4}\S)/m,
+  assert.ok(
+    document && typeof document === 'object' && !Array.isArray(document),
+    `workflow must be a mapping for job: ${jobName}`,
   );
-  assert.ok(matrixMatch, `missing include matrix in workflow job: ${jobName}`);
+  const job = document.jobs?.[jobName];
+  assert.ok(job && typeof job === 'object' && !Array.isArray(job), `missing workflow job: ${jobName}`);
+  const matrix = job.strategy?.matrix;
+  assert.ok(
+    matrix && typeof matrix === 'object' && !Array.isArray(matrix),
+    `missing matrix in workflow job: ${jobName}`,
+  );
+  assert.ok(
+    Array.isArray(matrix.include) && matrix.include.length > 0,
+    `missing include matrix in workflow job: ${jobName}`,
+  );
 
-  const targets = [];
-  let current;
-  for (const line of matrixMatch[1].split('\n')) {
-    const platform = line.match(/^\s{10}- platform:\s*(\S+)\s*$/);
-    if (platform) {
-      current = { platform: platform[1] };
-      targets.push(current);
-      continue;
-    }
-
-    const field = line.match(/^\s{12}(arch|runner_label):\s*(\S+)\s*$/);
-    if (field && current) current[field[1]] = field[2];
+  for (const target of matrix.include) {
+    assert.ok(
+      target && typeof target === 'object' && !Array.isArray(target),
+      `invalid matrix target in ${jobName}: ${JSON.stringify(target)}`,
+    );
   }
+  return matrix.include;
+}
+
+function extractRunnerTargets(workflow, jobName) {
+  const targets = parseJobMatrix(workflow, jobName).map(
+    ({ platform, arch, runner_label: runnerLabel }) => ({
+      platform,
+      arch,
+      runnerLabel,
+    }),
+  );
 
   for (const target of targets) {
-    assert.deepEqual(
-      Object.keys(target).sort(),
-      ['arch', 'platform', 'runner_label'],
+    assert.ok(
+      [target.platform, target.arch, target.runnerLabel].every(
+        (value) => typeof value === 'string' && value.length > 0,
+      ),
       `incomplete runner target in ${jobName}: ${JSON.stringify(target)}`,
     );
   }
 
-  return targets
-    .map(({ platform, arch, runner_label: runnerLabel }) => ({
-      platform,
-      arch,
-      runnerLabel,
-    }))
-    .sort((left, right) =>
+  return targets.sort((left, right) =>
       `${left.platform}/${left.arch}/${left.runnerLabel}`.localeCompare(
         `${right.platform}/${right.arch}/${right.runnerLabel}`,
       ),
@@ -62,35 +74,20 @@ function assertCompatibleBuilderFlags(workflow, jobName) {
     ['darwin', '--mac'],
     ['linux', '--linux'],
   ]);
-  const jobMatch = workflow.match(
-    new RegExp(
-      `^  ${jobName}:\\n([\\s\\S]*?)(?=^  [a-zA-Z0-9_-]+:\\n|(?![\\s\\S]))`,
-      'm',
-    ),
+  const targets = parseJobMatrix(workflow, jobName).map(
+    ({ platform, builder_flag: builderFlag }) => ({ platform, builderFlag }),
   );
-  assert.ok(jobMatch, `missing workflow job: ${jobName}`);
-
-  const matrixMatch = jobMatch[1].match(
-    /^\s{6}matrix:\s*\n\s{8}include:\s*\n([\s\S]*?)(?=^\s{4}\S)/m,
-  );
-  assert.ok(matrixMatch, `missing include matrix in workflow job: ${jobName}`);
-
-  let current;
-  const targets = [];
-  for (const line of matrixMatch[1].split('\n')) {
-    const platform = line.match(/^\s{10}- platform:\s*(\S+)\s*$/);
-    if (platform) {
-      current = { platform: platform[1] };
-      targets.push(current);
-      continue;
-    }
-
-    const builderFlag = line.match(/^\s{12}builder_flag:\s*(\S+)\s*$/);
-    if (builderFlag && current) current.builderFlag = builderFlag[1];
-  }
-
-  assert.ok(targets.length > 0, `missing release targets in workflow job: ${jobName}`);
   for (const target of targets) {
+    assert.equal(
+      typeof target.platform,
+      'string',
+      `incomplete release target in ${jobName}: ${JSON.stringify(target)}`,
+    );
+    assert.equal(
+      typeof target.builderFlag,
+      'string',
+      `incomplete release target in ${jobName}: ${JSON.stringify(target)}`,
+    );
     const expectedFlag = compatibleFlags.get(target.platform);
     assert.ok(expectedFlag, `unsupported release platform: ${target.platform}`);
     assert.equal(
@@ -100,6 +97,49 @@ function assertCompatibleBuilderFlags(workflow, jobName) {
     );
   }
 }
+
+test('workflow matrices tolerate harmless YAML formatting changes', () => {
+  const workflow = `
+jobs:
+    check-runner:
+      strategy: { matrix: { include: [
+        { runner_label: desktop-release-linux-x64, arch: x64, platform: linux },
+        { arch: arm64, platform: darwin, runner_label: desktop-release-darwin-arm64 }
+      ] } }
+`;
+
+  assert.deepEqual(extractRunnerTargets(workflow, 'check-runner'), [
+    { platform: 'darwin', arch: 'arm64', runnerLabel: 'desktop-release-darwin-arm64' },
+    { platform: 'linux', arch: 'x64', runnerLabel: 'desktop-release-linux-x64' },
+  ]);
+});
+
+test('workflow matrix parsing fails closed for malformed or missing fields', () => {
+  assert.throws(
+    () => extractRunnerTargets('jobs: [', 'check-runner'),
+    /malformed workflow YAML for job: check-runner/,
+  );
+  assert.throws(
+    () => extractRunnerTargets('jobs:\n  check-runner:\n    strategy: {}\n', 'check-runner'),
+    /missing matrix in workflow job: check-runner/,
+  );
+  assert.throws(
+    () =>
+      extractRunnerTargets(
+        'jobs:\n  check-runner:\n    strategy:\n      matrix:\n        include: nope\n',
+        'check-runner',
+      ),
+    /missing include matrix in workflow job: check-runner/,
+  );
+  assert.throws(
+    () =>
+      extractRunnerTargets(
+        'jobs:\n  check-runner:\n    strategy:\n      matrix:\n        include:\n          - platform: linux\n            arch: x64\n',
+        'check-runner',
+      ),
+    /incomplete runner target in check-runner/,
+  );
+});
 
 test('readiness target arguments require a supported OS and architecture', () => {
   assert.deepEqual(parseExpectedTarget(['--platform', 'linux', '--arch', 'arm64']), {
