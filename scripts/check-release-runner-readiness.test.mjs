@@ -8,20 +8,24 @@ import { hostTarget, parseExpectedTarget } from './check-release-runner-readines
 const readWorkflow = (filename) =>
   fs.readFileSync(new URL(`../.github/workflows/${filename}`, import.meta.url), 'utf8');
 
-function parseJobMatrix(workflow, jobName) {
+function parseWorkflow(workflow, context) {
   let document;
   assert.doesNotThrow(
     () => {
       document = yaml.load(workflow);
     },
     undefined,
-    `malformed workflow YAML for job: ${jobName}`,
+    `malformed workflow YAML for ${context}`,
   );
-
   assert.ok(
     document && typeof document === 'object' && !Array.isArray(document),
-    `workflow must be a mapping for job: ${jobName}`,
+    `workflow must be a mapping for ${context}`,
   );
+  return document;
+}
+
+function parseJobMatrix(workflow, jobName) {
+  const document = parseWorkflow(workflow, `job: ${jobName}`);
   const job = document.jobs?.[jobName];
   assert.ok(job && typeof job === 'object' && !Array.isArray(job), `missing workflow job: ${jobName}`);
   const matrix = job.strategy?.matrix;
@@ -94,6 +98,83 @@ function assertCompatibleBuilderFlags(workflow, jobName) {
       target.builderFlag,
       expectedFlag,
       `incompatible builder flag for ${target.platform}`,
+    );
+  }
+}
+
+function assertReadinessWorkflowPolicy(workflow) {
+  const document = parseWorkflow(workflow, 'readiness policy');
+  const triggers = document.on;
+  assert.ok(
+    triggers && typeof triggers === 'object' && !Array.isArray(triggers),
+    'missing workflow triggers',
+  );
+  assert.ok(
+    Array.isArray(triggers.schedule) &&
+      triggers.schedule.length > 0 &&
+      triggers.schedule.every(
+        (entry) =>
+          entry &&
+          typeof entry === 'object' &&
+          !Array.isArray(entry) &&
+          typeof entry.cron === 'string' &&
+          entry.cron.trim().length > 0,
+      ),
+    'missing or malformed readiness schedule',
+  );
+  assert.ok(
+    Object.hasOwn(triggers, 'workflow_dispatch') &&
+      (triggers.workflow_dispatch === null ||
+        (typeof triggers.workflow_dispatch === 'object' &&
+          !Array.isArray(triggers.workflow_dispatch))),
+    'missing or malformed workflow_dispatch trigger',
+  );
+
+  const job = document.jobs?.['check-runner'];
+  assert.ok(job && typeof job === 'object' && !Array.isArray(job), 'missing check-runner job');
+  assert.equal(job['timeout-minutes'], 10, 'check-runner timeout-minutes must be 10');
+  assert.ok(Array.isArray(job.steps) && job.steps.length > 0, 'missing check-runner steps');
+
+  const jobs = document.jobs;
+  assert.ok(jobs && typeof jobs === 'object' && !Array.isArray(jobs), 'missing workflow jobs');
+  const executableCommands = new Map();
+  for (const [jobName, candidateJob] of Object.entries(jobs)) {
+    assert.ok(
+      candidateJob && typeof candidateJob === 'object' && !Array.isArray(candidateJob),
+      `malformed workflow job: ${jobName}`,
+    );
+    if (!Object.hasOwn(candidateJob, 'steps')) continue;
+    assert.ok(Array.isArray(candidateJob.steps), `malformed steps for workflow job: ${jobName}`);
+    for (const [index, step] of candidateJob.steps.entries()) {
+      assert.ok(
+        step && typeof step === 'object' && !Array.isArray(step),
+        `malformed ${jobName} step at index ${index}`,
+      );
+      if (Object.hasOwn(step, 'run')) {
+        assert.equal(
+          typeof step.run,
+          'string',
+          `malformed run command in ${jobName} at step index ${index}`,
+        );
+        assert.ok(step.run.trim().length > 0, `empty run command in ${jobName} at step index ${index}`);
+        executableCommands.set(`${jobName}:${index}`, step.run);
+      }
+    }
+  }
+
+  assert.ok(
+    [...executableCommands].some(
+      ([location, command]) =>
+        location.startsWith('check-runner:') &&
+        /\bnode\s+scripts\/check-release-runner-readiness\.mjs(?:\s|$)/.test(command),
+    ),
+    'missing readiness probe command',
+  );
+  for (const command of executableCommands.values()) {
+    assert.doesNotMatch(
+      command,
+      /check-packaged-vault-lock-native|screen.?lock|suspend|sleepnow/i,
+      'readiness workflow contains a destructive command',
     );
   }
 }
@@ -194,9 +275,95 @@ test('release targets use compatible electron-builder platform flags', () => {
 
 test('scheduled readiness workflow is scheduled and non-destructive', () => {
   const workflow = readWorkflow('desktop-release-runner-readiness.yml');
-  assert.match(workflow, /schedule:\s*\n\s+- cron:/);
-  assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /timeout-minutes: 10/);
-  assert.match(workflow, /check-release-runner-readiness\.mjs/);
-  assert.doesNotMatch(workflow, /check-packaged-vault-lock-native|screen.?lock|suspend|sleepnow/i);
+  assert.doesNotThrow(() => assertReadinessWorkflowPolicy(workflow));
+});
+
+test('readiness policy tolerates equivalent YAML scalar styles', () => {
+  const workflow = `
+on: { schedule: [{ cron: "17 13 * * 1" }], workflow_dispatch: {} }
+jobs:
+  check-runner:
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@example
+      - run: |
+          node scripts/check-release-runner-readiness.mjs \\
+            --platform \${{ matrix.platform }} \\
+            --arch \${{ matrix.arch }}
+`;
+
+  assert.doesNotThrow(() => assertReadinessWorkflowPolicy(workflow));
+});
+
+test('readiness policy fails closed for missing or malformed fields', () => {
+  const validWorkflow = `
+on:
+  schedule:
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+jobs:
+  check-runner:
+    timeout-minutes: 10
+    steps:
+      - run: node scripts/check-release-runner-readiness.mjs
+`;
+  const parsed = yaml.load(validWorkflow);
+  const checkInvalid = (mutate, expected) => {
+    const fixture = structuredClone(parsed);
+    mutate(fixture);
+    assert.throws(() => assertReadinessWorkflowPolicy(yaml.dump(fixture)), expected);
+  };
+
+  checkInvalid((fixture) => delete fixture.on.schedule, /missing or malformed readiness schedule/);
+  checkInvalid(
+    (fixture) => {
+      fixture.on.schedule = [{ cron: 17 }];
+    },
+    /missing or malformed readiness schedule/,
+  );
+  checkInvalid(
+    (fixture) => delete fixture.on.workflow_dispatch,
+    /missing or malformed workflow_dispatch trigger/,
+  );
+  checkInvalid(
+    (fixture) => {
+      fixture.jobs['check-runner']['timeout-minutes'] = '10';
+    },
+    /timeout-minutes must be 10/,
+  );
+  checkInvalid(
+    (fixture) => {
+      fixture.jobs['check-runner'].steps[0].run = ['node', 'scripts/check-release-runner-readiness.mjs'];
+    },
+    /malformed run command/,
+  );
+  checkInvalid(
+    (fixture) => {
+      fixture.jobs['check-runner'].steps[0].run = 'echo readiness';
+    },
+    /missing readiness probe command/,
+  );
+});
+
+test('readiness policy scans every executable step for destructive commands', () => {
+  const workflow = `
+on:
+  schedule: [{ cron: "17 13 * * 1" }]
+  workflow_dispatch:
+jobs:
+  check-runner:
+    timeout-minutes: 10
+    steps:
+      - run: node scripts/check-release-runner-readiness.mjs
+  unrelated-job:
+    steps:
+      - name: A later executable step must not escape the denylist
+        run: >-
+          tool screen-lock
+`;
+
+  assert.throws(
+    () => assertReadinessWorkflowPolicy(workflow),
+    /readiness workflow contains a destructive command/,
+  );
 });
