@@ -123,4 +123,59 @@ describe("backup destination cancellation", () => {
     await waitFor(() => expect(mocks.mutateSettings).toHaveBeenCalledTimes(1));
     expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
   });
+
+  it("cancels each active backup exactly once after disabling and saving removal of every destination", async () => {
+    let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
+    const disabledSchedule = { ...configuredSchedule, enabled: false, destinations: [] };
+    const saveHeld = new Promise<{ backupSchedule: BackupScheduleSettings }>((resolve) => {
+      finishSave = resolve;
+    });
+
+    mocks.mutateSettings.mockImplementation(async (_id, updater) => {
+      const update = updater({ backupSchedule: configuredSchedule });
+      expect(update.backupSchedule).toEqual(disabledSchedule);
+      expect(updater({ backupSchedule: configuredSchedule }).backupSchedule).toEqual(disabledSchedule);
+      return saveHeld;
+    });
+
+    await renderConfiguredSchedule();
+    fireEvent.click(screen.getByTestId("switch-scheduled-backups"));
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${DESTINATION.label}` }));
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${RETAINED_DESTINATION.label}` }));
+
+    expect(screen.getByText("No folder selected.")).toBeTruthy();
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+    expect(mocks.mutateSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+
+    await waitFor(() => expect(mocks.mutateSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+
+    finishSave({ backupSchedule: disabledSchedule });
+
+    await waitFor(() => expect(mocks.cancelActiveScheduledBackup).toHaveBeenCalledTimes(2));
+    expect(mocks.cancelActiveScheduledBackup.mock.calls).toEqual([
+      [DESTINATION.token],
+      [RETAINED_DESTINATION.token],
+    ]);
+  });
+
+  it("cancels neither active backup when saving disabled removal of every destination fails", async () => {
+    const disabledSchedule = { ...configuredSchedule, enabled: false, destinations: [] };
+    mocks.mutateSettings.mockImplementation(async (_id, updater) => {
+      const update = updater({ backupSchedule: configuredSchedule });
+      expect(update.backupSchedule).toEqual(disabledSchedule);
+      throw new Error("settings write failed");
+    });
+
+    await renderConfiguredSchedule();
+    fireEvent.click(screen.getByTestId("switch-scheduled-backups"));
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${DESTINATION.label}` }));
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${RETAINED_DESTINATION.label}` }));
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+
+    await waitFor(() => expect(mocks.mutateSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+  });
 });

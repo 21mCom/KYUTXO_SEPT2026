@@ -61,16 +61,14 @@ export function BackupScheduleSection() {
         toast({ variant: "destructive", title: "Choose a destination", description: "Select at least one local backup folder before enabling the schedule." });
         return;
       }
-      const removedDestinationTokens: string[] = [];
+      const removedDestinationTokens = new Set<string>();
       const updated = await mutateSettings("default", (current) => ({
         backupSchedule: (() => {
           const currentSchedule = normalizeBackupSchedule(current.backupSchedule);
           const configuredTokens = new Set(normalized.destinations.map((destination) => destination.token));
-          removedDestinationTokens.push(
-            ...currentSchedule.destinations
-              .filter((destination) => !configuredTokens.has(destination.token))
-              .map((destination) => destination.token),
-          );
+          for (const destination of currentSchedule.destinations) {
+            if (!configuredTokens.has(destination.token)) removedDestinationTokens.add(destination.token);
+          }
           return mergeBackupSchedulePolicy(currentSchedule, normalized);
         })(),
       }));
