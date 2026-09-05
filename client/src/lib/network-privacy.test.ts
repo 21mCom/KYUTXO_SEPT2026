@@ -21,6 +21,7 @@ import {
   assertFirstSyncConfirmed,
   assertNetworkAccessAllowed,
   getNetworkPrivacyLabel,
+  getForgottenNetworkSourceUpdates,
   initializeFreshNetworkPrivacy,
   isFirstSyncConfirmationRequired,
   isNetworkAccessEnabled,
@@ -94,6 +95,29 @@ describe('network privacy policy', () => {
     expect(getNetworkPrivacyLabel(offline)).toBe('Offline');
     expect(() => assertNetworkAccessAllowed(offline)).toThrow(NETWORK_BLOCKED_MESSAGE);
     expect(offline.networkPrivacyMode).toBe('public-tor');
+  });
+
+  it('forgets the explicit choice without erasing reusable provider details', () => {
+    const configured = {
+      ...legacy,
+      providerType: 'custom-electrs' as const,
+      customUrl: 'http://umbrel.local:3006/api',
+      useTor: true,
+      networkPrivacyMode: 'own-node' as const,
+      networkOnboardingStage: 'complete' as const,
+      networkAccessEnabled: true,
+      networkPrivacyChosenAt: 123,
+      firstSyncConfirmedAt: 456,
+    };
+    const forgotten = { ...configured, ...getForgottenNetworkSourceUpdates() };
+
+    expect(forgotten.providerType).toBe('custom-electrs');
+    expect(forgotten.customUrl).toBe('http://umbrel.local:3006/api');
+    expect(forgotten.useTor).toBe(true);
+    expect(forgotten.networkPrivacyMode).toBeUndefined();
+    expect(forgotten.networkOnboardingStage).toBe('source');
+    expect(forgotten.networkAccessEnabled).toBe(false);
+    expect(() => assertNetworkAccessAllowed(forgotten)).toThrow(NETWORK_CHOICE_REQUIRED_MESSAGE);
   });
 
   it('requires disclosure once for newly-chosen sources, not legacy vaults', () => {

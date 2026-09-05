@@ -78,6 +78,7 @@ import {
 import {
   assertNetworkAccessAllowed,
   deriveNetworkPrivacyMode,
+  isExplicitNetworkChoice,
   isNetworkAccessEnabled,
 } from "@/lib/network-privacy";
 
@@ -159,7 +160,13 @@ const PROVIDER_OPTIONS: { value: NodeProviderType; label: string; description: s
 ];
 
 export default function NodeSettings() {
-  const { nodeSettings, updateSettings, resetToDefaults, isLoading } = useNodeSettings();
+  const {
+    nodeSettings,
+    updateSettings,
+    forgetNetworkSource,
+    resetToDefaults,
+    isLoading,
+  } = useNodeSettings();
   const { desktopLockSettings } = useSettings();
   const { toast } = useToast();
 
@@ -202,6 +209,8 @@ export default function NodeSettings() {
   const [pendingDesktopLockSettings, setPendingDesktopLockSettings] =
     useState<Partial<DesktopLockSettings>>({});
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isForgetSourceOpen, setIsForgetSourceOpen] = useState(false);
+  const [isForgettingSource, setIsForgettingSource] = useState(false);
   const [newLocalHost, setNewLocalHost] = useState('');
   
   const currentSettings: NodeSettingsType = {
@@ -219,6 +228,7 @@ export default function NodeSettings() {
                             currentSettings.providerType === 'custom-mempool';
   
   const privacyInfo = getProviderPrivacyInfo(currentSettings.providerType, currentSettings.useTor);
+  const hasConfiguredNetworkSource = isExplicitNetworkChoice(currentSettings);
   
   const handleProviderChange = (value: NodeProviderType) => {
     const newCustomUrl = value.startsWith('custom-') ? pendingChanges.customUrl || currentSettings.customUrl : undefined;
@@ -474,6 +484,32 @@ export default function NodeSettings() {
       title: "Settings Reset",
       description: "Node settings have been reset to defaults",
     });
+  };
+
+  const handleForgetSource = async () => {
+    if (isForgettingSource) return;
+    setIsForgettingSource(true);
+    try {
+      await forgetNetworkSource();
+      setPendingChanges({});
+      setTestResult(null);
+      setTorTestResult(null);
+      setElectrumTestResult(null);
+      setElectrumTrustPrompt(null);
+      setIsForgetSourceOpen(false);
+      toast({
+        title: "Network Source Forgotten",
+        description: "Network access is off. Connection details were kept so you can review or reuse them, but no source will be used until you explicitly enable one.",
+      });
+    } catch {
+      toast({
+        title: "Could Not Forget Source",
+        description: "Your network source choice could not be cleared.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsForgettingSource(false);
+    }
   };
   
   // Helper functions for managing trusted local hosts
@@ -1084,10 +1120,11 @@ export default function NodeSettings() {
                   
                   <Button
                     onClick={handleTestTor}
-                    disabled={isTorTesting}
+                    disabled={isTorTesting || !hasConfiguredNetworkSource}
                     variant="outline"
                     className="w-full"
                     data-testid="button-test-tor"
+                    title={!hasConfiguredNetworkSource ? "Choose and enable a network source before testing Tor." : undefined}
                   >
                     {isTorTesting ? (
                       <>
@@ -1523,10 +1560,11 @@ export default function NodeSettings() {
                   
                   <Button
                     onClick={handleTestElectrum}
-                    disabled={isElectrumTesting || !currentSettings.electrumHost?.trim()}
+                    disabled={isElectrumTesting || !currentSettings.electrumHost?.trim() || !hasConfiguredNetworkSource}
                     variant="outline"
                     className="w-full"
                     data-testid="button-test-electrum"
+                    title={!hasConfiguredNetworkSource ? "Choose and enable a network source before testing Electrum." : undefined}
                   >
                     {isElectrumTesting ? (
                       <>
@@ -1651,10 +1689,11 @@ export default function NodeSettings() {
           
           <Button
             onClick={handleTestConnection}
-            disabled={isTesting}
+            disabled={isTesting || !hasConfiguredNetworkSource}
             variant="outline"
             className="w-full"
             data-testid="button-test-connection"
+            title={!hasConfiguredNetworkSource ? "Choose and enable a network source before testing the connection." : undefined}
           >
             {isTesting ? (
               <>
@@ -1675,7 +1714,7 @@ export default function NodeSettings() {
       <div className="flex items-center gap-3">
         <Button
           onClick={() => handleSaveSettings(false)}
-          disabled={!hasPendingChanges || isSavingSettings}
+          disabled={!hasPendingChanges || isSavingSettings || isForgettingSource}
           className="flex-1"
           data-testid="button-save-settings"
         >
@@ -1683,19 +1722,82 @@ export default function NodeSettings() {
         </Button>
         <Button
           onClick={handleReset}
-          disabled={isSavingSettings}
+          disabled={isSavingSettings || isForgettingSource}
           variant="outline"
           data-testid="button-reset-settings"
         >
           Reset to Defaults
         </Button>
       </div>
+
+      {nodeSettings.networkPrivacyMode !== undefined && (
+        <div className="rounded-md border border-destructive/30 p-4 space-y-3">
+          <div>
+            <p className="text-sm font-medium">Forget configured source</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Turns network access off and clears your explicit source choice. Server addresses,
+              Tor settings, and other connection details stay saved for later review or reuse.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            onClick={() => setIsForgetSourceOpen(true)}
+            disabled={
+              isSavingSettings ||
+              isForgettingSource ||
+              isTesting ||
+              isTorTesting ||
+              isElectrumTesting ||
+              isTrustingCertificate ||
+              isRevokingCertificate
+            }
+            data-testid="button-forget-network-source"
+            title={
+              isTesting || isTorTesting || isElectrumTesting || isTrustingCertificate || isRevokingCertificate
+                ? "Wait for the current network operation to finish before forgetting this source."
+                : undefined
+            }
+          >
+            Forget source
+          </Button>
+        </div>
+      )}
       
       {hasPendingChanges && (
         <p className="text-sm text-center text-amber-600 dark:text-amber-400">
           You have unsaved changes
         </p>
       )}
+
+      <AlertDialog open={isForgetSourceOpen} onOpenChange={setIsForgetSourceOpen}>
+        <AlertDialogContent data-testid="dialog-forget-network-source">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Forget this network source?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Network access will be disabled immediately and the app will return to setup-required
+              offline mode. Your saved server addresses, Tor settings, and connection preferences
+              will remain available, but the app will not fall back to or contact any provider until
+              you explicitly choose and enable a source again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isForgettingSource}>Keep source</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void handleForgetSource();
+              }}
+              disabled={isForgettingSource}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-forget-network-source"
+            >
+              {isForgettingSource ? "Forgetting..." : "Forget source and go offline"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Electrum TLS certificate trust prompt (TOFU) */}
       <AlertDialog

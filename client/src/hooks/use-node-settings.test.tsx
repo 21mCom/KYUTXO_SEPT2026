@@ -134,12 +134,43 @@ describe("useNodeSettings", () => {
     expect(() => assertNetworkAccessAllowed(result.current.nodeSettings)).not.toThrow();
   });
 
-  it("exposes updateSettings, resetToDefaults, and setConnectionStatus functions", () => {
+  it("exposes updateSettings, forgetNetworkSource, resetToDefaults, and setConnectionStatus functions", () => {
     mockQueryReturn = { id: "default", providerType: "mempool-space" };
     const { result } = renderHook(() => useNodeSettings());
     expect(typeof result.current.updateSettings).toBe("function");
+    expect(typeof result.current.forgetNetworkSource).toBe("function");
     expect(typeof result.current.resetToDefaults).toBe("function");
     expect(typeof result.current.setConnectionStatus).toBe("function");
+  });
+
+  it("atomically returns a configured source to setup-required offline mode", async () => {
+    mockQueryReturn = {
+      id: "default",
+      providerType: "custom-electrs",
+      customUrl: "http://umbrel.local:3006/api",
+      networkPrivacyMode: "own-node",
+      networkOnboardingStage: "complete",
+      networkAccessEnabled: true,
+      networkPrivacyChosenAt: 123,
+      firstSyncConfirmedAt: 456,
+    };
+    nodeSettingsCrudMocks.getNodeSettings.mockResolvedValue(mockQueryReturn);
+    const { result } = renderHook(() => useNodeSettings());
+
+    await act(async () => {
+      await result.current.forgetNetworkSource();
+    });
+
+    expect(nodeSettingsCrudMocks.updateNodeSettings).toHaveBeenCalledWith("default", {
+      networkAccessEnabled: false,
+      networkOnboardingStage: "source",
+      networkPrivacyMode: undefined,
+      networkPrivacyChosenAt: undefined,
+      firstSyncConfirmedAt: undefined,
+      lastConnectionStatus: undefined,
+      lastConnectedAt: undefined,
+    });
+    expect(() => assertNetworkAccessAllowed()).toThrow("No network source is configured");
   });
 
   it("keeps an optimistic offline policy authoritative across a rerender", async () => {

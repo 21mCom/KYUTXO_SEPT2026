@@ -11,7 +11,10 @@ import {
   syncTorProxySettings,
   torProxySettingsFromNodeSettings,
 } from '@/lib/tor-proxy-settings-sync';
-import { setRuntimeNetworkSettings } from '@/lib/network-privacy';
+import {
+  getForgottenNetworkSourceUpdates,
+  setRuntimeNetworkSettings,
+} from '@/lib/network-privacy';
 
 const DEFAULT_NODE_SETTINGS: NodeSettings = {
   id: 'default',
@@ -127,6 +130,10 @@ export function useNodeSettings() {
     await putNodeSettings(resetSettings);
   };
 
+  const forgetNetworkSource = async () => {
+    await updateSettings(getForgottenNetworkSourceUpdates());
+  };
+
   const setConnectionStatus = async (status: string, connected: boolean) => {
     await updateSettings({
       lastConnectionStatus: status,
@@ -137,6 +144,7 @@ export function useNodeSettings() {
   return {
     nodeSettings,
     updateSettings,
+    forgetNetworkSource,
     resetToDefaults,
     setConnectionStatus,
     // Only show loading if not timed out and settings haven't loaded

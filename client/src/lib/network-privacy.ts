@@ -85,6 +85,18 @@ export function deriveNetworkPrivacyMode(settings: NodeSettings): NetworkPrivacy
   return 'public-direct';
 }
 
+export function getForgottenNetworkSourceUpdates(): Partial<Omit<NodeSettings, 'id'>> {
+  return {
+    networkAccessEnabled: false,
+    networkOnboardingStage: 'source',
+    networkPrivacyMode: undefined,
+    networkPrivacyChosenAt: undefined,
+    firstSyncConfirmedAt: undefined,
+    lastConnectionStatus: undefined,
+    lastConnectedAt: undefined,
+  };
+}
+
 export function getNetworkPrivacyLabel(settings: NodeSettings): 'Offline' | 'Own node' | 'Tor' | 'Direct public' {
   if (!isNetworkAccessEnabled(settings)) return 'Offline';
   switch (deriveNetworkPrivacyMode(settings)) {
