@@ -13,35 +13,59 @@ import {
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(SCRIPTS_DIR);
-const PACKAGED_BROWSER_CHECKS = [
-  'check-packaged-electron-browser.mjs',
+const LEGACY_PACKAGED_BROWSER_CHECKS = new Set([
+  // These predate the check-packaged-*-browser.mjs naming convention but still
+  // launch the packaged Electron app under Xvfb, so they remain in scope.
   'check-wrong-password-packaged.mjs',
-  'check-packaged-electrum-cancel-browser.mjs',
-  'check-packaged-coin-passport-browser.mjs',
-  'check-packaged-coin-origins-browser.mjs',
   'check-packaged-vault-migration.mjs',
-  'check-packaged-network-privacy-activity-browser.mjs',
-];
+]);
+
+function discoverPackagedBrowserChecks(filenames) {
+  return filenames
+    .filter((filename) =>
+      /^check-packaged-.+-browser\.mjs$/.test(filename) ||
+      LEGACY_PACKAGED_BROWSER_CHECKS.has(filename))
+    .sort();
+}
+
+function assertUsesSharedBinaryDiscovery(filename, source) {
+  assert.match(
+    source,
+    /import\s*\{\s*findPackagedBinaries\s*\}\s*from\s*['"]\.\/packaged-electron-binaries\.mjs['"]/,
+    `${filename} must import the shared discovery helper`,
+  );
+  assert.match(
+    source,
+    /findPackagedBinaries\s*\(\s*\{\s*tag\s*:\s*TAG\s*\}\s*\)/,
+    `${filename} must resolve both binaries through the shared helper`,
+  );
+  assert.doesNotMatch(
+    source,
+    /function findNixBinary|\/nix\/store\/\*-electron-|\/nix\/store\/\*-xorg-server-/,
+    `${filename} must not carry a private discovery copy`,
+  );
+}
 
 test('all packaged browser checks use the shared binary discovery module', () => {
-  for (const filename of PACKAGED_BROWSER_CHECKS) {
+  const filenames = discoverPackagedBrowserChecks(fs.readdirSync(SCRIPTS_DIR));
+  assert.ok(filenames.length > 0, 'must discover packaged browser checks');
+
+  for (const filename of filenames) {
     const source = fs.readFileSync(path.join(SCRIPTS_DIR, filename), 'utf8');
-    assert.match(
-      source,
-      /import\s*\{\s*findPackagedBinaries\s*\}\s*from\s*['"]\.\/packaged-electron-binaries\.mjs['"]/,
-      `${filename} must import the shared discovery helper`,
-    );
-    assert.match(
-      source,
-      /findPackagedBinaries\s*\(\s*\{\s*tag\s*:\s*TAG\s*\}\s*\)/,
-      `${filename} must resolve both binaries through the shared helper`,
-    );
-    assert.doesNotMatch(
-      source,
-      /function findNixBinary|\/nix\/store\/\*-electron-|\/nix\/store\/\*-xorg-server-/,
-      `${filename} must not carry a private discovery copy`,
-    );
+    assertUsesSharedBinaryDiscovery(filename, source);
   }
+});
+
+test('a newly added packaged browser check cannot escape shared discovery assertions', () => {
+  const filename = 'check-packaged-future-feature-browser.mjs';
+  assert.deepEqual(discoverPackagedBrowserChecks([filename]), [filename]);
+  assert.throws(
+    () => assertUsesSharedBinaryDiscovery(
+      filename,
+      "function findNixBinary() { return '/nix/store/*-electron-private/bin/electron'; }\n",
+    ),
+    /check-packaged-future-feature-browser\.mjs must import the shared discovery helper/,
+  );
 });
 
 test('keeps the Electron 29 and modern Xvfb discovery specs together', () => {
