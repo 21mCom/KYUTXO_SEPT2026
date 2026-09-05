@@ -3690,6 +3690,17 @@ args = "node scripts/check-transaction-inbox-saved-view-snooze-browser.mjs"
 isValidation = true
 
 [[workflows.workflow]]
+name = "encrypted-backup-restore-safety-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-encrypted-backup-restore-safety-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
 name = "protected-vault-migration-gate-tests"
 author = "agent"
 
