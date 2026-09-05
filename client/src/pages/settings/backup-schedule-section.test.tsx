@@ -75,6 +75,21 @@ async function renderConfiguredSchedule() {
   await screen.findByText(DESTINATION.path);
 }
 
+function expectScheduleControlsDisabled(disabled: boolean) {
+  for (const control of [
+    screen.getByTestId("switch-scheduled-backups"),
+    screen.getByRole("button", { name: `Remove ${DESTINATION.label}` }),
+    screen.getByTestId("select-backup-cadence"),
+    screen.getByTestId("input-backup-retention"),
+    screen.getByTestId("select-backup-prompt"),
+    screen.getByTestId("switch-scheduled-compact"),
+    screen.getByTestId("switch-scheduled-encrypted"),
+    screen.getByTestId("button-save-backup-schedule"),
+  ]) {
+    expect((control as HTMLButtonElement | HTMLInputElement).disabled).toBe(disabled);
+  }
+}
+
 function rapidlyActivateSaveTwice() {
   const button = screen.getByTestId("button-save-backup-schedule");
   act(() => {
@@ -84,6 +99,43 @@ function rapidlyActivateSaveTwice() {
 }
 
 describe("backup destination cancellation", () => {
+  it("prevents schedule edits while a successful write is pending and shows the persisted result", async () => {
+    let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
+    const changedSchedule = { ...configuredSchedule, retentionCount: 12 };
+    mocks.mutateSettings.mockImplementation(() => new Promise((resolve) => {
+      finishSave = resolve;
+    }));
+
+    await renderConfiguredSchedule();
+    fireEvent.change(screen.getByTestId("input-backup-retention"), { target: { value: "12" } });
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+
+    await waitFor(() => expectScheduleControlsDisabled(true));
+
+    finishSave({ backupSchedule: changedSchedule });
+
+    await waitFor(() => expectScheduleControlsDisabled(false));
+    expect((screen.getByTestId("input-backup-retention") as HTMLInputElement).value).toBe("12");
+  });
+
+  it("prevents schedule edits while a failed write is pending and preserves the unsaved form", async () => {
+    let failSave!: (error: Error) => void;
+    mocks.mutateSettings.mockImplementation(() => new Promise((_resolve, reject) => {
+      failSave = reject;
+    }));
+
+    await renderConfiguredSchedule();
+    fireEvent.change(screen.getByTestId("input-backup-retention"), { target: { value: "12" } });
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+
+    await waitFor(() => expectScheduleControlsDisabled(true));
+
+    failSave(new Error("settings write failed"));
+
+    await waitFor(() => expectScheduleControlsDisabled(false));
+    expect((screen.getByTestId("input-backup-retention") as HTMLInputElement).value).toBe("12");
+  });
+
   it("ignores a repeated Save activation while persistence is pending, then cancels each removed active backup exactly once", async () => {
     let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
     const saveHeld = new Promise<{ backupSchedule: BackupScheduleSettings }>((resolve) => {

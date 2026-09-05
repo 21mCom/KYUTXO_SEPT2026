@@ -114,6 +114,7 @@ export function BackupScheduleSection() {
         <Switch
           checked={schedule.enabled}
           onCheckedChange={(enabled) => setSchedule((current) => ({ ...current, enabled }))}
+          disabled={saving}
           data-testid="switch-scheduled-backups"
         />
       </div>
@@ -121,7 +122,7 @@ export function BackupScheduleSection() {
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <Label>Destination folders (up to two)</Label>
-          <Button variant="outline" size="sm" onClick={() => void chooseFolder()} disabled={schedule.destinations.length >= 2} data-testid="button-add-backup-folder">
+          <Button variant="outline" size="sm" onClick={() => void chooseFolder()} disabled={saving || schedule.destinations.length >= 2} data-testid="button-add-backup-folder">
             <FolderOpen className="mr-2 h-4 w-4" />
             Choose folder
           </Button>
@@ -136,6 +137,7 @@ export function BackupScheduleSection() {
               size="icon"
                aria-label={`Remove ${destination.label}`}
                onClick={() => setSchedule((current) => ({ ...current, destinations: current.destinations.filter((item) => item.token !== destination.token) }))}
+               disabled={saving}
             >
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -146,7 +148,7 @@ export function BackupScheduleSection() {
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label>Cadence</Label>
-          <Select value={String(schedule.cadenceDays)} onValueChange={(value) => setSchedule((current) => ({ ...current, cadenceDays: Number(value) as BackupScheduleSettings["cadenceDays"] }))}>
+          <Select disabled={saving} value={String(schedule.cadenceDays)} onValueChange={(value) => setSchedule((current) => ({ ...current, cadenceDays: Number(value) as BackupScheduleSettings["cadenceDays"] }))}>
             <SelectTrigger data-testid="select-backup-cadence"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="1">Daily</SelectItem>
@@ -159,12 +161,12 @@ export function BackupScheduleSection() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="backup-retention">Newest copies to retain</Label>
-          <Input id="backup-retention" type="number" min={1} max={100} value={schedule.retentionCount} onChange={(event) => setSchedule((current) => ({ ...current, retentionCount: Number(event.target.value) }))} data-testid="input-backup-retention" />
+          <Input id="backup-retention" type="number" min={1} max={100} value={schedule.retentionCount} onChange={(event) => setSchedule((current) => ({ ...current, retentionCount: Number(event.target.value) }))} disabled={saving} data-testid="input-backup-retention" />
           <p className="text-xs text-muted-foreground">Monthly checkpoints are kept in addition to this number.</p>
         </div>
         <div className="space-y-2">
           <Label>Prompt behavior</Label>
-          <Select value={schedule.promptBehavior} onValueChange={(value) => setSchedule((current) => ({ ...current, promptBehavior: value as BackupScheduleSettings["promptBehavior"] }))}>
+          <Select disabled={saving} value={schedule.promptBehavior} onValueChange={(value) => setSchedule((current) => ({ ...current, promptBehavior: value as BackupScheduleSettings["promptBehavior"] }))}>
             <SelectTrigger data-testid="select-backup-prompt"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="ask">Ask before starting</SelectItem>
@@ -175,11 +177,11 @@ export function BackupScheduleSection() {
         <div className="space-y-3 rounded-md border p-3">
           <div className="flex items-center justify-between gap-3">
             <Label>Compact backup</Label>
-            <Switch checked={schedule.compact} onCheckedChange={(compact) => setSchedule((current) => ({ ...current, compact }))} data-testid="switch-scheduled-compact" />
+            <Switch checked={schedule.compact} onCheckedChange={(compact) => setSchedule((current) => ({ ...current, compact }))} disabled={saving} data-testid="switch-scheduled-compact" />
           </div>
           <div className="flex items-center justify-between gap-3">
             <Label>Encrypt backup</Label>
-            <Switch checked={schedule.encrypted} onCheckedChange={(encrypted) => setSchedule((current) => ({ ...current, encrypted }))} data-testid="switch-scheduled-encrypted" />
+            <Switch checked={schedule.encrypted} onCheckedChange={(encrypted) => setSchedule((current) => ({ ...current, encrypted }))} disabled={saving} data-testid="switch-scheduled-encrypted" />
           </div>
         </div>
       </div>
