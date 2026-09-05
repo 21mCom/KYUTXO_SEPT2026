@@ -19,6 +19,10 @@ export const NETWORK_CHOICE_REQUIRED_MESSAGE =
 export const FIRST_SYNC_CONFIRMATION_REQUIRED_MESSAGE =
   'Review and confirm the first-sync privacy disclosure before syncing.';
 
+export function isNetworkPolicyBlockedMessage(message: string): boolean {
+  return message === NETWORK_BLOCKED_MESSAGE || message === NETWORK_CHOICE_REQUIRED_MESSAGE;
+}
+
 const FRESH_NODE_SETTINGS: NodeSettings = {
   id: 'default',
   providerType: 'mempool-space',

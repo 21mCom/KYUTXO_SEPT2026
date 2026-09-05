@@ -24,6 +24,7 @@ import {
   initializeFreshNetworkPrivacy,
   isFirstSyncConfirmationRequired,
   isNetworkAccessEnabled,
+  isNetworkPolicyBlockedMessage,
   recordNetworkPrivacyActivity,
   setRuntimeNetworkSettings,
 } from './network-privacy';
@@ -46,6 +47,13 @@ beforeEach(() => {
 });
 
 describe('network privacy policy', () => {
+  it('identifies only errors that a UI can recover from in Node Settings', () => {
+    expect(isNetworkPolicyBlockedMessage(NETWORK_BLOCKED_MESSAGE)).toBe(true);
+    expect(isNetworkPolicyBlockedMessage(NETWORK_CHOICE_REQUIRED_MESSAGE)).toBe(true);
+    expect(isNetworkPolicyBlockedMessage(FIRST_SYNC_CONFIRMATION_REQUIRED_MESSAGE)).toBe(false);
+    expect(isNetworkPolicyBlockedMessage('Request failed: 500')).toBe(false);
+  });
+
   it('preserves networking for existing vaults without onboarding fields', () => {
     expect(isNetworkAccessEnabled(legacy)).toBe(true);
     expect(getNetworkPrivacyLabel(legacy)).toBe('Direct public');

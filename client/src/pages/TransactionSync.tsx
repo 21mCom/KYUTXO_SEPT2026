@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { 
   ArrowLeft,
   RefreshCw,
@@ -60,6 +61,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   getProviderClassDescription,
+  isNetworkPolicyBlockedMessage,
   isFirstSyncConfirmationRequired,
   markFirstSyncConfirmed,
 } from "@/lib/network-privacy";
@@ -113,6 +115,17 @@ export default function TransactionSync() {
   const [connectedOnly, setConnectedOnly] = useState(false);
   const [firstSyncDisclosureCount, setFirstSyncDisclosureCount] = useState<number | null>(null);
   const pendingFirstSyncAction = useRef<(() => Promise<void>) | null>(null);
+
+  const networkSettingsAction = (message: string) =>
+    isNetworkPolicyBlockedMessage(message) ? (
+      <ToastAction
+        altText="Open Node Settings"
+        onClick={() => navigate("/node-settings")}
+        data-testid="action-open-node-settings"
+      >
+        Open Node Settings
+      </ToastAction>
+    ) : undefined;
 
   // Skipped addresses and blacklist
   const [skippedAddresses, setSkippedAddresses] = useState<SkippedAddress[]>([]);
@@ -273,9 +286,11 @@ export default function TransactionSync() {
       setLastResult(result);
 
       if (result.success && result.addressesSynced === 0 && result.errors.length > 0) {
+        const message = result.errors[0];
         toast({
           title: "No Addresses to Sync",
-          description: result.errors[0],
+          description: message,
+          action: networkSettingsAction(message),
         });
       } else if (result.success) {
         const skippedMsg = result.addressesSkipped > 0 ? ` (${result.addressesSkipped} skipped)` : '';
@@ -285,17 +300,21 @@ export default function TransactionSync() {
           description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses and queued ${result.newlyQueuedTransactions} for review.${skippedMsg}${filteredMsg}`,
         });
       } else {
+        const message = result.errors[0] || "Some addresses failed to sync";
         toast({
           title: "Sync Completed with Errors",
-          description: result.errors[0] || "Some addresses failed to sync",
+          description: message,
           variant: "destructive",
+          action: networkSettingsAction(message),
         });
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : "An error occurred";
       toast({
         title: "Sync Failed",
-        description: error instanceof Error ? error.message : "An error occurred",
+        description: message,
         variant: "destructive",
+        action: networkSettingsAction(message),
       });
     } finally {
       try { getActivityBus().completeTask('transaction-sync'); } catch {}
@@ -505,17 +524,21 @@ export default function TransactionSync() {
           description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses and queued ${result.newlyQueuedTransactions} for review.`,
         });
       } else {
+        const message = result.errors[0] || "Some addresses failed to sync";
         toast({
           title: "Sync Completed with Errors",
-          description: result.errors[0] || "Some addresses failed to sync",
+          description: message,
           variant: "destructive",
+          action: networkSettingsAction(message),
         });
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : "An error occurred";
       toast({
         title: "Resume Failed",
-        description: error instanceof Error ? error.message : "An error occurred",
+        description: message,
         variant: "destructive",
+        action: networkSettingsAction(message),
       });
     } finally {
       try { getActivityBus().completeTask('transaction-sync'); } catch {}
@@ -560,17 +583,21 @@ export default function TransactionSync() {
           description: `Found ${result.transactionsImported} new transactions and queued ${result.newlyQueuedTransactions} for review.`,
         });
       } else {
+        const message = result.errors[0] || "Unknown error";
         toast({
           title: "Single Address Sync Failed",
-          description: result.errors[0] || "Unknown error",
+          description: message,
           variant: "destructive",
+          action: networkSettingsAction(message),
         });
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : "An error occurred";
       toast({
         title: "Sync Failed",
-        description: error instanceof Error ? error.message : "An error occurred",
+        description: message,
         variant: "destructive",
+        action: networkSettingsAction(message),
       });
     } finally {
       setIsSingleSyncing(false);

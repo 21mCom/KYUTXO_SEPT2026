@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, memo } from "react";
+import { useLocation } from "wouter";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Search, Loader2, AlertCircle, CheckCircle, Clock, X, RefreshCw, Info, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -372,6 +373,7 @@ function parseInput(text: string): ParseResult {
 }
 
 export default function AddressChecker() {
+  const [, navigate] = useLocation();
   const { nodeSettings } = useNodeSettings();
   const { openRecordPreview } = useRecordPreview();
   const [pastedText, setPastedText] = useState("");
@@ -995,9 +997,17 @@ export default function AddressChecker() {
         {providerError && (
           <Alert variant="destructive" data-testid="alert-provider-error">
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              <strong>Node connection error:</strong> {providerError} Visit{" "}
-              <a href="#/node-settings" className="underline">Node Connection settings</a> to fix this.
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span><strong>Node connection error:</strong> {providerError}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => navigate("/node-settings")}
+                data-testid="action-open-node-settings"
+              >
+                Open Node Settings
+              </Button>
             </AlertDescription>
           </Alert>
         )}

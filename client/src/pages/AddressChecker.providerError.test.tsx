@@ -14,10 +14,11 @@
 //   3. the batch finishes (isRunning returns to false): the Cancel button
 //      disappears, the Reset button appears, and Check Addresses is re-enabled.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import "fake-indexeddb/auto";
 import { screen, waitFor, fireEvent, within, cleanup } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { NETWORK_CHOICE_REQUIRED_MESSAGE } from "@/lib/network-privacy";
 
 // Radix Tooltips only render their content on hover, but the per-row error
 // message lives inside <TooltipContent>. Render the tooltip parts inline so the
@@ -77,6 +78,8 @@ const ADDR_C = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
 const ERROR_MESSAGE = "Network timeout: node unreachable";
 
 describe("AddressChecker — unreachable node isolation", () => {
+  afterEach(cleanup);
+
   beforeEach(() => {
     vi.clearAllMocks();
     getAddressCoreStats.mockImplementation(async (address: string) => {
@@ -85,6 +88,26 @@ describe("AddressChecker — unreachable node isolation", () => {
       }
       return { txCount: 3, receivedSats: 100000, sentSats: 40000, balanceSats: 60000 };
     });
+  });
+
+  it("offers a direct Node Settings action when provider creation is blocked", async () => {
+    cleanup();
+    createProviderFromSettings.mockImplementationOnce(() => {
+      throw new Error(NETWORK_CHOICE_REQUIRED_MESSAGE);
+    });
+
+    renderWithProviders(<AddressChecker />);
+    fireEvent.change(screen.getByTestId("textarea-address-input"), {
+      target: { value: ADDR_A },
+    });
+    fireEvent.click(screen.getByTestId("button-run-check"));
+
+    const action = await screen.findByTestId("action-open-node-settings");
+    expect(action.textContent).toBe("Open Node Settings");
+    expect(screen.getByTestId("alert-provider-error").textContent).toContain(NETWORK_CHOICE_REQUIRED_MESSAGE);
+
+    fireEvent.click(action);
+    expect(window.location.pathname).toBe("/node-settings");
   });
 
   it("marks only the failing address as error and finishes the rest", async () => {
