@@ -93,7 +93,7 @@ if (missing.length > 0) {
 }
 
 const GUARDED_TESTIDS = [...UNLOCK_TESTIDS, ...ONBOARDING_TESTIDS];
-const TESTID_PATTERN = new RegExp(`['"](${GUARDED_TESTIDS.join('|')})['"]`);
+const TESTID_PATTERN = new RegExp("[\"'`](" + GUARDED_TESTIDS.join('|') + ")[\"'`]");
 
 const SELF_FILE = path.basename(__filename);
 

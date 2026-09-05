@@ -41,16 +41,16 @@ function makeUnlockGuardFixture() {
 }
 
 describe('browser-check unlock guard', () => {
-  it('rejects generic onboarding selectors while allowing the dedicated first-run journey', () => {
+  it('rejects template-string onboarding selectors while allowing the dedicated first-run journey', () => {
     const { root, fixtureScriptsDir } = makeUnlockGuardFixture();
     try {
       fs.writeFileSync(
         path.join(fixtureScriptsDir, 'check-generic-browser.mjs'),
-        "page.getByTestId('network-onboarding-source');\n",
+        'page.getByTestId(`network-onboarding-source`);\n',
       );
       fs.writeFileSync(
         path.join(fixtureScriptsDir, 'check-first-run-network-privacy-browser.mjs'),
-        "page.getByTestId('button-onboarding-finish');\n",
+        'page.getByTestId(`button-onboarding-finish`);\n',
       );
 
       const result = spawnSync(process.execPath, [unlockGuardPath], {
