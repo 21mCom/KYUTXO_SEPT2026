@@ -135,17 +135,20 @@ afterEach(async () => {
 });
 
 describe("backup schedule status persistence", () => {
-  it.each(["success", "failure"] as const)(
-    "does not resurrect a removed destination after a late %s update",
-    async (outcome) => {
-      const archiveChunks: Uint8Array[] = [];
-      backupApi.scheduledBackupWrite.mockImplementation(async (_id: string, data: ArrayBuffer) => {
-        if (outcome === "failure") throw new Error("Primary write failed");
-        archiveChunks.push(new Uint8Array(data.slice(0)));
+  it("does not promote to a destination removed during its active export", async () => {
+      const archiveChunks = new Map<string, Uint8Array[]>();
+      backupApi.scheduledBackupOpen.mockImplementation(async (token: string) => ({
+        success: true,
+        id: token === DESTINATION_A ? "primary-partial-backup" : "secondary-partial-backup",
+      }));
+      backupApi.scheduledBackupWrite.mockImplementation(async (id: string, data: ArrayBuffer) => {
+        const chunks = archiveChunks.get(id) ?? [];
+        chunks.push(new Uint8Array(data.slice(0)));
+        archiveChunks.set(id, chunks);
         return { success: true };
       });
-      backupApi.scheduledBackupRead.mockImplementation(async (_id: string, offset: number) => {
-        const archive = concatChunks(archiveChunks);
+      backupApi.scheduledBackupRead.mockImplementation(async (id: string, offset: number) => {
+        const archive = concatChunks(archiveChunks.get(id) ?? []);
         const chunk = archive.subarray(offset);
         return {
           success: true,
@@ -154,34 +157,24 @@ describe("backup schedule status persistence", () => {
         };
       });
 
-      let releaseLateUpdate!: () => void;
-      const lateUpdateHeld = new Promise<void>((resolve) => {
-        releaseLateUpdate = resolve;
+      let releaseValidation!: () => void;
+      const validationHeld = new Promise<void>((resolve) => {
+        releaseValidation = resolve;
       });
-      let lateUpdateStarted!: () => void;
-      const lateUpdateEntered = new Promise<void>((resolve) => {
-        lateUpdateStarted = resolve;
+      let validationStarted!: () => void;
+      const validationEntered = new Promise<void>((resolve) => {
+        validationStarted = resolve;
       });
-      if (outcome === "success") {
-        backupApi.scheduledBackupPromote.mockImplementation(async () => {
-          lateUpdateStarted();
-          await lateUpdateHeld;
-          return {
-            success: true,
-            sizeBytes: 1234,
-            checksum: "primary-checksum",
-          };
-        });
-      } else {
-        backupApi.scheduledBackupAbort.mockImplementation(async () => {
-          lateUpdateStarted();
-          await lateUpdateHeld;
-          return { success: true };
-        });
-      }
+      backupApi.scheduledBackupValidate.mockImplementation(async (id: string) => {
+        if (id === "primary-partial-backup") {
+          validationStarted();
+          await validationHeld;
+        }
+        return { success: true };
+      });
 
       const scheduledRun = runDueScheduledBackup({ now: SCHEDULED_RUN_AT });
-      await lateUpdateEntered;
+      await validationEntered;
 
       const current = await getSettings("default");
       const edited = {
@@ -193,26 +186,33 @@ describe("backup schedule status persistence", () => {
         backupSchedule: mergeBackupSchedulePolicy(latest.backupSchedule, edited),
       }));
 
-      releaseLateUpdate();
+      releaseValidation();
       const result = await scheduledRun;
       const saved = normalizeBackupSchedule((await getSettings("default"))?.backupSchedule);
 
       expect(result).toEqual({
-        verified: outcome === "success" ? 1 : 0,
+        verified: 1,
         skipped: false,
-        failures: outcome === "success"
-          ? ["Secondary drive: Secondary drive was removed"]
-          : ["Primary drive: Primary write failed", "Secondary drive: Secondary drive was removed"],
+        failures: [],
       });
+      expect(backupApi.scheduledBackupAbort).toHaveBeenCalledWith("primary-partial-backup");
+      expect(backupApi.scheduledBackupPromote).not.toHaveBeenCalledWith(
+        "primary-partial-backup",
+        expect.any(String),
+        true,
+      );
+      expect(backupApi.scheduledBackupPromote).toHaveBeenCalledWith(
+        "secondary-partial-backup",
+        expect.any(String),
+        true,
+      );
       expect(saved.destinations).toEqual([
         { token: DESTINATION_B, label: "Secondary drive" },
       ]);
       expect(saved.destinationStates?.[DESTINATION_A]).toBeUndefined();
       expect(saved.destinationStates?.[DESTINATION_B]?.freeSpaceHistory).toEqual([{ at: 1, freeBytes: 20 }]);
-      expect(saved.destinationStates?.[DESTINATION_B]?.lastFailureAt).toBe(SCHEDULED_RUN_AT);
-      expect(saved.destinationStates?.[DESTINATION_B]?.lastFailureMessage).toBe("Secondary drive was removed");
-    },
-  );
+      expect(saved.destinationStates?.[DESTINATION_B]?.lastVerifiedAt).toBe(SCHEDULED_RUN_AT);
+    });
 
   it("retains interleaved capacity, success, failure, and drill updates", async () => {
     let releaseCapacity!: () => void;

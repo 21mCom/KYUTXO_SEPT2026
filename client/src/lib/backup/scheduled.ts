@@ -509,6 +509,14 @@ export async function runDueScheduledBackup(options: {
       const mainValidated = await api.scheduledBackupValidate?.(id, sink.checksum ?? "");
       if (!mainValidated?.success) throw new Error(mainValidated?.error || "Could not validate scheduled backup.");
       throwIfCancelled(options.signal);
+      const latestSettings = await getSettings("default");
+      const latestSchedule = normalizeBackupSchedule(latestSettings?.backupSchedule);
+      if (!latestSchedule.destinations.some((configured) => configured.token === destination.token)) {
+        await api.scheduledBackupAbort(id);
+        id = undefined;
+        statusSchedule = latestSchedule;
+        continue;
+      }
       const promoted = await api.scheduledBackupPromote(id, scheduledName(now), true);
       if (!promoted.success) throw new Error(promoted.error || "Could not promote verified backup.");
       id = undefined;
