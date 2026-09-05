@@ -154,3 +154,4 @@
 - [Release evidence fail-closed](release-evidence-fail-closed.md) — release gates must revalidate every downloaded evidence file immediately before publish; producer job success alone is insufficient.
 - [Runner alert recovery evidence](runner-alert-recovery-evidence.md) — never close an offline-runner alert because queued work vanished; require a newer successful probe for that exact label.
 - [Normalized model restore identity](normalized-model-restore-identity.md) — portable natural keys never include surrogate IDs; old-backup merges project missing normalized rows without overwriting live choices.
+- [GitHub Actions dispatch input safety](github-actions-dispatch-input-safety.md) — choice inputs constrain the UI, not API callers; env-pass and allowlist before shell use.

@@ -1,0 +1,57 @@
+name: Desktop release runner monitor contract fixture
+run-name: ${{ inputs.contract_id }}-${{ inputs.outcome }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      contract_id:
+        description: Correlation ID supplied by the live contract controller
+        required: true
+        type: string
+      outcome:
+        description: Disposable API state to expose
+        required: true
+        type: choice
+        options:
+          - queued
+          - failure
+          - success
+
+permissions:
+  contents: none
+
+jobs:
+  queued-readiness:
+    if: inputs.outcome == 'queued'
+    name: readiness-${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          - platform: linux
+            arch: x64
+    runs-on:
+      - self-hosted
+      - release-runner-monitor-contract-no-runner
+    steps:
+      - run: exit 1
+
+  completed-readiness:
+    if: inputs.outcome != 'queued'
+    name: readiness-${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          - platform: linux
+            arch: x64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Produce the requested disposable conclusion
+        shell: bash
+        env:
+          CONTRACT_OUTCOME: ${{ inputs.outcome }}
+        run: |
+          case "$CONTRACT_OUTCOME" in
+            success) exit 0 ;;
+            failure) exit 1 ;;
+            *) echo "Unsupported contract outcome" >&2; exit 2 ;;
+          esac

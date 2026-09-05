@@ -8,10 +8,14 @@ const {
   THRESHOLD_MINUTES,
   alertBody,
   alertTitle,
+  releaseRunnerLabelForJobName,
   staleQueuedLabels,
   run,
 } = require('../.github/scripts/monitor-release-runner-readiness.cjs');
 const watchdog = require('../.github/scripts/watch-release-runner-monitor.cjs');
+const {
+  runLiveContract,
+} = require('../.github/scripts/check-release-runner-monitor-live-contract.cjs');
 
 test('stale queued readiness jobs resolve to their exact release-runner labels', () => {
   const now = Date.parse('2026-09-05T12:30:00Z');
@@ -23,6 +27,133 @@ test('stale queued readiness jobs resolve to their exact release-runner labels',
   ];
 
   assert.deepEqual(staleQueuedLabels(jobs, now), ['desktop-release-win-x64']);
+  assert.equal(releaseRunnerLabelForJobName('readiness-win-x64'), 'desktop-release-win-x64');
+});
+
+test('manual live contract is isolated from alert issues and runner management', () => {
+  const controller = fs.readFileSync(
+    new URL('../.github/workflows/desktop-release-runner-monitor-contract.yml', import.meta.url),
+    'utf8',
+  );
+  const fixture = fs.readFileSync(
+    new URL('../.github/workflows/desktop-release-runner-monitor-contract-fixture.yml', import.meta.url),
+    'utf8',
+  );
+  const contract = fs.readFileSync(
+    new URL('../.github/scripts/check-release-runner-monitor-live-contract.cjs', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(controller, /workflow_dispatch:/);
+  assert.match(controller, /permissions:\s*\n\s+actions: write\s*\n\s+contents: read/);
+  assert.doesNotMatch(controller, /issues: write|schedule:/);
+  assert.match(fixture, /release-runner-monitor-contract-no-runner/);
+  assert.match(fixture, /name: readiness-\$\{\{ matrix\.platform \}\}-\$\{\{ matrix\.arch \}\}/);
+  assert.match(contract, /releaseRunnerLabelForJobName\(queuedJob\.name\)/);
+  assert.match(contract, /cancelWorkflowRun/);
+  assert.match(contract, /\['failure', 'success'\]/);
+  assert.doesNotMatch(fixture, /\[\[.*\$\{\{ inputs\.outcome/);
+  assert.match(fixture, /CONTRACT_OUTCOME: \$\{\{ inputs\.outcome \}\}/);
+  assert.doesNotMatch(contract, /issues\.|deleteSelfHostedRunner|removeAllCustomLabels|setCustomLabels/);
+});
+
+function liveContractHarness({ failFirstRunLookup = false } = {}) {
+  const runs = [];
+  const cancelled = new Set();
+  const calls = [];
+  let nextId = 100;
+  let shouldFailLookup = failFirstRunLookup;
+  const github = {
+    rest: {
+      actions: {
+        createWorkflowDispatch: async ({ inputs }) => {
+          const id = nextId++;
+          calls.push({ type: 'dispatch', id, outcome: inputs.outcome });
+          runs.unshift({
+            id,
+            display_title: `${inputs.contract_id}-${inputs.outcome}`,
+            created_at: new Date().toISOString(),
+            status: inputs.outcome === 'queued' ? 'queued' : 'completed',
+            outcome: inputs.outcome,
+          });
+        },
+        listWorkflowRuns: async () => {
+          if (shouldFailLookup) {
+            shouldFailLookup = false;
+            throw new Error('simulated lookup failure');
+          }
+          return { data: { workflow_runs: runs } };
+        },
+        listJobsForWorkflowRun: async ({ run_id }) => {
+          const run = runs.find((candidate) => candidate.id === run_id);
+          const conclusion = cancelled.has(run_id)
+            ? 'cancelled'
+            : run.outcome === 'queued' ? null : run.outcome;
+          return {
+            data: {
+              jobs: [{
+                name: 'readiness-linux-x64',
+                status: conclusion ? 'completed' : 'queued',
+                conclusion,
+              }],
+            },
+          };
+        },
+        cancelWorkflowRun: async ({ run_id }) => {
+          calls.push({ type: 'cancel', runId: run_id });
+          cancelled.add(run_id);
+          const run = runs.find((candidate) => candidate.id === run_id);
+          if (run) run.status = 'completed';
+        },
+      },
+    },
+  };
+  const core = {
+    info: (message) => calls.push({ type: 'info', message }),
+    warning: (message) => calls.push({ type: 'warning', message }),
+  };
+  return { calls, core, github };
+}
+
+test('live contract observes queued, cancelled, failed, and successful job payloads', async () => {
+  const { calls, core, github } = liveContractHarness();
+  await runLiveContract({
+    github,
+    core,
+    context: {
+      repo: { owner: 'owner', repo: 'repo' },
+      ref: 'main',
+      runId: 7,
+      runAttempt: 1,
+    },
+  });
+
+  assert.deepEqual(
+    calls.filter((call) => call.type === 'dispatch').map((call) => call.outcome),
+    ['queued', 'failure', 'success'],
+  );
+  assert.equal(calls.filter((call) => call.type === 'cancel').length, 1);
+  for (const state of ['queued', 'cancelled', 'failure', 'success']) {
+    assert.ok(calls.some((call) => call.type === 'info' && call.message.startsWith(`PASS ${state}:`)));
+  }
+});
+
+test('live contract rediscovers and cancels a queued fixture when initial lookup fails', async () => {
+  const { calls, core, github } = liveContractHarness({ failFirstRunLookup: true });
+  await assert.rejects(
+    runLiveContract({
+      github,
+      core,
+      context: {
+        repo: { owner: 'owner', repo: 'repo' },
+        ref: 'main',
+        runId: 8,
+        runAttempt: 1,
+      },
+    }),
+    /simulated lookup failure/,
+  );
+  assert.equal(calls.filter((call) => call.type === 'cancel').length, 1);
 });
 
 test('alert copy names the runner and gives a recovery path', () => {

@@ -91,6 +91,31 @@ desktop release runner readiness`. The watchdog closes its issue only after it
 observes a monitor completion newer than the alert; a failed monitor run still
 counts as a heartbeat and must be investigated through that run's own failure.
 
+### Manual live API contract check
+
+Before a release, or after changing either readiness workflow, manually run
+`Check release runner monitor live API contract`. The hosted controller creates
+disposable runs of `Desktop release runner monitor contract fixture` and reads
+them back through the same GitHub Actions run/job APIs used by the monitor. It
+must report four passes:
+
+- the controlled `readiness-linux-x64` matrix job is returned as `queued` and
+  resolves to the exact `desktop-release-linux-x64` release-runner label;
+- cancelling that disposable run is returned as a completed `cancelled` job;
+- a hosted follow-up fixture is returned as completed `failure`; and
+- a hosted follow-up fixture is returned as completed `success`.
+
+The queued fixture uses the reserved
+`release-runner-monitor-contract-no-runner` label, never a release desktop
+label. The controller cancels it as soon as the queued payload is observed and
+also attempts cancellation during failure cleanup. The check is manual-only,
+has no `issues: write` permission, never invokes the alerting monitor, and uses
+no runner-management API. It therefore cannot control or relabel a runner, open
+an alert issue, or leave a recurring source of alert noise. If a controller run
+is manually cancelled at the same moment as its cleanup, cancel any remaining
+contract fixture run from the Actions page; the fixture cannot be mistaken for
+the production readiness workflow by the scheduled monitor.
+
 To recover, start the named Actions runner from its logged-in interactive
 desktop session, confirm its exact release label is still registered, and
 manually rerun `Check desktop release runner readiness`. The hosted monitor

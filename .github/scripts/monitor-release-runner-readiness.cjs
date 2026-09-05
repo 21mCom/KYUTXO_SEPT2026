@@ -21,6 +21,10 @@ function staleQueuedLabels(jobs, now = Date.now(), thresholdMinutes = THRESHOLD_
   )].sort();
 }
 
+function releaseRunnerLabelForJobName(jobName) {
+  return JOB_LABELS.get(jobName);
+}
+
 function alertTitle(label) {
   return `${ALERT_PREFIX} ${label} has not accepted its readiness job`;
 }
@@ -70,7 +74,7 @@ async function run({ github, context, core }) {
   const successfulAtByLabel = new Map();
   for (const { workflowRun, jobs } of jobsByRun) {
     for (const label of staleQueuedLabels(jobs)) {
-      const job = jobs.find((candidate) => JOB_LABELS.get(candidate.name) === label);
+      const job = jobs.find((candidate) => releaseRunnerLabelForJobName(candidate.name) === label);
       staleByLabel.set(label, {
         label,
         queuedAt: job.created_at,
@@ -78,7 +82,7 @@ async function run({ github, context, core }) {
       });
     }
     for (const job of jobs) {
-      const label = JOB_LABELS.get(job.name);
+      const label = releaseRunnerLabelForJobName(job.name);
       if (!label || job.status !== 'completed' || job.conclusion !== 'success') continue;
       const completedAt = job.completed_at || job.started_at || job.created_at;
       if (!completedAt) continue;
@@ -142,5 +146,6 @@ module.exports = {
   alertBody,
   alertTitle,
   run,
+  releaseRunnerLabelForJobName,
   staleQueuedLabels,
 };
