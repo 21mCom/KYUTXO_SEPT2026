@@ -530,7 +530,7 @@ export async function restoreCategory(data: { name: string; createdAt: number })
   return await db.categories.add(data) as number;
 }
 
-export async function restoreOwner(data: { name: string; createdAt: number }): Promise<number> {
+export async function restoreOwner(data: Owner): Promise<number> {
   return await db.owners.add(data) as number;
 }
 

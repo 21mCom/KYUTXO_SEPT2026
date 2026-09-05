@@ -447,7 +447,31 @@ export interface Category {
 export interface Owner {
   id?: number;
   name: string;
+  /** Policy owners are deliberately separate from the legacy owner string on records. */
+  kind?: OwnerKind;
+  /** Immutable policy identity; the display name may be changed. */
+  isDefault?: boolean;
+  /** Set instead of deleting so historic policy and record labels remain auditable. */
+  archivedAt?: number;
   createdAt: number;
+}
+
+export type OwnerKind = 'person' | 'company';
+export type OwnerMatchingMethod = 'fifo' | 'lifo' | 'hifo' | 'specific-identification' | 'proportional';
+
+/** Inclusive, ISO-calendar-date residency policy for an owner. */
+export interface OwnerResidency {
+  id?: number;
+  ownerId: number;
+  startDate: string;
+  /** Undefined means the policy remains in force indefinitely. */
+  endDate?: string;
+  jurisdiction: string;
+  region?: string;
+  notes?: string;
+  matchingMethod: OwnerMatchingMethod;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface WalletName {

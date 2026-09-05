@@ -82,6 +82,8 @@ import {
   type CreateCustodySegmentData,
   type CreateLineageSnapshotData,
 } from "@/lib/data/lineage-crud";
+import { db, type OwnerMatchingMethod } from "@/lib/database";
+import { validateResidencyRanges } from "@/lib/data/owner-policy";
 
 export type RestoreMode = "merge" | "replace";
 
@@ -100,6 +102,7 @@ export async function restoreLegacyVocabulary(
     tags?: any[];
     categories?: any[];
     owners?: any[];
+    ownerResidencies?: any[];
     walletNames?: any[];
     seedNames?: any[];
     walletSoftware?: any[];
@@ -107,6 +110,18 @@ export async function restoreLegacyVocabulary(
   restoreMode: RestoreMode,
 ): Promise<{ tagsAdded: number; categoriesAdded: number; vocabularyAdded: number }> {
   const now = Date.now();
+  const matchingMethods = new Set(["fifo", "lifo", "hifo", "specific-identification", "proportional"]);
+  const histories = new Map<number, Array<{ startDate: string; endDate?: string }>>();
+  for (const row of data.ownerResidencies ?? []) {
+    if (!row || typeof row.ownerId !== "number" || typeof row.startDate !== "string" ||
+      typeof row.jurisdiction !== "string" || !matchingMethods.has(row.matchingMethod)) {
+      throw new Error("Invalid owner residency in backup");
+    }
+    const history = histories.get(row.ownerId) ?? [];
+    history.push({ startDate: row.startDate, endDate: typeof row.endDate === "string" ? row.endDate : undefined });
+    histories.set(row.ownerId, history);
+  }
+  for (const rows of histories.values()) validateResidencyRanges(rows);
   let tagsAdded = 0;
   let categoriesAdded = 0;
   let vocabularyAdded = 0;
@@ -127,6 +142,25 @@ export async function restoreLegacyVocabulary(
     for (const sn of await getSeedNames()) existingSeedNameNames.add(sn.name);
     for (const ws of await getWalletSoftware()) existingWalletSoftwareNames.add(ws.name);
   }
+  // Preflight combined live + incoming residency history before inserting any
+  // vocabulary rows. Owner names are the legacy restore's stable bridge.
+  if (restoreMode === "merge") {
+    const incomingNames = new Map<number, string>();
+    for (const owner of data.owners ?? []) if (typeof owner?.id === "number" && typeof owner.name === "string") incomingNames.set(owner.id, owner.name);
+    const liveOwners = await getOwners();
+    for (const [oldId, name] of incomingNames) {
+      const live = liveOwners.find((owner) => owner.name === name);
+      if (!live?.id) continue;
+      const incoming = (data.ownerResidencies ?? []).filter((row) => row.ownerId === oldId)
+        .map((row) => ({ startDate: row.startDate, endDate: typeof row.endDate === "string" ? row.endDate : undefined }));
+      if (incoming.length) validateResidencyRanges([
+        ...(await db.ownerResidencies.where("ownerId").equals(live.id).toArray()),
+        ...incoming,
+      ]);
+    }
+  }
+  let hasDefault = (await getOwners()).some((owner) => owner.isDefault === true);
+  let acceptedIncomingDefault = false;
 
   for (const tag of data.tags ?? []) {
     const { id, ...tagData } = tag;
@@ -152,8 +186,50 @@ export async function restoreLegacyVocabulary(
     const { id, ...ownerData } = owner;
     const ownerName = ownerData.name || "";
     if (restoreMode === "merge" && existingOwnerNames.has(ownerName)) continue;
-    await restoreOwner({ name: ownerName, createdAt: ownerData.createdAt || now });
+    const restoreDefault = !hasDefault && !acceptedIncomingDefault && ownerData.isDefault === true;
+    await restoreOwner({
+      name: ownerName,
+      kind: ownerData.kind === "company" ? "company" : "person",
+      archivedAt: typeof ownerData.archivedAt === "number" ? ownerData.archivedAt : undefined,
+      isDefault: restoreDefault,
+      createdAt: ownerData.createdAt || now,
+    });
+    if (restoreDefault) { hasDefault = true; acceptedIncomingDefault = true; }
     vocabularyAdded++;
+  }
+  if (!hasDefault) {
+    const restored = await getOwners();
+    const fallback = restored.find((owner) => owner.name.trim().toLowerCase() === "me") ??
+      [...restored].sort((a, b) => a.createdAt - b.createdAt || a.id! - b.id!)[0];
+    if (fallback?.id != null) await db.owners.update(fallback.id, { isDefault: true });
+  }
+
+  // Legacy JSON backups carry small tables together. Owner primary keys are
+  // regenerated on restore, so resolve each residency through the backup
+  // owner's name rather than retaining an invalid old numeric key.
+  const backupOwnerNames = new Map<number, string>();
+  for (const owner of data.owners ?? []) {
+    if (typeof owner?.id === "number" && typeof owner.name === "string") backupOwnerNames.set(owner.id, owner.name);
+  }
+  for (const row of data.ownerResidencies ?? []) {
+    const name = backupOwnerNames.get(row?.ownerId);
+    if (!name || typeof row.startDate !== "string" || typeof row.jurisdiction !== "string") continue;
+    const owner = (await getOwners()).find((candidate) => candidate.name === name);
+    if (!owner?.id || typeof row.matchingMethod !== "string") continue;
+    const exists = restoreMode === "merge" && await db.ownerResidencies
+      .where("[ownerId+startDate]").equals([owner.id, row.startDate]).first();
+    if (exists) continue;
+    await db.ownerResidencies.add({
+      ownerId: owner.id,
+      startDate: row.startDate,
+      endDate: typeof row.endDate === "string" ? row.endDate : undefined,
+      jurisdiction: row.jurisdiction,
+      region: typeof row.region === "string" ? row.region : undefined,
+      notes: typeof row.notes === "string" ? row.notes : undefined,
+      matchingMethod: row.matchingMethod as OwnerMatchingMethod,
+      createdAt: typeof row.createdAt === "number" ? row.createdAt : now,
+      updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : now,
+    });
   }
 
   for (const wn of data.walletNames ?? []) {

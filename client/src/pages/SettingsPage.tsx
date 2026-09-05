@@ -11,6 +11,7 @@ import { HoverTooltipSection } from "./settings/hover-tooltip-section";
 import { StorageCard, DatabaseDoctorCard, AboutCard } from "./settings/info-cards-section";
 import { SecurityAttachmentSection } from "./settings/security-attachment-section";
 import { DataManagementSection } from "./settings/data-management-section";
+import { OwnersSection } from "./settings/owners-section";
 export { resetEntityErrorOpenState } from "./settings/entity-errors";
 
 export default function SettingsPage() {
@@ -26,6 +27,7 @@ export default function SettingsPage() {
 
         <AppearanceSection />
         <FieldVisibilitySection />
+        <OwnersSection />
         <VocabularyManager />
         <AnalysisLimitsSection />
         <EntityListSection />

@@ -17,11 +17,11 @@ import { reportDbUpgradeProgress } from './db-upgrade-progress';
  * KEEP IN SYNC when adding a new `this.version(N)` declaration — the
  * legacy-migration test asserts this matches the opened database.
  */
-export const CURRENT_SCHEMA_VERSION = 44;
+export const CURRENT_SCHEMA_VERSION = 45;
 
 // Import types needed for the class definition
 import type {
-  Record, Attachment, Tag, Category, Owner, WalletName, SeedName, WalletSoftware,
+  Record, Attachment, Tag, Category, Owner, OwnerResidency, WalletName, SeedName, WalletSoftware,
   RecordOrigin, CustomField, Settings, PriceData, BlockchainTransaction,
   TransactionParticipant, AddressSyncState, NodeSettings, DerivationTemplate,
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
@@ -46,6 +46,7 @@ export class KYUTXODatabase extends Dexie {
   tags!: Table<Tag>;
   categories!: Table<Category>;
   owners!: Table<Owner>;
+  ownerResidencies!: Table<OwnerResidency>;
   walletNames!: Table<WalletName>;
   seedNames!: Table<SeedName>;
   walletSoftware!: Table<WalletSoftware>;
@@ -115,6 +116,30 @@ export class KYUTXODatabase extends Dexie {
 
   constructor() {
     super('KYUTXODatabase');
+    // v45 turns the legacy owner vocabulary into a policy-owner table without
+    // invalidating existing name-based record annotations. Residency blocks are
+    // independent rows so a policy history can be safely edited and backed up.
+    this.version(45).stores({
+      owners: '++id, name, archivedAt',
+      ownerResidencies: '++id, ownerId, [ownerId+startDate], startDate, endDate',
+    }).upgrade(async tx => {
+      if (await tx.table('owners').count() === 0) {
+        await tx.table('owners').add({ name: 'Me', kind: 'person', isDefault: true, createdAt: Date.now() });
+      }
+      const ownerRows = await tx.table('owners').toArray();
+      const defaults = ownerRows.filter((owner: globalThis.Record<string, unknown>) => owner.isDefault === true);
+      if (defaults.length === 0) {
+        const me = ownerRows.find((owner: globalThis.Record<string, unknown>) =>
+          typeof owner.name === 'string' && owner.name.trim().toLowerCase() === 'me');
+        const first = me ?? [...ownerRows].sort((a: globalThis.Record<string, unknown>, b: globalThis.Record<string, unknown>) =>
+          (typeof a.createdAt === 'number' ? a.createdAt : 0) - (typeof b.createdAt === 'number' ? b.createdAt : 0) ||
+          (typeof a.id === 'number' ? a.id : 0) - (typeof b.id === 'number' ? b.id : 0))[0];
+        if (first) await tx.table('owners').update(first.id, { isDefault: true });
+      }
+      await tx.table('owners').toCollection().modify((owner: globalThis.Record<string, unknown>) => {
+        if (owner.kind !== 'person' && owner.kind !== 'company') owner.kind = 'person';
+      });
+    });
     // v44 adds normalized rows only. Legacy record fields intentionally remain
     // untouched; the post-unlock migration is resumable and performs no cleanup.
     this.version(44).stores({
@@ -1380,6 +1405,12 @@ export const db = new KYUTXODatabase();
 
 // Initialize default settings
 db.on('ready', async () => {
+  // A newly-created database does not run an upgrade callback, while an older
+  // vault can legitimately have an empty legacy vocabulary. In both cases Me
+  // is the compatibility default for the pre-policy single-owner workflow.
+  if (await db.owners.count() === 0) {
+    await db.owners.add({ name: 'Me', kind: 'person', isDefault: true, createdAt: Date.now() });
+  }
   const settings = await db.settings.get('default');
   if (!settings) {
     await db.settings.add(createDefaultSettings('default'));

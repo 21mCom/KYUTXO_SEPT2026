@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Pencil, Trash2, Loader2, Tag, FolderOpen, Wallet, Key, User, Monitor, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Tag, FolderOpen, Wallet, Key, Monitor, ChevronDown, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,7 +30,6 @@ import { useTags, createTag, updateTag, deleteTag, getTagUsageCount } from "@/ho
 import { useCategories, createCategory, updateCategory, deleteCategory, getCategoryUsageCount } from "@/hooks/use-categories";
 import { useWalletNames, createWalletName, updateWalletName, deleteWalletName, getWalletNameUsageCount } from "@/hooks/use-wallet-names";
 import { useSeedNames, createSeedName, updateSeedName, deleteSeedName, getSeedNameUsageCount, SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
-import { useOwners, createOwner, updateOwner, deleteOwner, getOwnerUsageCount } from "@/hooks/use-owners";
 import { useWalletSoftware, createWalletSoftware, updateWalletSoftware, deleteWalletSoftware, getWalletSoftwareUsageCount } from "@/hooks/use-wallet-software";
 import { propagateTagRename, propagateCategoryRename, propagateStringFieldRename } from "@/lib/data/vocabulary-crud";
 
@@ -327,7 +326,6 @@ export default function VocabularyManager() {
   const { categories, isLoading: categoriesLoading } = useCategories();
   const { walletNames, isLoading: walletNamesLoading } = useWalletNames();
   const { seedNames, isLoading: seedNamesLoading } = useSeedNames();
-  const { owners, isLoading: ownersLoading } = useOwners();
   const { walletSoftware, isLoading: walletSoftwareLoading } = useWalletSoftware();
 
   const sections: VocabSectionConfig[] = [
@@ -356,18 +354,6 @@ export default function VocabularyManager() {
       getUsageCount: getCategoryUsageCount,
       propagateRename: propagateCategoryRename,
       deleteRemovesFromRecords: true,
-    },
-    {
-      key: "owners",
-      label: "Owners",
-      icon: User,
-      items: owners,
-      isLoading: ownersLoading,
-      onCreate: createOwner,
-      onUpdate: (id, data) => updateOwner(id, data),
-      onDelete: deleteOwner,
-      getUsageCount: getOwnerUsageCount,
-      propagateRename: (oldName, newName) => propagateStringFieldRename('owner', oldName, newName),
     },
     {
       key: "wallet-names",

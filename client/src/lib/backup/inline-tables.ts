@@ -103,6 +103,7 @@ import {
 } from "@/lib/quantum-risk";
 import { sanitizeSavedInboxViews } from "@/lib/data/transaction-crud";
 import type { SavedInboxView } from "@/lib/db-types";
+import { validateResidencyRanges } from "@/lib/data/owner-policy";
 
 // Recognized Fund Trail layout values + their human-readable labels, derived
 // from the single source of truth so this allow-list never drifts from the UI.
@@ -336,11 +337,12 @@ export async function restoreSettingsPreferences(rows: any[]): Promise<void> {
 }
 
 export async function readInlineTables(): Promise<Record<string, unknown[]>> {
-  const [tags, categories, owners, walletNames, seedNames, walletSoftware] =
+  const [tags, categories, owners, ownerResidencies, walletNames, seedNames, walletSoftware] =
     await Promise.all([
       db.tags.toArray(),
       db.categories.toArray(),
       db.owners.toArray(),
+      db.ownerResidencies.toArray(),
       db.walletNames.toArray(),
       db.seedNames.toArray(),
       db.walletSoftware.toArray(),
@@ -385,6 +387,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     tags,
     categories,
     owners,
+    ownerResidencies,
     walletNames,
     seedNames,
     walletSoftware,
@@ -413,6 +416,7 @@ export async function clearInlineTables(): Promise<void> {
   await db.tags.clear();
   await db.categories.clear();
   await db.owners.clear();
+  await db.ownerResidencies.clear();
   await db.walletNames.clear();
   await db.seedNames.clear();
   await db.walletSoftware.clear();
@@ -473,6 +477,22 @@ export async function restoreInlineTables(
 ): Promise<InlineRestoreResult> {
   const arr = (k: string): any[] => (Array.isArray(data[k]) ? (data[k] as any[]) : []);
   const now = Date.now();
+  // Validate the complete incoming policy history before touching owner rows.
+  // In particular do not allow a malformed backup to leave a restored owner
+  // with only a prefix of its residency history.
+  const matchingMethods = new Set(["fifo", "lifo", "hifo", "specific-identification", "proportional"]);
+  const incomingResidencies = arr("ownerResidencies");
+  const history = new Map<number, Array<{ startDate: string; endDate?: string }>>();
+  for (const row of incomingResidencies) {
+    if (!row || typeof row.ownerId !== "number" || typeof row.startDate !== "string" ||
+      typeof row.jurisdiction !== "string" || !matchingMethods.has(row.matchingMethod)) {
+      throw new Error("Invalid owner residency in backup");
+    }
+    const rows = history.get(row.ownerId) ?? [];
+    rows.push({ startDate: row.startDate, endDate: typeof row.endDate === "string" ? row.endDate : undefined });
+    history.set(row.ownerId, rows);
+  }
+  for (const rows of history.values()) validateResidencyRanges(rows);
 
   // Vocabulary tables de-dupe by `name` in merge mode (the raw restore*
   // helpers are blind Dexie adds with no uniqueness constraint, so without
@@ -492,6 +512,7 @@ export async function restoreInlineTables(
         tagIds: [] as number[],
         categoryIds: [] as number[],
         ownerIds: [] as number[],
+        ownerResidencyIds: [] as number[],
         walletNameIds: [] as number[],
         seedNameIds: [] as number[],
         walletSoftwareIds: [] as number[],
@@ -539,11 +560,77 @@ export async function restoreInlineTables(
     meta?.categoryIds.push(newCategoryId);
   }
   const seenOwners = await vocabSeen(getOwners);
-  for (const owner of arr("owners")) {
+  const liveOwners = await getOwners();
+  const incomingOwners = arr("owners");
+  const incomingOwnerNames = new Map<number, string>();
+  for (const owner of incomingOwners) {
+    if (typeof owner?.id === "number" && typeof owner.name === "string") incomingOwnerNames.set(owner.id, owner.name);
+  }
+  // Merge preflight must include live history: validate before inserting even an
+  // owner row, so a rejected merge is all-or-nothing for owner policy data.
+  if (isMergeMode) {
+    const liveByName = new Map(liveOwners.map((owner) => [owner.name, owner]));
+    for (const [oldOwnerId, name] of incomingOwnerNames) {
+      const live = liveByName.get(name);
+      if (!live?.id) continue;
+      const incoming = incomingResidencies
+        .filter((row) => row.ownerId === oldOwnerId)
+        .map((row) => ({ startDate: row.startDate, endDate: typeof row.endDate === "string" ? row.endDate : undefined }));
+      if (incoming.length) validateResidencyRanges([
+        ...(await db.ownerResidencies.where("ownerId").equals(live.id).toArray()),
+        ...incoming,
+      ]);
+    }
+  }
+  let hasDefault = liveOwners.some((owner) => owner.isDefault === true);
+  let acceptedIncomingDefault = false;
+  const ownerIdMap = new Map<number, number>();
+  for (const owner of incomingOwners) {
     const name = owner.name || "";
-    if (vocabSkip(seenOwners, name)) continue;
-    const newOwnerId = await restoreOwner({ name, createdAt: owner.createdAt || now });
+    if (vocabSkip(seenOwners, name)) {
+      const existing = (await getOwners()).find((row) => row.name === name);
+      if (typeof owner.id === "number" && existing?.id != null) ownerIdMap.set(owner.id, existing.id);
+      continue;
+    }
+    const restoreDefault = !hasDefault && !acceptedIncomingDefault && owner.isDefault === true;
+    const newOwnerId = await restoreOwner({
+      name,
+      kind: owner.kind === "company" ? "company" : "person",
+      archivedAt: typeof owner.archivedAt === "number" ? owner.archivedAt : undefined,
+      isDefault: restoreDefault,
+      createdAt: owner.createdAt || now,
+    });
+    if (restoreDefault) { hasDefault = true; acceptedIncomingDefault = true; }
     meta?.ownerIds.push(newOwnerId);
+    if (typeof owner.id === "number") ownerIdMap.set(owner.id, newOwnerId);
+  }
+  if (!hasDefault) {
+    const restored = await getOwners();
+    const fallback = restored.find((owner) => owner.name.trim().toLowerCase() === "me") ??
+      [...restored].sort((a, b) => a.createdAt - b.createdAt || a.id! - b.id!)[0];
+    if (fallback?.id != null) await db.owners.update(fallback.id, { isDefault: true });
+  }
+  // Residencies refer to owner primary keys, which are intentionally remapped
+  // during restore just like other inline autoincrement rows.
+  for (const residency of arr("ownerResidencies")) {
+    const ownerId = ownerIdMap.get(residency.ownerId);
+    if (ownerId === undefined || typeof residency.startDate !== "string" ||
+        typeof residency.jurisdiction !== "string" || typeof residency.matchingMethod !== "string") continue;
+    const duplicate = isMergeMode && await db.ownerResidencies
+      .where('[ownerId+startDate]').equals([ownerId, residency.startDate]).first();
+    if (duplicate) continue;
+    const id = await db.ownerResidencies.add({
+      ownerId,
+      startDate: residency.startDate,
+      endDate: typeof residency.endDate === "string" ? residency.endDate : undefined,
+      jurisdiction: residency.jurisdiction,
+      region: typeof residency.region === "string" ? residency.region : undefined,
+      notes: typeof residency.notes === "string" ? residency.notes : undefined,
+      matchingMethod: residency.matchingMethod as import("@/lib/db-types").OwnerMatchingMethod,
+      createdAt: typeof residency.createdAt === "number" ? residency.createdAt : now,
+      updatedAt: typeof residency.updatedAt === "number" ? residency.updatedAt : now,
+    });
+    meta?.ownerResidencyIds.push(id as number);
   }
   const seenWalletNames = await vocabSeen(getWalletNames);
   for (const wn of arr("walletNames")) {
@@ -828,6 +915,7 @@ export async function restoreInlineTables(
       await db.tags.bulkDelete(meta.tagIds);
       await db.categories.bulkDelete(meta.categoryIds);
       await db.owners.bulkDelete(meta.ownerIds);
+      await db.ownerResidencies.bulkDelete(meta.ownerResidencyIds);
       await db.walletNames.bulkDelete(meta.walletNameIds);
       await db.seedNames.bulkDelete(meta.seedNameIds);
       await db.walletSoftware.bulkDelete(meta.walletSoftwareIds);

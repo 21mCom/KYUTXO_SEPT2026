@@ -237,6 +237,7 @@ export async function runLegacyJsonRestore(
     recordOrigins: backupRecordOrigins = [],
     customFields: backupCustomFields,
     owners = [],
+    ownerResidencies = [],
     walletNames = [],
     seedNames = [],
     walletSoftware = [],
@@ -330,7 +331,7 @@ export async function runLegacyJsonRestore(
   // wallet software). Merge mode skips entries whose name already exists;
   // replace mode adds every entry (cleared above).
   const vocabResult = await restoreLegacyVocabulary(
-    { tags, categories, owners, walletNames, seedNames, walletSoftware },
+    { tags, categories, owners, ownerResidencies, walletNames, seedNames, walletSoftware },
     restoreMode,
   );
   await throwIfAborted();
