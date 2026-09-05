@@ -40,6 +40,27 @@ logged-in graphical desktop session while the job runs. Do not run these jobs
 as a service account without a desktop session, through Xvfb, or on the normal
 hosted runners.
 
+## Scheduled readiness warning
+
+The `Check desktop release runner readiness` workflow runs every Monday and can
+also be started manually. Its five matrix jobs use the same dedicated labels as
+the release gate, so an offline or incorrectly labeled runner remains visibly
+queued instead of giving false assurance that the target is ready. The weekly
+lead time lets maintainers restore it before release day (GitHub's job timeout
+starts only after a runner accepts the job). Each runner reports its actual Node
+OS/architecture and verifies that Bash is executable. Linux runners
+additionally require `DISPLAY` or
+`WAYLAND_DISPLAY`, the session D-Bus address, and an active, local graphical
+session reported by `loginctl`.
+
+This readiness workflow is intentionally non-destructive: it does not build or
+launch KYUTXO and never invokes the native screen-lock or suspend commands.
+Accepted jobs that fail a prerequisite emit a `Release desktop is not ready`
+workflow warning and write the reason to the job summary. Maintainers should
+inspect any failed or still-queued scheduled run, restore the named runner's
+logged-in desktop session, and rerun the workflow manually until all five jobs
+report **Ready**.
+
 ## Interactive runner setup
 
 Register each machine as a repository self-hosted runner with the labels
