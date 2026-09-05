@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Focused real-browser proof that wrong passwords cannot mutate a live vault
-// for either v3 or legacy encrypted backups, and that retrying with the correct
-// password succeeds. Everything runs offline against local IndexedDB.
+// for either v3 or legacy encrypted backups, that damaged legacy ciphertext is
+// equally non-destructive with the correct password, and that intact retries
+// succeed. Everything runs offline against local IndexedDB.
 
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
@@ -104,12 +105,29 @@ async function buildLegacyBackup(data, password) {
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
+async function corruptLegacyCiphertext(backupBytes) {
+  const zip = await JSZip.loadAsync(backupBytes);
+  const backupFile = zip.file('backup.json');
+  if (!backupFile) throw new Error('Legacy backup is missing backup.json');
+  const backup = JSON.parse(await backupFile.async('text'));
+  const encrypted = Buffer.from(backup.data, 'base64');
+  if (encrypted.length <= 12) throw new Error('Legacy encrypted payload is too short');
+  // Keep the IV and ZIP/JSON structure valid while making AES-GCM reject the
+  // authenticated ciphertext even when the supplied password is correct.
+  encrypted[12] ^= 0x01;
+  backup.data = encrypted.toString('base64');
+  zip.file('backup.json', JSON.stringify(backup));
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
 async function snapshot(page) {
   return page.evaluate(async () => {
+    const recordCrud = await import('/src/lib/data/record-crud.ts');
     const settingsCrud = await import('/src/lib/data/settings-crud.ts');
     const txCrud = await import('/src/lib/data/transaction-crud.ts');
     return {
       settings: await settingsCrud.getSettings('default'),
+      records: await recordCrud.getAllRecords(),
       transactions: await txCrud.getAllTransactions(),
     };
   });
@@ -145,6 +163,7 @@ async function proveWrongThenCorrect(page, {
   verifyCorrect,
   record,
   label,
+  corruptBackupBuffer,
 }) {
   await openRestore(page, backupName, backupBuffer);
   const password = page.getByTestId('input-restore-password');
@@ -164,6 +183,54 @@ async function proveWrongThenCorrect(page, {
     !previewVisible && JSON.stringify(afterWrong) === JSON.stringify(beforeWrong),
     `preview=${previewVisible} vaultUnchanged=${JSON.stringify(afterWrong) === JSON.stringify(beforeWrong)}`,
   );
+
+  if (corruptBackupBuffer) {
+    await page.getByTestId('input-restore-file').setInputFiles({
+      name: `${label}-corrupt-ciphertext.zip`,
+      mimeType: 'application/zip',
+      buffer: corruptBackupBuffer,
+    });
+    await page.getByText('Backup Date:', { exact: false }).waitFor({
+      state: 'visible',
+      timeout: 20_000,
+    });
+    await password.fill(correctPassword);
+    await continueButton.click();
+    await page.getByText('Could not read backup', { exact: true }).first().waitFor({
+      state: 'visible',
+      timeout: 20_000,
+    });
+    const failureMessageVisible = await page
+      .getByText('The password may be incorrect, or the backup is corrupted.', {
+        exact: true,
+      })
+      .first()
+      .isVisible()
+      .catch(() => false);
+    const corruptPreviewVisible = await page.getByTestId('restore-preferences-preview')
+      .isVisible()
+      .catch(() => false);
+    const afterCorrupt = await snapshot(page);
+    record(
+      `${label}-corrupt-ciphertext-non-destructive`,
+      failureMessageVisible &&
+        !corruptPreviewVisible &&
+        JSON.stringify(afterCorrupt) === JSON.stringify(beforeWrong),
+      `failureMessage=${failureMessageVisible} preview=${corruptPreviewVisible} vaultUnchanged=${
+        JSON.stringify(afterCorrupt) === JSON.stringify(beforeWrong)
+      }`,
+    );
+
+    await page.getByTestId('input-restore-file').setInputFiles({
+      name: backupName,
+      mimeType: 'application/zip',
+      buffer: backupBuffer,
+    });
+    await page.getByText('Backup Date:', { exact: false }).waitFor({
+      state: 'visible',
+      timeout: 20_000,
+    });
+  }
 
   await password.fill(correctPassword);
   await continueButton.click();
@@ -310,6 +377,7 @@ async function main() {
       };
     });
     const legacyBackup = await buildLegacyBackup(legacyData, LEGACY_PASSWORD);
+    const corruptLegacyBackup = await corruptLegacyCiphertext(legacyBackup);
 
     await page.evaluate(async (staleTxid) => {
       const settingsCrud = await import('/src/lib/data/settings-crud.ts');
@@ -338,6 +406,7 @@ async function main() {
       beforeWrong: beforeLegacyWrong,
       record,
       label: 'legacy',
+      corruptBackupBuffer: corruptLegacyBackup,
       verifyCorrect: ({ settings, transactions }) => ({
         passed: settings?.disableOrphanCheck === true &&
           transactions.length === 1 &&
@@ -363,7 +432,7 @@ async function main() {
   if (failed.length) {
     throw new Error(`Failed steps: ${failed.map((step) => step.name).join(', ')}`);
   }
-  console.log('[encrypted-backup-restore-safety] PASSED: v3 and legacy wrong-password restores are non-destructive and correct-password retries succeed.');
+  console.log('[encrypted-backup-restore-safety] PASSED: wrong-password and corrupt-ciphertext restores are non-destructive and intact retries succeed.');
 }
 
 main().catch((error) => {
