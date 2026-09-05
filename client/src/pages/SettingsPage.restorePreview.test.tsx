@@ -87,8 +87,9 @@ beforeAll(() => {
 async function makeLegacyBackup(opts: {
   settings: any[];
   password?: string;
+  data?: unknown;
 }): Promise<File> {
-  const dataObj = { records: [], settings: opts.settings };
+  const dataObj = opts.data ?? { records: [], settings: opts.settings };
   let backup: any;
   if (opts.password) {
     const salt = generateSalt();
@@ -153,6 +154,29 @@ afterEach(() => {
 });
 
 describe("SettingsPage — legacy backup preference preview (plain)", () => {
+  it("blocks malformed plaintext data before confirmation and preserves portable settings", async () => {
+    renderWithSettingsProviders(<SettingsPage />);
+    await openRestoreWith(
+      await makeLegacyBackup({ settings: [], data: "not-a-vault-payload" }),
+    );
+
+    fireEvent.click(await screen.findByTestId("button-continue-restore"));
+
+    await waitFor(() => {
+      expect(
+        toastSpy.mock.calls.some((call) => call[0]?.title === "Malformed backup data"),
+      ).toBe(true);
+    });
+    expect(screen.queryByTestId("restore-preferences-preview")).toBeNull();
+    expect(screen.getByTestId("radio-replace")).toBeTruthy();
+    expect(screen.queryByTestId("button-confirm-restore")).toBeNull();
+
+    const after = await getSettings("default");
+    expect(after?.disableOrphanCheck).toBe(false);
+    expect(after?.cancelConfirmThreshold).toBe(75);
+    expect(after?.privacyHistoryLimit).toBe(30);
+  });
+
   it("advances to the confirm stage and shows the correct From-backup vs Kept rows", async () => {
     renderWithSettingsProviders(<SettingsPage />);
     await openRestoreWith(await makeLegacyBackup({ settings: PREFS_SETTINGS }));

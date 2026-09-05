@@ -76,7 +76,7 @@ export interface LegacyRestoreOptions {
   cleanupAfterClear?: () => Promise<void>;
 }
 
-function assertLegacyBackupData(data: any): void {
+export function assertLegacyBackupData(data: any): void {
   if (!data || typeof data !== "object" || !Array.isArray(data.records)) {
     throw new Error("Invalid legacy backup data");
   }

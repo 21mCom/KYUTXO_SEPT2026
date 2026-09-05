@@ -612,6 +612,21 @@ describe("runLegacyJsonRestore: Electron attachment file routing", () => {
 });
 
 describe("runLegacyJsonRestore: invalid backups", () => {
+  it("rejects malformed plaintext data before replace mode clears the live vault", async () => {
+    await bulkCreateRecords(
+      [{ type: "address", inputString: "live-record", label: "Keep me", tags: [], categories: [] } as any],
+      { skipNotification: true },
+    );
+    const file = await makePlainZip("not-a-vault-payload");
+    const { cb, events } = makeCallbacks();
+
+    await expect(runLegacyJsonRestore(file, "", "replace", cb)).rejects.toThrow(
+      "Invalid legacy backup data",
+    );
+    expect(await db.records.count()).toBe(1);
+    expect(events.some((event) => event.kind === "cleared")).toBe(false);
+  });
+
   it("throws 'Invalid backup file' when the ZIP has no backup.json", async () => {
     const zip = new JSZip();
     zip.file("something-else.txt", "not a backup");

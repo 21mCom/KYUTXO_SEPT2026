@@ -45,7 +45,10 @@ import {
   previewSettingsPreferences,
   type PortablePreferencePreview,
 } from "@/lib/backup/inline-tables";
-import { runLegacyJsonRestore } from "@/lib/backup/legacy-restore-pipeline";
+import {
+  assertLegacyBackupData,
+  runLegacyJsonRestore,
+} from "@/lib/backup/legacy-restore-pipeline";
 import { createRestoreAttachmentWriter } from "@/lib/backup/restore-attachment-writer";
 import { runPostRestoreTxidBackfill } from "@/lib/backup/post-restore-backfill";
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
@@ -351,23 +354,23 @@ export function RestoreBackupFlow() {
         }
       }
 
-      // For plaintext legacy backups: warn when backup.data is present but is not
-      // a proper plain object — this would silently produce a no-data restore.
-      if (
-        !backup.encrypted &&
-        backup.data !== undefined &&
-        backup.data !== null &&
-        (typeof legacyData !== "object" || Array.isArray(legacyData))
-      ) {
+      // A legacy archive is restorable only when its payload has the required
+      // records array. Fail closed here, before exposing the destructive
+      // confirmation action. The restore pipeline repeats this assertion so a
+      // future alternate caller cannot bypass the non-destructive preflight.
+      try {
+        assertLegacyBackupData(legacyData);
+      } catch {
         toast({
           variant: "destructive",
           title: "Malformed backup data",
           description:
-            "This backup's data payload is present but couldn't be read. Records and other data may not restore. Check that the backup file is not corrupt.",
+            "This backup's data payload is missing or damaged. Nothing was changed. Choose a valid backup file.",
         });
+        return;
       }
 
-      const legacySettings = Array.isArray(legacyData?.settings)
+      const legacySettings = Array.isArray(legacyData.settings)
         ? (legacyData.settings as any[])
         : [];
       setPrefPreview(previewSettingsPreferences(legacySettings));
