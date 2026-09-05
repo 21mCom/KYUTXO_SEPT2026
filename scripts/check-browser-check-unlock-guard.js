@@ -25,7 +25,9 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const SCRIPTS_DIR = __dirname;
+const SCRIPTS_DIR = process.env.BROWSER_CHECK_UNLOCK_GUARD_SCRIPTS_DIR
+  ? path.resolve(process.env.BROWSER_CHECK_UNLOCK_GUARD_SCRIPTS_DIR)
+  : __dirname;
 
 // The authoritative source of these testids.
 const SOURCE_FILES = [

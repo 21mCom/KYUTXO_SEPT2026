@@ -1,11 +1,76 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {
   completeFreshVaultOnboardingIfPresent,
   dismissMigrationOverlayIfPresent,
   unlockIfNeeded,
   waitForExistingVaultLoginScreen,
 } from './browser-check-utils.mjs';
+
+const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+const unlockGuardPath = path.join(scriptsDir, 'check-browser-check-unlock-guard.js');
+
+function makeUnlockGuardFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-check-unlock-guard-'));
+  const fixtureScriptsDir = path.join(root, 'scripts');
+  const componentsDir = path.join(root, 'client/src/components');
+  fs.mkdirSync(fixtureScriptsDir, { recursive: true });
+  fs.mkdirSync(componentsDir, { recursive: true });
+
+  for (const component of [
+    'LoginScreen.tsx',
+    'LegacyMigrationOverlay.tsx',
+    'NetworkPrivacyOnboarding.tsx',
+  ]) {
+    fs.writeFileSync(path.join(componentsDir, component), '');
+  }
+  for (const script of [
+    'browser-check-utils.mjs',
+    'check-packaged-vault-lock-native.mjs',
+    'check-wrong-password-packaged.mjs',
+  ]) {
+    fs.writeFileSync(path.join(fixtureScriptsDir, script), '');
+  }
+
+  return { root, fixtureScriptsDir };
+}
+
+describe('browser-check unlock guard', () => {
+  it('rejects generic onboarding selectors while allowing the dedicated first-run journey', () => {
+    const { root, fixtureScriptsDir } = makeUnlockGuardFixture();
+    try {
+      fs.writeFileSync(
+        path.join(fixtureScriptsDir, 'check-generic-browser.mjs'),
+        "page.getByTestId('network-onboarding-source');\n",
+      );
+      fs.writeFileSync(
+        path.join(fixtureScriptsDir, 'check-first-run-network-privacy-browser.mjs'),
+        "page.getByTestId('button-onboarding-finish');\n",
+      );
+
+      const result = spawnSync(process.execPath, [unlockGuardPath], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          BROWSER_CHECK_UNLOCK_GUARD_SCRIPTS_DIR: fixtureScriptsDir,
+        },
+      });
+
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /check-generic-browser\.mjs:1\s+\[network-onboarding-source\]/);
+      assert.doesNotMatch(result.stderr, /check-first-run-network-privacy-browser\.mjs:/);
+      assert.match(result.stderr, /completeFreshVaultOnboardingIfPresent/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 function timeoutError(message = 'locator timed out') {
   const error = new Error(message);
