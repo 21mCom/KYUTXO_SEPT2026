@@ -9,7 +9,7 @@
 //      verifies that the existing view is updated rather than duplicated;
 //   4. creates and deletes a second view;
 //   5. reloads, unlocks again, selects the saved view, and verifies that its
-//      tab, search, date, and amount filters are restored;
+//      tab, search, date, and amount filters are reapplied;
 //   6. snoozes one row with the one-week preset and the other with the native
 //      custom date input, then verifies the persisted state/timestamps.
 //
@@ -33,7 +33,7 @@ const BASE_URL = `http://localhost:${PORT}/`;
 const PAGE_URL = `${BASE_URL}transaction-inbox`;
 const SETUP_PASSWORD = 'transaction-inbox-check-123';
 const VIEW_NAME = 'Inbox review today';
-const DELETED_VIEW_NAME = 'Deleted before backup';
+const DELETED_VIEW_NAME = 'Deleted before reload';
 
 // The shared "24" prefix makes the saved search match both rows while the
 // first eight characters remain different, so each TransactionCard has a
@@ -431,10 +431,8 @@ async function main() {
       `views=${updated.count} matching=${updated.matchingCount} id=${updated.id} search=${JSON.stringify(updated.search)} amount=${updated.filters?.amountMinBtc}-${updated.filters?.amountMaxBtc}`,
     );
 
-    // Create a second view and delete it before the backup. The stale local
-    // state injected below contains this deleted view, so a restore that
-    // merges or resurrects local settings instead of applying the backup
-    // snapshot will fail the post-restore assertion.
+    // Create a second view and delete it before reloading. This proves the
+    // deleted entry is not resurrected by stale in-memory state.
     await page.getByTestId('input-inbox-view-name').fill(DELETED_VIEW_NAME);
     await clickEl(page, 'button-inbox-save-view');
     await page.getByTestId('select-inbox-saved-view').selectOption({ label: DELETED_VIEW_NAME });
@@ -444,7 +442,7 @@ async function main() {
       null,
       { timeout: 10_000 },
     );
-    const beforeBackupViews = await page.evaluate(async ({ viewName, deletedViewName }) => {
+    const beforeReloadViews = await page.evaluate(async ({ viewName, deletedViewName }) => {
       const settingsCrud = await import('/src/lib/data/settings-crud.ts');
       const settings = await settingsCrud.getSettings('default');
       const views = Array.isArray(settings?.savedInboxViews) ? settings.savedInboxViews : [];
@@ -455,11 +453,11 @@ async function main() {
       };
     }, { viewName: VIEW_NAME, deletedViewName: DELETED_VIEW_NAME });
     record(
-      'delete-view-before-backup',
-      beforeBackupViews.viewCount === 1 &&
-        beforeBackupViews.updatedCount === 1 &&
-        beforeBackupViews.deletedCount === 0,
-      `views=${beforeBackupViews.viewCount} updated=${beforeBackupViews.updatedCount} deleted=${beforeBackupViews.deletedCount}`,
+      'delete-view-before-reload',
+      beforeReloadViews.viewCount === 1 &&
+        beforeReloadViews.updatedCount === 1 &&
+        beforeReloadViews.deletedCount === 0,
+      `views=${beforeReloadViews.viewCount} updated=${beforeReloadViews.updatedCount} deleted=${beforeReloadViews.deletedCount}`,
     );
 
     await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
@@ -470,7 +468,7 @@ async function main() {
     });
 
     // Change away from the saved state before reload so selecting the saved
-    // view proves the tab itself is restored, not merely retained in memory.
+    // view proves the tab itself is reapplied, not merely retained in memory.
     await activateTab(page, 'tab-inbox-ignored');
     await page.waitForTimeout(300);
     await page.reload({ waitUntil: 'load', timeout: 60_000 });

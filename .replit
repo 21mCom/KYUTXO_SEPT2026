@@ -955,6 +955,10 @@ args = "browser-check-unlock-guard"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "restore-safety-isolation-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "vault-health-scale-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -3696,6 +3700,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-encrypted-backup-restore-safety-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "restore-safety-isolation-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-restore-safety-isolation.js && node --test scripts/check-restore-safety-isolation.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
