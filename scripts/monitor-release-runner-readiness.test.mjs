@@ -346,6 +346,109 @@ test('watchdog alert names and links the silent monitor', () => {
   assert.match(body, /dispatch .* manually/);
 });
 
+function watchdogHarness({ runs, openIssues = [] }) {
+  const calls = [];
+  const github = {
+    paginate: async () => openIssues,
+    rest: {
+      actions: {
+        listWorkflowRuns: async () => ({ data: { workflow_runs: runs } }),
+      },
+      issues: {
+        listForRepo: 'listForRepo',
+        create: async (request) => {
+          calls.push({ type: 'create', request });
+          return { data: { html_url: 'https://example.test/issues/heartbeat' } };
+        },
+        createComment: async (request) => calls.push({ type: 'comment', request }),
+        update: async (request) => calls.push({ type: 'update', request }),
+      },
+    },
+  };
+  const invocation = {
+    github,
+    context: { repo: { owner: 'owner', repo: 'repo' } },
+    core: {
+      info: (message) => calls.push({ type: 'info', message }),
+      warning: (message) => calls.push({ type: 'warning', message }),
+      setFailed: (message) => calls.push({ type: 'failed', message }),
+    },
+    now: Date.parse('2026-09-05T12:30:00Z'),
+  };
+  return { calls, invocation };
+}
+
+test('watchdog treats exactly 30 minutes since completion as silent', async () => {
+  const { calls, invocation } = watchdogHarness({
+    runs: [{
+      status: 'completed',
+      conclusion: 'success',
+      updated_at: '2026-09-05T12:00:00Z',
+      html_url: 'https://example.test/runs/threshold',
+    }],
+  });
+
+  await watchdog.run(invocation);
+
+  assert.equal(calls.filter((call) => call.type === 'create').length, 1);
+  assert.equal(calls.filter((call) => call.type === 'failed').length, 1);
+});
+
+test('watchdog with no run history links the monitor workflow Actions page', async () => {
+  const { calls, invocation } = watchdogHarness({ runs: [] });
+
+  await watchdog.run(invocation);
+
+  const created = calls.find((call) => call.type === 'create');
+  assert.ok(created);
+  assert.match(
+    created.request.body,
+    /https:\/\/github\.com\/owner\/repo\/actions\/workflows\/desktop-release-runner-monitor\.yml/,
+  );
+  assert.match(created.request.body, /No completed run was found/);
+});
+
+test('watchdog links a newer in-progress run but measures silence from the older completion', async () => {
+  const { calls, invocation } = watchdogHarness({
+    runs: [
+      {
+        status: 'in_progress',
+        created_at: '2026-09-05T12:20:00Z',
+        html_url: 'https://example.test/runs/in-progress',
+      },
+      {
+        status: 'completed',
+        conclusion: 'success',
+        updated_at: '2026-09-05T11:59:59Z',
+        html_url: 'https://example.test/runs/completed',
+      },
+    ],
+  });
+
+  await watchdog.run(invocation);
+
+  const created = calls.find((call) => call.type === 'create');
+  assert.ok(created);
+  assert.match(created.request.body, /runs\/in-progress/);
+  assert.match(created.request.body, /Last completion: 2026-09-05T11:59:59Z/);
+});
+
+test('cancelled monitor runs count as heartbeat completions', async () => {
+  const { calls, invocation } = watchdogHarness({
+    runs: [{
+      status: 'completed',
+      conclusion: 'cancelled',
+      updated_at: '2026-09-05T12:05:00Z',
+      html_url: 'https://example.test/runs/cancelled',
+    }],
+  });
+
+  await watchdog.run(invocation);
+
+  assert.equal(calls.filter((call) => call.type === 'create').length, 0);
+  assert.equal(calls.filter((call) => call.type === 'failed').length, 0);
+});
+
 test('watchdog opens one alert after silence and closes it only after a newer completion', async () => {
   const calls = [];
   let runs = [{
