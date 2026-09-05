@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +11,15 @@ const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/build.yml'),
 const matrixWorkflow = fs.readFileSync(path.join(ROOT, '.github/workflows/desktop-package-matrix.yml'), 'utf8');
 const builder = JSON.parse(fs.readFileSync(path.join(ROOT, 'electron-builder.json'), 'utf8'));
 const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+
+function run(command, args, cwd) {
+  return spawnSync(command, args, {
+    cwd,
+    encoding: 'utf8',
+    env: { ...process.env, npm_config_ignore_scripts: 'true' },
+    shell: process.platform === 'win32',
+  });
+}
 
 test('pull requests and all packages are gated by typecheck and the documented fast tier', () => {
   assert.match(workflow, /pull_request:\s*\n\s+branches:/);
@@ -21,6 +32,47 @@ test('pull requests and all packages are gated by typecheck and the documented f
   assert.ok(packageJson.scripts['test:fast:unguarded']);
   assert.match(packageJson.scripts['test:unit'], /--maxWorkers=1/);
   assert.equal(packageJson.scripts['test:scripts'], 'node scripts/run-node-tests.mjs');
+});
+
+test('the pull-request fast-tier entry point rejects a test that rewrites a tracked sample', (t) => {
+  const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-tier-fixture-checkout-'));
+  t.after(() => fs.rmSync(checkout, { recursive: true, force: true }));
+
+  const sampleName = 'tracked-release-sample.pdf';
+  const sourceSample = path.join(ROOT, 'proof-of-funds-Alice_Example-2026-06-30.pdf');
+  const sourceBytesBefore = fs.readFileSync(sourceSample);
+  fs.mkdirSync(path.join(checkout, 'scripts'));
+  fs.copyFileSync(
+    path.join(ROOT, 'scripts/check-release-fixtures.mjs'),
+    path.join(checkout, 'scripts/check-release-fixtures.mjs'),
+  );
+  fs.writeFileSync(path.join(checkout, sampleName), 'original sample bytes');
+  fs.writeFileSync(
+    path.join(checkout, 'scripts/rewrite-sample.mjs'),
+    `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(sampleName)}, 'rewritten');\n`,
+  );
+  fs.writeFileSync(
+    path.join(checkout, 'package.json'),
+    JSON.stringify({
+      private: true,
+      type: 'module',
+      scripts: {
+        'test:fast': packageJson.scripts['test:fast'],
+        'test:fast:unguarded': 'node scripts/rewrite-sample.mjs',
+      },
+    }),
+  );
+
+  assert.equal(run('git', ['init', '-q'], checkout).status, 0);
+  assert.equal(run('git', ['add', '.'], checkout).status, 0);
+
+  const result = run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'test:fast'], checkout);
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 1, output);
+  assert.match(output, /test command modified 1 checked-in sample document/);
+  assert.match(output, new RegExp(sampleName.replace('.', '\\.')));
+  assert.deepEqual(fs.readFileSync(sourceSample), sourceBytesBefore);
 });
 
 test('tagged and explicitly requested releases run the full suite before packaging', () => {
