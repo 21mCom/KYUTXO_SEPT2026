@@ -104,32 +104,57 @@ const STRING_LITERAL_PATTERN = new RegExp(STRING_LITERAL_SOURCE, 'g');
 
 const SELF_FILE = path.basename(__filename);
 
-function evaluateStaticString(node, bindings, seen = new Set()) {
+function evaluateStaticString(node, bindings, functions, seen = new Set()) {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return node.text;
   }
   if (ts.isParenthesizedExpression(node)) {
-    return evaluateStaticString(node.expression, bindings, seen);
+    return evaluateStaticString(node.expression, bindings, functions, seen);
   }
   if (ts.isIdentifier(node)) {
     if (seen.has(node.text)) return undefined;
     const initializer = bindings.get(node.text);
     if (!initializer) return undefined;
-    return evaluateStaticString(initializer, bindings, new Set([...seen, node.text]));
+    return evaluateStaticString(initializer, bindings, functions, new Set([...seen, node.text]));
   }
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    const left = evaluateStaticString(node.left, bindings, seen);
-    const right = evaluateStaticString(node.right, bindings, seen);
+    const left = evaluateStaticString(node.left, bindings, functions, seen);
+    const right = evaluateStaticString(node.right, bindings, functions, seen);
     return left === undefined || right === undefined ? undefined : left + right;
   }
   if (ts.isTemplateExpression(node)) {
     let value = node.head.text;
     for (const span of node.templateSpans) {
-      const expression = evaluateStaticString(span.expression, bindings, seen);
+      const expression = evaluateStaticString(span.expression, bindings, functions, seen);
       if (expression === undefined) return undefined;
       value += expression + span.literal.text;
     }
     return value;
+  }
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    let objectNode = node.expression;
+    if (ts.isIdentifier(objectNode)) {
+      if (seen.has(objectNode.text)) return undefined;
+      objectNode = bindings.get(objectNode.text);
+      if (!objectNode) return undefined;
+      seen = new Set([...seen, node.expression.text]);
+    }
+    if (!ts.isObjectLiteralExpression(objectNode)) return undefined;
+    const propertyName = ts.isPropertyAccessExpression(node)
+      ? node.name.text
+      : node.argumentExpression
+        ? evaluateStaticString(node.argumentExpression, bindings, functions, seen)
+        : undefined;
+    if (propertyName === undefined) return undefined;
+    const property = objectNode.properties.find(
+      (candidate) =>
+        ts.isPropertyAssignment(candidate) &&
+        ((ts.isIdentifier(candidate.name) || ts.isStringLiteral(candidate.name)) &&
+          candidate.name.text === propertyName),
+    );
+    return property && ts.isPropertyAssignment(property)
+      ? evaluateStaticString(property.initializer, bindings, functions, seen)
+      : undefined;
   }
   if (
     ts.isCallExpression(node) &&
@@ -145,12 +170,47 @@ function evaluateStaticString(node, bindings, seen = new Set()) {
     }
     if (!ts.isArrayLiteralExpression(arrayNode)) return undefined;
     const separator =
-      node.arguments.length === 0 ? ',' : evaluateStaticString(node.arguments[0], bindings, seen);
+      node.arguments.length === 0
+        ? ','
+        : evaluateStaticString(node.arguments[0], bindings, functions, seen);
     if (separator === undefined) return undefined;
     const values = arrayNode.elements.map((element) =>
-      evaluateStaticString(element, bindings, seen),
+      evaluateStaticString(element, bindings, functions, seen),
     );
     return values.some((value) => value === undefined) ? undefined : values.join(separator);
+  }
+  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+    const functionName = node.expression.text;
+    if (seen.has(functionName)) return undefined;
+    const callable = functions.get(functionName) ?? bindings.get(functionName);
+    if (
+      !callable ||
+      (!ts.isFunctionDeclaration(callable) &&
+        !ts.isFunctionExpression(callable) &&
+        !ts.isArrowFunction(callable))
+    ) {
+      return undefined;
+    }
+    const localBindings = new Map(bindings);
+    for (let index = 0; index < callable.parameters.length; index += 1) {
+      const parameter = callable.parameters[index];
+      const argument = node.arguments[index];
+      if (!ts.isIdentifier(parameter.name) || !argument) return undefined;
+      localBindings.set(parameter.name.text, argument);
+    }
+    const returnedExpression = ts.isBlock(callable.body)
+      ? callable.body.statements.length === 1 && ts.isReturnStatement(callable.body.statements[0])
+        ? callable.body.statements[0].expression
+        : undefined
+      : callable.body;
+    return returnedExpression
+      ? evaluateStaticString(
+          returnedExpression,
+          localBindings,
+          functions,
+          new Set([...seen, functionName]),
+        )
+      : undefined;
   }
   return undefined;
 }
@@ -158,9 +218,13 @@ function evaluateStaticString(node, bindings, seen = new Set()) {
 function findComputedTestidHits(source, file, full) {
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const bindings = new Map();
+  const functions = new Map();
   const hits = [];
 
   function visit(node) {
+    if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+      functions.set(node.name.text, node);
+    }
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
@@ -176,7 +240,7 @@ function findComputedTestidHits(source, file, full) {
       node.expression.name.text === 'getByTestId' &&
       node.arguments.length > 0
     ) {
-      const testid = evaluateStaticString(node.arguments[0], bindings);
+      const testid = evaluateStaticString(node.arguments[0], bindings, functions);
       if (GUARDED_TESTIDS.includes(testid)) {
         const allowed =
           (UNLOCK_TESTIDS.includes(testid) && UNLOCK_ALLOWLIST.has(full)) ||

@@ -53,6 +53,10 @@ describe('browser-check unlock guard', () => {
           "page.getByTestId(`${choice}offline`);",
           "const parts = ['button', 'save', 'network', 'choice'];",
           "page.getByTestId(parts.join('-'));",
+          "const selectors = { source: ['network', 'onboarding', 'source'].join('-') };",
+          "page.getByTestId(selectors.source);",
+          "function onboardingChoice(kind) { return `choice-network-${kind}`; }",
+          "page.getByTestId(onboardingChoice('public-direct'));",
           '',
         ].join('\n'),
       );
@@ -63,6 +67,20 @@ describe('browser-check unlock guard', () => {
           "page.getByTestId('network-' + 'onboarding-source');",
           "const choice = 'choice-network-';",
           "page.getByTestId(`${choice}offline`);",
+          "const selectors = { source: 'network-' + 'onboarding-source' };",
+          "page.getByTestId(selectors.source);",
+          "const finish = () => ['button', 'onboarding', 'finish'].join('-');",
+          "page.getByTestId(finish());",
+          '',
+        ].join('\n'),
+      );
+      fs.writeFileSync(
+        path.join(fixtureScriptsDir, 'check-packaged-vault-lock-native.mjs'),
+        [
+          "const selectors = { password: ['input', 'password'].join('-') };",
+          "page.getByTestId(selectors.password);",
+          "function migrationSelector() { return 'legacy-' + 'migration-overlay'; }",
+          "page.getByTestId(migrationSelector());",
           '',
         ].join('\n'),
       );
@@ -81,7 +99,10 @@ describe('browser-check unlock guard', () => {
       assert.match(result.stderr, /check-generic-browser\.mjs:2\s+\[button-onboarding-finish\]/);
       assert.match(result.stderr, /check-generic-browser\.mjs:4\s+\[choice-network-offline\]/);
       assert.match(result.stderr, /check-generic-browser\.mjs:6\s+\[button-save-network-choice\]/);
+      assert.match(result.stderr, /check-generic-browser\.mjs:8\s+\[network-onboarding-source\]/);
+      assert.match(result.stderr, /check-generic-browser\.mjs:10\s+\[choice-network-public-direct\]/);
       assert.doesNotMatch(result.stderr, /check-first-run-network-privacy-browser\.mjs:/);
+      assert.doesNotMatch(result.stderr, /check-packaged-vault-lock-native\.mjs:/);
       assert.match(result.stderr, /completeFreshVaultOnboardingIfPresent/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
