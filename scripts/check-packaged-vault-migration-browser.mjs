@@ -9,8 +9,8 @@
  * or partially implemented app must never pass this release gate.
  *
  * Usage:
- *   node scripts/check-packaged-vault-migration.mjs
- *   KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-vault-migration.mjs
+ *   node scripts/check-packaged-vault-migration-browser.mjs
+ *   KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-vault-migration-browser.mjs
  */
 
 import { chromium } from 'playwright-core';

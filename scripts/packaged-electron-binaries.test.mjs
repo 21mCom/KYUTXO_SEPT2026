@@ -13,12 +13,6 @@ import {
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(SCRIPTS_DIR);
-const LEGACY_PACKAGED_BROWSER_CHECKS = new Set([
-  // These predate the check-packaged-*-browser.mjs naming convention but still
-  // launch the packaged Electron app under Xvfb, so they remain in scope.
-  'check-wrong-password-packaged.mjs',
-  'check-packaged-vault-migration.mjs',
-]);
 const PACKAGED_NON_BROWSER_CHECKS = new Set([
   // These validate packaged internals without launching a renderer under
   // Electron/Xvfb, so the browser-check filename convention does not apply.
@@ -29,9 +23,7 @@ const PACKAGED_BROWSER_CHECK_PATTERN = /^check-packaged-.+-browser\.mjs$/;
 
 function discoverPackagedBrowserChecks(filenames) {
   return filenames
-    .filter((filename) =>
-      PACKAGED_BROWSER_CHECK_PATTERN.test(filename) ||
-      LEGACY_PACKAGED_BROWSER_CHECKS.has(filename))
+    .filter((filename) => PACKAGED_BROWSER_CHECK_PATTERN.test(filename))
     .sort();
 }
 
@@ -44,7 +36,6 @@ function assertRegisteredPackagedCheckNames(registrationSources) {
       const filename = match.groups.filename;
       assert.ok(
         PACKAGED_BROWSER_CHECK_PATTERN.test(filename) ||
-          LEGACY_PACKAGED_BROWSER_CHECKS.has(filename) ||
           PACKAGED_NON_BROWSER_CHECKS.has(filename),
         `${sourceName} registers unrecognized packaged check ${filename}; ` +
           'packaged Electron browser checks must be named check-packaged-*-browser.mjs',

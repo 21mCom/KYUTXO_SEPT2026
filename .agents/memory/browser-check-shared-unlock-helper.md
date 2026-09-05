@@ -17,7 +17,7 @@ no hint of the real cause).
 literal for one of those 4 testids. `button-submit` is deliberately NOT part of the guarded set —
 it's reused by unrelated forms (e.g. `client/src/pages/Evidence.tsx`), so it can't be linted as an
 unlock-only signal; `input-password`/`input-confirm-password`/the 2 overlay testids are unique
-enough to lint safely. One file, `scripts/check-wrong-password-packaged.mjs`, is allowlisted in the
+enough to lint safely. One file, `scripts/check-packaged-wrong-password-browser.mjs`, is allowlisted in the
 guard because it deliberately exercises LoginScreen's own internals (wrong-password rejection,
 stuck-fill detection) rather than just getting past it. The shared `dismissMigrationOverlayIfPresent`
 throws if the overlay never clears (fail loud), unlike most of the old inline copies which silently

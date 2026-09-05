@@ -20,7 +20,7 @@
 //      and the login form (input-password) stays mounted (vault locked).
 //
 // Usage:
-//   KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-wrong-password-packaged.mjs
+//   KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-wrong-password-browser.mjs
 //     Reuses release/linux-unpacked/resources/app.asar (fails if absent).
 //   Without the env var it builds everything first (several minutes).
 

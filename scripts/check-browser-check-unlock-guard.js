@@ -66,7 +66,7 @@ const ONBOARDING_TESTIDS = [
 // something else.
 const UNLOCK_ALLOWLIST = new Set([
   path.join(SCRIPTS_DIR, 'check-packaged-vault-lock-native.mjs'),
-  path.join(SCRIPTS_DIR, 'check-wrong-password-packaged.mjs'),
+  path.join(SCRIPTS_DIR, 'check-packaged-wrong-password-browser.mjs'),
 ]);
 
 // This check owns the first-run onboarding journey itself, including proving

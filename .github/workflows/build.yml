@@ -270,7 +270,7 @@ jobs:
       - name: Verify protected-vault migration recovery
         env:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
-        run: node scripts/check-packaged-vault-migration.mjs
+        run: node scripts/check-packaged-vault-migration-browser.mjs
 
       # RELEASE GATE: the device-local network activity log must survive a
       # full Portable.exe process restart without persisting addresses/provider

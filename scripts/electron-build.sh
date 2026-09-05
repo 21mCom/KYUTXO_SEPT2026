@@ -74,7 +74,7 @@ KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-coin-origins-browser.mj
 # protected main-process test bridge is present; a plaintext app must not pass
 # by returning a superficial success flag.
 echo "Step 8: Verifying protected-vault migration recovery..."
-KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-vault-migration.mjs
+KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-vault-migration-browser.mjs
 
 # RELEASE GATE: prove the device-local network activity log survives a real
 # packaged Electron process restart, keeps address/provider details out of its

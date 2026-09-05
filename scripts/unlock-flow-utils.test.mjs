@@ -32,7 +32,7 @@ function makeUnlockGuardFixture() {
   for (const script of [
     'browser-check-utils.mjs',
     'check-packaged-vault-lock-native.mjs',
-    'check-wrong-password-packaged.mjs',
+    'check-packaged-wrong-password-browser.mjs',
   ]) {
     fs.writeFileSync(path.join(fixtureScriptsDir, script), '');
   }

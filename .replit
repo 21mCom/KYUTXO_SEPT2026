@@ -3732,7 +3732,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node scripts/check-packaged-vault-migration.mjs"
+args = "node scripts/check-packaged-vault-migration-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

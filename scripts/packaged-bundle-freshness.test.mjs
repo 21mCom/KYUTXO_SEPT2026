@@ -304,7 +304,7 @@ test('asar guard ignores dot-dirs and skip-dirs under electron/', () => {
 // main-process code again. Pattern: scripts/check-engine-bridge-shared.test.mjs.
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGED_CHECK_SCRIPTS = [
-  'check-wrong-password-packaged.mjs',
+  'check-packaged-wrong-password-browser.mjs',
   'check-packaged-electron-browser.mjs',
   'check-packaged-electrum-cancel-browser.mjs',
   'check-packaged-native-engine.mjs',
