@@ -177,6 +177,46 @@ function applyCompactFilters(
   }
 }
 
+// Normalized model rows ride in the small inline manifest tables.  Compact
+// exports must apply the same retained-record/transaction boundary as the
+// streamed tables, then retain only the parent rows those annotations use.
+function compactInlineRecordModel(
+  inline: Record<string, unknown[]>,
+  plan: CompactPlan,
+): Record<string, unknown[]> {
+  const rows = (name: string): any[] => Array.isArray(inline[name]) ? inline[name] as any[] : [];
+  const ownership = rows("addressOwnership")
+    .filter(row => typeof row.recordId === "number" && !plan.droppedRecordIds.has(row.recordId))
+    .map(row => ({ ...row }));
+  const metadata = rows("transactionMetadata")
+    .filter(row => typeof row.txid === "string" && !plan.droppedTxids.has(row.txid));
+  const legs = rows("transactionLegMetadata")
+    .filter(row => typeof row.txid === "string" && !plan.droppedTxids.has(row.txid))
+    .map(row => ({ ...row }));
+  const walletIds = new Set<number>();
+  const entityIds = new Set<number>();
+  for (const row of [...ownership, ...legs, ...metadata]) {
+    if (typeof row.walletId === "number") walletIds.add(row.walletId);
+    if (typeof row.entityId === "number") entityIds.add(row.entityId);
+    if (typeof row.counterpartyEntityId === "number") entityIds.add(row.counterpartyEntityId);
+  }
+  const wallets = rows("wallets").filter(row => typeof row.id === "number" && walletIds.has(row.id));
+  for (const wallet of wallets) if (typeof wallet.entityId === "number") entityIds.add(wallet.entityId);
+  const entities = rows("entities").filter(row => typeof row.id === "number" && entityIds.has(row.id));
+  const keptEntityIds = new Set(entities.map(row => row.id));
+  const keptWalletIds = new Set(wallets.map(row => row.id));
+  for (const row of [...ownership, ...legs]) {
+    if (typeof row.entityId === "number" && !keptEntityIds.has(row.entityId)) delete row.entityId;
+    if (typeof row.walletId === "number" && !keptWalletIds.has(row.walletId)) delete row.walletId;
+  }
+  for (const row of [...ownership, ...metadata]) {
+    if (typeof row.counterpartyEntityId === "number" && !keptEntityIds.has(row.counterpartyEntityId)) {
+      delete row.counterpartyEntityId;
+    }
+  }
+  return { ...inline, entities, wallets, addressOwnership: ownership, transactionMetadata: metadata, transactionLegMetadata: legs };
+}
+
 export async function exportBackup(opts: ExportOptions): Promise<void> {
   const batchSize = opts.batchSize ?? DEFAULT_BATCH;
   const readInline = opts.readInline ?? readInlineTables;
@@ -279,7 +319,10 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
   // Inline (small) tables → manifest.
   opts.onProgress?.({ percent: 4, phase: "Gathering metadata..." });
   const inlineData = await readInline();
-  const inlineEnvelope = await serializeInline(inlineData, key);
+  const backupInlineData = opts.compactPlan
+    ? compactInlineRecordModel(inlineData, opts.compactPlan)
+    : inlineData;
+  const inlineEnvelope = await serializeInline(backupInlineData, key);
 
   const manifest: BackupManifest = {
     formatVersion: BACKUP_FORMAT_VERSION,

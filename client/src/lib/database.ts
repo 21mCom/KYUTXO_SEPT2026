@@ -17,7 +17,7 @@ import { reportDbUpgradeProgress } from './db-upgrade-progress';
  * KEEP IN SYNC when adding a new `this.version(N)` declaration — the
  * legacy-migration test asserts this matches the opened database.
  */
-export const CURRENT_SCHEMA_VERSION = 43;
+export const CURRENT_SCHEMA_VERSION = 44;
 
 // Import types needed for the class definition
 import type {
@@ -27,7 +27,8 @@ import type {
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
   PausedSyncState, SkippedAddress, AddressBlacklist, PartialExportBundle,
   TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag, SavedPsbt,
-      AdversaryScenario, NetworkPrivacyActivityEntry,
+       AdversaryScenario, NetworkPrivacyActivityEntry, RecordEntity, RecordWallet,
+       AddressOwnership, TransactionMetadata, TransactionLegMetadata, RecordModelMigrationState,
 } from './db-types';
 import type {
   RecordSearchIndexEntry,
@@ -104,9 +105,26 @@ export class KYUTXODatabase extends Dexie {
   // intentionally absent from backups and can be rebuilt from records.
   recordSearchIndex!: Table<RecordSearchIndexEntry>;
   recordSearchIndexState!: Table<RecordSearchIndexState>;
+  // v44 normalized record-model projection. Writes belong in record-model-crud.ts.
+  entities!: Table<RecordEntity>;
+  wallets!: Table<RecordWallet>;
+  addressOwnership!: Table<AddressOwnership>;
+  transactionMetadata!: Table<TransactionMetadata>;
+  transactionLegMetadata!: Table<TransactionLegMetadata>;
+  recordModelMigrationState!: Table<RecordModelMigrationState>;
 
   constructor() {
     super('KYUTXODatabase');
+    // v44 adds normalized rows only. Legacy record fields intentionally remain
+    // untouched; the post-unlock migration is resumable and performs no cleanup.
+    this.version(44).stores({
+      entities: '++id, &naturalKey, name, kind',
+      wallets: '++id, &naturalKey, name, entityId',
+      addressOwnership: '++id, &recordId, state, entityId, walletId',
+      transactionMetadata: '++id, &txid',
+      transactionLegMetadata: '++id, &[txid+legKey], txid, legKey, direction, entityId, walletId',
+      recordModelMigrationState: 'id',
+    });
 
     // v41: drop ~30 confirmed-dead indexes across 11 tables, following the
     // same audit approach as the v40 `records` cleanup. Task #2127's guard

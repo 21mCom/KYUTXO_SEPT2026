@@ -76,4 +76,50 @@ describe("protected store", () => {
       await client.close();
     }
   }, 30_000);
+
+  it("keeps every v44 normalized record-model row encrypted across a protected reopen", async () => {
+    const { root, client } = makeClient();
+    const password = "v44 protected migration password";
+    const rows = [
+      ["entities", "entity-1", { naturalKey: "person:alice", name: "KYUTXO_V44_ENTITY_1f32a", kind: "person", createdAt: 1, updatedAt: 1 }],
+      ["wallets", "wallet-1", { naturalKey: "wallet:alice:cold", name: "KYUTXO_V44_WALLET_2d45b", entityId: 1, seedName: "KYUTXO_V44_SEED_3e56c", walletSoftware: "KYUTXO_V44_SOFTWARE_4f67d", createdAt: 1, updatedAt: 1 }],
+      ["addressOwnership", "ownership-1", { recordId: 42, state: "assigned", entityId: 1, walletId: 1, confidence: "manual", createdAt: 1, updatedAt: 1 }],
+      ["transactionMetadata", "metadata-1", { txid: "KYUTXO_V44_TXID_5a78e", flowType: "received", categories: ["KYUTXO_V44_CATEGORY_6b89f"], tags: ["KYUTXO_V44_TAG_7c90a"], notes: "KYUTXO_V44_NOTE_8d01b", createdAt: 1, updatedAt: 1 }],
+      ["transactionLegMetadata", "leg-1", { txid: "KYUTXO_V44_TXID_5a78e", legKey: "output:0", direction: "incoming", entityId: 1, walletId: 1, notes: "KYUTXO_V44_LEG_NOTE_9e12c", hasFlowOverride: true, createdAt: 1, updatedAt: 1 }],
+    ] as const;
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password });
+      for (const [table, id, row] of rows) {
+        await client.call(MESSAGE_TYPES.PUT_ROW, { table, id, row });
+      }
+
+      const encryptedBytes = fs.readFileSync(path.join(root, "protected-store.sqlite"));
+      for (const token of [
+        "KYUTXO_V44_ENTITY_1f32a",
+        "KYUTXO_V44_WALLET_2d45b",
+        "KYUTXO_V44_SEED_3e56c",
+        "KYUTXO_V44_SOFTWARE_4f67d",
+        "KYUTXO_V44_TXID_5a78e",
+        "KYUTXO_V44_CATEGORY_6b89f",
+        "KYUTXO_V44_TAG_7c90a",
+        "KYUTXO_V44_NOTE_8d01b",
+        "KYUTXO_V44_LEG_NOTE_9e12c",
+      ]) {
+        expect(encryptedBytes.includes(token)).toBe(false);
+      }
+
+      await client.close();
+      const reopened = new ProtectedStoreClient({ dataDir: root });
+      try {
+        await reopened.call(MESSAGE_TYPES.UNLOCK, { password });
+        for (const [table, id, row] of rows) {
+          expect(await reopened.call(MESSAGE_TYPES.GET_ROW, { table, id })).toEqual(row);
+        }
+      } finally {
+        await reopened.close();
+      }
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
 });

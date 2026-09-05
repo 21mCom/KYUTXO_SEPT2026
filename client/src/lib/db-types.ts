@@ -194,6 +194,103 @@ export interface VaultMetadata {
   vaultNotes?: string | null;
 }
 
+// === Normalized record model (v44) =========================================
+// These rows deliberately coexist with the legacy Record fields during the
+// staged rollout.  The legacy fields remain the compatibility projection until
+// every reader has moved to this model.
+export type EntityKind = 'person' | 'organisation' | 'counterparty' | 'self';
+export type AddressOwnershipState =
+  | 'assigned'
+  | 'ours-owner-unknown'
+  | 'not-ours'
+  | 'undetermined';
+export type TransactionLegDirection = 'incoming' | 'outgoing' | 'owner-transfer';
+
+export interface RecordEntity {
+  id?: number;
+  /** Lower-cased, trimmed natural key; stable across backup/restore. */
+  naturalKey: string;
+  name: string;
+  kind: EntityKind;
+  /** Preserved classification for entities created from legacy counterparties. */
+  counterpartyType?: CounterpartyType;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RecordWallet {
+  id?: number;
+  /** Name plus provenance/owner fields, normalized by record-model-crud. */
+  naturalKey: string;
+  name: string;
+  entityId?: number;
+  seedName?: string;
+  walletSoftware?: string;
+  vault?: VaultMetadata;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AddressOwnership {
+  id?: number;
+  recordId: number;
+  state: AddressOwnershipState;
+  entityId?: number;
+  /** Explicit external counterparty, independent of whether ownership is known. */
+  counterpartyEntityId?: number;
+  walletId?: number;
+  /** The old importance tier is provenance confidence, not ownership truth. */
+  confidence?: AddressImportance;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TransactionMetadata {
+  id?: number;
+  txid: string;
+  flowType?: FlowType;
+  acquisitionMethod?: AcquisitionMethod;
+  dispositionType?: DispositionType;
+  costBasisUsd?: number;
+  counterpartyEntityId?: number;
+  categories?: string[];
+  tags?: string[];
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TransactionLegMetadata {
+  id?: number;
+  txid: string;
+  /** Stable participant/outpoint key; `default` is reserved for defaults. */
+  legKey: string;
+  direction: TransactionLegDirection;
+  entityId?: number;
+  walletId?: number;
+  flowType?: FlowType;
+  acquisitionMethod?: AcquisitionMethod;
+  dispositionType?: DispositionType;
+  costBasisUsd?: number;
+  categories?: string[];
+  tags?: string[];
+  notes?: string;
+  /** True only where a legacy value disagreed with transaction defaults. */
+  hasFlowOverride?: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Durable checkpoint for the post-unlock, batched v44 projection. */
+export interface RecordModelMigrationState {
+  id: 'v44';
+  phase: 'addresses' | 'transactions' | 'complete';
+  lastRecordId: number;
+  singleOwner?: boolean;
+  completedAt?: number;
+  updatedAt: number;
+}
+
 // Plaintext record structure (for type safety and querying)
 export interface Record {
   id?: number;

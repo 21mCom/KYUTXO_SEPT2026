@@ -619,6 +619,9 @@ export function RestoreBackupFlow() {
       // Legacy whole-file JSON restore — the full pipeline (decrypt, clear,
       // per-table restore, attachment files, summary message) lives in
       // @/lib/backup/legacy-restore-pipeline so it is testable outside React.
+      const legacyController = new AbortController();
+      restoreAbortRef.current = legacyController;
+      setRestoreCancellable(true);
       const legacySummary = await runLegacyJsonRestore(
         restoreFile,
         restorePassword,
@@ -634,6 +637,7 @@ export function RestoreBackupFlow() {
             restoreClearedRef.current = true;
           },
         },
+        { signal: legacyController.signal },
       );
 
       // --- Post-restore txid backfill (shared helper, never throws) ---

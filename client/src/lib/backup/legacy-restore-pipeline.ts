@@ -27,6 +27,7 @@ import {
   restoreLegacySnapshots,
 } from "@/lib/backup/legacy-restore-misc";
 import {
+  clearInlineTables,
   restoreNodeSettingsRows,
   restoreSettingsPreferences,
 } from "@/lib/backup/inline-tables";
@@ -53,6 +54,9 @@ import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { clearDustFlags, restoreDustFlagRows } from "@/lib/data/dust-flags-crud";
 import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import { db } from "@/lib/database";
+import { runRecordModelMigration } from "@/lib/data/record-model-crud";
+import { BackupCancelledError } from "./sink";
+import { RestoreInterruptedError } from "./restore";
 
 export type LegacyRestoreMode = "replace" | "merge";
 
@@ -65,6 +69,17 @@ export interface LegacyRestoreCallbacks {
    * handling to "vault was wiped" semantics.
    */
   onCleared: () => void;
+}
+export interface LegacyRestoreOptions {
+  signal?: AbortSignal;
+  /** Test seam for proving a failed post-clear cleanup is never reported safe. */
+  cleanupAfterClear?: () => Promise<void>;
+}
+
+function assertLegacyBackupData(data: any): void {
+  if (!data || typeof data !== "object" || !Array.isArray(data.records)) {
+    throw new Error("Invalid legacy backup data");
+  }
 }
 
 export interface LegacyRestoreSummary {
@@ -143,7 +158,37 @@ export async function runLegacyJsonRestore(
   password: string,
   restoreMode: LegacyRestoreMode,
   cb: LegacyRestoreCallbacks,
+  options: LegacyRestoreOptions = {},
 ): Promise<LegacyRestoreSummary> {
+  let cleared = false;
+  const clearAfterInterruptedRestore = async () => {
+    if (options.cleanupAfterClear) return options.cleanupAfterClear();
+    await clearAllRecords({ skipNotification: true });
+    await clearAttachments({ skipNotification: true });
+    await clearUtxoLineage({ skipNotification: true });
+    await clearCustodySegments({ skipNotification: true });
+    await clearLineageSnapshots({ skipNotification: true });
+    await clearTransactions({ skipNotification: true });
+    await clearParticipants({ skipNotification: true });
+    await clearAddressSyncState({ skipNotification: true });
+    // Single source of truth for every portable inline table, including saved
+    // PSBTs, adversary scenarios, evidence, vocabularies, and the normalized
+    // v44 model/checkpoint. Settings remains device-local per restore contract.
+    await clearInlineTables();
+  };
+  const throwIfAborted = async () => {
+    if (!options.signal?.aborted) return;
+    if (!cleared) throw new BackupCancelledError();
+    try {
+      await clearAfterInterruptedRestore();
+    } catch (cause) {
+      throw new RestoreInterruptedError("Legacy restore was interrupted and cleanup failed", { cause });
+    }
+    const cancelled = new BackupCancelledError();
+    cancelled.clearedBeforeCancel = true;
+    throw cancelled;
+  };
+  await throwIfAborted();
   const zip = await JSZip.loadAsync(file);
   const backupFile = zip.file("backup.json");
 
@@ -177,6 +222,10 @@ export async function runLegacyJsonRestore(
       throw new Error("Invalid password or corrupted backup");
     }
   }
+  // Validate the required shape before the replace path can clear a live
+  // vault. A syntactically valid `{ data: {} }` is not a restorable archive.
+  assertLegacyBackupData(data);
+  await throwIfAborted();
 
   cb.onProgress(30, "Processing data...");
 
@@ -206,24 +255,13 @@ export async function runLegacyJsonRestore(
     dustFlags = [],
   } = data;
 
+  try {
   if (restoreMode === "replace") {
+    await throwIfAborted();
     cb.onProgress(40, "Clearing existing data...");
 
     await clearAllRecords({ skipNotification: true });
-    await db.tags.clear();
-    await db.categories.clear();
     await clearAttachments({ skipNotification: true });
-    await clearRecordOrigins({ skipNotification: true });
-    await clearCustomFields({ skipNotification: true });
-    await db.owners.clear();
-    await db.walletNames.clear();
-    await db.seedNames.clear();
-    await db.walletSoftware.clear();
-    await clearDerivationTemplates({ skipNotification: true });
-    await clearEvidence({ skipNotification: true });
-    await clearEvidenceAttachments({ skipNotification: true });
-    await clearPriceData({ skipNotification: true });
-    await clearNodeSettings({ skipNotification: true });
     await clearUtxoLineage({ skipNotification: true });
     await clearCustodySegments({ skipNotification: true });
     await clearLineageSnapshots({ skipNotification: true });
@@ -233,7 +271,7 @@ export async function runLegacyJsonRestore(
     // Dust flags point at transaction outputs; a replace restore wipes the
     // transactions above, so stale flags must never survive it. Cleared
     // even though most legacy backups predate the dustFlags table.
-    await clearDustFlags({ skipNotification: true });
+    await clearInlineTables();
     // Drop any saved Privacy Audit / Adversary View session — it was
     // computed from the vault being replaced, so restoring it after this
     // restore would show results about data that no longer exists.
@@ -245,9 +283,11 @@ export async function runLegacyJsonRestore(
     }
     // Mark the vault as wiped so the caller's cancel/error handlers know to
     // reload rather than just close the dialog.
+    cleared = true;
     cb.onCleared();
   }
 
+  await throwIfAborted();
   cb.onProgress(50, "Restoring records...");
 
   // Backup record id -> live record id. bulkCreateRecords assigns fresh
@@ -261,6 +301,7 @@ export async function runLegacyJsonRestore(
   // Restore records (de-dup by inputString in merge mode; backup id -> live
   // id recorded in recordIdMap for dependent rows).
   const recordResult = await restoreLegacyRecords(records, restoreMode, recordIdMap);
+  await throwIfAborted();
   const recordsAdded = recordResult.recordsAdded;
   const recordsSkipped = recordResult.recordsSkipped;
   if (records && records.length > 0) {
@@ -280,6 +321,7 @@ export async function runLegacyJsonRestore(
     restoreMode,
     recordIdMap,
   );
+  await throwIfAborted();
   void recordOriginsAdded;
 
   cb.onProgress(70, "Restoring tags and categories...");
@@ -291,6 +333,7 @@ export async function runLegacyJsonRestore(
     { tags, categories, owners, walletNames, seedNames, walletSoftware },
     restoreMode,
   );
+  await throwIfAborted();
   const tagsAdded = vocabResult.tagsAdded;
   const categoriesAdded = vocabResult.categoriesAdded;
   const vocabularyAdded = vocabResult.vocabularyAdded;
@@ -304,6 +347,7 @@ export async function runLegacyJsonRestore(
     restoreMode,
     recordIdMap,
   );
+  await throwIfAborted();
   const legacyOrphanedRelPaths = legacyAttResult.orphanedRelPaths;
 
   // Restore attachment files from ZIP. Orphaned files (whose owning record
@@ -401,12 +445,14 @@ export async function runLegacyJsonRestore(
 
     await Promise.all(filePromises);
   }
+  await throwIfAborted();
 
   cb.onProgress(90, "Restoring custom fields...");
 
   // Restore custom fields (merge mode de-dups by `slug`; replace mode adds
   // every field).
   const customFieldsAdded = await restoreLegacyCustomFields(backupCustomFields, restoreMode);
+  await throwIfAborted();
   void customFieldsAdded;
 
   cb.onProgress(96, "Restoring derivation templates...");
@@ -414,6 +460,7 @@ export async function runLegacyJsonRestore(
   // Restore derivation templates (merge mode de-dups by
   // `fingerprint:scriptType`; replace mode adds every template).
   const templatesAdded = await restoreLegacyDerivationTemplates(derivationTemplates, restoreMode);
+  await throwIfAborted();
 
   cb.onProgress(97, "Restoring evidence and additional data...");
 
@@ -426,6 +473,7 @@ export async function runLegacyJsonRestore(
   // backup more than once doesn't accumulate duplicates; replace mode adds
   // every row (the table was cleared above).
   const evidenceResult = await restoreLegacyEvidence(evidence, evidenceAttachments, restoreMode);
+  await throwIfAborted();
   const evidenceAdded = evidenceResult.evidenceAdded;
 
   // Restore price data (v2.2.0+, not encrypted): no id remapping. In merge
@@ -434,6 +482,7 @@ export async function runLegacyJsonRestore(
   // cleared the table above and adds every row. Shared with the v3 inline
   // path via restorePriceDataRows so the two paths can never diverge.
   const priceDataAdded = await restoreLegacyPriceData(priceData, restoreMode);
+  await throwIfAborted();
 
   // Restore node settings (v2.2.0+, not encrypted). Uses the shared helper
   // so the legacy path and the v3 streaming path can never diverge in how
@@ -452,6 +501,7 @@ export async function runLegacyJsonRestore(
   // skipped, so a merge over an already-present segment no longer throws on
   // the unique index and aborts the restore.
   const lineageResult = await restoreLegacyLineage(utxoLineage, custodySegments, restoreMode);
+  await throwIfAborted();
   const lineageDataAdded = lineageResult.lineageAdded;
 
   // Restore lineage snapshots (selective-disclosure / Continuity Certificate
@@ -486,6 +536,7 @@ export async function runLegacyJsonRestore(
     restoreMode,
     recordIdMap,
   );
+  await throwIfAborted();
   const transactionsAdded = txResult.transactionsAdded;
   const participantsAdded = txResult.participantsAdded;
   const transactionsEnriched = txResult.transactionsEnriched;
@@ -498,6 +549,33 @@ export async function runLegacyJsonRestore(
     restoreMode,
     recordIdMap,
   );
+
+  // Pre-v3 archives naturally have no normalized rows. Build the v44
+  // compatibility projection only after every legacy record, category, and
+  // transaction field has landed, so categories and per-leg flow overrides are
+  // derived from the complete restored shape. Resetting the checkpoint is
+  // essential for a merge into a vault whose earlier migration was complete.
+  // A legacy merge needs a projection for newly-added legacy records, but the
+  // projection's guarded put helpers intentionally replace an existing row.
+  // Preserve every pre-existing normalized row verbatim and put it back after
+  // the pass: that permits absent/new rows to be derived while never replacing
+  // a user's ownership, transaction defaults, categories, or flow overrides.
+  const normalizedBeforeMerge = restoreMode === "merge"
+    ? await Promise.all([
+        db.entities.toArray(), db.wallets.toArray(), db.addressOwnership.toArray(),
+        db.transactionMetadata.toArray(), db.transactionLegMetadata.toArray(),
+      ])
+    : null;
+  await db.recordModelMigrationState.clear();
+  await runRecordModelMigration();
+  if (normalizedBeforeMerge) {
+    const [entities, wallets, ownership, metadata, legs] = normalizedBeforeMerge;
+    await db.entities.bulkPut(entities);
+    await db.wallets.bulkPut(wallets);
+    await db.addressOwnership.bulkPut(ownership);
+    await db.transactionMetadata.bulkPut(metadata);
+    await db.transactionLegMetadata.bulkPut(legs);
+  }
 
   console.log(
     `[Restore] transactions: ${transactionsAdded}, enriched: ${transactionsEnriched}, participants: ${participantsAdded}, participants enriched: ${participantsEnriched}, synced addresses: ${addressSyncAdded}, dust flags: ${dustFlagsAdded}`,
@@ -569,4 +647,20 @@ export async function runLegacyJsonRestore(
     orphanedFilesRouted: legacyOrphanedFilesRouted,
     orphanedFilesLost: legacyOrphanedFilesLost,
   };
+  } catch (error) {
+    if (!cleared) throw error;
+    // Any failure after replace's point of no return gets the same verified
+    // empty reset as cancellation. Never let the caller describe a partial
+    // vault as intact.
+    try {
+      await clearAfterInterruptedRestore();
+    } catch (cause) {
+      throw new RestoreInterruptedError("Legacy restore failed and cleanup failed", { cause });
+    }
+    if (error instanceof BackupCancelledError) {
+      error.clearedBeforeCancel = true;
+      throw error;
+    }
+    throw new RestoreInterruptedError("Legacy restore failed after clearing the vault", { cause: error });
+  }
 }

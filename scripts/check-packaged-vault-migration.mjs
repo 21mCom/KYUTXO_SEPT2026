@@ -56,6 +56,11 @@ const TAG = '[packaged-vault-migration]';
 const FIXTURE_TOKENS = [
   'KYUTXO_PROTECTED_ROW_6d974c29f24a',
   'KYUTXO_PROTECTED_ATTACHMENT_3ac89e7441bf',
+  'KYUTXO_V44_ENTITY_1f32a',
+  'KYUTXO_V44_WALLET_2d45b',
+  'KYUTXO_V44_OWNERSHIP_3e56c',
+  'KYUTXO_V44_TRANSACTION_METADATA_4f67d',
+  'KYUTXO_V44_TRANSACTION_LEG_5a78e',
 ];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

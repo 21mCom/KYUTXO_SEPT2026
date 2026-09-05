@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import {
   GENERATION_SWAP_PHASES,
   MIGRATION_PHASES,
+  NORMALIZED_RECORD_MODEL_TABLES,
   PLAINTEXT_MIGRATION_SOURCE_ROOT,
   PROTECTED_VAULT_SCENARIOS,
   assertBackupRecoverySuccessReport,
@@ -31,6 +32,11 @@ function snapshot(generation = 'verified-generation-1') {
     tables: {
       records: { count: 2, digest: digest('records') },
       settings: { count: 1, digest: digest('settings') },
+      entities: { count: 1, digest: digest('entities') },
+      wallets: { count: 1, digest: digest('wallets') },
+      addressOwnership: { count: 1, digest: digest('address-ownership') },
+      transactionMetadata: { count: 1, digest: digest('transaction-metadata') },
+      transactionLegMetadata: { count: 1, digest: digest('transaction-leg-metadata') },
     },
     attachments: {
       count: 1,
@@ -74,6 +80,27 @@ test('protected report requires row, digest, reference, attachment, SQLCipher, a
     () => assertProtectedVaultReport(invalid, 'fresh-lifecycle'),
     /lowercase SHA-256 digest/,
   );
+});
+
+test('protected snapshots account for deterministic v44 normalized metadata', () => {
+  const valid = report('migration-success', {
+    migrated: true,
+    sourceRemoved: true,
+    sourcePlaintextRemaining: false,
+    active: snapshot('verified-generation-2'),
+  });
+  assertSuccessfulMigrationReport(valid);
+
+  for (const table of NORMALIZED_RECORD_MODEL_TABLES) {
+    const missing = report('migration-success', {
+      migrated: true,
+      sourceRemoved: true,
+      sourcePlaintextRemaining: false,
+      active: snapshot('verified-generation-2'),
+    });
+    delete missing.active.tables[table];
+    assert.throws(() => assertSuccessfulMigrationReport(missing), new RegExp(`${table} is missing`));
+  }
 });
 
 test('fresh lifecycle requires create, unlock, lock, and verified reopen transitions', () => {

@@ -357,6 +357,11 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     dustFlags,
     savedPsbts,
     adversaryScenarios,
+    entities,
+    wallets,
+    addressOwnership,
+    transactionMetadata,
+    transactionLegMetadata,
   ] = await Promise.all([
     getAllRecordOrigins(),
     getAllCustomFields(),
@@ -369,6 +374,11 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     getAllDustFlags(),
     getAllSavedPsbts(),
     getAllAdversaryScenarios(),
+    db.entities.toArray(),
+    db.wallets.toArray(),
+    db.addressOwnership.toArray(),
+    db.transactionMetadata.toArray(),
+    db.transactionLegMetadata.toArray(),
   ]);
 
   return {
@@ -389,6 +399,13 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     dustFlags,
     savedPsbts,
     adversaryScenarios,
+    // v44 normalized record-model data. The resumable migration checkpoint is
+    // deliberately device-local derived state and must never travel in backups.
+    entities,
+    wallets,
+    addressOwnership,
+    transactionMetadata,
+    transactionLegMetadata,
   };
 }
 
@@ -409,6 +426,12 @@ export async function clearInlineTables(): Promise<void> {
   await clearDustFlags({ skipNotification: true });
   await clearSavedPsbts({ skipNotification: true });
   await clearAdversaryScenarios({ skipNotification: true });
+  await db.entities.clear();
+  await db.wallets.clear();
+  await db.addressOwnership.clear();
+  await db.transactionMetadata.clear();
+  await db.transactionLegMetadata.clear();
+  await db.recordModelMigrationState.clear();
   // NOTE: settings is intentionally not cleared (matches legacy restore).
   // utxoLineage, custodySegments and lineageSnapshots are streamed tables now;
   // the restore orchestrator clears them, not this inline path.

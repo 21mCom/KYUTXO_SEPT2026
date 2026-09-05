@@ -56,6 +56,7 @@ import {
   type DbUpgradeProgress,
 } from '@/lib/db-upgrade-progress';
 import { initializeFreshNetworkPrivacy } from '@/lib/network-privacy';
+import { runRecordModelMigration } from '@/lib/data/record-model-crud';
 
 interface AuthContextType {
   isInitialized: boolean | null;
@@ -536,6 +537,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // before file decryption reads those paths.
       await runAttachmentPathMigration();
       await runLegacyDecryptMigration(password, saltBase64);
+      // The normalized record-model projection deliberately starts only after
+      // legacy decryption has verified the plaintext fields it reads. Its own
+      // durable checkpoint makes an interruption retry from the last committed
+      // batch on the next unlock, without ever removing legacy fields.
+      if (await isLegacyDecryptComplete()) {
+        setMigrationPhase('Organizing record ownership and transaction metadata…');
+        await runRecordModelMigration({
+          onProgress: ({ phase, processed }) => {
+            setMigrationPhase(
+              phase === 'complete'
+                ? 'Record model migration complete'
+                : `Organizing ${phase}… ${processed.toLocaleString()} records processed`,
+            );
+          },
+        });
+      }
       await runInputStringLowerRepair();
     } finally {
       migrationInFlightRef.current = false;

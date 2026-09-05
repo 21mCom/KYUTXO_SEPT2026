@@ -5,6 +5,15 @@
 export const PROTECTED_VAULT_TEST_API = 'protectedVaultTest';
 export const PROTECTED_VAULT_TEST_METHOD = 'runScenario';
 export const PLAINTEXT_MIGRATION_SOURCE_ROOT = 'migration-source';
+// v44 is a projection rather than a backup-only feature: a protected
+// generation must account for each normalized table in its canonical snapshot.
+export const NORMALIZED_RECORD_MODEL_TABLES = Object.freeze([
+  'entities',
+  'wallets',
+  'addressOwnership',
+  'transactionMetadata',
+  'transactionLegMetadata',
+]);
 
 export const MIGRATION_PHASES = [
   'preflight',
@@ -109,6 +118,11 @@ function assertProtectedSnapshot(snapshot, label) {
   assertContentSnapshot(snapshot, label);
   if (snapshot.sqlCipherIntegrity !== 'ok') {
     fail(`${label}.sqlCipherIntegrity is not ok`);
+  }
+  for (const table of NORMALIZED_RECORD_MODEL_TABLES) {
+    if (!Object.hasOwn(snapshot.tables, table)) {
+      fail(`${label}.tables.${table} is missing`);
+    }
   }
 }
 
@@ -231,6 +245,11 @@ export function assertSuccessfulMigrationReport(report) {
     fail('migration-success did not publish a new generation');
   }
   assertEqualContent(report.active, report.baseline, 'migration-success');
+  for (const table of NORMALIZED_RECORD_MODEL_TABLES) {
+    if (report.active.tables[table].count < 1) {
+      fail(`migration-success did not preserve normalized ${table} metadata`);
+    }
+  }
   if (report.sourcePlaintextRemaining === true) {
     fail('migration-success left plaintext source bytes active');
   }

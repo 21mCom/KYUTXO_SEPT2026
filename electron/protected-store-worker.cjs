@@ -23,6 +23,10 @@ const TABLES = new Set([
   'pausedSyncState', 'skippedAddresses', 'addressBlacklist',
   'partialExportBundles', 'trashedAttachments', 'privacyAuditHistory',
   'dustFlags', 'savedPsbts', 'adversaryScenarios', 'vault',
+  // v44 normalized record-model projection. These rows have the same encrypted
+  // protected_rows boundary as legacy records; never route them to a sidecar.
+  'entities', 'wallets', 'addressOwnership', 'transactionMetadata',
+  'transactionLegMetadata', 'recordModelMigrationState',
 ]);
 
 let db = null;

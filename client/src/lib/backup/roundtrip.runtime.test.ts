@@ -244,6 +244,34 @@ beforeAll(async () => {
     await restoreTag({ name: `tag-${i}`, color: "#888888", createdAt: 1000 + i });
   }
 
+  // v44 normalized projection rows are small inline tables, but their foreign
+  // keys must still survive the records' fresh-id restore remap.
+  const entityId = await db.entities.add({
+    naturalKey: "person:roundtrip owner", name: "Roundtrip Owner", kind: "person",
+    createdAt: 1, updatedAt: 1,
+  });
+  const walletId = await db.wallets.add({
+    naturalKey: "roundtrip wallet|1||", name: "Roundtrip Wallet", entityId,
+    createdAt: 1, updatedAt: 1,
+  });
+  const counterpartyId = await db.entities.add({
+    naturalKey: "counterparty:roundtrip payer", name: "Roundtrip Payer", kind: "counterparty",
+    createdAt: 1, updatedAt: 1,
+  });
+  await db.addressOwnership.add({
+    recordId: recordIds[0], state: "assigned", entityId, walletId,
+    counterpartyEntityId: counterpartyId, confidence: "manual", createdAt: 1, updatedAt: 1,
+  });
+  const normalizedTxid = "0".repeat(64);
+  await db.transactionMetadata.add({
+    txid: normalizedTxid, flowType: "received", categories: ["Income"], counterpartyEntityId: counterpartyId,
+    createdAt: 1, updatedAt: 1,
+  });
+  await db.transactionLegMetadata.add({
+    txid: normalizedTxid, legKey: "output:0", direction: "incoming", entityId, walletId,
+    categories: ["Income"], hasFlowOverride: true, createdAt: 1, updatedAt: 1,
+  });
+
   for (let i = 0; i < N_FILES; i++) {
     sourceFiles.set(`ab/cd/file-${i}.bin`, new Uint8Array([i, i + 1, i + 2, 0xff]));
   }
@@ -328,6 +356,21 @@ describe("v3 backup restore stays bounded and round-trips", () => {
     expect(await countUtxoLineage()).toBe(N_LINEAGE);
     expect(await countCustodySegments()).toBe(N_SEGMENTS);
     expect(await db.tags.count()).toBe(N_TAGS);
+    expect(await db.entities.count()).toBe(2);
+    expect(await db.wallets.count()).toBe(1);
+    expect(await db.addressOwnership.count()).toBe(1);
+    expect(await db.transactionMetadata.count()).toBe(1);
+    expect(await db.transactionLegMetadata.count()).toBe(1);
+    const ownership = await db.addressOwnership.toCollection().first();
+    const wallet = await db.wallets.toCollection().first();
+    const leg = await db.transactionLegMetadata.toCollection().first();
+    expect(ownership?.recordId).toBeGreaterThan(0);
+    expect(ownership?.entityId).toBe(wallet?.entityId);
+    expect(ownership?.walletId).toBe(wallet?.id);
+    expect(leg?.entityId).toBe(wallet?.entityId);
+    expect(leg?.walletId).toBe(wallet?.id);
+    const restoredCounterparty = await db.entities.where("naturalKey").equals("counterparty:roundtrip payer").first();
+    expect((await db.transactionMetadata.toCollection().first())?.counterpartyEntityId).toBe(restoredCounterparty?.id);
 
     // Attachment file bytes survived the round-trip exactly.
     expect(restoredFiles.size).toBe(N_FILES);

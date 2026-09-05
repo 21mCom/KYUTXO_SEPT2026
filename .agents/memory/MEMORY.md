@@ -153,3 +153,4 @@
 - [Full-suite validation under concurrent merges](full-suite-concurrent-merges.md) — a long serial suite is a moving target while task branches merge; repair only reproducible failures and recheck changed harnesses directly.
 - [Release evidence fail-closed](release-evidence-fail-closed.md) — release gates must revalidate every downloaded evidence file immediately before publish; producer job success alone is insufficient.
 - [Runner alert recovery evidence](runner-alert-recovery-evidence.md) — never close an offline-runner alert because queued work vanished; require a newer successful probe for that exact label.
+- [Normalized model restore identity](normalized-model-restore-identity.md) — portable natural keys never include surrogate IDs; old-backup merges project missing normalized rows without overwriting live choices.

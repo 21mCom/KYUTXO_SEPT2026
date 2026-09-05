@@ -89,7 +89,15 @@ import type {
   UtxoLineage,
   CustodySegment,
   LineageSnapshot,
+  RecordEntity,
+  RecordWallet,
+  AddressOwnership,
+  TransactionMetadata,
+  TransactionLegMetadata,
+  RecordModelMigrationState,
 } from "@/lib/database";
+import { db } from "@/lib/database";
+import { runRecordModelMigration } from "@/lib/data/record-model-crud";
 import {
   clearInlineTables,
   restoreInlineTables,
@@ -394,6 +402,16 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         lineageIds: [] as number[],
         segmentIds: [] as number[],
         snapshotIds: [] as number[],
+        entityIds: [] as number[],
+        walletIds: [] as number[],
+        ownershipIds: [] as number[],
+        transactionMetadataIds: [] as number[],
+        transactionLegMetadataIds: [] as number[],
+        // Normalized rows which collided in a merge are enriched only where the
+        // live value is absent. Keep complete originals for exact cancellation.
+        normalizedPriors: [] as Array<{ table: "entities" | "wallets" | "addressOwnership" | "transactionMetadata" | "transactionLegMetadata"; row: any }>,
+        migrationStatePrior: undefined as RecordModelMigrationState | undefined,
+        migrationStateCaptured: false,
         // Prior values of the exact fields updateTransaction() enriched, so a
         // cancel restores the live transaction to its pre-merge shape.
         txEnrichPriors: [] as Array<{ id: number; prior: Partial<CreateTransactionData> }>,
@@ -429,6 +447,18 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     await bulkDeleteUtxoLineage(log.lineageIds, { skipNotification: true });
     await bulkDeleteCustodySegments(log.segmentIds, { skipNotification: true });
     await bulkDeleteLineageSnapshots(log.snapshotIds, { skipNotification: true });
+    await db.transactionLegMetadata.bulkDelete(log.transactionLegMetadataIds);
+    await db.transactionMetadata.bulkDelete(log.transactionMetadataIds);
+    await db.addressOwnership.bulkDelete(log.ownershipIds);
+    await db.wallets.bulkDelete(log.walletIds);
+    await db.entities.bulkDelete(log.entityIds);
+    for (const prior of log.normalizedPriors) {
+      await (db[prior.table] as any).put(prior.row);
+    }
+    if (log.migrationStateCaptured) {
+      if (log.migrationStatePrior === undefined) await db.recordModelMigrationState.delete("v44");
+      else await db.recordModelMigrationState.put(log.migrationStatePrior);
+    }
     await bulkDeleteTransactions(log.transactionIds, { skipNotification: true });
     for (const { id, prior } of log.txEnrichPriors) {
       await updateTransaction(id, prior, { skipNotification: true });
@@ -480,6 +510,11 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       log.lineageIds.length +
       log.segmentIds.length +
       log.snapshotIds.length +
+        log.entityIds.length +
+        log.walletIds.length +
+        log.ownershipIds.length +
+        log.transactionMetadataIds.length +
+        log.transactionLegMetadataIds.length +
       inlineMetadataRemoved
     );
   }
@@ -490,6 +525,10 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   // records stream has built the old→new id map — see
   // restorePendingRecordOrigins(), called once the ZIP stream completes.
   let pendingRecordOrigins: any[] = [];
+  // v44 rows are inline, but three of their foreign keys point at records which
+  // receive fresh ids from the streamed records entry. Keep them until that map
+  // is complete. Missing keys is the normal shape of an older v3 backup.
+  let pendingRecordModel: Record<string, unknown> = {};
 
   // Discovery-tree pointer fixup: `discoveredFromRecordId` on a backup record
   // references a BACKUP record id, which may be a forward reference (the id
@@ -1077,6 +1116,204 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     report(`Restoring ${table}...`);
   }
 
+  // Restore v44's small normalized tables after records have been assigned
+  // fresh ids.  This intentionally uses the tables directly: these are backup
+  // import rows, not user edits, and bulk ordering/remapping is part of the
+  // restore transaction boundary rather than the interactive CRUD API.
+  async function restorePendingRecordModel(): Promise<boolean> {
+    const arr = (name: string): any[] =>
+      Array.isArray(pendingRecordModel[name]) ? pendingRecordModel[name] as any[] : [];
+    const modelKeys = ["entities", "wallets", "addressOwnership", "transactionMetadata", "transactionLegMetadata"];
+    // Absence, rather than emptiness, identifies pre-v44 v3 archives. An empty
+    // v44 vault is still a completed projection and must not be regenerated
+    // from legacy compatibility fields on its next unlock.
+    if (!modelKeys.some(name => Object.prototype.hasOwnProperty.call(pendingRecordModel, name))) return false;
+    throwIfAborted();
+    const entityMap = new Map<number, number>();
+    const walletMap = new Map<number, number>();
+    const priorSeen = new Set<string>();
+    const stableKey = (value: unknown): string =>
+      typeof value === "string" ? value.trim().toLocaleLowerCase() : "";
+    const walletNaturalKey = (wallet: any, entityNaturalKey?: string): string => {
+      const vault = wallet?.vault;
+      const vaultPart = vault ? [
+        vault.isVaultXpub ? "1" : "0", stableKey(vault.vaultName),
+        vault.m ?? "", vault.n ?? "", vault.vaultNotes ?? "",
+      ].join(":") : "";
+      return [stableKey(wallet?.name), entityNaturalKey ?? "", stableKey(wallet?.seedName),
+        stableKey(wallet?.walletSoftware), vaultPart].join("|");
+    };
+    const missing = (v: unknown) => v === undefined || v === null || v === "" ||
+      (Array.isArray(v) && v.length === 0);
+    const enrich = async (table: any, existing: any, incoming: any, fields: string[]) => {
+      if (!isMerge) return;
+      const changes: any = {};
+      for (const field of fields) if (missing(existing[field]) && !missing(incoming[field])) changes[field] = incoming[field];
+      if (!Object.keys(changes).length) return;
+      const token = `${table.name}:${existing.id}`;
+      if (!priorSeen.has(token)) {
+        priorSeen.add(token);
+        mergeUndoLog?.normalizedPriors.push({ table: table.name, row: { ...existing } });
+      }
+      await table.update(existing.id, changes);
+    };
+    const remapCounterparty = async (oldId: unknown): Promise<number | undefined> => {
+      const id = remap(entityMap, oldId);
+      return id !== undefined && (await db.entities.get(id))?.kind === "counterparty" ? id : undefined;
+    };
+    for (const raw of arr("entities")) {
+      throwIfAborted();
+      if (!raw || typeof raw.naturalKey !== "string" || !raw.naturalKey) continue;
+      const existing = await db.entities.where("naturalKey").equals(raw.naturalKey).first();
+      let id: number;
+      if (existing) {
+        await enrich(db.entities, existing, raw, ["name", "kind"]);
+        id = existing.id!;
+      } else {
+        const { id: old, ...row } = raw;
+        id = await db.entities.add(row as RecordEntity) as number;
+        mergeUndoLog?.entityIds.push(id);
+      }
+      if (typeof raw.id === "number") entityMap.set(raw.id, id);
+    }
+    for (const raw of arr("wallets")) {
+      throwIfAborted();
+      if (!raw || typeof raw.name !== "string" || !raw.name.trim()) continue;
+      const entityId = remap(entityMap, raw.entityId);
+      const entityNaturalKey = entityId === undefined
+        ? undefined : (await db.entities.get(entityId))?.naturalKey;
+      // Never trust the serialized key: older writers accidentally used local
+      // entity ids. Recompute it after parent remap so source and destination
+      // surrogate ids cannot create duplicate wallets.
+      const naturalKey = walletNaturalKey(raw, entityNaturalKey);
+      const incoming = { ...raw, naturalKey, ...(entityId === undefined ? { entityId: undefined } : { entityId }) };
+      let existing = await db.wallets.where("naturalKey").equals(naturalKey).first();
+      if (!existing) {
+        // Upgrade pre-fix live rows lazily while matching. This makes a merge
+        // idempotent even when its first run was made by an older build.
+        for (const candidate of await db.wallets.toArray()) {
+          const candidateEntity = candidate.entityId === undefined ? undefined : await db.entities.get(candidate.entityId);
+          const candidateKey = walletNaturalKey(candidate, candidateEntity?.naturalKey);
+          if (candidate.naturalKey !== candidateKey) await db.wallets.update(candidate.id!, { naturalKey: candidateKey });
+          if (candidateKey === naturalKey) { existing = { ...candidate, naturalKey: candidateKey }; break; }
+        }
+      }
+      let id: number;
+      if (existing) {
+        await enrich(db.wallets, existing, incoming, ["name", "entityId", "seedName", "walletSoftware", "vault"]);
+        id = existing.id!;
+      } else {
+        const { id: old, ...row } = incoming;
+        id = await db.wallets.add(row as RecordWallet) as number;
+        mergeUndoLog?.walletIds.push(id);
+      }
+      if (typeof raw.id === "number") walletMap.set(raw.id, id);
+    }
+    for (const raw of arr("addressOwnership")) {
+      throwIfAborted();
+      const recordId = remap(idMap, raw?.recordId);
+      if (recordId === undefined || !raw ||
+          !["assigned", "ours-owner-unknown", "not-ours", "undetermined"].includes(raw.state)) continue;
+      const entityId = remap(entityMap, raw.entityId);
+      const walletId = remap(walletMap, raw.walletId);
+      const counterpartyEntityId = await remapCounterparty(raw.counterpartyEntityId);
+      // An assigned row with an unavailable entity is not a valid assignment;
+      // retain the address conservatively as unresolved instead of dangling.
+      const state = raw.state === "assigned" && entityId === undefined ? "undetermined" : raw.state;
+      const incoming = { ...raw, recordId, state, entityId, walletId, counterpartyEntityId };
+      const existing = await db.addressOwnership.where("recordId").equals(recordId).first();
+      if (existing) {
+        await enrich(db.addressOwnership, existing, incoming, ["state", "entityId", "walletId", "counterpartyEntityId", "confidence"]);
+      } else {
+        const { id: old, ...row } = incoming;
+        const id = await db.addressOwnership.add(row as AddressOwnership) as number;
+        mergeUndoLog?.ownershipIds.push(id);
+      }
+    }
+    for (const raw of arr("transactionMetadata")) {
+      throwIfAborted();
+      if (!raw || typeof raw.txid !== "string" || !raw.txid) continue;
+      const incoming = { ...raw, counterpartyEntityId: await remapCounterparty(raw.counterpartyEntityId) };
+      const existing = await db.transactionMetadata.where("txid").equals(raw.txid).first();
+      const fields = ["flowType", "acquisitionMethod", "dispositionType", "costBasisUsd", "categories", "tags", "notes", "counterpartyEntityId"];
+      if (existing) await enrich(db.transactionMetadata, existing, incoming, fields);
+      else {
+        const { id: old, ...row } = incoming;
+        const id = await db.transactionMetadata.add(row as TransactionMetadata) as number;
+        mergeUndoLog?.transactionMetadataIds.push(id);
+      }
+    }
+    for (const raw of arr("transactionLegMetadata")) {
+      throwIfAborted();
+      if (!raw || typeof raw.txid !== "string" || !raw.txid || typeof raw.legKey !== "string" || !raw.legKey ||
+          !["incoming", "outgoing", "owner-transfer"].includes(raw.direction)) continue;
+      const entityId = remap(entityMap, raw.entityId);
+      const walletId = remap(walletMap, raw.walletId);
+      const incoming = { ...raw, entityId, walletId };
+      const existing = await db.transactionLegMetadata.where("[txid+legKey]").equals([raw.txid, raw.legKey]).first();
+      const fields = ["direction", "entityId", "walletId", "flowType", "acquisitionMethod", "dispositionType", "costBasisUsd", "categories", "tags", "notes", "hasFlowOverride"];
+      if (existing) await enrich(db.transactionLegMetadata, existing, incoming, fields);
+      else {
+        const { id: old, ...row } = incoming;
+        const id = await db.transactionLegMetadata.add(row as TransactionLegMetadata) as number;
+        mergeUndoLog?.transactionLegMetadataIds.push(id);
+      }
+    }
+    if (mergeUndoLog && !mergeUndoLog.migrationStateCaptured) {
+      mergeUndoLog.migrationStatePrior = await db.recordModelMigrationState.get("v44");
+      mergeUndoLog.migrationStateCaptured = true;
+    }
+    await db.recordModelMigrationState.put({
+      id: "v44", phase: "complete", lastRecordId: 0,
+      completedAt: Date.now(), updatedAt: Date.now(),
+    });
+    return true;
+  }
+
+  // Pre-v44 v3 archives have legacy fields only. In merge mode an already
+  // completed live checkpoint would otherwise skip their projection forever.
+  // Run the normal migration, then restore every pre-existing normalized row
+  // verbatim: it leaves only projections for genuinely new legacy records and
+  // prevents its put-style compatibility projection from changing live choices.
+  async function projectOldV3Merge(): Promise<void> {
+    if (!isMerge) return;
+    throwIfAborted();
+    const before = await Promise.all([
+      db.entities.toArray(), db.wallets.toArray(), db.addressOwnership.toArray(),
+      db.transactionMetadata.toArray(), db.transactionLegMetadata.toArray(),
+    ]);
+    const ids = before.map(rows => new Set(rows.map(row => row.id).filter((id): id is number => typeof id === "number")));
+    if (mergeUndoLog && !mergeUndoLog.migrationStateCaptured) {
+      mergeUndoLog.migrationStatePrior = await db.recordModelMigrationState.get("v44");
+      mergeUndoLog.migrationStateCaptured = true;
+    }
+    await db.recordModelMigrationState.clear();
+    await runRecordModelMigration();
+    const after = await Promise.all([
+      db.entities.toArray(), db.wallets.toArray(), db.addressOwnership.toArray(),
+      db.transactionMetadata.toArray(), db.transactionLegMetadata.toArray(),
+    ]);
+    // Restore only prior rows; bulkPut does not remove migration-added rows.
+    await db.entities.bulkPut(before[0]);
+    await db.wallets.bulkPut(before[1]);
+    await db.addressOwnership.bulkPut(before[2]);
+    await db.transactionMetadata.bulkPut(before[3]);
+    await db.transactionLegMetadata.bulkPut(before[4]);
+    const targets = [
+      mergeUndoLog?.entityIds, mergeUndoLog?.walletIds, mergeUndoLog?.ownershipIds,
+      mergeUndoLog?.transactionMetadataIds, mergeUndoLog?.transactionLegMetadataIds,
+    ];
+    for (let i = 0; i < after.length; i++) {
+      const target = targets[i];
+      if (!target) continue;
+      for (const row of after[i]) if (typeof row.id === "number" && !ids[i].has(row.id)) target.push(row.id);
+    }
+    // Cancellation is checked only after inserted ids and overwritten live
+    // rows are safely undoable; checking immediately after migration could
+    // strand exactly the normalized rows this path created.
+    throwIfAborted();
+  }
+
   // Insert the backup's recordOrigins rows (source history driving the
   // Conflict Resolution page) once the whole ZIP stream has been processed, so
   // the records old→new id map is complete. Rows whose owning record is absent
@@ -1225,6 +1462,9 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
             if (inlineResult && Array.isArray(inlineResult.pendingRecordOrigins)) {
               pendingRecordOrigins = inlineResult.pendingRecordOrigins;
             }
+            // The standard inline restorer deliberately ignores these v44
+            // tables: their ids need the records stream's old→new map.
+            pendingRecordModel = inline;
             // Older v3 backups carry lineage/segments/snapshots INLINE instead
             // of streamed; those inserts are data rows too and must be part of
             // the merge-cancel undo log or cancelling a merge of an old backup
@@ -1369,6 +1609,8 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     // rows. Runs inside the try so a failure/cancel here follows the same
     // contracts as any other post-clear failure (reset-to-empty in replace
     // mode, undo log in merge mode).
+    const restoredV44Model = await restorePendingRecordModel();
+    if (!restoredV44Model) await projectOldV3Merge();
     await restorePendingRecordOrigins();
 
     // Re-link discovery-tree pointers through the completed id map — same
