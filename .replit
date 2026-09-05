@@ -3437,6 +3437,17 @@ args = "node --test scripts/check-audit.test.mjs"
 isValidation = true
 
 [[workflows.workflow]]
+name = "release-fixture-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-release-fixtures.test.mjs scripts/release-workflow.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
 name = "pof-version-browser-check"
 author = "agent"
 

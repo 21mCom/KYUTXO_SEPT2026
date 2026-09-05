@@ -27,6 +27,10 @@ test('tagged and explicitly requested releases run the full suite before packagi
   const fullSuiteIndex = workflow.indexOf('run: npm run test:full');
   const packageIndex = workflow.indexOf('run: npx electron-builder');
   assert.ok(fullSuiteIndex > -1 && fullSuiteIndex < packageIndex);
+  assert.equal(
+    packageJson.scripts['test:full'],
+    'node scripts/check-release-fixtures.mjs -- npm run test:full:unguarded',
+  );
 });
 
 test('manual releases are bound to an existing version tag at the validated commit', () => {

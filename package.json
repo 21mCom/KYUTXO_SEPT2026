@@ -15,7 +15,8 @@
     "test:unit": "vitest run --silent --maxWorkers=1",
     "test:scripts": "node scripts/run-node-tests.mjs",
     "test:fast": "vitest run --silent --maxWorkers=2 client/src/lib/bitcoin.canonicalize.test.ts client/src/lib/crypto.kdf.test.ts client/src/lib/backup/compact-roundtrip.runtime.test.ts server/launch-token.test.ts electron/security-utils.test.ts && node --test scripts/check-audit.test.mjs scripts/generate-sha256.test.mjs scripts/release-workflow.test.mjs",
-    "test:full": "npm run test:unit && npm run test:scripts",
+    "test:full": "node scripts/check-release-fixtures.mjs -- npm run test:full:unguarded",
+    "test:full:unguarded": "npm run test:unit && npm run test:scripts",
     "release:checksums": "node scripts/generate-sha256.mjs release"
   },
   "dependencies": {

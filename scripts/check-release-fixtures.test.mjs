@@ -1,0 +1,71 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'check-release-fixtures.mjs',
+);
+
+function makeRepo() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'release-fixtures-test-'));
+  spawnSync('git', ['init', '-q'], { cwd: root });
+  fs.writeFileSync(path.join(root, 'sample.pdf'), 'original pdf');
+  fs.writeFileSync(path.join(root, 'nested.docx'), 'original docx');
+  fs.writeFileSync(path.join(root, 'notes.txt'), 'not a protected document');
+  spawnSync('git', ['add', '.'], { cwd: root });
+  return root;
+}
+
+function run(root, source) {
+  return spawnSync(process.execPath, [SCRIPT, '--', process.execPath, '-e', source], {
+    cwd: root,
+    env: { ...process.env, CHECK_RELEASE_FIXTURES_ROOT: root },
+    encoding: 'utf8',
+  });
+}
+
+test('passes when a test command leaves tracked documents unchanged', (t) => {
+  const root = makeRepo();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const result = run(root, `require('node:fs').writeFileSync('notes.txt', 'changed')`);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /protecting 2 tracked sample document/);
+});
+
+test('reports every document changed during the command without reverting it', (t) => {
+  const root = makeRepo();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'sample.pdf'), 'pre-existing user edit');
+
+  const result = run(
+    root,
+    [
+      `const fs = require('node:fs')`,
+      `fs.appendFileSync('sample.pdf', ' plus test edit')`,
+      `fs.writeFileSync('nested.docx', 'test rewrite')`,
+    ].join(';'),
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /sample\.pdf/);
+  assert.match(result.stderr, /nested\.docx/);
+  assert.match(result.stderr, /left untouched/);
+  assert.equal(fs.readFileSync(path.join(root, 'sample.pdf'), 'utf8'), 'pre-existing user edit plus test edit');
+  assert.equal(fs.readFileSync(path.join(root, 'nested.docx'), 'utf8'), 'test rewrite');
+});
+
+test('preserves a failing test command status when fixtures are unchanged', (t) => {
+  const root = makeRepo();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const result = run(root, 'process.exit(7)');
+
+  assert.equal(result.status, 7);
+});
