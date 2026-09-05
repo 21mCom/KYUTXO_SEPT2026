@@ -13,7 +13,10 @@ import {
 } from '@/lib/tor-proxy-settings-sync';
 import {
   getForgottenNetworkSourceUpdates,
+  replaceRuntimeNetworkSettings,
+  serializeNodeSettingsWrite,
   setRuntimeNetworkSettings,
+  updateRuntimeNetworkSettings,
 } from '@/lib/network-privacy';
 
 const DEFAULT_NODE_SETTINGS: NodeSettings = {
@@ -34,6 +37,19 @@ const UNRESOLVED_NODE_SETTINGS: NodeSettings = {
   networkAccessEnabled: false,
   networkOnboardingStage: 'source',
 };
+
+function getResetSettings(current: NodeSettings): NodeSettings {
+  return {
+    ...DEFAULT_NODE_SETTINGS,
+    networkAccessEnabled: current.networkAccessEnabled,
+    networkOnboardingStage: current.networkOnboardingStage,
+    networkPrivacyMode: current.networkPrivacyMode === undefined
+      ? undefined
+      : 'public-direct',
+    networkPrivacyChosenAt: current.networkPrivacyChosenAt,
+    firstSyncConfirmedAt: current.firstSyncConfirmedAt,
+  };
+}
 
 export function useNodeSettings() {
   const [hasTimedOut, setHasTimedOut] = useState(false);
@@ -103,31 +119,31 @@ export function useNodeSettings() {
   }, [syncKey]);
 
   const updateSettings = async (updates: Partial<Omit<NodeSettings, 'id'>>) => {
-    setRuntimeNetworkSettings({ ...nodeSettings, ...updates });
-    const existing = await getNodeSettings('default');
-    if (existing) {
-      await updateStoredNodeSettings('default', updates);
-    } else {
-      await putNodeSettings({
+    updateRuntimeNetworkSettings(updates, nodeSettings);
+    await serializeNodeSettingsWrite(async () => {
+      const existing = await getNodeSettings('default');
+      const latestSettings = {
         ...DEFAULT_NODE_SETTINGS,
+        ...existing,
         ...updates,
-      });
-    }
+      };
+      if (existing) {
+        await updateStoredNodeSettings('default', updates);
+      } else {
+        await putNodeSettings(latestSettings);
+      }
+    });
   };
 
   const resetToDefaults = async () => {
-    const resetSettings: NodeSettings = {
-      ...DEFAULT_NODE_SETTINGS,
-      networkAccessEnabled: nodeSettings.networkAccessEnabled,
-      networkOnboardingStage: nodeSettings.networkOnboardingStage,
-      networkPrivacyMode: nodeSettings.networkPrivacyMode === undefined
-        ? undefined
-        : 'public-direct',
-      networkPrivacyChosenAt: nodeSettings.networkPrivacyChosenAt,
-      firstSyncConfirmedAt: nodeSettings.firstSyncConfirmedAt,
-    };
-    setRuntimeNetworkSettings(resetSettings);
-    await putNodeSettings(resetSettings);
+    replaceRuntimeNetworkSettings(getResetSettings, nodeSettings);
+    await serializeNodeSettingsWrite(async () => {
+      const existing = await getNodeSettings('default');
+      await putNodeSettings(getResetSettings({
+        ...DEFAULT_NODE_SETTINGS,
+        ...existing,
+      }));
+    });
   };
 
   const forgetNetworkSource = async () => {

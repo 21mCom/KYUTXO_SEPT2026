@@ -182,13 +182,70 @@ describe("useNodeSettings", () => {
       networkOnboardingStage: "complete",
       networkAccessEnabled: true,
     };
-    nodeSettingsCrudMocks.getNodeSettings.mockImplementation(() => new Promise(() => {}));
+    let signalReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      signalReadStarted = resolve;
+    });
+    let releaseRead!: () => void;
+    nodeSettingsCrudMocks.getNodeSettings.mockImplementation(() => new Promise((resolve) => {
+      signalReadStarted();
+      releaseRead = () => resolve(mockQueryReturn as never);
+    }));
     const { result, rerender } = renderHook(() => useNodeSettings());
 
-    void result.current.updateSettings({ networkAccessEnabled: false });
+    const update = result.current.updateSettings({ networkAccessEnabled: false });
     rerender();
 
     expect(() => assertNetworkAccessAllowed()).toThrow("Network access is offline");
+    await act(async () => {
+      await readStarted;
+      releaseRead();
+      await update;
+    });
+  });
+
+  it("keeps forgotten policy cleared when a stale unrelated update races it", async () => {
+    const stored = {
+      id: "default",
+      providerType: "custom-electrs",
+      customUrl: "http://umbrel.local:3006/api",
+      networkPrivacyMode: "own-node" as const,
+      networkOnboardingStage: "complete" as const,
+      networkAccessEnabled: true,
+      networkPrivacyChosenAt: 123,
+    };
+    mockQueryReturn = { ...stored };
+    nodeSettingsCrudMocks.getNodeSettings.mockImplementation(async () => ({ ...stored }));
+
+    let releaseForgetWrite!: () => void;
+    const forgetWriteBlocked = new Promise<void>((resolve) => {
+      releaseForgetWrite = resolve;
+    });
+    nodeSettingsCrudMocks.updateNodeSettings.mockImplementationOnce(async (_id, updates) => {
+      await forgetWriteBlocked;
+      Object.assign(stored, updates);
+    }).mockImplementation(async (_id, updates) => {
+      Object.assign(stored, updates);
+    });
+
+    const { result } = renderHook(() => useNodeSettings());
+    const forget = result.current.forgetNetworkSource();
+    const staleUnrelatedUpdate = result.current.updateSettings({ requestTimeout: 45_000 });
+
+    expect(() => assertNetworkAccessAllowed()).toThrow("No network source is configured");
+    await act(async () => {
+      releaseForgetWrite();
+      await Promise.all([forget, staleUnrelatedUpdate]);
+    });
+
+    expect(stored).toEqual(expect.objectContaining({
+      requestTimeout: 45_000,
+      networkAccessEnabled: false,
+      networkOnboardingStage: "source",
+      networkPrivacyMode: undefined,
+      networkPrivacyChosenAt: undefined,
+    }));
+    expect(() => assertNetworkAccessAllowed()).toThrow("No network source is configured");
   });
 
   it("reset preserves offline and onboarding policy fields", async () => {
@@ -202,6 +259,7 @@ describe("useNodeSettings", () => {
       networkAccessEnabled: false,
       firstSyncConfirmedAt: 123,
     };
+    nodeSettingsCrudMocks.getNodeSettings.mockResolvedValue(mockQueryReturn);
     const { result } = renderHook(() => useNodeSettings());
     await act(async () => {
       await result.current.resetToDefaults();

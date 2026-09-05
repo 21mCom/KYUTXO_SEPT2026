@@ -39,9 +39,33 @@ const FRESH_NODE_SETTINGS: NodeSettings = {
 };
 
 let runtimeSettings: NodeSettings | undefined;
+let settingsWriteQueue: Promise<void> = Promise.resolve();
+
+export function serializeNodeSettingsWrite<T>(write: () => Promise<T>): Promise<T> {
+  const result = settingsWriteQueue.then(write, write);
+  settingsWriteQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
 
 export function setRuntimeNetworkSettings(settings: NodeSettings): void {
   runtimeSettings = settings;
+}
+
+export function updateRuntimeNetworkSettings(
+  updates: Partial<Omit<NodeSettings, 'id'>>,
+  fallback: NodeSettings,
+): void {
+  runtimeSettings = {
+    ...(runtimeSettings ?? fallback),
+    ...updates,
+  };
+}
+
+export function replaceRuntimeNetworkSettings(
+  replace: (current: NodeSettings) => NodeSettings,
+  fallback: NodeSettings,
+): void {
+  runtimeSettings = replace(runtimeSettings ?? fallback);
 }
 
 export function isExplicitNetworkChoice(settings: NodeSettings): boolean {
@@ -153,24 +177,28 @@ export function recordNetworkPrivacyActivity(
 }
 
 export async function initializeFreshNetworkPrivacy(): Promise<void> {
-  const existing = await getNodeSettings('default');
-  if (existing) {
-    await updateNodeSettings('default', {
-      networkAccessEnabled: false,
-      networkOnboardingStage: 'source',
-      networkPrivacyMode: undefined,
-      networkPrivacyChosenAt: undefined,
-      firstSyncConfirmedAt: undefined,
-    });
-    runtimeSettings = { ...existing, ...FRESH_NODE_SETTINGS };
-    return;
-  }
-  await putNodeSettings(FRESH_NODE_SETTINGS);
-  runtimeSettings = FRESH_NODE_SETTINGS;
+  await serializeNodeSettingsWrite(async () => {
+    const existing = await getNodeSettings('default');
+    if (existing) {
+      await updateNodeSettings('default', {
+        networkAccessEnabled: false,
+        networkOnboardingStage: 'source',
+        networkPrivacyMode: undefined,
+        networkPrivacyChosenAt: undefined,
+        firstSyncConfirmedAt: undefined,
+      });
+      runtimeSettings = { ...existing, ...FRESH_NODE_SETTINGS };
+      return;
+    }
+    await putNodeSettings(FRESH_NODE_SETTINGS);
+    runtimeSettings = FRESH_NODE_SETTINGS;
+  });
 }
 
 export async function markFirstSyncConfirmed(): Promise<void> {
   const chosenAt = Date.now();
-  await updateNodeSettings('default', { firstSyncConfirmedAt: chosenAt });
-  if (runtimeSettings) runtimeSettings = { ...runtimeSettings, firstSyncConfirmedAt: chosenAt };
+  await serializeNodeSettingsWrite(async () => {
+    await updateNodeSettings('default', { firstSyncConfirmedAt: chosenAt });
+    if (runtimeSettings) runtimeSettings = { ...runtimeSettings, firstSyncConfirmedAt: chosenAt };
+  });
 }
