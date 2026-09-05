@@ -45,6 +45,50 @@ export const DEFAULT_BACKUP_SCHEDULE: BackupScheduleSettings = {
 // grow without bound.
 export const BACKUP_FREE_SPACE_HISTORY_LIMIT = 30;
 
+const activeDestinationRuns = new Map<string, Set<AbortController>>();
+
+export function cancelActiveScheduledBackup(destinationToken: string): void {
+  for (const controller of activeDestinationRuns.get(destinationToken) ?? []) {
+    controller.abort();
+  }
+}
+
+function registerActiveDestinationRun(destinationToken: string): {
+  controller: AbortController;
+  unregister: () => void;
+} {
+  const controller = new AbortController();
+  const controllers = activeDestinationRuns.get(destinationToken) ?? new Set<AbortController>();
+  controllers.add(controller);
+  activeDestinationRuns.set(destinationToken, controllers);
+  return {
+    controller,
+    unregister: () => {
+      controllers.delete(controller);
+      if (controllers.size === 0) activeDestinationRuns.delete(destinationToken);
+    },
+  };
+}
+
+function combineAbortSignals(...signals: Array<AbortSignal | undefined>): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const active = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  const abort = () => controller.abort();
+  for (const signal of active) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      for (const signal of active) signal.removeEventListener("abort", abort);
+    },
+  };
+}
+
 function normalizeFreeSpaceHistory(value: unknown): BackupFreeSpaceReading[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const readings = value
@@ -240,11 +284,21 @@ export function selectBackupsForRotation(
 class ScheduledFileSink implements BackupSink {
   private tail = Promise.resolve();
   private failure: unknown = null;
+  private readonly onAbort = () => {
+    void this.api.scheduledBackupAbort?.(this.id).catch(() => undefined);
+  };
   checksum?: string;
-  constructor(private readonly id: string, private readonly api: NonNullable<ReturnType<typeof getElectronAPISafe>>) {}
+  constructor(
+    private readonly id: string,
+    private readonly api: NonNullable<ReturnType<typeof getElectronAPISafe>>,
+    private readonly signal?: AbortSignal,
+  ) {
+    signal?.addEventListener("abort", this.onAbort, { once: true });
+  }
   write(chunk: Uint8Array): void {
     const copy = chunk.slice();
     this.tail = this.tail.then(async () => {
+      throwIfCancelled(this.signal);
       const result = await this.api.scheduledBackupWrite?.(this.id, copy.buffer as ArrayBuffer);
       if (!result?.success) throw new Error(result?.error || "Scheduled backup write failed");
     }).catch((error) => { if (this.failure == null) this.failure = error; });
@@ -255,11 +309,13 @@ class ScheduledFileSink implements BackupSink {
   }
   async close(): Promise<void> {
     await this.drain();
+    this.signal?.removeEventListener("abort", this.onAbort);
     const result = await this.api.scheduledBackupClose?.(this.id);
     if (!result?.success) throw new Error(result?.error || "Scheduled backup close failed");
     this.checksum = result.checksum;
   }
   async abort(): Promise<void> {
+    this.signal?.removeEventListener("abort", this.onAbort);
     try { await this.api.scheduledBackupAbort?.(this.id); } catch { /* best effort */ }
   }
 }
@@ -469,8 +525,10 @@ export async function runDueScheduledBackup(options: {
     // independently after every unlock.
     if (!isBackupDue(state?.lastVerifiedAt ?? schedule.lastVerifiedAt, schedule.cadenceDays, now) && !state?.lastFailureAt) continue;
     let id: string | undefined;
+    const activeRun = registerActiveDestinationRun(destination.token);
+    const combinedSignal = combineAbortSignals(options.signal, activeRun.controller.signal);
     try {
-      throwIfCancelled(options.signal);
+      throwIfCancelled(combinedSignal.signal);
       const space = await api.getScheduledBackupDiskSpace?.(destination.token);
       if (space?.success && typeof space.freeBytes === "number" &&
           space.freeBytes < estimateExportBytes({ attachmentBytes, rowCount })) {
@@ -480,7 +538,7 @@ export async function runDueScheduledBackup(options: {
       if (!opened.success || !opened.id) throw new Error(opened.error || "Could not open the backup destination.");
       id = opened.id;
       options.onProgress?.(`Creating backup in ${destination.label}`);
-      const sink = new ScheduledFileSink(id, api);
+      const sink = new ScheduledFileSink(id, api, combinedSignal.signal);
       await exportBackup({
         sink,
         encrypted: schedule.encrypted,
@@ -502,13 +560,13 @@ export async function runDueScheduledBackup(options: {
           },
         },
         onProgress: (p) => options.onProgress?.(p.phase),
-        signal: options.signal,
+        signal: combinedSignal.signal,
       });
-      await verifyScheduledBackup(() => scheduledChunks(id!, api, options.signal), password, options.signal);
-      throwIfCancelled(options.signal);
+      await verifyScheduledBackup(() => scheduledChunks(id!, api, combinedSignal.signal), password, combinedSignal.signal);
+      throwIfCancelled(combinedSignal.signal);
       const mainValidated = await api.scheduledBackupValidate?.(id, sink.checksum ?? "");
       if (!mainValidated?.success) throw new Error(mainValidated?.error || "Could not validate scheduled backup.");
-      throwIfCancelled(options.signal);
+      throwIfCancelled(combinedSignal.signal);
       const latestSettings = await getSettings("default");
       const latestSchedule = normalizeBackupSchedule(latestSettings?.backupSchedule);
       if (!latestSchedule.destinations.some((configured) => configured.token === destination.token)) {
@@ -531,11 +589,18 @@ export async function runDueScheduledBackup(options: {
         }));
     } catch (error) {
       if (id) await api.scheduledBackupAbort(id);
+      if (activeRun.controller.signal.aborted && !options.signal?.aborted) {
+        statusSchedule = normalizeBackupSchedule((await getSettings("default"))?.backupSchedule);
+        continue;
+      }
       const message = error instanceof BackupCancelledError ? "Scheduled backup was cancelled." : error instanceof Error ? error.message : String(error);
       failures.push(`${destination.label}: ${message}`);
       throwIfCancelled(options.signal);
       statusSchedule = await mutateBackupSchedule((current) =>
         mergeFailedBackupDestination(current, destination.token, { at: now, message }));
+    } finally {
+      combinedSignal.dispose();
+      activeRun.unregister();
     }
   }
   if (verified > 0) {

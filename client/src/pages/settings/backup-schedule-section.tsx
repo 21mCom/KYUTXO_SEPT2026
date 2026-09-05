@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { getElectronAPISafe, isElectron } from "@/lib/electron";
 import { getSettings, mutateSettings } from "@/lib/data/settings-crud";
 import {
+  cancelActiveScheduledBackup,
   DEFAULT_BACKUP_SCHEDULE,
   mergeBackupSchedulePolicy,
   normalizeBackupSchedule,
@@ -60,9 +61,20 @@ export function BackupScheduleSection() {
         toast({ variant: "destructive", title: "Choose a destination", description: "Select at least one local backup folder before enabling the schedule." });
         return;
       }
+      const removedDestinationTokens: string[] = [];
       const updated = await mutateSettings("default", (current) => ({
-        backupSchedule: mergeBackupSchedulePolicy(current.backupSchedule, normalized),
+        backupSchedule: (() => {
+          const currentSchedule = normalizeBackupSchedule(current.backupSchedule);
+          const configuredTokens = new Set(normalized.destinations.map((destination) => destination.token));
+          removedDestinationTokens.push(
+            ...currentSchedule.destinations
+              .filter((destination) => !configuredTokens.has(destination.token))
+              .map((destination) => destination.token),
+          );
+          return mergeBackupSchedulePolicy(currentSchedule, normalized);
+        })(),
       }));
+      for (const token of removedDestinationTokens) cancelActiveScheduledBackup(token);
       const saved = normalizeBackupSchedule(updated?.backupSchedule ?? normalized);
       setSchedule(saved);
       toast({ title: "Backup schedule saved", description: normalized.enabled ? "KYUTXO will check whether a backup is due after each unlock." : "Scheduled backups are off." });

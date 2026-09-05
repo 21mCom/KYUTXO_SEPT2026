@@ -19,6 +19,7 @@ import {
 } from "@/lib/data/settings-crud";
 import {
   BACKUP_FREE_SPACE_HISTORY_LIMIT,
+  cancelActiveScheduledBackup,
   DEFAULT_BACKUP_SCHEDULE,
   mergeBackupSchedulePolicy,
   normalizeBackupSchedule,
@@ -135,7 +136,7 @@ afterEach(async () => {
 });
 
 describe("backup schedule status persistence", () => {
-  it("does not promote to a destination removed during its active export", async () => {
+  it("aborts a removed destination while export chunks are still being written and continues", async () => {
       const archiveChunks = new Map<string, Uint8Array[]>();
       backupApi.scheduledBackupOpen.mockImplementation(async (token: string) => ({
         success: true,
@@ -157,24 +158,28 @@ describe("backup schedule status persistence", () => {
         };
       });
 
-      let releaseValidation!: () => void;
-      const validationHeld = new Promise<void>((resolve) => {
-        releaseValidation = resolve;
+      let releaseFirstWrite!: () => void;
+      const firstWriteHeld = new Promise<void>((resolve) => {
+        releaseFirstWrite = resolve;
       });
-      let validationStarted!: () => void;
-      const validationEntered = new Promise<void>((resolve) => {
-        validationStarted = resolve;
+      let firstWriteStarted!: () => void;
+      const firstWriteEntered = new Promise<void>((resolve) => {
+        firstWriteStarted = resolve;
       });
-      backupApi.scheduledBackupValidate.mockImplementation(async (id: string) => {
-        if (id === "primary-partial-backup") {
-          validationStarted();
-          await validationHeld;
+      let primaryWrites = 0;
+      backupApi.scheduledBackupWrite.mockImplementation(async (id: string, data: ArrayBuffer) => {
+        if (id === "primary-partial-backup" && primaryWrites++ === 0) {
+          firstWriteStarted();
+          await firstWriteHeld;
         }
+        const chunks = archiveChunks.get(id) ?? [];
+        chunks.push(new Uint8Array(data.slice(0)));
+        archiveChunks.set(id, chunks);
         return { success: true };
       });
 
       const scheduledRun = runDueScheduledBackup({ now: SCHEDULED_RUN_AT });
-      await validationEntered;
+      await firstWriteEntered;
 
       const current = await getSettings("default");
       const edited = {
@@ -185,8 +190,12 @@ describe("backup schedule status persistence", () => {
       await mutateSettings("default", (latest) => ({
         backupSchedule: mergeBackupSchedulePolicy(latest.backupSchedule, edited),
       }));
+      cancelActiveScheduledBackup(DESTINATION_A);
 
-      releaseValidation();
+      await vi.waitFor(() =>
+        expect(backupApi.scheduledBackupAbort).toHaveBeenCalledWith("primary-partial-backup"),
+      );
+      releaseFirstWrite();
       const result = await scheduledRun;
       const saved = normalizeBackupSchedule((await getSettings("default"))?.backupSchedule);
 
