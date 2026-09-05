@@ -62,6 +62,7 @@ function runFixture({
     return spawnSync(process.execPath, [guard], {
       encoding: 'utf8',
       env: { ...process.env, CHECK_RESTORE_SAFETY_ROOT: root },
+      timeout: 5_000,
     });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -116,6 +117,55 @@ test('rejects restore coupling reached through transitive local helpers', () => 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /scripts\/journeys\/open-inbox\.js:2/);
   assert.match(result.stderr, /client\/src\/lib\/backup\/export\.ts:1/);
+});
+
+test('rejects restore coupling reached through an extensionless local import', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './inbox-helpers';\nawait openInbox();\n",
+    helpers: {
+      'scripts/inbox-helpers.ts': [
+        'export function openInbox(page) {',
+        "  return page.getByTestId('button-open-restore');",
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /scripts\/inbox-helpers\.ts:2/);
+});
+
+test('rejects restore coupling reached through a directory index import', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './inbox-helpers';\nawait openInbox();\n",
+    helpers: {
+      'scripts/inbox-helpers/index.tsx': [
+        'export function openInbox() {',
+        "  return 'backup journey';",
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /scripts\/inbox-helpers\/index\.tsx:2/);
+});
+
+test('cyclic local helper imports terminate and still reject restore coupling', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './helpers/first';\nawait openInbox();\n",
+    helpers: {
+      'scripts/helpers/first.js': [
+        "import { second } from './second';",
+        'export function openInbox() { return second(); }',
+      ].join('\n'),
+      'scripts/helpers/second.js': [
+        "import { openInbox } from './first';",
+        "export function second() { return 'restore flow'; }",
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /scripts\/helpers\/second\.js:2/);
 });
 
 test('rejects a focused restore check that is no longer validation', () => {
