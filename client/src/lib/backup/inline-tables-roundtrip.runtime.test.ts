@@ -84,6 +84,7 @@ import {
   getAllDustFlags,
   clearDustFlags,
 } from "@/lib/data/dust-flags-crud";
+import { clearOwnershipReviewDecisions } from "@/lib/data/ownership-review-decisions-crud";
 
 // ---- fully-populated seed rows (every optional + required field set) --------
 
@@ -207,6 +208,7 @@ async function clearEverything(): Promise<void> {
   await clearEvidenceAttachments({ skipNotification: true });
   await clearPriceData({ skipNotification: true });
   await clearDustFlags({ skipNotification: true });
+  await clearOwnershipReviewDecisions();
   await db.tags.clear();
   await db.categories.clear();
   await db.owners.clear();

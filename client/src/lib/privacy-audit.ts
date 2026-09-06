@@ -1,7 +1,8 @@
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/db-types";
 import { getParticipantsByAddressesWithOutpointSpends } from "@/lib/data/record-queries";
 import { getAllDustFlags } from "@/lib/data/dust-flags-crud";
-import { queryVaultRows } from "@/lib/data/repository-helpers";
+import { getRecordsByInputStrings } from "@/lib/data/record-crud";
+import { listVaultRows, queryVaultRows } from "@/lib/data/repository-helpers";
 import { lookupEntities, ENTITY_CATEGORY_TAG_NAMES, ENTITY_CATEGORY_LABELS, ENTITY_CATEGORY_COLORS, type EntityCategory } from "@/lib/privacy-entity-list";
 
 // ─── Severity ────────────────────────────────────────────────────────────────
@@ -22,6 +23,8 @@ export type PrivacyFindingType =
   | "ADDRESS_REUSE"
   | "ROUND_AMOUNT"
   | "COMMON_INPUT_OWNERSHIP"
+  | "MULTI_OWNER_CO_SPEND"
+  | "MULTI_OWNER_ADDRESS_REUSE"
   | "UNNECESSARY_INPUT"
   | "RECURRING_PAYMENT"
   | "HIGH_ACTIVITY"
@@ -123,6 +126,12 @@ export interface AuditContext {
   participants: TransactionParticipant[];
   participantsByTxid: Map<string, TransactionParticipant[]>;
   transactions: Map<string, BlockchainTransaction>;
+  /**
+   * Explicitly assigned owner name by address. This is intentionally populated
+   * only from AddressOwnership rows in the `assigned` state; a missing entry
+   * means the audit must not infer an owner from transaction structure.
+   */
+  confirmedOwnerByAddress?: Map<string, string>;
   /**
    * Outpoints ("txid:vout") the user explicitly flagged as dust (via the
    * Dusted page). Dust findings for these outputs are annotated + downgraded:
@@ -329,13 +338,63 @@ async function buildAuditContext(
   const dustFlagRows = await getAllDustFlags();
   const dustFlaggedOutpoints = new Set(dustFlagRows.map((r) => r.outpoint));
 
+  onProgress?.("Loading confirmed ownership...");
+  const confirmedOwnerByAddress = await loadConfirmedOwnerByAddress(userAddresses);
+
   return {
     userAddresses: addressSet,
     participants: participants.map(attributeBlankInput),
     participantsByTxid,
     dustFlaggedOutpoints,
     transactions: txRecords,
+    confirmedOwnerByAddress,
   };
+}
+
+const OWNERSHIP_RECORD_BATCH_SIZE = 1000;
+
+/**
+ * Returns confirmed ownership only. All reads go through the repository
+ * vocabulary: the protected-vault renderer has no Dexie tables, and
+ * listVaultRows deliberately pages its finite collection reads.
+ */
+export async function loadConfirmedOwnerByAddress(
+  userAddresses: string[],
+): Promise<Map<string, string>> {
+  const records: Awaited<ReturnType<typeof getRecordsByInputStrings>> = [];
+  for (let i = 0; i < userAddresses.length; i += OWNERSHIP_RECORD_BATCH_SIZE) {
+    records.push(...await getRecordsByInputStrings(
+      userAddresses.slice(i, i + OWNERSHIP_RECORD_BATCH_SIZE),
+    ));
+  }
+  const addressByRecordId = new Map(records.flatMap((record) =>
+    record.id == null || !record.inputString ? [] : [[record.id, record.inputString] as const],
+  ));
+  if (addressByRecordId.size === 0) return new Map();
+
+  // No ownership/entity query is currently part of the protected query
+  // vocabulary. Page these tables through the repository instead of reaching
+  // around it to Dexie, then retain only rows relevant to this audit.
+  const ownershipRows = await listVaultRows("addressOwnership");
+  const assignedRows = ownershipRows.filter(
+    (row) => addressByRecordId.has(row.recordId) && row.state === "assigned" && row.entityId != null,
+  );
+  const assignedEntityIds = new Set(assignedRows.flatMap((row) =>
+    row.entityId == null ? [] : [row.entityId],
+  ));
+  if (assignedEntityIds.size === 0) return new Map();
+
+  const entities = await listVaultRows("entities");
+  const entityNameById = new Map(entities.flatMap((entity) =>
+    entity.id == null || !assignedEntityIds.has(entity.id) ? [] : [[entity.id, entity.name] as const],
+  ));
+  const confirmedOwnerByAddress = new Map<string, string>();
+  for (const row of assignedRows) {
+    const address = addressByRecordId.get(row.recordId);
+    const owner = row.entityId == null ? undefined : entityNameById.get(row.entityId);
+    if (address && owner) confirmedOwnerByAddress.set(address, owner);
+  }
+  return confirmedOwnerByAddress;
 }
 
 // ─── Existing heuristics (preserved) ─────────────────────────────────────────
@@ -714,6 +773,102 @@ export function detectAddressReuse(ctx: AuditContext): PrivacyFinding[] {
     }
   }
 
+  return findings;
+}
+
+/**
+ * Detects a transaction that co-spends inputs assigned to different confirmed
+ * owners. Unknown/undetermined ownership is deliberately excluded rather than
+ * being folded into an owner bucket.
+ */
+export function detectMultiOwnerCoSpend(ctx: AuditContext): PrivacyFinding[] {
+  const findings: PrivacyFinding[] = [];
+  const owners = ctx.confirmedOwnerByAddress;
+  if (!owners || owners.size === 0) return findings;
+
+  for (const [txid, parts] of ctx.participantsByTxid) {
+    const addressesByOwner = new Map<string, Set<string>>();
+    for (const input of parts) {
+      if (input.role !== "input") continue;
+      const owner = owners.get(input.address);
+      if (!owner) continue;
+      const addresses = addressesByOwner.get(owner) ?? new Set<string>();
+      addresses.add(input.address);
+      addressesByOwner.set(owner, addresses);
+    }
+    if (addressesByOwner.size < 2) continue;
+
+    const ownerEvidence = [...addressesByOwner.entries()].map(([owner, addresses]) => ({
+      owner,
+      addresses: [...addresses],
+    }));
+    findings.push({
+      type: "MULTI_OWNER_CO_SPEND",
+      severity: "HIGH",
+      description: `Inputs assigned to ${addressesByOwner.size} confirmed owners were co-spent in one transaction, publicly linking those owners' funds.`,
+      details: { ownerEvidence, ownerCount: addressesByOwner.size },
+      correction: "Use coin control to keep confirmed owners' UTXOs separate. Do not combine funds across owners unless the resulting public linkage is intended.",
+      txids: [txid],
+      addresses: ownerEvidence.flatMap((e) => e.addresses),
+    });
+  }
+  return findings;
+}
+
+/**
+ * Detects a recipient address used by transactions funded by different
+ * confirmed owners. This identifies shared/reused payment addresses without
+ * assigning any meaning to inputs whose ownership is unknown.
+ */
+export function detectMultiOwnerAddressReuse(ctx: AuditContext): PrivacyFinding[] {
+  const owners = ctx.confirmedOwnerByAddress;
+  if (!owners || owners.size === 0) return [];
+
+  const evidenceByAddress = new Map<string, {
+    txids: Set<string>;
+    owners: Map<string, Set<string>>;
+    inputAddresses: Set<string>;
+  }>();
+  for (const [txid, parts] of ctx.participantsByTxid) {
+    const knownInputs = parts.filter((part) => part.role === "input" && owners.has(part.address));
+    if (knownInputs.length === 0) continue;
+    for (const output of parts) {
+      if (output.role !== "output" || !output.address) continue;
+      const evidence = evidenceByAddress.get(output.address) ?? {
+        txids: new Set<string>(),
+        owners: new Map<string, Set<string>>(),
+        inputAddresses: new Set<string>(),
+      };
+      evidence.txids.add(txid);
+      for (const input of knownInputs) {
+        const owner = owners.get(input.address)!;
+        const addresses = evidence.owners.get(owner) ?? new Set<string>();
+        addresses.add(input.address);
+        evidence.owners.set(owner, addresses);
+        evidence.inputAddresses.add(input.address);
+      }
+      evidenceByAddress.set(output.address, evidence);
+    }
+  }
+
+  const findings: PrivacyFinding[] = [];
+  for (const [address, evidence] of evidenceByAddress) {
+    // A single multi-owner transaction is co-spend evidence, not address reuse.
+    if (evidence.txids.size < 2 || evidence.owners.size < 2) continue;
+    const ownerEvidence = [...evidence.owners.entries()].map(([owner, addresses]) => ({
+      owner,
+      addresses: [...addresses],
+    }));
+    findings.push({
+      type: "MULTI_OWNER_ADDRESS_REUSE",
+      severity: "HIGH",
+      description: `Address ${address.substring(0, 12)}… was reused as a recipient by ${evidence.owners.size} confirmed owners, linking their payment activity.`,
+      details: { ownerEvidence, ownerCount: evidence.owners.size, transactionCount: evidence.txids.size },
+      correction: "Ask the recipient to provide a fresh address for each owner and payment. Avoid reusing a shared recipient address across distinct owners.",
+      txids: [...evidence.txids],
+      addresses: [address, ...evidence.inputAddresses],
+    });
+  }
   return findings;
 }
 
@@ -1858,6 +2013,12 @@ export async function runPrivacyAudit(
   onProgress?.("Detecting address reuse...");
   const addressReuse = detectAddressReuse(ctx);
 
+  onProgress?.("Detecting multi-owner co-spends...");
+  const multiOwnerCoSpends = detectMultiOwnerCoSpend(ctx);
+
+  onProgress?.("Detecting multi-owner address reuse...");
+  const multiOwnerAddressReuse = detectMultiOwnerAddressReuse(ctx);
+
   onProgress?.("Detecting round amounts...");
   const roundAmounts = detectRoundAmounts(ctx, coinjoinTxids);
 
@@ -1905,6 +2066,8 @@ export async function runPrivacyAudit(
     ...exchange.findings,
     ...taintMerge,
     ...addressReuse,
+    ...multiOwnerCoSpends,
+    ...multiOwnerAddressReuse,
     ...cioh,
     ...unnecessary,
     ...highActivity,
@@ -1961,6 +2124,8 @@ export const PRIVACY_TAG_MAP: Partial<Record<PrivacyFindingType, { tagName: stri
   ADDRESS_REUSE: { tagName: "privacy:address-reuse", color: "#ef4444" },
   ROUND_AMOUNT: { tagName: "privacy:round-amount", color: "#f59e0b" },
   COMMON_INPUT_OWNERSHIP: { tagName: "privacy:cioh", color: "#f97316" },
+  MULTI_OWNER_CO_SPEND: { tagName: "privacy:multi-owner-co-spend", color: "#ef4444" },
+  MULTI_OWNER_ADDRESS_REUSE: { tagName: "privacy:multi-owner-address-reuse", color: "#ef4444" },
   UNNECESSARY_INPUT: { tagName: "privacy:unnecessary-input", color: "#64748b" },
   RECURRING_PAYMENT: { tagName: "privacy:recurring", color: "#0ea5e9" },
   HIGH_ACTIVITY: { tagName: "privacy:high-activity", color: "#8b5cf6" },
@@ -2006,6 +2171,8 @@ export const FINDING_TYPE_LABELS: Partial<Record<PrivacyFindingType, string>> = 
   ADDRESS_REUSE: "Address Reuse",
   ROUND_AMOUNT: "Round Amount",
   COMMON_INPUT_OWNERSHIP: "Common Input Ownership",
+  MULTI_OWNER_CO_SPEND: "Multi-Owner Co-Spend",
+  MULTI_OWNER_ADDRESS_REUSE: "Multi-Owner Address Reuse",
   UNNECESSARY_INPUT: "Unnecessary Input",
   RECURRING_PAYMENT: "Recurring Payment",
   HIGH_ACTIVITY: "High Activity Address",

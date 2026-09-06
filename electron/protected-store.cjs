@@ -45,6 +45,7 @@ const PROTECTED_TABLES = Object.freeze([
   // protected_rows boundary as legacy records; never route them to a sidecar.
   'entities', 'wallets', 'addressOwnership', 'transactionMetadata',
   'transactionLegMetadata', 'recordModelMigrationState',
+  'ownershipReviewDecisions',
 ]);
 
 const SAFE_ERROR = 'Protected store operation failed';

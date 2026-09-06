@@ -105,6 +105,10 @@ import {
 import { sanitizeSavedInboxViews } from "@/lib/data/transaction-crud";
 import type { SavedInboxView } from "@/lib/db-types";
 import { getOwnerResidencies, validateResidencyRanges } from "@/lib/data/owner-policy";
+import {
+  getAllOwnershipReviewDecisions,
+  clearOwnershipReviewDecisions,
+} from "@/lib/data/ownership-review-decisions-crud";
 
 // Recognized Fund Trail layout values + their human-readable labels, derived
 // from the single source of truth so this allow-list never drifts from the UI.
@@ -390,6 +394,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     addressOwnership,
     transactionMetadata,
     transactionLegMetadata,
+    ownershipReviewDecisions,
   ] = await Promise.all([
     getAllRecordOrigins(),
     getAllCustomFields(),
@@ -407,6 +412,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     readAllRepositoryRows("addressOwnership"),
     readAllRepositoryRows("transactionMetadata"),
     readAllRepositoryRows("transactionLegMetadata"),
+    getAllOwnershipReviewDecisions(),
   ]);
 
   return {
@@ -435,6 +441,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     addressOwnership,
     transactionMetadata,
     transactionLegMetadata,
+    ownershipReviewDecisions,
   };
 }
 
@@ -459,6 +466,7 @@ export async function clearInlineTables(): Promise<void> {
   await clearDustFlags({ skipNotification: true });
   await clearSavedPsbts({ skipNotification: true });
   await clearAdversaryScenarios({ skipNotification: true });
+  await clearOwnershipReviewDecisions();
   await Promise.all([
     repository.clear("entities"),
     repository.clear("wallets"),

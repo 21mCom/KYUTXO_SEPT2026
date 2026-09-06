@@ -111,6 +111,7 @@ import {
 } from "./legacy-restore";
 import { MergeClassifier } from "./merge-classify";
 import { recordOriginMergeKey } from "./merge-keys";
+import { restoreOwnershipReviewDecision } from "@/lib/data/ownership-review-decisions-crud";
 
 // Thrown when a restore is cancelled AFTER the destructive clear but the vault
 // could NOT be reset to a clean state. The vault is then in an unknown partial
@@ -408,6 +409,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         ownershipIds: [] as number[],
         transactionMetadataIds: [] as number[],
         transactionLegMetadataIds: [] as number[],
+        ownershipReviewDecisionIds: [] as string[],
         // Normalized rows which collided in a merge are enriched only where the
         // live value is absent. Keep complete originals for exact cancellation.
         normalizedPriors: [] as Array<{ table: "entities" | "wallets" | "addressOwnership" | "transactionMetadata" | "transactionLegMetadata"; row: any }>,
@@ -449,6 +451,9 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     await bulkDeleteCustodySegments(log.segmentIds, { skipNotification: true });
     await bulkDeleteLineageSnapshots(log.snapshotIds, { skipNotification: true });
     await db.transactionLegMetadata.bulkDelete(log.transactionLegMetadataIds);
+    if (log.ownershipReviewDecisionIds.length) {
+      await getVaultRepository().bulkDelete("ownershipReviewDecisions", log.ownershipReviewDecisionIds);
+    }
     await db.transactionMetadata.bulkDelete(log.transactionMetadataIds);
     await db.addressOwnership.bulkDelete(log.ownershipIds);
     await db.wallets.bulkDelete(log.walletIds);
@@ -516,6 +521,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         log.ownershipIds.length +
         log.transactionMetadataIds.length +
         log.transactionLegMetadataIds.length +
+        log.ownershipReviewDecisionIds.length +
       inlineMetadataRemoved
     );
   }
@@ -1129,7 +1135,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   async function restorePendingRecordModel(): Promise<boolean> {
     const arr = (name: string): any[] =>
       Array.isArray(pendingRecordModel[name]) ? pendingRecordModel[name] as any[] : [];
-    const modelKeys = ["entities", "wallets", "addressOwnership", "transactionMetadata", "transactionLegMetadata"];
+    const modelKeys = ["entities", "wallets", "addressOwnership", "transactionMetadata", "transactionLegMetadata", "ownershipReviewDecisions"];
     // Absence, rather than emptiness, identifies pre-v44 v3 archives. An empty
     // v44 vault is still a completed projection and must not be regenerated
     // from legacy compatibility fields on its next unlock.
@@ -1264,6 +1270,53 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         const id = await db.transactionLegMetadata.add(row as TransactionLegMetadata) as number;
         mergeUndoLog?.transactionLegMetadataIds.push(id);
       }
+    }
+    const validStates = new Set(["accepted", "rejected", "undecided", "not-ours"]);
+    const validActions = new Set(["assign", "assign-manual", "assign-cluster", "assign-wallet", "reject", "undecided", "not-ours"]);
+    const remapOwnership = async (raw: any): Promise<any | undefined> => {
+      const recordId = remap(idMap, raw?.recordId);
+      if (recordId === undefined || !raw || !["assigned", "ours-owner-unknown", "not-ours", "undetermined"].includes(raw.state)) return undefined;
+      const entityId = remap(entityMap, raw.entityId);
+      const walletId = remap(walletMap, raw.walletId);
+      const counterpartyEntityId = await remapCounterparty(raw.counterpartyEntityId);
+      // `previousOwnership.id` is an auto-increment surrogate. Point it at the
+      // restored current row for the same record (when there is one), never at
+      // the backup-local id which could overwrite an unrelated local row when
+      // the decision is later undone.
+      const restoredOwnership = await db.addressOwnership.where("recordId").equals(recordId).first();
+      return {
+        ...raw,
+        ...(restoredOwnership?.id === undefined ? { id: undefined } : { id: restoredOwnership.id }),
+        recordId,
+        ...(entityId === undefined ? { entityId: undefined } : { entityId }),
+        ...(walletId === undefined ? { walletId: undefined } : { walletId }),
+        ...(counterpartyEntityId === undefined ? { counterpartyEntityId: undefined } : { counterpartyEntityId }),
+      };
+    };
+    for (const raw of arr("ownershipReviewDecisions")) {
+      throwIfAborted();
+      if (!raw || typeof raw.evidenceFingerprint !== "string" || !raw.evidenceFingerprint ||
+          !validStates.has(raw.state) || !validActions.has(raw.action) || !Array.isArray(raw.recordIds)) continue;
+      const recordIds = [...new Set(raw.recordIds.map((id: unknown) => remap(idMap, id)).filter((id: number | undefined): id is number => id !== undefined))];
+      if (!recordIds.length) continue;
+      const previousOwnership = Array.isArray(raw.previousOwnership)
+        ? (await Promise.all(raw.previousOwnership.map(remapOwnership))).filter((row): row is any => row !== undefined)
+        : undefined;
+      const createdOwnershipRecordIds = Array.isArray(raw.createdOwnershipRecordIds)
+        ? [...new Set(raw.createdOwnershipRecordIds.map((id: unknown) => remap(idMap, id)).filter((id: number | undefined): id is number => id !== undefined))]
+        : undefined;
+      const entityId = remap(entityMap, raw.entityId);
+      // The fingerprint, rather than a backup-local surrogate id, is the
+      // natural identity. Existing local decisions always win during merge.
+      const id = raw.evidenceFingerprint;
+      if (isMerge && await getVaultRepository().get("ownershipReviewDecisions", id)) continue;
+      await restoreOwnershipReviewDecision({
+        ...raw, id, evidenceFingerprint: id, recordIds,
+        ...(entityId === undefined ? { entityId: undefined } : { entityId }),
+        ...(previousOwnership === undefined ? {} : { previousOwnership }),
+        ...(createdOwnershipRecordIds === undefined ? {} : { createdOwnershipRecordIds }),
+      });
+      if (isMerge) mergeUndoLog?.ownershipReviewDecisionIds.push(id);
     }
     if (mergeUndoLog && !mergeUndoLog.migrationStateCaptured) {
       mergeUndoLog.migrationStatePrior = await db.recordModelMigrationState.get("v44");

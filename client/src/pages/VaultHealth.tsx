@@ -497,6 +497,22 @@ export default function VaultHealth() {
               testId="card-health-conflicts"
             />
             <CategoryCard
+              title="Ownership review"
+              description="Keeps addresses without a confirmed current ownership decision visible."
+              status={snapshot.ownership.unavailable ? "problem" : snapshot.ownership.unresolved > 0 ? "warning" : "healthy"}
+              count={snapshot.ownership.unresolved}
+              detail={
+                snapshot.ownership.unavailable
+                  ? "The current ownership state could not be read. No ownership was inferred; open the review queue after resolving the vault read problem."
+                  : snapshot.ownership.unresolved > 0
+                    ? `${formatCount(snapshot.ownership.under7Days)} under 7 days, ${formatCount(snapshot.ownership.sevenToThirtyDays)} aged 7–30 days, ${formatCount(snapshot.ownership.over30Days)} over 30 days${snapshot.ownership.unknownAge ? `, and ${formatCount(snapshot.ownership.unknownAge)} with an unknown age` : ""}. Suggestions and legacy labels do not resolve these items.`
+                    : "Every address has a confirmed current ownership decision."
+              }
+              action="/resolve-ownership"
+              actionLabel="Review ownership"
+              testId="card-health-ownership"
+            />
+            <CategoryCard
               title="Sync freshness"
               description="Checks whether address records have a recent local sync checkpoint."
               status={snapshot.sync.unavailable ? "problem" : snapshot.sync.neverSynced + snapshot.sync.stale > 0 ? "warning" : "healthy"}

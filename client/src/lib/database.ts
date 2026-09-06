@@ -27,7 +27,7 @@ import { reportDbUpgradeProgress } from './db-upgrade-progress';
  * KEEP IN SYNC when adding a new `this.version(N)` declaration — the
  * legacy-migration test asserts this matches the opened database.
  */
-export const CURRENT_SCHEMA_VERSION = 45;
+export const CURRENT_SCHEMA_VERSION = 46;
 
 // Import types needed for the class definition
 import type {
@@ -39,6 +39,7 @@ import type {
   TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag, SavedPsbt,
        AdversaryScenario, NetworkPrivacyActivityEntry, RecordEntity, RecordWallet,
        AddressOwnership, TransactionMetadata, TransactionLegMetadata, RecordModelMigrationState,
+       OwnershipReviewDecision,
 } from './db-types';
 import type {
   RecordSearchIndexEntry,
@@ -123,9 +124,16 @@ export class KYUTXODatabase extends Dexie {
   transactionMetadata!: Table<TransactionMetadata>;
   transactionLegMetadata!: Table<TransactionLegMetadata>;
   recordModelMigrationState!: Table<RecordModelMigrationState>;
+  ownershipReviewDecisions!: Table<OwnershipReviewDecision>;
 
   constructor() {
     super('KYUTXODatabase');
+    // v46 stores explicit decisions separately from evidence generation. A
+    // rejection remains effective only for its exact fingerprint, allowing
+    // changed on-chain evidence to be reviewed again.
+    this.version(46).stores({
+      ownershipReviewDecisions: '&id, evidenceFingerprint, state, updatedAt',
+    });
     // v45 turns the legacy owner vocabulary into a policy-owner table without
     // invalidating existing name-based record annotations. Residency blocks are
     // independent rows so a policy history can be safely edited and backed up.

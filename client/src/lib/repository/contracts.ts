@@ -7,7 +7,7 @@ import type {
   TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag, SavedPsbt,
   AdversaryScenario, NetworkPrivacyActivityEntry,
   RecordEntity, RecordWallet, AddressOwnership, TransactionMetadata,
-  TransactionLegMetadata, RecordModelMigrationState,
+  TransactionLegMetadata, RecordModelMigrationState, OwnershipReviewDecision,
 } from '../db-types';
 
 /**
@@ -55,6 +55,7 @@ export interface VaultRows {
   transactionMetadata: TransactionMetadata;
   transactionLegMetadata: TransactionLegMetadata;
   recordModelMigrationState: RecordModelMigrationState;
+  ownershipReviewDecisions: OwnershipReviewDecision;
 }
 
 export type VaultTableName = keyof VaultRows;
@@ -159,6 +160,8 @@ export interface VaultRepository {
   }>;
   clearVault(): Promise<{ deleted: number }>;
   restoreCommit(command: RestoreVaultCommit): Promise<{ saved: number }>;
+  /** A finite atomic command for confirmed ownership actions and their undo. */
+  commitOwnershipReview(command: OwnershipReviewCommit): Promise<OwnershipReviewDecision>;
   /**
    * A transaction boundary, not a Dexie transaction object.  Protected
    * implementations must be native/atomic; they must never emulate Dexie's
@@ -261,6 +264,12 @@ export interface SettingsHistoryCommit {
   settings: Settings;
   historyEntry?: PrivacyAuditHistoryEntry;
   retainHistory?: number;
+}
+export interface OwnershipReviewCommit {
+  decision: OwnershipReviewDecision;
+  ownershipRows: AddressOwnership[];
+  /** Existing ownership primary keys to delete during undo. */
+  deleteOwnershipIds?: number[];
 }
 export interface RestoreVaultCommit {
   replaceExisting: boolean;

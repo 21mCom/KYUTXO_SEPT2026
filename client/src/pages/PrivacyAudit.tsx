@@ -159,6 +159,8 @@ const FINDING_TYPE_ICONS: Record<string, typeof Shield> = {
   ADDRESS_REUSE: Repeat2,
   ROUND_AMOUNT: Layers,
   COMMON_INPUT_OWNERSHIP: Network,
+  MULTI_OWNER_CO_SPEND: Merge,
+  MULTI_OWNER_ADDRESS_REUSE: Repeat2,
   UNNECESSARY_INPUT: Layers,
   RECURRING_PAYMENT: Repeat2,
   HIGH_ACTIVITY: Activity,

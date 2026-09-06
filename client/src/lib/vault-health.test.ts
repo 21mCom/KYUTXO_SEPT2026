@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { recordRows, syncRows, tableErrors, tables, backupHarness, mutateSettingsMock } = vi.hoisted(() => {
+const { recordRows, ownershipRows, syncRows, tableErrors, tables, backupHarness, mutateSettingsMock } = vi.hoisted(() => {
   const rows: any[] = [];
   const errors = new Set<string>();
   return {
     recordRows: rows,
+    ownershipRows: [] as any[],
     syncRows: [] as any[],
     tableErrors: errors,
-    tables: ["records", "recordOrigins", "attachments", "addressSyncState", "privacyAuditHistory"].map((name) => ({
+    tables: ["records", "recordOrigins", "attachments", "addressSyncState", "privacyAuditHistory", "addressOwnership"].map((name) => ({
       name,
       count: vi.fn(async () => {
         if (errors.has(name)) throw new Error(`${name} unreadable`);
@@ -27,7 +28,36 @@ const { recordRows, syncRows, tableErrors, tables, backupHarness, mutateSettings
   };
 });
 
-vi.mock("@/lib/database", () => ({ db: { tables } }));
+vi.mock("@/lib/database", () => ({
+  db: {
+    tables,
+    table: (name: string) => name === "addressOwnership"
+      ? {
+        ...tables.find((table) => table.name === name),
+        orderBy: () => ({
+          limit: () => ({ toArray: async () => ownershipRows }),
+        }),
+      }
+      : tables.find((table) => table.name === name),
+    addressOwnership: {
+      orderBy: () => ({
+        limit: () => ({ toArray: async () => ownershipRows }),
+      }),
+    },
+  },
+}));
+vi.mock("@/lib/repository", () => ({
+  getVaultRepository: () => ({
+    count: async (name: string) => {
+      if (tableErrors.has(name)) throw new Error(`${name} unreadable`);
+      return name === "records" ? recordRows.length : 0;
+    },
+    list: async (name: string) => {
+      if (tableErrors.has(name)) throw new Error(`${name} unreadable`);
+      return { rows: name === "addressOwnership" ? ownershipRows : [] };
+    },
+  }),
+}));
 vi.mock("@/lib/data/record-crud", () => ({
   getRecordsAfterId: vi.fn(async (afterId: number) => (afterId === 0 ? recordRows : [])),
 }));
@@ -78,6 +108,7 @@ function snapshot(overrides: Partial<VaultHealthSnapshot> = {}): VaultHealthSnap
       hiddenTagged: 0,
     },
     conflicts: { records: 0, fields: 0 },
+    ownership: { unresolved: 0, under7Days: 0, sevenToThirtyDays: 0, over30Days: 0, unknownAge: 0, unavailable: false },
     sync: { addressRecords: 0, neverSynced: 0, stale: 0, syncStateRows: 0, unavailable: false },
     backup: { recordCount: 2, attachmentCount: 0, tableCount: 1, canExport: true },
     privacy: { hasRun: true, interrupted: false, findings: 0, criticalOrHigh: 0, unavailable: false },
@@ -88,6 +119,7 @@ function snapshot(overrides: Partial<VaultHealthSnapshot> = {}): VaultHealthSnap
 describe("getVaultHealthStatus", () => {
   beforeEach(() => {
     recordRows.splice(0);
+    ownershipRows.splice(0);
     syncRows.splice(0);
     tableErrors.clear();
     backupHarness.settings = undefined;
@@ -137,6 +169,7 @@ describe("backup capacity threshold", () => {
 describe("runVaultHealthCheck", () => {
   beforeEach(() => {
     recordRows.splice(0);
+    ownershipRows.splice(0);
     syncRows.splice(0);
     tableErrors.clear();
     backupHarness.settings = undefined;
@@ -228,6 +261,30 @@ describe("runVaultHealthCheck", () => {
     expect(result.sync.addressRecords).toBe(1);
     expect(result.sync.neverSynced).toBe(0);
     expect(result.sync.stale).toBe(0);
+  });
+
+  it("keeps only confirmed ownership decisions out of the age-classified review count", async () => {
+    const now = Date.now();
+    recordRows.push(
+      { id: 1, type: "address", inputString: "bc1qconfirmed", inputStringLower: "bc1qconfirmed", addressImportance: "manual", tags: [], categories: [] },
+      { id: 2, type: "address", inputString: "bc1qrecent", inputStringLower: "bc1qrecent", addressImportance: "manual", tags: [], categories: [] },
+      { id: 3, type: "address", inputString: "bc1qaging", inputStringLower: "bc1qaging", addressImportance: "manual", tags: [], categories: [] },
+      { id: 4, type: "address", inputString: "bc1qold", inputStringLower: "bc1qold", addressImportance: "manual", tags: [], categories: [] },
+      { id: 5, type: "address", inputString: "bc1qmissing", inputStringLower: "bc1qmissing", addressImportance: "manual", tags: [], categories: [] },
+    );
+    ownershipRows.push(
+      { id: 1, recordId: 1, state: "assigned", updatedAt: now - 40 * 24 * 60 * 60 * 1000 },
+      { id: 2, recordId: 2, state: "undetermined", updatedAt: now - 2 * 24 * 60 * 60 * 1000 },
+      { id: 3, recordId: 3, state: "ours-owner-unknown", updatedAt: now - 10 * 24 * 60 * 60 * 1000 },
+      { id: 4, recordId: 4, state: "undetermined", updatedAt: now - 31 * 24 * 60 * 60 * 1000 },
+    );
+
+    const result = await runVaultHealthCheck();
+
+    expect(result.ownership).toMatchObject({
+      unresolved: 4, under7Days: 1, sevenToThirtyDays: 1, over30Days: 1, unknownAge: 1,
+    });
+    expect(getVaultHealthStatus(result)).toBe("warning");
   });
 
   it("keeps independent results when sync or privacy history is unreadable", async () => {

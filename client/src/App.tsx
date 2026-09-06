@@ -49,6 +49,7 @@ import { EngineBootstrapper, EnginePreparingIndicator } from "@/components/Engin
 import { GlobalCommandPalette } from "@/components/GlobalCommandPalette";
 import CoinOrigins from "@/pages/CoinOrigins";
 import TransactionInbox from "@/pages/TransactionInbox";
+import ResolveOwnership from "@/pages/ResolveOwnership";
 import { NetworkPrivacyControl } from "@/components/NetworkPrivacyControl";
 import { NetworkPrivacyOnboarding } from "@/components/NetworkPrivacyOnboarding";
 import { useNodeSettings } from "@/hooks/use-node-settings";
@@ -97,6 +98,7 @@ function AppRoutes() {
       <Route path="/transaction-sync" component={TransactionSync} />
       <Route path="/transactions" component={Transactions} />
       <Route path="/transaction-inbox" component={TransactionInbox} />
+      <Route path="/resolve-ownership" component={ResolveOwnership} />
       <Route path="/utxos" component={UTXOs} />
       <Route path="/utxo-provenance" component={UtxoProvenance} />
       <Route path="/coin-origins" component={CoinOrigins} />

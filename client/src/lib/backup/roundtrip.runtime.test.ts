@@ -67,6 +67,10 @@ import {
   countCustodySegments,
 } from "@/lib/data/lineage-crud";
 import { restoreTag } from "@/lib/data/vocabulary-crud";
+import {
+  getAllOwnershipReviewDecisions,
+  restoreOwnershipReviewDecision,
+} from "@/lib/data/ownership-review-decisions-crud";
 import type {
   TransactionParticipant,
   UtxoLineage,
@@ -271,6 +275,17 @@ beforeAll(async () => {
     txid: normalizedTxid, legKey: "output:0", direction: "incoming", entityId, walletId,
     categories: ["Income"], hasFlowOverride: true, createdAt: 1, updatedAt: 1,
   });
+  // A rejection is durable user evidence even though it changes no ownership
+  // row. Its record id must be remapped through the streamed records restore.
+  await restoreOwnershipReviewDecision({
+    id: "ownership-v1:rejected-roundtrip",
+    evidenceFingerprint: "ownership-v1:rejected-roundtrip",
+    state: "rejected",
+    action: "reject",
+    recordIds: [recordIds[0]],
+    createdAt: 1,
+    updatedAt: 2,
+  });
 
   for (let i = 0; i < N_FILES; i++) {
     sourceFiles.set(`ab/cd/file-${i}.bin`, new Uint8Array([i, i + 1, i + 2, 0xff]));
@@ -325,6 +340,17 @@ describe("v3 backup restore stays bounded and round-trips", () => {
   it("restores every table + attachment bytes without loading a whole table", async () => {
     const blob = memorySink.blob as Blob;
     expect(blob).toBeInstanceOf(Blob);
+    // This local-only decision must disappear during a replace restore, proving
+    // inline replace clears stale review evidence rather than appending it.
+    await restoreOwnershipReviewDecision({
+      id: "ownership-v1:stale",
+      evidenceFingerprint: "ownership-v1:stale",
+      state: "rejected",
+      action: "reject",
+      recordIds: [1],
+      createdAt: 3,
+      updatedAt: 3,
+    });
 
     resetMax();
     const result = await restoreV3Backup({
@@ -361,6 +387,14 @@ describe("v3 backup restore stays bounded and round-trips", () => {
     expect(await db.addressOwnership.count()).toBe(1);
     expect(await db.transactionMetadata.count()).toBe(1);
     expect(await db.transactionLegMetadata.count()).toBe(1);
+    const decisions = await getAllOwnershipReviewDecisions();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({
+      id: "ownership-v1:rejected-roundtrip",
+      state: "rejected",
+      action: "reject",
+      recordIds: [expect.any(Number)],
+    });
     const ownership = await db.addressOwnership.toCollection().first();
     const wallet = await db.wallets.toCollection().first();
     const leg = await db.transactionLegMetadata.toCollection().first();

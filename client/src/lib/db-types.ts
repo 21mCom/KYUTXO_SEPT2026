@@ -245,6 +245,10 @@ export interface AddressOwnership {
   updatedAt: number;
 }
 
+/** The local, reviewable outcome of an ownership heuristic. Suggestions are
+ * evidence, never ownership facts; only an accepted decision may change an
+ * AddressOwnership row. */
+export type OwnershipReviewDecisionState = 'accepted' | 'rejected' | 'undecided' | 'not-ours';
 export interface TransactionMetadata {
   id?: number;
   txid: string;
@@ -1475,4 +1479,24 @@ export interface NetworkPrivacyActivityEntry {
   providerClass: NetworkPrivacyMode;
   action: NetworkPrivacyActivityType;
   addressCount?: number;
+}
+
+/** `assign` is retained as a compact alias for the explicit single/manual action. */
+export type OwnershipReviewAction = 'assign' | 'assign-manual' | 'assign-cluster' | 'assign-wallet' | 'reject' | 'undecided' | 'not-ours';
+
+export interface OwnershipReviewDecision {
+  /** Stable evidence fingerprint, not an auto-generated surrogate. */
+  id: string;
+  evidenceFingerprint: string;
+  state: OwnershipReviewDecisionState;
+  action: OwnershipReviewAction;
+  recordIds: number[];
+  entityId?: number;
+  /** Present while an accepted ownership edit can be reversed exactly once. */
+  undoToken?: string;
+  previousOwnership?: AddressOwnership[];
+  /** Record ids whose ownership rows were created by this decision. */
+  createdOwnershipRecordIds?: number[];
+  createdAt: number;
+  updatedAt: number;
 }

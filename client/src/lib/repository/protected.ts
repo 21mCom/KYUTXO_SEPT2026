@@ -1,5 +1,5 @@
 import { getElectronAPISafe, type EngineEnvelope, type ProtectedStoreBridge } from '../electron';
-import type { ProtectedRepositoryCommandName, ProtectedRepositoryQueryName, RecordDeleteOrArchiveCommand, RecordsQuery, RestoreVaultCommit, SettingsHistoryCommit, TransactionParticipantsCommit, VaultKey, VaultListOptions, VaultPage, VaultRepository, VaultRows, VaultTableName } from './contracts';
+import type { OwnershipReviewCommit, ProtectedRepositoryCommandName, ProtectedRepositoryQueryName, RecordDeleteOrArchiveCommand, RecordsQuery, RestoreVaultCommit, SettingsHistoryCommit, TransactionParticipantsCommit, VaultKey, VaultListOptions, VaultPage, VaultRepository, VaultRows, VaultTableName } from './contracts';
 import type { Record } from '../db-types';
 
 const MAX_PAGE_SIZE = 1000;
@@ -109,6 +109,9 @@ export class ProtectedVaultRepository implements VaultRepository {
 
   async restoreCommit(command: RestoreVaultCommit) {
     return unwrap(await this.bridge.repository.restoreCommit(command.replaceExisting, command.rows));
+  }
+  async commitOwnershipReview(command: OwnershipReviewCommit) {
+    return unwrap(await this.bridge.repository.commitOwnershipReview(command)) as import('../db-types').OwnershipReviewDecision;
   }
 
   async transaction<T>(_tables: VaultTableName[], _operation: () => Promise<T>): Promise<T> {

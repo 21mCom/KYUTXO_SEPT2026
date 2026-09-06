@@ -29,6 +29,7 @@ function snapshot(overrides: Partial<VaultHealthSnapshot> = {}): VaultHealthSnap
       hiddenTagged: 0,
     },
     conflicts: { records: 0, fields: 0 },
+    ownership: { unresolved: 0, under7Days: 0, sevenToThirtyDays: 0, over30Days: 0, unknownAge: 0, unavailable: false },
     sync: { addressRecords: 2, neverSynced: 0, stale: 0, syncStateRows: 2, latestSyncedAt: Date.now(), unavailable: false },
     backup: { recordCount: 4, attachmentCount: 1, tableCount: 1, canExport: true },
     privacy: { hasRun: true, interrupted: false, findings: 0, criticalOrHigh: 0, unavailable: false },
@@ -52,6 +53,7 @@ describe("VaultHealth", () => {
     await waitFor(() => expect(getByTestId("text-health-verdict").textContent).toContain("healthy"));
     expect(getByTestId("card-health-integrity-link").getAttribute("href")).toBe("/database-doctor");
     expect(getByTestId("card-health-conflicts-link").getAttribute("href")).toBe("/conflict-resolution");
+    expect(getByTestId("card-health-ownership-link").getAttribute("href")).toBe("/resolve-ownership");
     expect(getByTestId("card-health-sync-link").getAttribute("href")).toBe("/transaction-sync");
     expect(getByTestId("card-health-backup-link").getAttribute("href")).toBe("/export");
     expect(getByTestId("card-health-privacy-link").getAttribute("href")).toBe("/privacy-audit");
@@ -94,6 +96,18 @@ describe("VaultHealth", () => {
     expect(getByTestId("card-health-metadata").textContent).toContain("Needs attention");
     expect(getByTestId("card-health-conflicts").textContent).toContain("2");
     expect(getByTestId("card-health-conflicts").textContent).toContain("affected records");
+  });
+
+  it("shows unresolved ownership aging without treating suggestions as decisions", async () => {
+    runHealthCheck.mockResolvedValue(snapshot({
+      ownership: { unresolved: 4, under7Days: 1, sevenToThirtyDays: 1, over30Days: 2, unknownAge: 0, unavailable: false },
+    }));
+    const { getByTestId } = render(<VaultHealth />);
+
+    await waitFor(() => expect(getByTestId("card-health-ownership")).toBeTruthy());
+    expect(getByTestId("card-health-ownership").textContent).toContain("Needs attention");
+    expect(getByTestId("card-health-ownership").textContent).toContain("over 30 days");
+    expect(getByTestId("card-health-ownership").textContent).toContain("Suggestions and legacy labels do not resolve");
   });
 
   it("shows free space and a headroom warning for a destination", async () => {

@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // mapping is fixed in preload and independently checked by the worker.
 const REPOSITORY_BY_COLLECTION = Object.freeze({
   records: 'records', attachments: 'records', tags: 'records', categories: 'records',
-  owners: 'records', walletNames: 'records', seedNames: 'records',
+  owners: 'records', ownerResidencies: 'records', walletNames: 'records', seedNames: 'records',
   walletSoftware: 'records', customFields: 'records', recordOrigins: 'records',
   blockchainTransactions: 'transactions', transactionParticipants: 'transactions',
   priceData: 'transactions', savedPsbts: 'transactions',
@@ -15,6 +15,9 @@ const REPOSITORY_BY_COLLECTION = Object.freeze({
   partialExportBundles: 'evidence', trashedAttachments: 'evidence',
   privacyAuditHistory: 'privacy', dustFlags: 'privacy',
   adversaryScenarios: 'privacy', networkPrivacyActivity: 'privacy', settings: 'vault',
+  entities: 'records', wallets: 'records', addressOwnership: 'records',
+  transactionMetadata: 'records', transactionLegMetadata: 'records',
+  recordModelMigrationState: 'records', ownershipReviewDecisions: 'records',
 });
 const repositoryCall = (collection, operation, payload = {}) => {
   const repository = REPOSITORY_BY_COLLECTION[collection];
@@ -84,6 +87,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       clearVault: () => repositoryCall('settings', 'clearAll', { confirm: 'clear-vault' }),
       restoreCommit: (replaceExisting, rows) =>
         repositoryCall('settings', 'restoreCommit', { replaceExisting, rows }),
+      commitOwnershipReview: (command) =>
+        repositoryCall('ownershipReviewDecisions', 'commitOwnershipReview', { command }),
     },
     writeAttachment: (bytes, alias) =>
       ipcRenderer.invoke('protected-store:writeAttachment', { bytes, alias }),

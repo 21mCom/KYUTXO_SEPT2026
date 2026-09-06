@@ -193,12 +193,38 @@ function compactInlineRecordModel(
   const legs = rows("transactionLegMetadata")
     .filter(row => typeof row.txid === "string" && !plan.droppedTxids.has(row.txid))
     .map(row => ({ ...row }));
+  // Decisions are evidence records. Retain only evidence that still has a
+  // retained target record, and apply the same boundary to undo payload ids.
+  const decisions = rows("ownershipReviewDecisions").map(row => {
+    const keepRecord = (id: unknown): id is number =>
+      typeof id === "number" && !plan.droppedRecordIds.has(id);
+    const recordIds = Array.isArray(row.recordIds) ? row.recordIds.filter(keepRecord) : [];
+    if (!recordIds.length) return null;
+    const previousOwnership = Array.isArray(row.previousOwnership)
+      ? row.previousOwnership
+        .filter((prior: any) => keepRecord(prior?.recordId))
+        .map((prior: any) => ({ ...prior }))
+      : undefined;
+    const createdOwnershipRecordIds = Array.isArray(row.createdOwnershipRecordIds)
+      ? row.createdOwnershipRecordIds.filter(keepRecord)
+      : undefined;
+    return {
+      ...row, recordIds,
+      ...(previousOwnership === undefined ? {} : { previousOwnership }),
+      ...(createdOwnershipRecordIds === undefined ? {} : { createdOwnershipRecordIds }),
+    };
+  }).filter((row): row is any => row !== null);
   const walletIds = new Set<number>();
   const entityIds = new Set<number>();
-  for (const row of [...ownership, ...legs, ...metadata]) {
+  for (const row of [...ownership, ...legs, ...metadata, ...decisions]) {
     if (typeof row.walletId === "number") walletIds.add(row.walletId);
     if (typeof row.entityId === "number") entityIds.add(row.entityId);
     if (typeof row.counterpartyEntityId === "number") entityIds.add(row.counterpartyEntityId);
+    for (const prior of Array.isArray(row.previousOwnership) ? row.previousOwnership : []) {
+      if (typeof prior.entityId === "number") entityIds.add(prior.entityId);
+      if (typeof prior.counterpartyEntityId === "number") entityIds.add(prior.counterpartyEntityId);
+      if (typeof prior.walletId === "number") walletIds.add(prior.walletId);
+    }
   }
   const wallets = rows("wallets").filter(row => typeof row.id === "number" && walletIds.has(row.id));
   for (const wallet of wallets) if (typeof wallet.entityId === "number") entityIds.add(wallet.entityId);
@@ -214,7 +240,15 @@ function compactInlineRecordModel(
       delete row.counterpartyEntityId;
     }
   }
-  return { ...inline, entities, wallets, addressOwnership: ownership, transactionMetadata: metadata, transactionLegMetadata: legs };
+  for (const row of decisions) {
+    if (typeof row.entityId === "number" && !keptEntityIds.has(row.entityId)) delete row.entityId;
+    for (const prior of Array.isArray(row.previousOwnership) ? row.previousOwnership : []) {
+      if (typeof prior.entityId === "number" && !keptEntityIds.has(prior.entityId)) delete prior.entityId;
+      if (typeof prior.counterpartyEntityId === "number" && !keptEntityIds.has(prior.counterpartyEntityId)) delete prior.counterpartyEntityId;
+      if (typeof prior.walletId === "number" && !keptWalletIds.has(prior.walletId)) delete prior.walletId;
+    }
+  }
+  return { ...inline, entities, wallets, addressOwnership: ownership, transactionMetadata: metadata, transactionLegMetadata: legs, ownershipReviewDecisions: decisions };
 }
 
 export async function exportBackup(opts: ExportOptions): Promise<void> {

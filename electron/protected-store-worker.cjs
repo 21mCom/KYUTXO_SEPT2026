@@ -30,7 +30,7 @@ const COLLECTIONS = new Set([
   // v44 normalized record-model projection. These rows have the same encrypted
   // protected_rows boundary as legacy records; never route them to a sidecar.
   'entities', 'wallets', 'addressOwnership', 'transactionMetadata',
-  'transactionLegMetadata', 'recordModelMigrationState',
+   'transactionLegMetadata', 'recordModelMigrationState', 'ownershipReviewDecisions',
   'networkPrivacyActivity', 'recordSearchIndex', 'recordSearchIndexState',
 ]);
 // The IPC names are deliberately domain groups, rather than a remote table or
@@ -42,7 +42,7 @@ const REPOSITORIES = Object.freeze({
     'records', 'attachments', 'recordOrigins', 'tags', 'categories', 'owners', 'ownerResidencies',
     'walletNames', 'seedNames', 'walletSoftware', 'customFields', 'entities',
     'wallets', 'addressOwnership', 'transactionMetadata',
-    'transactionLegMetadata', 'recordModelMigrationState',
+     'transactionLegMetadata', 'recordModelMigrationState', 'ownershipReviewDecisions',
     'recordSearchIndex', 'recordSearchIndexState',
   ]),
   transactions: new Set(['blockchainTransactions', 'transactionParticipants', 'priceData', 'savedPsbts']),
@@ -56,7 +56,7 @@ const REPOSITORY_OPERATIONS = new Set([
   'save', 'find', 'page', 'remove', 'saveBatch', 'removeBatch', 'batch', 'count', 'clear', 'query', 'command',
   // Fixed cross-collection commands.  These are commands, not a renderer
   // transaction callback or a generic multi-table mutation language.
-  'deleteOrArchiveRecords', 'saveTransactionWithParticipants', 'saveSettingsWithHistory', 'clearAll', 'restoreCommit',
+  'deleteOrArchiveRecords', 'saveTransactionWithParticipants', 'saveSettingsWithHistory', 'clearAll', 'restoreCommit', 'commitOwnershipReview',
 ]);
 
 let db = null;
@@ -766,6 +766,31 @@ function repository(message) {
   // Cross-row commands are deliberately dispatched by a finite command name.
   // They remain inside this worker's SQLite transaction; no renderer callback
   // is ever executed while a transaction is open.
+  if (operation === 'commitOwnershipReview') {
+    if (collection !== 'ownershipReviewDecisions') fail();
+    const command = message.command;
+    if (!command || typeof command !== 'object' || Array.isArray(command) ||
+        !command.decision || typeof command.decision !== 'object' || Array.isArray(command.decision) ||
+        !Array.isArray(command.ownershipRows) || command.ownershipRows.length > 2000 ||
+        !command.ownershipRows.every((row) => row && typeof row === 'object' && !Array.isArray(row)) ||
+        (command.deleteOwnershipIds !== undefined && (!Array.isArray(command.deleteOwnershipIds) ||
+          command.deleteOwnershipIds.length > 2000 || !command.deleteOwnershipIds.every(validId)))) fail();
+    const decision = command.decision;
+    if (!validId(decision.id)) fail();
+    const removeOwnership = db.prepare('DELETE FROM "addressOwnership" WHERE id_key=?');
+    const run = db.transaction(() => {
+      for (const id of command.deleteOwnershipIds || []) removeOwnership.run(idKey(id));
+      const createdOwnershipRecordIds = [];
+      for (const row of command.ownershipRows) {
+        if (row.id === undefined && Number.isSafeInteger(row.recordId)) createdOwnershipRecordIds.push(row.recordId);
+        repository({ repository: 'records', collection: 'addressOwnership', operation: 'save', row });
+      }
+      const saved = { ...decision, createdOwnershipRecordIds };
+      save(saved);
+      return saved;
+    });
+    return run();
+  }
   if (operation === 'command') {
     if (message.name !== 'cleanup.deleteRecordWithOrigins' || collection !== 'records') fail();
     const recordId = message.value && message.value.recordId;

@@ -52,6 +52,16 @@ export interface VaultHealthSnapshot {
     records: number;
     fields: number;
   };
+  ownership: {
+    /** Address records without a confirmed current ownership decision. */
+    unresolved: number;
+    under7Days: number;
+    sevenToThirtyDays: number;
+    over30Days: number;
+    unknownAge: number;
+    oldestUnresolvedAt?: number;
+    unavailable: boolean;
+  };
   sync: {
     addressRecords: number;
     neverSynced: number;
@@ -121,6 +131,8 @@ export class VaultHealthCancelledError extends Error {
 
 const BATCH_SIZE = 1000;
 const SYNC_STALE_MS = 30 * 24 * 60 * 60 * 1000;
+const OWNERSHIP_AGING_DAYS = 7;
+const OWNERSHIP_OVERDUE_DAYS = 30;
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new VaultHealthCancelledError();
@@ -178,6 +190,7 @@ export function getVaultHealthStatus(snapshot: VaultHealthSnapshot): VaultHealth
     snapshot.integrity.lockedUnreadable > 0 ||
     snapshot.integrity.tableErrors > 0 ||
     snapshot.metadata.canonicalIdentifierCollisions > 0 ||
+    snapshot.ownership.unavailable ||
     snapshot.sync.unavailable ||
     snapshot.privacy.unavailable ||
     snapshot.privacy.criticalOrHigh > 0
@@ -193,6 +206,7 @@ export function getVaultHealthStatus(snapshot: VaultHealthSnapshot): VaultHealth
     snapshot.metadata.nonCanonicalIdentifiers > 0 ||
     snapshot.metadata.hiddenTagged > 0 ||
     snapshot.conflicts.records > 0 ||
+    snapshot.ownership.unresolved > 0 ||
     snapshot.sync.neverSynced > 0 ||
     snapshot.sync.stale > 0 ||
     !snapshot.privacy.hasRun ||
@@ -231,7 +245,7 @@ export async function runVaultHealthCheck(options: {
     "custodySegments", "lineageSnapshots", "evidence", "evidenceAttachments",
     "pausedSyncState", "skippedAddresses", "addressBlacklist", "partialExportBundles",
     "trashedAttachments", "privacyAuditHistory", "dustFlags", "savedPsbts",
-    "adversaryScenarios", "networkPrivacyActivity",
+    "adversaryScenarios", "networkPrivacyActivity", "addressOwnership",
   ];
   await Promise.all(
     tables.map(async (name) => {
@@ -248,6 +262,7 @@ export async function runVaultHealthCheck(options: {
   const totalRecords = recordTable?.count ?? 0;
   const addressRecordIdsByInput = new Map<string, Set<number>>();
   const addressRecordIds = new Set<number>();
+  const addressCreatedAtByRecordId = new Map<number, number | undefined>();
   const canonicalKeyCounts = new Map<string, { total: number; nonCanonical: number }>();
   const integrity = {
     totalRecords: 0,
@@ -293,6 +308,7 @@ export async function runVaultHealthCheck(options: {
         if (row.type === "address") {
           if (row.id != null) {
             addressRecordIds.add(row.id);
+            addressCreatedAtByRecordId.set(row.id, row.createdAt);
             if (row.inputString) {
               const ids = addressRecordIdsByInput.get(row.inputString) ?? new Set<number>();
               ids.add(row.id);
@@ -353,6 +369,53 @@ export async function runVaultHealthCheck(options: {
     (total, counts) => total + (counts.total > 1 ? counts.nonCanonical : 0),
     0,
   );
+  const ownership = {
+    unresolved: 0,
+    under7Days: 0,
+    sevenToThirtyDays: 0,
+    over30Days: 0,
+    unknownAge: 0,
+    oldestUnresolvedAt: undefined as number | undefined,
+    unavailable: tableCounts.find((table) => table.name === "addressOwnership")?.error ?? false,
+  };
+  if (!ownership.unavailable) {
+    try {
+      onProgress?.({ phase: "Checking unresolved ownership…" });
+      const ownershipByRecordId = new Map<number, { state: string; updatedAt?: number; createdAt?: number }>();
+      let cursor: string | number | undefined;
+      do {
+        throwIfAborted(signal);
+        const page = await getVaultRepository().list("addressOwnership", { cursor, limit: BATCH_SIZE });
+        for (const row of page.rows) {
+          ownershipByRecordId.set(row.recordId, row);
+        }
+        cursor = page.cursor;
+        if (cursor !== undefined) await yieldToUi(signal);
+      } while (cursor !== undefined);
+
+      const now = Date.now();
+      for (const recordId of addressRecordIds) {
+        const current = ownershipByRecordId.get(recordId);
+        // Only explicit current decisions resolve the queue. In particular,
+        // legacy owner labels and suggestions never make an item disappear.
+        if (current?.state === "assigned" || current?.state === "not-ours") continue;
+        ownership.unresolved += 1;
+        const stateAt = current?.updatedAt ?? current?.createdAt ?? addressCreatedAtByRecordId.get(recordId);
+        if (typeof stateAt !== "number" || !Number.isFinite(stateAt) || stateAt > now) {
+          ownership.unknownAge += 1;
+          continue;
+        }
+        ownership.oldestUnresolvedAt = Math.min(ownership.oldestUnresolvedAt ?? stateAt, stateAt);
+        const ageDays = (now - stateAt) / (24 * 60 * 60 * 1000);
+        if (ageDays < OWNERSHIP_AGING_DAYS) ownership.under7Days += 1;
+        else if (ageDays < OWNERSHIP_OVERDUE_DAYS) ownership.sevenToThirtyDays += 1;
+        else ownership.over30Days += 1;
+      }
+    } catch (error) {
+      if (error instanceof VaultHealthCancelledError) throw error;
+      ownership.unavailable = true;
+    }
+  }
 
   const sync = {
     addressRecords: addressRecordIds.size,
@@ -533,6 +596,7 @@ export async function runVaultHealthCheck(options: {
     integrity,
     metadata,
     conflicts: { records: conflictRecords, fields: conflictFields },
+    ownership,
     sync,
     backup: {
       recordCount: totalRecords,

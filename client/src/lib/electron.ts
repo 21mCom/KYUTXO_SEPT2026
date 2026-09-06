@@ -480,6 +480,7 @@ export interface ProtectedStoreBridge {
     saveSettingsWithHistory: (settings: unknown, historyEntry?: unknown, retainHistory?: number) => Promise<EngineEnvelope<{ settingsId: string | number; historyId?: string | number; retainedHistory: number }>>;
     clearVault: () => Promise<EngineEnvelope<{ deleted: number }>>;
     restoreCommit: (replaceExisting: boolean, rows: object) => Promise<EngineEnvelope<{ saved: number }>>;
+    commitOwnershipReview: (command: unknown) => Promise<EngineEnvelope<unknown>>;
   };
   writeAttachment: (bytes: ArrayBuffer, alias?: string) => Promise<EngineEnvelope<{ id: string; name: string; alias?: string; size: number }>>;
   readAttachment: (name: string, id: string) => Promise<EngineEnvelope<ArrayBuffer>>;

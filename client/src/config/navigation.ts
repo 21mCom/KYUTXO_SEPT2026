@@ -33,6 +33,7 @@ import {
   QrCode,
   RefreshCw,
   Repeat2,
+  ShieldQuestion,
   Search,
   Server,
   Settings,
@@ -87,6 +88,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { title: "Balance", url: "/balance", icon: Wallet, aliases: ["portfolio", "holdings", "funds"] },
       { title: "Transaction Inbox", url: "/transaction-inbox", icon: Inbox, aliases: ["curation", "review transactions", "new transactions"], badge: "transaction-inbox" },
+      { title: "Resolve Ownership", url: "/resolve-ownership", icon: ShieldQuestion, aliases: ["ownership review", "unassigned addresses", "address owner"] },
       { title: "Transactions", url: "/transactions", icon: LayoutList, aliases: ["tx", "txids", "transaction history"] },
       { title: "UTXOs", url: "/utxos", icon: Coins, aliases: ["coins", "outputs", "unspent outputs"] },
       { title: "UTXO Provenance", url: "/utxo-provenance", icon: Waypoints, aliases: ["coin provenance", "output history"] },

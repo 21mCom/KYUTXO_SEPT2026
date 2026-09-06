@@ -1,5 +1,5 @@
 import type { KYUTXODatabase } from '../database';
-import type { ProtectedRepositoryCommandName, ProtectedRepositoryQueryName, RecordDeleteOrArchiveCommand, RestoreVaultCommit, SettingsHistoryCommit, TransactionParticipantsCommit, VaultKey, VaultListOptions, VaultPage, VaultRepository, VaultRows, VaultTableName } from './contracts';
+import type { OwnershipReviewCommit, ProtectedRepositoryCommandName, ProtectedRepositoryQueryName, RecordDeleteOrArchiveCommand, RestoreVaultCommit, SettingsHistoryCommit, TransactionParticipantsCommit, VaultKey, VaultListOptions, VaultPage, VaultRepository, VaultRows, VaultTableName } from './contracts';
 
 const MAX_PAGE_SIZE = 1000;
 
@@ -353,6 +353,17 @@ export class DexieVaultRepository implements VaultRepository {
         saved += rows.length;
       }
       return { saved };
+    });
+  }
+
+  async commitOwnershipReview(command: OwnershipReviewCommit) {
+    return this.database.transaction('rw', this.table('addressOwnership'), this.table('ownershipReviewDecisions'), async () => {
+      if (command.deleteOwnershipIds?.length) await this.table('addressOwnership').bulkDelete(command.deleteOwnershipIds);
+      const createdOwnershipRecordIds = command.ownershipRows.filter(row => row.id === undefined).map(row => row.recordId);
+      if (command.ownershipRows.length) await this.table('addressOwnership').bulkPut(command.ownershipRows);
+      const decision = { ...command.decision, createdOwnershipRecordIds };
+      await this.table('ownershipReviewDecisions').put(decision);
+      return decision;
     });
   }
 
