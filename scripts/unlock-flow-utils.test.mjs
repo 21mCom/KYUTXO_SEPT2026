@@ -62,6 +62,12 @@ describe('browser-check unlock guard', () => {
           "page.getByTestId(finishAlias);",
           "function onboardingChoice(kind) { return `choice-network-${kind}`; }",
           "page.getByTestId(onboardingChoice('public-direct'));",
+          "function onboardingSource() { const suffix = ['onboarding', 'source'].join('-'); const selector = `network-${suffix}`; return selector; }",
+          "page.getByTestId(onboardingSource());",
+          "function dynamicChoice() { let suffix = 'network-'; return 'choice-' + suffix + runtimeChoice(); }",
+          "page.getByTestId(dynamicChoice());",
+          "function statefulFinish() { const selector = ['button', 'onboarding'].join('-'); recordSelector(selector); return selector + '-finish'; }",
+          "page.getByTestId(statefulFinish());",
           '',
         ].join('\n'),
       );
@@ -112,6 +118,9 @@ describe('browser-check unlock guard', () => {
       assert.match(result.stderr, /check-generic-browser\.mjs:10\s+\[network-onboarding-source\]/);
       assert.match(result.stderr, /check-generic-browser\.mjs:13\s+\[button-onboarding-finish\]/);
       assert.match(result.stderr, /check-generic-browser\.mjs:15\s+\[choice-network-public-direct\]/);
+      assert.match(result.stderr, /check-generic-browser\.mjs:17\s+\[network-onboarding-source\]/);
+      assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:19\s+/);
+      assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:21\s+/);
       assert.doesNotMatch(result.stderr, /check-first-run-network-privacy-browser\.mjs:/);
       assert.doesNotMatch(result.stderr, /check-packaged-vault-lock-native\.mjs:/);
       assert.match(result.stderr, /completeFreshVaultOnboardingIfPresent/);

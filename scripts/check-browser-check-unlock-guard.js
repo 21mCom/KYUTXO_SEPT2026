@@ -198,11 +198,27 @@ function evaluateStaticString(node, bindings, functions, seen = new Set()) {
       if (!ts.isIdentifier(parameter.name) || !argument) return undefined;
       localBindings.set(parameter.name.text, argument);
     }
-    const returnedExpression = ts.isBlock(callable.body)
-      ? callable.body.statements.length === 1 && ts.isReturnStatement(callable.body.statements[0])
-        ? callable.body.statements[0].expression
-        : undefined
-      : callable.body;
+    let returnedExpression;
+    if (ts.isBlock(callable.body)) {
+      const statements = [...callable.body.statements];
+      const returnStatement = statements.pop();
+      if (!returnStatement || !ts.isReturnStatement(returnStatement)) return undefined;
+      for (const statement of statements) {
+        if (
+          !ts.isVariableStatement(statement) ||
+          (statement.declarationList.flags & ts.NodeFlags.Const) === 0
+        ) {
+          return undefined;
+        }
+        for (const declaration of statement.declarationList.declarations) {
+          if (!ts.isIdentifier(declaration.name) || !declaration.initializer) return undefined;
+          localBindings.set(declaration.name.text, declaration.initializer);
+        }
+      }
+      returnedExpression = returnStatement.expression;
+    } else {
+      returnedExpression = callable.body;
+    }
     return returnedExpression
       ? evaluateStaticString(
           returnedExpression,
