@@ -17,6 +17,68 @@ const {
   runLiveContract,
 } = require('../.github/scripts/check-release-runner-monitor-live-contract.cjs');
 
+const GITHUB_ACTIONS_CRON_FIELD_RANGES = [
+  [0, 59],
+  [0, 23],
+  [1, 31],
+  [1, 12],
+  [0, 6],
+];
+
+function assertGithubActionsCron(expression) {
+  const fields = expression.trim().split(/\s+/);
+  assert.equal(fields.length, 5, `expected five cron fields: ${expression}`);
+
+  fields.forEach((field, index) => {
+    const [minimum, maximum] = GITHUB_ACTIONS_CRON_FIELD_RANGES[index];
+    for (const item of field.split(',')) {
+      assert.notEqual(item, '', `empty cron list item: ${expression}`);
+      const [range, step, ...extraParts] = item.split('/');
+      assert.equal(extraParts.length, 0, `too many step separators: ${expression}`);
+      if (step !== undefined) {
+        assert.match(step, /^\d+$/, `invalid cron step: ${expression}`);
+        assert.ok(Number(step) > 0, `cron step must be positive: ${expression}`);
+      }
+
+      if (range === '*') continue;
+      const bounds = range.split('-');
+      assert.ok(bounds.length === 1 || bounds.length === 2, `invalid cron range: ${expression}`);
+      for (const bound of bounds) {
+        assert.match(bound, /^\d+$/, `invalid cron value: ${expression}`);
+        const value = Number(bound);
+        assert.ok(
+          value >= minimum && value <= maximum,
+          `cron value outside ${minimum}-${maximum}: ${expression}`,
+        );
+      }
+      if (bounds.length === 2) {
+        assert.ok(Number(bounds[0]) <= Number(bounds[1]), `descending cron range: ${expression}`);
+      }
+    }
+  });
+}
+
+function workflowCron(workflow) {
+  const match = workflow.match(/^\s*-\s+cron:\s*['"]([^'"]+)['"]\s*$/m);
+  assert.ok(match, 'workflow must contain a quoted cron schedule');
+  return match[1];
+}
+
+test('GitHub Actions cron validation rejects malformed schedules', () => {
+  for (const expression of [
+    '*/5 * * *',
+    '*/5 * * * * *',
+    '60 * * * *',
+    '* 24 * * *',
+    '* * 0 * *',
+    '* * * 13 *',
+    '* * * * 7',
+    '*/0 * * * *',
+  ]) {
+    assert.throws(() => assertGithubActionsCron(expression), undefined, expression);
+  }
+});
+
 test('stale queued readiness jobs resolve to their exact release-runner labels', () => {
   const now = Date.parse('2026-09-05T12:30:00Z');
   const jobs = [
@@ -174,7 +236,9 @@ test('hosted monitor is scheduled, least-privilege, and does not manage runners'
     new URL('../.github/workflows/desktop-release-runner-monitor.yml', import.meta.url),
     'utf8',
   );
-  assert.match(workflow, /cron: '\*\/5 \* \* \* \*'/);
+  const cron = workflowCron(workflow);
+  assertGithubActionsCron(cron);
+  assert.equal(cron, '*/5 * * * *');
   assert.match(workflow, /runs-on: ubuntu-latest/);
   assert.match(workflow, /permissions:\s*\n\s+actions: read\s*\n\s+contents: read\s*\n\s+issues: write/);
   assert.doesNotMatch(workflow, /self-hosted|administration:|organization:|runner-groups:/);
@@ -320,7 +384,9 @@ test('independent watchdog is scheduled, least-privilege, and never uses release
     new URL('../.github/workflows/desktop-release-runner-monitor-watchdog.yml', import.meta.url),
     'utf8',
   );
-  assert.match(workflow, /cron: '7,22,37,52 \* \* \* \*'/);
+  const cron = workflowCron(workflow);
+  assertGithubActionsCron(cron);
+  assert.equal(cron, '7,22,37,52 * * * *');
   assert.match(workflow, /runs-on: ubuntu-latest/);
   assert.match(workflow, /permissions:\s*\n\s+actions: read\s*\n\s+contents: read\s*\n\s+issues: write/);
   assert.doesNotMatch(workflow, /self-hosted|administration:|organization:|runner-groups:/);

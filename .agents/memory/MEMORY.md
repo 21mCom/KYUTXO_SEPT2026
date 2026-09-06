@@ -1,4 +1,3 @@
-- [Scope-value single→multi conversion](scope-value-multiselect-conversion.md) — converting a scope Select to a multi-select changes a lib function's matching from `.includes` to `.some(...includes)`; find every direct-call test site and Playwright `select-scope-value` role=option click.
 - [Large-vault startup migrations](large-vault-startup-migrations.md) — batched once-only startup repairs run in background; fresh-vault skip only when empty; file-decrypt resume freezes-not-breaks.
 - [Shared report date/address filters](shared-report-filter-components.md) — DateRangeFilter (native from/to+exact, no Calendar) and SearchableEntityPicker (single/multi) are the reusable report-scoping controls; reuse, don't reinvent.
 - [Export-kind canonical enum alignment](export-kind-canonical-enum.md) — when a page's kind filter must match the app-wide address/transaction/other enum but still needs a narrower bucket (e.g. UTXO refs), add a sub-toggle rather than a 4th enum value.
@@ -7,7 +6,6 @@
 - [Backup streaming guards](backup-streaming-guards.md) — fflate onEntry is sync (manifest-order via a flag); memory-export OOM guard must aggregate all streamed-table counts.
 - [Restore cancellation contract](restore-cancel-contract.md) — cancel before clear keeps vault intact; after clear resets to verified-empty; if cleanup fails, fail closed with a distinct hard error (never claim clean).
 - [Lockfile firewall URLs](lockfile-firewall-urls.md) — firewall URLs break external npm ci; rewrite needs the /-/ tarball form (host-only rewrites 404 and sneak past a firewall-string gate).
-- [fontsource-variable imports](fontsource-variable-imports.md) — bare @fontsource-variable import is wght-only; use opsz.css + *-italic.css to match a Google ital,opsz,wght request.
 - [sqlite-wasm Vite loading](sqlite-wasm-vite-loading.md) — wasm dies in Vite dev (SPA serves HTML for .wasm); load via `?url`+locateFile; verify in a real browser; persisted()=no ≠ not-persisted.
 - [Native SQLite read-engine](native-sqlite-engine.md) — at-scale SQL = native better-sqlite3 in an Electron worker_thread, NOT sqlite-wasm (corrupts ~6GB); TRUNCATE not WAL; renderer imports the worker type-only.
 - [Long jobs on Replit](replit-long-jobs-workflow.md) — bash `&`/setsid bg jobs die at the tool-call boundary; run multi-minute scripts as a temporary Replit workflow and read its log file.
@@ -24,7 +22,6 @@
 - [Browser no Buffer global](browser-no-buffer-global.md) — client code using Buffer.from crashes in-browser (not polyfilled) but passes vitest (Node); use Uint8Array; bitcoinjs-lib v7 accepts it directly.
 - [Browser-crypto regression check](browser-crypto-regression-check.md) — Buffer/Web-Crypto browser crash only catchable in a REAL browser (Node delete-Buffer + jsdom browser-conditions both lie); headless Chromium via Nix + playwright-core.
 - [Attachment pointer drift repair](attachment-pointer-drift-repair.md) — relink drifted DB pointers to orphaned hashed/opaque files only (never plaintext); claim each file to avoid double-link; repair never moves/copies/deletes bytes.
-- [useLiveQuery arity](use-livequery-arity.md) — this repo's dexie-react-hooks types accept only 1-2 args (no default-result 3rd arg) and infer `{}` for `?? []`; use 1 arg + handle undefined like the use-* hooks.
 - [Sync backfill of new tx fields](sync-backfill-new-fields.md) — backfilling new blockchainTransactions columns onto old rows must run in syncAddress's height-skip branch (it preempts the existing-tx lookup), or re-sync backfills nothing.
 - [UTXO spent detection outpoint-first](utxo-spent-detection.md) — outpoint spends are authoritative, FIFO only for outpoint-less inputs; address-keyed loads miss blank-address Electrum inputs; algorithm changes need an engine schema bump.
 - [Electrum sent via outpoint matching](electrum-sent-outpoint-matching.md) — Electrum txs lack input prevout addresses; compute Sent by matching input outpoints (txid:vout) to owned outputs, never by input address; use computeHistoryFromTxs.
@@ -33,10 +30,8 @@
 - [Stale-report scratch store](stale-report-scratch-store.md) — stream unbounded scan results to a SEPARATE Dexie DB (++seq), read windows on demand; awaitable batch cb for backpressure; dodges CRUD-guards + memory cap.
 - [Portable-pref preview/restore parity](portable-pref-preview.md) — preview + restore of backup portable prefs must share one descriptor list; preview before vault clear so wrong-password fails non-destructively.
 - [Force-graph testid collisions](force-graph-testid-collision.md) — node testid is id.slice(0,8); fixtures sharing first 8 chars collide → getByTestId-in-waitFor times out (looks like a render hang); graph colours are index.css theme tokens.
-- [jsdom location.reload mock](jsdom-location-reload-mock.md) — reload is non-configurable; defineProperty/Proxy both fail; replace window.location wholesale with a plain object carrying a reload spy.
 - [Test provider harness](test-provider-harness.md) — wrap Tooltip/AddressLink-capable tests in full stack via `@/test/testProviders`; conditional tooltips hide the fragility; settingsTestProviders is now an alias.
 - [renderWithProviders vs database mock](renderWithProviders-database-mock.md) — harness deep-imports RecordDetailPanel→db constants; wholesale `vi.mock("@/lib/database")` fails at collection — use importOriginal + override only `db`.
-- [metadata-hover cache in tests](metadata-hover-cache-tests.md) — module-level resolve cache leaks the FileText indicator across test cases; invalidateCachedRecord per id in before/afterEach.
 - [Copy-button toast guard tests](copy-button-toast-tests.md) — assert clipboard+toast: mockClear right before the click (setup toasts pollute), stub execCommand for the failure path, don't duplicate already-covered buttons.
 - [Browser-seed privacy audit](browser-seed-privacy-audit.md) — real-browser layout checks: seed via Vite-singleton dynamic imports; active entity list is in-memory (reload wipes it); one combined snippet avoids runTest timeouts. Dismiss the legacy-migration overlay after every unlock or clicks get swallowed.
 - [Stale dev-bundle e2e](stale-dev-bundle-e2e.md) — e2e failing while unit tests + code review are green often = stale Vite/PWA bundle; force a rebuild (edit/restart) before chasing a non-bug.
@@ -47,7 +42,6 @@
 - [AddressLink icon cache-driven](addresslink-icon-cache-driven.md) — orange FileText icon comes from the metadata-hover cache subscription (not recordId); TTL only drops the entry, icon refreshes only on a later preload/hover re-resolve.
 - [Browser-seed Transactions page](browser-seed-transactions-reload.md) — default tx list/search only scans curated txs; page useLiveQuery ignores dynamic-import writes — seed then reload ONCE before rendering the link, live createRecord after.
 - [Fund Trail layout variants](fund-trail-layout-variants.md) — caps are hop-level never per-node; variants are pure adapter fns (no DOM measure); stacked/Sankey scale off densest column sum not max single flow.
-- [Mockup canvas presentation](mockup-canvas-presentation.md) — presentArtifact artifactId = artifact PATH ("artifacts/mockup-sandbox"); PWA SW serves stale preview screenshots, add a ?cachebust= token.
 - [RecordDetailPanel render paths](record-detail-panel-paths.md) — clicking a link opens the GLOBAL preview (RecordPreviewContext), which hand-builds panelRecord and silently drops unlisted fields; add new panel fields to both builders.
 - [Provider-harness IndexedDB requirement](provider-harness-indexeddb.md) — TestProviders→RecordPreviewProvider queries Dexie at mount; harness tests without `fake-indexeddb/auto` crash with "IndexedDB API missing".
 - [Privacy proximity hop dedup](privacy-proximity-dedup-hops.md) — closest-hop dedup + owned-only tx loading make isolated hop-3/4 findings impossible E2E; test those tiers at engine level. Also: partly-broken persisted snapshot keeps valid subset (imported+partialWarning), not bundled.
@@ -62,14 +56,12 @@
 - [Curated-tier balance surfaces](curated-tier-balance-surfaces.md) — cached-stats aggregations must ALLOWLIST curated tiers; discovered counterparty rows inherit walletName + stamped stats and inflate totals; import helpers from db-types not database.
 - [Import re-attribution tier promotion](import-reattribution-tier-promotion.md) — re-stamping walletName on import is invisible unless discovery-tier input rows are also promoted to a curated tier; never re-label xpub-derived.
 - [Bulk-import vocabulary ensure*](bulk-import-vocabulary-ensure.md) — strict create* after a record loop always throws "already exists" (loop auto-syncs vocab); use ensure*, keep vocab non-fatal, verify counts vs DB.
-- [Theme-toggle transition lag](browser-theme-toggle-transition.md) — after toggling .dark, wait out transition-colors before getComputedStyle or you read the OLD theme's color.
 - [Vitest fork teardown timeout](vitest-fork-teardown-timeout.md) — green runs exiting 1 with "Timeout terminating forks worker" = load-slow shutdown, not leaks; raise teardownTimeout after hanging-process check.
 - [db-error-noise vitest guard](db-noise-vitest-guard.md) — global setup hook fails tests on unhandled rejections/Dexie noise; mock CRUD modules, never loosen the hook.
 - [Descriptor/BSMS import gotchas](descriptor-bsms-import.md) — BSMS `/**` wildcard = dual-chain; vocabulary "already exists" throws must be tolerated in bulk saves or imports die.
 - [Electrum txid confirmations](electrum-txid-confirmations.md) — verbose tx.get has confirmations but NO height; derive tip−conf+1 via cached tip; never cache unconfirmed conversions in session caches.
 - [Dexie boolean index keys](dexie-boolean-index-keys.md) — where(boolField).equals(true) throws DataError (booleans aren't IDB keys); swallowed → UI shows stale totals; use .filter scans.
 - [Dexie .or() requires an index](dexie-or-requires-index.md) — unindexed .or() field throws SchemaError at query time; silent catch-and-empty fallbacks hide it as console noise.
-- [jsdom page-test harness gotchas](jsdom-page-test-harness-gotchas.md) — new .test.tsx needs @vitest-environment jsdom + manual cleanup(); no jest-dom matchers; partial-mock shared modules via importOriginal.
 - [npm audit remediation](npm-audit-remediation.md) — never audit-fix --force (downgrades electron-builder); brace-expansion ^5.0.8 override clears the chain; vite7 needs @types/node ≥20.19.
 - [Address Checker 5k scaling](address-checker-5k-scaling.md) — huge tables need memoized rows + page-scroll virtualization; per-row Radix Tooltips freeze the mount; live-Electrum bench runs in PHASE/SLICE chunks.
 - [Demo vault builder](demo-vault-builder.md) — v3 backup zips from Node (fflate); Esplora rotate+cache; deep custody chains need chain adoption + addTx-size-aware spend walk; unlock per page load.
@@ -103,8 +95,6 @@
 - [Packaged Electron no local server](electron-packaged-no-local-server.md) — packaged app is file:// + IPC only (no Host header ever); only dev Electron hits localhost:5000; lockstep tests parse main.cjs.
 - [Electron error hygiene scope](electron-error-hygiene.md) — sanitization tasks cover main-process LOGS too, not just IPC payloads; redact host:port via opaque conn ids, log name+errno only; server JSON-RPC error text may pass through tagged.
 - [createdAt sort tie-breaks](created-at-sort-tiebreak.md) — "most recent row" sorts on Date.now() need an id tie-break; same-millisecond inserts sort arbitrarily and mis-de-dup.
-- [React disabled-click guard](react-disabled-click-guard.md) — React swallows forced clicks while props.disabled is set; assert the disabled state, not handler fallback toasts behind it.
-- [Radix toast vs Playwright strict](radix-toast-playwright-strict.md) — toast text duplicates into aria-live; getByText needs .first(); gate cancel asserts on a streamed phase, not first progress.
 - [Corrupted test-file repair](corrupted-test-repair.md) — restore mangled tests' original intent from git history; a "repair" that deletes them leaves green workflows with zero coverage.
 - [Node-side message signing](node-side-message-signing.md) — sign the live per-session challenge in the check script (noble secp256k1 + header 27+rec+4) instead of pre-generated fixtures; block non-localhost to surface manual-anchor paths.
 - [Browser engine-bridge mock](browser-engine-bridge-mock.md) — test engine-served reads in Chromium via an addInitScript electronAPI.engine bridge (no isElectron flag) answering fingerprints/pages from live IDB.
@@ -127,7 +117,6 @@
 - [Browser-check reload state loss](browser-check-reload-state-loss.md) — a deliberate page.goto/reload drops both the unlocked vault key and any addInitScript shim's in-memory Map; re-unlock every time, back shim storage with IndexedDB.
 - [Settings import completion checks](settings-import-completion-browser-checks.md) — after confirming an import, wait for the visible badge/count refresh before asserting completion; persistence can lead the live query.
 - [Dexie bulk-write throughput ceiling](dexie-indexed-bulk-write-throughput.md) — heavily-indexed tables (e.g. records, ~14 indexes) cap headless-Chromium bulk writes at ~700/s; literal million-row seeds are impractical, size a documented representative N instead.
-- [Combobox create-new wording convention](combobox-create-new-wording.md) — app-wide "select or add" pickers label the new-entry row `Add "<value>"`; a shared component drifting to `Create "<value>"` silently breaks any `[cmdk-item]` text-matcher check.
 - [Dexie dead-index guard pattern](dexie-dead-index-guard.md) — dynamic `.where(variable)` dispatch defeats literal grep for index usage; pin the exact index token set + an explicit denylist, not just a generic scanner.
 - [Virtualizer range-effect index collision](virtualizer-range-effect-index-collision.md) — windowed-list effects that default virtualItems[0].index to 0 when empty never fire if real content also starts at index 0; add virtualItems.length to deps.
 - [Bulk-write batching root cause](bulk-write-batching-root-cause.md) — a slow "bulk" operation is often a serial per-record loop that never calls the batch helper at all; verify the call site batches before optimizing the helper/schema.
@@ -135,7 +124,6 @@
 - [records-query planner key coverage](records-query-planner-key-coverage.md) — index-narrowing keyed by `field_operator` needs an entry per operator a producer can emit; a missing key silently falls back to a broader scan with no test failure (correctness hides the perf regression).
 - [Filter chips / Clear-All browser-check gotchas](filter-chips-clear-all-browser-check.md) — sidebar nav links live in collapsible groups (check visibility before clicking the header); debounced hasActiveFilters lags a Clear click, so wait for hidden, don't assert synchronously.
 - [Export date filter uses blockTime](export-date-filter-blocktime.md) — tx/UTXO export rows scope date filters by the transaction's blockTime (batched txid lookup), never updatedAt/createdAt; address/other kinds keep the old fallback.
-- [React DayPicker test selection](react-day-picker-jsdom-selection.md) — target button[name=day], reject day-outside, verify the trigger date; nested browser popovers must fully detach before reopening.
 - [Windows Electron runtime compatibility](windows-electron-runtime-compatibility.md) — Electron 43 blanked the packaged renderer; keep the proven Electron line plus hardened extractor until Windows renderer launch is release-gated.
 - [Renderer build constant parity](renderer-build-constant-parity.md) — every Vite target must inject shared compile-time constants; one missing define can blank only the packaged renderer.
 - [SOCKS URL parsing in browsers](socks-url-browser-parsing.md) — Chromium does not parse socks5:// as an authority URL; validate the scheme, then parse its authority through a known special scheme.
