@@ -4,6 +4,7 @@ import test from 'node:test';
 import yaml from 'js-yaml';
 
 import { hostTarget, parseExpectedTarget } from './check-release-runner-readiness.mjs';
+import { validateGitHubActionsCron } from './check-workflow-schedules.mjs';
 
 const readWorkflow = (filename) =>
   fs.readFileSync(new URL(`../.github/workflows/${filename}`, import.meta.url), 'utf8');
@@ -102,49 +103,6 @@ function assertCompatibleBuilderFlags(workflow, jobName) {
   }
 }
 
-const GITHUB_ACTIONS_CRON_FIELD_RANGES = [
-  [0, 59],
-  [0, 23],
-  [1, 31],
-  [1, 12],
-  [0, 6],
-];
-
-function isValidCronValue(value, minimum, maximum) {
-  return /^\d+$/.test(value) && Number(value) >= minimum && Number(value) <= maximum;
-}
-
-function isValidCronPart(part, minimum, maximum) {
-  const [range, step, ...extra] = part.split('/');
-  if (extra.length > 0 || (step !== undefined && (!/^\d+$/.test(step) || Number(step) < 1))) {
-    return false;
-  }
-  if (range === '*') return true;
-
-  const bounds = range.split('-');
-  if (bounds.length === 1) {
-    return isValidCronValue(bounds[0], minimum, maximum);
-  }
-  return (
-    bounds.length === 2 &&
-    isValidCronValue(bounds[0], minimum, maximum) &&
-    isValidCronValue(bounds[1], minimum, maximum) &&
-    Number(bounds[0]) <= Number(bounds[1])
-  );
-}
-
-function isValidGitHubActionsCron(expression) {
-  if (typeof expression !== 'string') return false;
-  const fields = expression.trim().split(/\s+/);
-  return (
-    fields.length === GITHUB_ACTIONS_CRON_FIELD_RANGES.length &&
-    fields.every((field, index) => {
-      const [minimum, maximum] = GITHUB_ACTIONS_CRON_FIELD_RANGES[index];
-      return field.split(',').every((part) => isValidCronPart(part, minimum, maximum));
-    })
-  );
-}
-
 function assertReadinessWorkflowPolicy(workflow) {
   const document = parseWorkflow(workflow, 'readiness policy');
   const triggers = document.on;
@@ -160,7 +118,7 @@ function assertReadinessWorkflowPolicy(workflow) {
           entry &&
           typeof entry === 'object' &&
           !Array.isArray(entry) &&
-          isValidGitHubActionsCron(entry.cron),
+          validateGitHubActionsCron(entry.cron),
       ),
     'missing or malformed readiness schedule',
   );

@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 
+import { validateGitHubActionsCron } from './check-workflow-schedules.mjs';
+
 const require = createRequire(import.meta.url);
 const {
   THRESHOLD_MINUTES,
@@ -17,45 +19,8 @@ const {
   runLiveContract,
 } = require('../.github/scripts/check-release-runner-monitor-live-contract.cjs');
 
-const GITHUB_ACTIONS_CRON_FIELD_RANGES = [
-  [0, 59],
-  [0, 23],
-  [1, 31],
-  [1, 12],
-  [0, 6],
-];
-
 function assertGithubActionsCron(expression) {
-  const fields = expression.trim().split(/\s+/);
-  assert.equal(fields.length, 5, `expected five cron fields: ${expression}`);
-
-  fields.forEach((field, index) => {
-    const [minimum, maximum] = GITHUB_ACTIONS_CRON_FIELD_RANGES[index];
-    for (const item of field.split(',')) {
-      assert.notEqual(item, '', `empty cron list item: ${expression}`);
-      const [range, step, ...extraParts] = item.split('/');
-      assert.equal(extraParts.length, 0, `too many step separators: ${expression}`);
-      if (step !== undefined) {
-        assert.match(step, /^\d+$/, `invalid cron step: ${expression}`);
-        assert.ok(Number(step) > 0, `cron step must be positive: ${expression}`);
-      }
-
-      if (range === '*') continue;
-      const bounds = range.split('-');
-      assert.ok(bounds.length === 1 || bounds.length === 2, `invalid cron range: ${expression}`);
-      for (const bound of bounds) {
-        assert.match(bound, /^\d+$/, `invalid cron value: ${expression}`);
-        const value = Number(bound);
-        assert.ok(
-          value >= minimum && value <= maximum,
-          `cron value outside ${minimum}-${maximum}: ${expression}`,
-        );
-      }
-      if (bounds.length === 2) {
-        assert.ok(Number(bounds[0]) <= Number(bounds[1]), `descending cron range: ${expression}`);
-      }
-    }
-  });
+  assert.ok(validateGitHubActionsCron(expression), `invalid GitHub Actions cron: ${expression}`);
 }
 
 function workflowCron(workflow) {
