@@ -144,19 +144,57 @@ function readNodeSettingsClassification() {
   return { failures, policyFields };
 }
 
-function findPolicyFields(node, localInitializers, found = new Set(), visited = new Set()) {
+function findPolicyFields(
+  node,
+  localInitializers,
+  localAssignedFields,
+  found = new Set(),
+  visited = new Set(),
+) {
   if (ts.isIdentifier(node) && localInitializers.has(node.text) && !visited.has(node.text)) {
     visited.add(node.text);
-    findPolicyFields(localInitializers.get(node.text), localInitializers, found, visited);
+    findPolicyFields(
+      localInitializers.get(node.text),
+      localInitializers,
+      localAssignedFields,
+      found,
+      visited,
+    );
+  }
+  if (ts.isIdentifier(node)) {
+    for (const field of localAssignedFields.get(node.text) ?? []) {
+      found.add(field);
+    }
   }
   if (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) {
     const field = propertyNameText(node.name);
     if (field && POLICY_FIELDS.has(field)) found.add(field);
   }
   ts.forEachChild(node, child => {
-    findPolicyFields(child, localInitializers, found, visited);
+    findPolicyFields(child, localInitializers, localAssignedFields, found, visited);
   });
   return found;
+}
+
+function assignedProperty(node) {
+  if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) {
+    return undefined;
+  }
+  const target = unwrapExpression(node.left);
+  if (ts.isPropertyAccessExpression(target) && ts.isIdentifier(target.expression)) {
+    return { localName: target.expression.text, field: target.name.text };
+  }
+  if (
+    ts.isElementAccessExpression(target) &&
+    ts.isIdentifier(target.expression) &&
+    target.argumentExpression
+  ) {
+    const key = unwrapExpression(target.argumentExpression);
+    if (ts.isStringLiteral(key) || ts.isNumericLiteral(key)) {
+      return { localName: target.expression.text, field: key.text };
+    }
+  }
+  return undefined;
 }
 
 function lineAndColumn(sourceFile, node) {
@@ -199,6 +237,7 @@ for (const file of files) {
   const localWrites = new Map();
   const namespaceImports = new Set();
   const localInitializers = new Map();
+  const localAssignedFields = new Map();
 
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
@@ -231,6 +270,12 @@ for (const file of files) {
   collectLocalInitializers(sourceFile);
 
   function visit(node) {
+    const assignment = assignedProperty(node);
+    if (assignment && POLICY_FIELDS.has(assignment.field)) {
+      const fields = localAssignedFields.get(assignment.localName) ?? new Set();
+      fields.add(assignment.field);
+      localAssignedFields.set(assignment.localName, fields);
+    }
     if (ts.isCallExpression(node)) {
       let writeName;
       if (ts.isIdentifier(node.expression)) {
@@ -246,7 +291,7 @@ for (const file of files) {
       if (writeName) {
         const fields = new Set();
         for (const argument of node.arguments) {
-          findPolicyFields(argument, localInitializers, fields);
+          findPolicyFields(argument, localInitializers, localAssignedFields, fields);
         }
         if (fields.size > 0) {
           failures.push(

@@ -128,6 +128,40 @@ test('fails a direct write whose payload is held in a local variable', () => {
   assert.match(result.stderr, /firstSyncConfirmedAt/);
 });
 
+test('fails a direct write whose payload is populated through later property assignments', () => {
+  const result = runGuard({
+    'bad-mutated-variable.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      const policyUpdates = {};
+      policyUpdates.networkAccessEnabled = false;
+      policyUpdates['firstSyncConfirmedAt'] = undefined;
+      updateNodeSettings('default', policyUpdates);
+    `,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /networkAccessEnabled/);
+  assert.match(result.stderr, /firstSyncConfirmedAt/);
+});
+
+test('permits unrelated mutations and mutations made after a CRUD write', () => {
+  const result = runGuard({
+    'good-mutated-variable.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      const ordinaryUpdates = {};
+      ordinaryUpdates.requestTimeout = 10_000;
+      const unrelated = {};
+      unrelated.networkAccessEnabled = false;
+      updateNodeSettings('default', ordinaryUpdates);
+
+      const laterMutated = {};
+      updateNodeSettings('default', laterMutated);
+      laterMutated.networkAccessEnabled = false;
+    `,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OK/);
+});
+
 test('ignores test sources and permits the approved serialized modules', () => {
   const result = runGuard({
     'feature.test.ts': `
