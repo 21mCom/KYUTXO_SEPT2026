@@ -55,6 +55,11 @@ describe('browser-check unlock guard', () => {
           "page.getByTestId(parts.join('-'));",
           "const selectors = { source: ['network', 'onboarding', 'source'].join('-') };",
           "page.getByTestId(selectors.source);",
+          "const { source } = selectors;",
+          "page.getByTestId(source);",
+          "const renamedSelectors = { finishButton: ['button', 'onboarding', 'finish'].join('-') };",
+          "const { finishButton: finishAlias } = renamedSelectors;",
+          "page.getByTestId(finishAlias);",
           "function onboardingChoice(kind) { return `choice-network-${kind}`; }",
           "page.getByTestId(onboardingChoice('public-direct'));",
           '',
@@ -69,6 +74,8 @@ describe('browser-check unlock guard', () => {
           "page.getByTestId(`${choice}offline`);",
           "const selectors = { source: 'network-' + 'onboarding-source' };",
           "page.getByTestId(selectors.source);",
+          "const { source: onboardingSource } = selectors;",
+          "page.getByTestId(onboardingSource);",
           "const finish = () => ['button', 'onboarding', 'finish'].join('-');",
           "page.getByTestId(finish());",
           '',
@@ -79,6 +86,8 @@ describe('browser-check unlock guard', () => {
         [
           "const selectors = { password: ['input', 'password'].join('-') };",
           "page.getByTestId(selectors.password);",
+          "const { password: passwordSelector } = selectors;",
+          "page.getByTestId(passwordSelector);",
           "function migrationSelector() { return 'legacy-' + 'migration-overlay'; }",
           "page.getByTestId(migrationSelector());",
           '',
@@ -100,7 +109,9 @@ describe('browser-check unlock guard', () => {
       assert.match(result.stderr, /check-generic-browser\.mjs:4\s+\[choice-network-offline\]/);
       assert.match(result.stderr, /check-generic-browser\.mjs:6\s+\[button-save-network-choice\]/);
       assert.match(result.stderr, /check-generic-browser\.mjs:8\s+\[network-onboarding-source\]/);
-      assert.match(result.stderr, /check-generic-browser\.mjs:10\s+\[choice-network-public-direct\]/);
+      assert.match(result.stderr, /check-generic-browser\.mjs:10\s+\[network-onboarding-source\]/);
+      assert.match(result.stderr, /check-generic-browser\.mjs:13\s+\[button-onboarding-finish\]/);
+      assert.match(result.stderr, /check-generic-browser\.mjs:15\s+\[choice-network-public-direct\]/);
       assert.doesNotMatch(result.stderr, /check-first-run-network-privacy-browser\.mjs:/);
       assert.doesNotMatch(result.stderr, /check-packaged-vault-lock-native\.mjs:/);
       assert.match(result.stderr, /completeFreshVaultOnboardingIfPresent/);
