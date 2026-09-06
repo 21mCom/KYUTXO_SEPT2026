@@ -158,14 +158,23 @@ const ELECTRON_SHIM = `
   // database instead — that's real per-origin storage and survives reloads
   // just like the app's own Dexie database does.
   let attachmentSeq = 0;
-  const shimDbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open('electron-shim-attachments', 1);
-    req.onupgradeneeded = () => { req.result.createObjectStore('files'); };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  let shimDbPromise = null;
+  function getShimDb() {
+    if (location.origin === 'null') {
+      return Promise.reject(new Error('Electron attachment shim requires a valid app origin'));
+    }
+    if (!shimDbPromise) {
+      shimDbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open('electron-shim-attachments', 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore('files'); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    return shimDbPromise;
+  }
   async function shimPut(path, arrayBuffer) {
-    const db = await shimDbPromise;
+    const db = await getShimDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction('files', 'readwrite');
       tx.objectStore('files').put(arrayBuffer, path);
@@ -174,7 +183,7 @@ const ELECTRON_SHIM = `
     });
   }
   async function shimGet(path) {
-    const db = await shimDbPromise;
+    const db = await getShimDb();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('files', 'readonly');
       const req = tx.objectStore('files').get(path);
@@ -358,7 +367,11 @@ async function main() {
       const context = await browser.newContext();
       await context.addInitScript(FS_ACCESS_SHIM);
       const page = await context.newPage();
-      page.on('pageerror', (e) => console.log(`[evidence-stream][page-error] ${e.message}`));
+      const pageErrors = [];
+      page.on('pageerror', (e) => {
+        pageErrors.push(e.message);
+        console.log(`[evidence-stream][page-error] ${e.message}`);
+      });
 
       let loaded = false;
       for (let i = 0; i < 3 && !loaded; i++) {
@@ -518,6 +531,11 @@ async function main() {
       );
       const noSuccessToastAfterWriteFailure = (await page.getByText(/Evidence package exported/i).count()) === 0;
       step('[A4] no success toast appears after a mid-stream write failure', noSuccessToastAfterWriteFailure);
+      step(
+        'browser streaming path has no unexpected page errors',
+        pageErrors.length === 0,
+        pageErrors.join(' | '),
+      );
 
       await context.close();
     }
@@ -529,7 +547,11 @@ async function main() {
       await context.addInitScript(ENGINE_SHIM);
       await context.addInitScript(ELECTRON_SHIM);
       const page = await context.newPage();
-      page.on('pageerror', (e) => console.log(`[evidence-stream][page-error] ${e.message}`));
+      const pageErrors = [];
+      page.on('pageerror', (e) => {
+        pageErrors.push(e.message);
+        console.log(`[evidence-stream][page-error] ${e.message}`);
+      });
 
       let loaded = false;
       for (let i = 0; i < 3 && !loaded; i++) {
@@ -580,6 +602,11 @@ async function main() {
       step('[B1] File System Access API was never touched (Electron preferred)', electronState.fsShimCalls === 0, `fsShimCalls=${electronState.fsShimCalls}`);
       step('[B1] streamed total exceeds the 75 MiB in-memory cap', electronState.totalWritten > AGGREGATE_CAP, `totalWritten=${electronState.totalWritten} cap=${AGGREGATE_CAP}`);
       step('[B1] Electron sink was closed (write completed cleanly)', electronState.closed === true && electronState.aborted !== true, `closed=${electronState.closed} aborted=${electronState.aborted}`);
+      step(
+        'desktop streaming path has no unexpected page errors',
+        pageErrors.length === 0,
+        pageErrors.join(' | '),
+      );
 
       await context.close();
     }
