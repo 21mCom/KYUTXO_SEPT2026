@@ -178,21 +178,45 @@ test('fails a direct write whose payload receives protected fields through Objec
   assert.match(result.stderr, /firstSyncConfirmedAt/);
 });
 
-test('permits unrelated aliases and alias mutations made after a CRUD write', () => {
+test('fails a direct write whose payload alias is established by a later assignment', () => {
+  const result = runGuard({
+    'bad-later-assigned-alias.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      const policyUpdates = {};
+      let alias;
+      alias = policyUpdates;
+      alias.networkAccessEnabled = false;
+      alias['firstSyncConfirmedAt'] = undefined;
+      updateNodeSettings('default', policyUpdates);
+    `,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /networkAccessEnabled/);
+  assert.match(result.stderr, /firstSyncConfirmedAt/);
+});
+
+test('permits unrelated reassigned locals and aliases established or mutated after a CRUD write', () => {
   const result = runGuard({
     'good-mutated-variable.ts': `
       import { updateNodeSettings } from './lib/data/node-settings-crud';
       const ordinaryUpdates = {};
       ordinaryUpdates.requestTimeout = 10_000;
       const unrelated = {};
-      const unrelatedAlias = unrelated;
+      let unrelatedAlias;
+      unrelatedAlias = unrelated;
       unrelatedAlias.networkAccessEnabled = false;
       updateNodeSettings('default', ordinaryUpdates);
 
       const laterMutated = {};
-      const laterAlias = laterMutated;
+      let laterAlias;
       updateNodeSettings('default', laterMutated);
+      laterAlias = laterMutated;
       laterAlias.networkAccessEnabled = false;
+
+      let reassigned = {};
+      reassigned = getOrdinaryUpdates();
+      reassigned.requestTimeout = 20_000;
+      updateNodeSettings('default', reassigned);
     `,
   });
   assert.equal(result.status, 0, result.stderr);

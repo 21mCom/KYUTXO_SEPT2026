@@ -209,6 +209,18 @@ function assignedProperty(node) {
   return undefined;
 }
 
+function assignedAlias(node) {
+  if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) {
+    return undefined;
+  }
+  const target = unwrapExpression(node.left);
+  const value = unwrapExpression(node.right);
+  if (!ts.isIdentifier(target) || !ts.isIdentifier(value)) {
+    return undefined;
+  }
+  return { localName: target.text, aliasName: value.text };
+}
+
 function objectAssignTarget(node) {
   if (
     !ts.isCallExpression(node) ||
@@ -306,6 +318,15 @@ for (const file of files) {
   collectLocalInitializers(sourceFile);
 
   function visit(node) {
+    const aliasAssignment = assignedAlias(node);
+    if (aliasAssignment) {
+      const aliasesForLocal = localAliases.get(aliasAssignment.localName) ?? new Set();
+      aliasesForLocal.add(aliasAssignment.aliasName);
+      localAliases.set(aliasAssignment.localName, aliasesForLocal);
+      const aliasesForValue = localAliases.get(aliasAssignment.aliasName) ?? new Set();
+      aliasesForValue.add(aliasAssignment.localName);
+      localAliases.set(aliasAssignment.aliasName, aliasesForValue);
+    }
     const assignment = assignedProperty(node);
     if (assignment && POLICY_FIELDS.has(assignment.field)) {
       const fields = localAssignedFields.get(assignment.localName) ?? new Set();
