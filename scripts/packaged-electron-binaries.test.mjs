@@ -20,6 +20,12 @@ const PACKAGED_NON_BROWSER_CHECKS = new Set([
   'check-packaged-vault-lock-native.mjs',
 ]);
 const PACKAGED_BROWSER_CHECK_PATTERN = /^check-packaged-.+-browser\.mjs$/;
+const MANUAL_PACKAGED_BROWSER_CHECKS = new Map([
+  [
+    'check-packaged-wrong-password-browser.mjs',
+    'Manual regression reproduction: its single-session lock/unlock flow is intentionally excluded from release automation because packaged relaunch state is unreliable.',
+  ],
+]);
 
 function discoverPackagedBrowserChecks(filenames) {
   return filenames
@@ -42,6 +48,76 @@ function assertRegisteredPackagedCheckNames(registrationSources) {
       );
     }
   }
+}
+
+function findRegisteredPackagedBrowserChecks(
+  registrationSources,
+  { requireValidationMetadata = false } = {},
+) {
+  const registered = new Set();
+  for (const source of Object.values(registrationSources)) {
+    const registrationBlocks = requireValidationMetadata
+      ? source.split(/\[\[workflows\.workflow\]\]/).filter(
+        (block) => /\bisValidation\s*=\s*true\b/.test(block),
+      )
+      : [source];
+    for (const block of registrationBlocks) {
+      for (const match of block.matchAll(
+        /\bnode\s+scripts\/(?<filename>check-packaged-.+-browser\.mjs)\b/g,
+      )) {
+        registered.add(match.groups.filename);
+      }
+    }
+  }
+  return registered;
+}
+
+function assertPackagedBrowserCheckRegistrationPolicy({
+  discoveredChecks,
+  releaseSources,
+  validationSources,
+  manualChecks = MANUAL_PACKAGED_BROWSER_CHECKS,
+}) {
+  const discovered = new Set(discoveredChecks);
+  const releaseRegistered = findRegisteredPackagedBrowserChecks(releaseSources);
+  const validationRegistered = findRegisteredPackagedBrowserChecks(
+    validationSources,
+    { requireValidationMetadata: true },
+  );
+
+  for (const [filename, reason] of manualChecks) {
+    assert.ok(
+      PACKAGED_BROWSER_CHECK_PATTERN.test(filename),
+      `manual packaged browser check classification has an invalid filename: ${filename}`,
+    );
+    assert.ok(
+      discovered.has(filename),
+      `manual packaged browser check classification is stale: ${filename} does not exist`,
+    );
+    assert.ok(
+      typeof reason === 'string' && reason.trim().length >= 40,
+      `manual packaged browser check ${filename} must document a specific reason`,
+    );
+    assert.ok(
+      !releaseRegistered.has(filename) && !validationRegistered.has(filename),
+      `${filename} is registered; remove its obsolete manual classification`,
+    );
+  }
+
+  const orphaned = discoveredChecks.filter(
+    (filename) =>
+      !releaseRegistered.has(filename) &&
+      !validationRegistered.has(filename) &&
+      !manualChecks.has(filename),
+  );
+  assert.deepEqual(
+    orphaned,
+    [],
+    'orphaned packaged browser check(s): ' +
+      `${orphaned.join(', ')}. Register each check in scripts/electron-build.sh or ` +
+      '.github/workflows/build.yml as a release gate, register it as a validation in ' +
+      '.replit, or add a narrowly documented entry to MANUAL_PACKAGED_BROWSER_CHECKS.',
+  );
 }
 
 function assertUsesSharedBinaryDiscovery(filename, source) {
@@ -96,6 +172,71 @@ test('release and validation registrations enforce packaged browser check filena
     ),
     '.replit': fs.readFileSync(path.join(ROOT, '.replit'), 'utf8'),
   });
+});
+
+test('every packaged browser check has an explicit release, validation, or manual policy', () => {
+  assertPackagedBrowserCheckRegistrationPolicy({
+    discoveredChecks: discoverPackagedBrowserChecks(fs.readdirSync(SCRIPTS_DIR)),
+    releaseSources: {
+      'scripts/electron-build.sh': fs.readFileSync(
+        path.join(SCRIPTS_DIR, 'electron-build.sh'),
+        'utf8',
+      ),
+      '.github/workflows/build.yml': fs.readFileSync(
+        path.join(ROOT, '.github', 'workflows', 'build.yml'),
+        'utf8',
+      ),
+    },
+    validationSources: {
+      '.replit': fs.readFileSync(path.join(ROOT, '.replit'), 'utf8'),
+    },
+  });
+});
+
+test('a newly added packaged browser check cannot remain orphaned', () => {
+  assert.throws(
+    () => assertPackagedBrowserCheckRegistrationPolicy({
+      discoveredChecks: ['check-packaged-future-feature-browser.mjs'],
+      releaseSources: { release: '' },
+      validationSources: { validation: '' },
+      manualChecks: new Map(),
+    }),
+    /orphaned packaged browser check\(s\): check-packaged-future-feature-browser\.mjs.*Register each check in scripts\/electron-build\.sh.*\.replit/s,
+  );
+});
+
+test('a .replit workflow only counts when it is marked as validation', () => {
+  assert.throws(
+    () => assertPackagedBrowserCheckRegistrationPolicy({
+      discoveredChecks: ['check-packaged-future-feature-browser.mjs'],
+      releaseSources: { release: '' },
+      validationSources: {
+        '.replit': [
+          '[[workflows.workflow]]',
+          'name = "future-feature"',
+          'args = "node scripts/check-packaged-future-feature-browser.mjs"',
+          '[workflows.workflow.metadata]',
+          'isValidation = false',
+        ].join('\n'),
+      },
+      manualChecks: new Map(),
+    }),
+    /orphaned packaged browser check\(s\): check-packaged-future-feature-browser\.mjs/,
+  );
+});
+
+test('manual packaged browser checks require a narrow documented classification', () => {
+  assert.throws(
+    () => assertPackagedBrowserCheckRegistrationPolicy({
+      discoveredChecks: ['check-packaged-future-feature-browser.mjs'],
+      releaseSources: { release: '' },
+      validationSources: { validation: '' },
+      manualChecks: new Map([
+        ['check-packaged-future-feature-browser.mjs', 'manual'],
+      ]),
+    }),
+    /must document a specific reason/,
+  );
 });
 
 test('rejects an unconventional newly registered packaged browser check without launching it', () => {
