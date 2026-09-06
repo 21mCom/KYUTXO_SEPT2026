@@ -39,7 +39,7 @@ test('passes when a test command leaves tracked documents unchanged', (t) => {
   assert.match(result.stdout, /protecting 2 tracked sample document/);
 });
 
-test('reports every document changed during the command without reverting it', (t) => {
+test('labels deleted and rewritten documents together without reverting remaining damage', (t) => {
   const root = makeRepo();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'sample.pdf'), 'pre-existing user edit');
@@ -48,16 +48,16 @@ test('reports every document changed during the command without reverting it', (
     root,
     [
       `const fs = require('node:fs')`,
-      `fs.appendFileSync('sample.pdf', ' plus test edit')`,
+      `fs.rmSync('sample.pdf')`,
       `fs.writeFileSync('nested.docx', 'test rewrite')`,
     ].join(';'),
   );
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /sample\.pdf/);
-  assert.match(result.stderr, /nested\.docx/);
+  assert.match(result.stderr, /deleted: sample\.pdf/);
+  assert.match(result.stderr, /rewritten: nested\.docx/);
   assert.match(result.stderr, /left untouched/);
-  assert.equal(fs.readFileSync(path.join(root, 'sample.pdf'), 'utf8'), 'pre-existing user edit plus test edit');
+  assert.equal(fs.existsSync(path.join(root, 'sample.pdf')), false);
   assert.equal(fs.readFileSync(path.join(root, 'nested.docx'), 'utf8'), 'test rewrite');
 });
 

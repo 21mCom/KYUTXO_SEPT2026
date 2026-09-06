@@ -69,9 +69,8 @@ function assertMixedSampleDamageIsRejected(t, publicScript, checkoutPrefix) {
 
   assert.equal(result.status, 1, output);
   assert.match(output, /test command modified 2 checked-in sample document/);
-  for (const sampleName of sampleNames) {
-    assert.match(output, new RegExp(sampleName.replace('.', '\\.')));
-  }
+  assert.match(output, new RegExp(`deleted: ${sampleNames[0].replace('.', '\\.')}`));
+  assert.match(output, new RegExp(`rewritten: ${sampleNames[1].replace('.', '\\.')}`));
   assert.deepEqual(fs.readFileSync(sourceSample), sourceBytesBefore);
 }
 

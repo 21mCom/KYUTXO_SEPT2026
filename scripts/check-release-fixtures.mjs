@@ -65,12 +65,21 @@ function main() {
     shell: process.platform === 'win32',
   });
 
-  const modified = files.filter((file) => before.get(file) !== digest(path.join(root, file)));
+  const modified = files
+    .map((file) => {
+      const after = digest(path.join(root, file));
+      if (before.get(file) === after) return null;
+      return {
+        file,
+        status: after === '<missing>' ? 'deleted' : 'rewritten',
+      };
+    })
+    .filter(Boolean);
   if (modified.length > 0) {
     console.error(
       `${TAG} FAIL: test command modified ${modified.length} checked-in sample document(s):`,
     );
-    for (const file of modified) console.error(`  ${file}`);
+    for (const { file, status } of modified) console.error(`  ${status}: ${file}`);
     console.error(`${TAG} Files were left untouched so the changes can be inspected.`);
   }
 
