@@ -132,13 +132,39 @@ async function corruptLegacyCiphertext(backupBytes) {
 
 async function snapshot(page) {
   return page.evaluate(async () => {
-    const recordCrud = await import('/src/lib/data/record-crud.ts');
-    const settingsCrud = await import('/src/lib/data/settings-crud.ts');
-    const txCrud = await import('/src/lib/data/transaction-crud.ts');
+    const { db } = await import('/src/lib/database.ts');
+    const { STREAMED_TABLES } = await import('/src/lib/backup/format.ts');
+    const { readInlineTables } = await import('/src/lib/backup/inline-tables.ts');
+    const inlineTables = await readInlineTables();
+    const portableTables = {};
+    for (const tableName of STREAMED_TABLES) {
+      portableTables[tableName] = await db.table(tableName).toArray();
+    }
+    for (const [tableName, rows] of Object.entries(inlineTables)) {
+      portableTables[tableName] = rows;
+    }
+
+    const listResponse = await fetch('/api/attachments/list-all');
+    if (!listResponse.ok) {
+      throw new Error(`Could not snapshot attachment files: ${listResponse.status}`);
+    }
+    const attachmentPaths = ((await listResponse.json()).files ?? []).sort();
+    const attachmentFiles = [];
+    for (const relativePath of attachmentPaths) {
+      const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/');
+      const response = await fetch(`/api/attachments/download/${encodedPath}`);
+      if (!response.ok) {
+        throw new Error(`Could not snapshot attachment ${relativePath}: ${response.status}`);
+      }
+      const digest = await crypto.subtle.digest('SHA-256', await response.arrayBuffer());
+      const sha256 = Array.from(new Uint8Array(digest), (byte) =>
+        byte.toString(16).padStart(2, '0')).join('');
+      attachmentFiles.push({ relativePath, sha256 });
+    }
+
     return {
-      settings: await settingsCrud.getSettings('default'),
-      records: await recordCrud.getAllRecords(),
-      transactions: await txCrud.getAllTransactions(),
+      portableTables,
+      attachmentFiles,
     };
   });
 }
@@ -387,12 +413,16 @@ async function main() {
       beforeWrong: beforeV3Wrong,
       record,
       label: 'v3',
-      verifyCorrect: ({ settings, transactions }) => ({
-        passed: settings?.disableOrphanCheck === true &&
-          transactions.length === 1 &&
-          transactions[0]?.txid === TX_BACKED_UP,
-        detail: `disableOrphanCheck=${settings?.disableOrphanCheck} txids=${transactions.map((tx) => tx.txid).join(',')}`,
-      }),
+      verifyCorrect: ({ portableTables }) => {
+        const settings = portableTables.settings?.find((row) => row.id === 'default');
+        const transactions = portableTables.blockchainTransactions ?? [];
+        return {
+          passed: settings?.disableOrphanCheck === true &&
+            transactions.length === 1 &&
+            transactions[0]?.txid === TX_BACKED_UP,
+          detail: `disableOrphanCheck=${settings?.disableOrphanCheck} txids=${transactions.map((tx) => tx.txid).join(',')}`,
+        };
+      },
     });
 
     const legacyData = await page.evaluate(async () => {
@@ -442,12 +472,16 @@ async function main() {
       record,
       label: 'legacy',
       corruptBackupBuffer: corruptLegacyBackup,
-      verifyCorrect: ({ settings, transactions }) => ({
-        passed: settings?.disableOrphanCheck === true &&
-          transactions.length === 1 &&
-          transactions[0]?.txid === TX_BACKED_UP,
-        detail: `disableOrphanCheck=${settings?.disableOrphanCheck} txids=${transactions.map((tx) => tx.txid).join(',')}`,
-      }),
+      verifyCorrect: ({ portableTables }) => {
+        const settings = portableTables.settings?.find((row) => row.id === 'default');
+        const transactions = portableTables.blockchainTransactions ?? [];
+        return {
+          passed: settings?.disableOrphanCheck === true &&
+            transactions.length === 1 &&
+            transactions[0]?.txid === TX_BACKED_UP,
+          detail: `disableOrphanCheck=${settings?.disableOrphanCheck} txids=${transactions.map((tx) => tx.txid).join(',')}`,
+        };
+      },
     });
 
     await context.close();
