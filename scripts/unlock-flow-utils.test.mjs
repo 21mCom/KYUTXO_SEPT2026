@@ -84,6 +84,14 @@ describe('browser-check unlock guard', () => {
            "page.getByTestId(reassignedChoiceAlias('offline'));",
            "const sideEffectingChoiceAlias = (recordSelectorUse(), buildAliasedChoice);",
            "page.getByTestId(sideEffectingChoiceAlias('offline'));",
+           "const helperBag = { buildChoice: (kind) => `choice-network-${kind}` };",
+           "const { buildChoice: destructuredChoiceAlias } = helperBag;",
+           "page.getByTestId(destructuredChoiceAlias('offline'));",
+           "const computedHelperName = runtimeHelperName();",
+           "const { [computedHelperName]: computedChoiceAlias } = helperBag;",
+           "page.getByTestId(computedChoiceAlias('offline'));",
+           "let { buildChoice: mutableChoiceAlias } = helperBag;",
+           "page.getByTestId(mutableChoiceAlias('offline'));",
           '',
         ].join('\n'),
       );
@@ -144,6 +152,9 @@ describe('browser-check unlock guard', () => {
        assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:32\s+/);
        assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:35\s+/);
        assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:37\s+/);
+        assert.match(result.stderr, /check-generic-browser\.mjs:40\s+\[choice-network-offline\]/);
+        assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:43\s+/);
+        assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:45\s+/);
       assert.doesNotMatch(result.stderr, /check-first-run-network-privacy-browser\.mjs:/);
       assert.doesNotMatch(result.stderr, /check-packaged-vault-lock-native\.mjs:/);
       assert.match(result.stderr, /completeFreshVaultOnboardingIfPresent/);
