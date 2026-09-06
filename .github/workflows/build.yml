@@ -245,6 +245,15 @@ jobs:
       # tree, relaunch the same wrapper, and drive both renderer sessions over
       # CDP. This catches wrapper/extraction regressions, portable data being
       # written to the runner profile, and packaged Electron blank windows.
+      # The shared launch helper first extracts the NSIS payload with 7-Zip and
+      # requires its app.asar SHA-256 to match the validated win-unpacked bundle.
+      - name: Confirm 7-Zip is available for portable bundle integrity checks
+        shell: pwsh
+        run: |
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
+            throw "7z is required to verify that Portable.exe embeds the validated app.asar"
+          }
+
       - name: Verify packaged Windows renderer and portable restart persistence
         env:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'

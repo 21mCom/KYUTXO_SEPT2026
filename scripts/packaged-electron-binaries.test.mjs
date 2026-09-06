@@ -13,6 +13,7 @@ import {
 import {
   findWindowsPortableArtifact,
   prepareWindowsPortableLaunch,
+  verifyWindowsPortableBundle,
 } from './packaged-windows-portable.mjs';
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -247,6 +248,49 @@ test('shared Windows portable lookup rejects missing, empty, and stale artifacts
   );
 });
 
+test('shared Windows portable verification binds embedded app.asar bytes to the validated package', (t) => {
+  const root = fs.mkdtempSync(path.join(SCRIPTS_DIR, '.portable-integrity-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const artifactPath = path.join(root, 'KYUTXO-1.2.3-Portable.exe');
+  const asarPath = path.join(root, 'validated', 'app.asar');
+  fs.mkdirSync(path.dirname(asarPath), { recursive: true });
+  fs.writeFileSync(artifactPath, 'fresh portable timestamp is not evidence');
+  fs.writeFileSync(asarPath, 'validated bundle');
+
+  const extractArchive = (archive, outputDir) => {
+    if (archive === artifactPath) {
+      fs.mkdirSync(path.join(outputDir, '$PLUGINSDIR'), { recursive: true });
+      fs.writeFileSync(path.join(outputDir, '$PLUGINSDIR', 'app-64.7z'), 'archive');
+      return;
+    }
+    fs.mkdirSync(path.join(outputDir, 'resources'), { recursive: true });
+    fs.writeFileSync(path.join(outputDir, 'resources', 'app.asar'), 'validated bundle');
+  };
+  const result = verifyWindowsPortableBundle({
+    artifactPath,
+    asarPath,
+    tag: '[test]',
+    extractArchive,
+  });
+  assert.equal(result.embeddedDigest, result.validatedDigest);
+
+  const mismatchedExtract = (archive, outputDir) => {
+    extractArchive(archive, outputDir);
+    if (archive !== artifactPath) {
+      fs.writeFileSync(path.join(outputDir, 'resources', 'app.asar'), 'different build');
+    }
+  };
+  assert.throws(
+    () => verifyWindowsPortableBundle({
+      artifactPath,
+      asarPath,
+      tag: '[test]',
+      extractArchive: mismatchedExtract,
+    }),
+    /portable bundle integrity check failed: embedded app\.asar SHA-256 .* does not match validated app\.asar .*rebuild Portable\.exe/,
+  );
+});
+
 test('shared Windows launch setup copies the fresh artifact and strips inherited portable state', (t) => {
   const root = fs.mkdtempSync(path.join(SCRIPTS_DIR, '.portable-helper-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -265,6 +309,7 @@ test('shared Windows launch setup copies the fresh artifact and strips inherited
     home,
     tag: '[test]',
     env: { KEEP_ME: 'yes', PORTABLE_EXECUTABLE_DIR: 'C:\\stale' },
+    verifyBundle: () => {},
   });
   assert.equal(fs.readFileSync(setup.executable, 'utf8'), 'portable bytes');
   assert.equal(setup.launchDir, path.join(home, 'portable-launch'));

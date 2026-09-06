@@ -34,6 +34,8 @@ npx electron-builder --config electron-builder.json
 # is intact, inline scripts are blocked, Trusted Types are enforced, and wasm
 # compiles.
 # (Reuses the dist/ output already built above; packages a --dir asar.)
+# On Windows, the shared portable helper extracts Portable.exe and requires the
+# embedded app.asar SHA-256 to match this validated unpacked app.asar.
 echo "Step 4: Verifying the packaged renderer (blank-window release gate)..."
 node scripts/check-packaged-electron-browser.mjs
 
