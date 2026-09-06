@@ -622,6 +622,58 @@ test('watchdog opens one alert after silence and closes it only after a newer co
   assert.equal(calls.filter((call) => call.type === 'update').length, 1);
 });
 
+test('watchdog keeps a valid alert open until a strictly newer completion arrives', async () => {
+  const alertCreatedAt = '2026-09-05T12:00:00Z';
+  const { calls, invocation } = watchdogHarness({
+    runs: [{
+      status: 'completed',
+      updated_at: '2026-09-05T11:59:59Z',
+      html_url: 'https://example.test/runs/older',
+    }],
+    openIssues: [{
+      number: 13,
+      title: watchdog.ALERT_TITLE,
+      created_at: alertCreatedAt,
+      html_url: 'https://example.test/issues/13',
+    }],
+  });
+
+  await watchdog.run(invocation);
+  assert.equal(calls.filter((call) => call.type === 'comment').length, 0);
+  assert.equal(calls.filter((call) => call.type === 'update').length, 0);
+
+  invocation.github.rest.actions.listWorkflowRuns = async () => ({
+    data: {
+      workflow_runs: [{
+        status: 'completed',
+        updated_at: alertCreatedAt,
+        html_url: 'https://example.test/runs/equal',
+      }],
+    },
+  });
+  await watchdog.run(invocation);
+  assert.equal(calls.filter((call) => call.type === 'comment').length, 0);
+  assert.equal(calls.filter((call) => call.type === 'update').length, 0);
+
+  invocation.github.rest.actions.listWorkflowRuns = async () => ({
+    data: {
+      workflow_runs: [{
+        status: 'completed',
+        updated_at: '2026-09-05T12:00:01Z',
+        html_url: 'https://example.test/runs/newer',
+      }],
+    },
+  });
+  await watchdog.run(invocation);
+  assert.equal(calls.filter((call) => call.type === 'comment').length, 1);
+  assert.equal(calls.filter((call) => call.type === 'update').length, 1);
+  assert.match(
+    calls.find((call) => call.type === 'comment').request.body,
+    /runs\/newer/,
+  );
+  assert.equal(calls.find((call) => call.type === 'update').request.state, 'closed');
+});
+
 for (const [description, createdAt] of [
   ['malformed', 'not-a-timestamp'],
   ['missing', undefined],
