@@ -160,6 +160,24 @@ test('fails a direct write whose payload is mutated through a local alias', () =
   assert.match(result.stderr, /firstSyncConfirmedAt/);
 });
 
+test('fails a direct write whose payload receives protected fields through Object.assign', () => {
+  const result = runGuard({
+    'bad-object-assign.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      const policySource = {
+        networkAccessEnabled: false,
+        firstSyncConfirmedAt: undefined,
+      };
+      const policyUpdates = {};
+      Object.assign(policyUpdates, { requestTimeout: 10_000 }, policySource);
+      updateNodeSettings('default', policyUpdates);
+    `,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /networkAccessEnabled/);
+  assert.match(result.stderr, /firstSyncConfirmedAt/);
+});
+
 test('permits unrelated aliases and alias mutations made after a CRUD write', () => {
   const result = runGuard({
     'good-mutated-variable.ts': `
@@ -175,6 +193,25 @@ test('permits unrelated aliases and alias mutations made after a CRUD write', ()
       const laterAlias = laterMutated;
       updateNodeSettings('default', laterMutated);
       laterAlias.networkAccessEnabled = false;
+    `,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OK/);
+});
+
+test('permits ordinary Object.assign merges, unrelated targets, and merges after a CRUD write', () => {
+  const result = runGuard({
+    'good-object-assign.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      const ordinaryUpdates = {};
+      Object.assign(ordinaryUpdates, { requestTimeout: 10_000 });
+      const unrelated = {};
+      Object.assign(unrelated, { networkAccessEnabled: false });
+      updateNodeSettings('default', ordinaryUpdates);
+
+      const laterMerged = {};
+      updateNodeSettings('default', laterMerged);
+      Object.assign(laterMerged, { firstSyncConfirmedAt: undefined });
     `,
   });
   assert.equal(result.status, 0, result.stderr);

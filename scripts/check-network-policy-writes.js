@@ -209,6 +209,20 @@ function assignedProperty(node) {
   return undefined;
 }
 
+function objectAssignTarget(node) {
+  if (
+    !ts.isCallExpression(node) ||
+    !ts.isPropertyAccessExpression(node.expression) ||
+    !ts.isIdentifier(node.expression.expression) ||
+    node.expression.expression.text !== 'Object' ||
+    node.expression.name.text !== 'assign' ||
+    node.arguments.length < 2
+  ) {
+    return undefined;
+  }
+  const target = unwrapExpression(node.arguments[0]);
+  return ts.isIdentifier(target) ? target.text : undefined;
+}
 function lineAndColumn(sourceFile, node) {
   const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
   return `${position.line + 1}:${position.character + 1}`;
@@ -297,6 +311,24 @@ for (const file of files) {
       const fields = localAssignedFields.get(assignment.localName) ?? new Set();
       fields.add(assignment.field);
       localAssignedFields.set(assignment.localName, fields);
+    }
+    const assignTarget = objectAssignTarget(node);
+    if (assignTarget) {
+      const mergedPolicyFields = new Set();
+      for (const source of node.arguments.slice(1)) {
+        findPolicyFields(
+          source,
+          localInitializers,
+          localAssignedFields,
+          localAliases,
+          mergedPolicyFields,
+        );
+      }
+      if (mergedPolicyFields.size > 0) {
+        const fields = localAssignedFields.get(assignTarget) ?? new Set();
+        for (const field of mergedPolicyFields) fields.add(field);
+        localAssignedFields.set(assignTarget, fields);
+      }
     }
     if (ts.isCallExpression(node)) {
       let writeName;
