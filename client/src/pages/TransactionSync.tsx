@@ -393,9 +393,19 @@ export default function TransactionSync() {
     const lower = Array.from(new Set(addresses.map((a) => a.trim().toLowerCase()).filter(Boolean)));
     if (lower.length === 0) return 0;
 
-    const matched = (await Promise.all(lower.map((value) =>
-      getVaultRepository().query<DbRecord>('records', 'records.byInputStringLower', value, 1),
-    ))).flat().filter((record) => record.type === 'address');
+    let matched: DbRecord[];
+    try {
+      matched = (await Promise.all(lower.map((value) =>
+        getVaultRepository().query<DbRecord>('records', 'records.byInputStringLower', value, 1),
+      ))).flat().filter((record) => record.type === 'address');
+    } catch {
+      toast({
+        title: "Sync Failed",
+        description: "Could not look up the flagged addresses for syncing. Please try again.",
+        variant: "destructive",
+      });
+      return 0;
+    }
     const recordIds = matched
       .map((r) => r.id)
       .filter((id): id is number => typeof id === 'number');
