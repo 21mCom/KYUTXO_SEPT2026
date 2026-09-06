@@ -260,6 +260,88 @@ test('rejects an imported but unused focused helper behind a local barrel re-exp
   assert.match(result.stderr, /missing its required restore selector button-open-restore/);
 });
 
+test('accepts required focused proof fragments reached through an aliased named barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { proveRestore as runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function proveRestore(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects an imported but unused focused helper behind an aliased named barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { proveRestore as runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function proveRestore(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('accepts required focused proof fragments reached through a default-as-named barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { default as runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export default function proveRestore(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects an imported but unused focused helper behind a default-as-named barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { default as runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export default function proveRestore(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
 test('accepts required focused proof fragments reached through multiple local barrels', () => {
   const focused = validFocusedProof();
   const fragment = "page.getByTestId('button-open-restore');";
