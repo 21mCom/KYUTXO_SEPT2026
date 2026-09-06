@@ -25,7 +25,10 @@ function assertSampleMutationIsRejected(t, publicScript, checkoutPrefix) {
   const checkout = fs.mkdtempSync(path.join(os.tmpdir(), checkoutPrefix));
   t.after(() => fs.rmSync(checkout, { recursive: true, force: true }));
 
-  const sampleName = 'tracked-release-sample.pdf';
+  const sampleNames = [
+    'tracked-release-sample.pdf',
+    'tracked-release-sample.docx',
+  ];
   const sourceSample = path.join(ROOT, 'proof-of-funds-Alice_Example-2026-06-30.pdf');
   const sourceBytesBefore = fs.readFileSync(sourceSample);
   const unguardedScript = `${publicScript}:unguarded`;
@@ -34,10 +37,18 @@ function assertSampleMutationIsRejected(t, publicScript, checkoutPrefix) {
     path.join(ROOT, 'scripts/check-release-fixtures.mjs'),
     path.join(checkout, 'scripts/check-release-fixtures.mjs'),
   );
-  fs.writeFileSync(path.join(checkout, sampleName), 'original sample bytes');
+  for (const sampleName of sampleNames) {
+    fs.writeFileSync(path.join(checkout, sampleName), `original bytes for ${sampleName}`);
+  }
   fs.writeFileSync(
     path.join(checkout, 'scripts/rewrite-sample.mjs'),
-    `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(sampleName)}, 'rewritten');\n`,
+    [
+      `import fs from 'node:fs';`,
+      ...sampleNames.map(
+        (sampleName) => `fs.writeFileSync(${JSON.stringify(sampleName)}, 'rewritten');`,
+      ),
+      '',
+    ].join('\n'),
   );
   fs.writeFileSync(
     path.join(checkout, 'package.json'),
@@ -58,8 +69,10 @@ function assertSampleMutationIsRejected(t, publicScript, checkoutPrefix) {
   const output = `${result.stdout}\n${result.stderr}`;
 
   assert.equal(result.status, 1, output);
-  assert.match(output, /test command modified 1 checked-in sample document/);
-  assert.match(output, new RegExp(sampleName.replace('.', '\\.')));
+  assert.match(output, /test command modified 2 checked-in sample document/);
+  for (const sampleName of sampleNames) {
+    assert.match(output, new RegExp(sampleName.replace('.', '\\.')));
+  }
   assert.deepEqual(fs.readFileSync(sourceSample), sourceBytesBefore);
 }
 
