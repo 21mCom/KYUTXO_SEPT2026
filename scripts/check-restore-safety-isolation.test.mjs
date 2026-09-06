@@ -164,6 +164,61 @@ test('rejects required focused proof fragments in an unused arrow helper', () =>
   assert.match(result.stderr, /missing its required restore selector button-open-restore/);
 });
 
+test('rejects required focused proof fragments in an imported but unused helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { deadRestoreProof } from './restore-helper.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export function deadRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('accepts required focused proof fragments reached through an imported helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helper.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('accepts required focused proof fragments reached through a default-imported helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import runRestoreProof from './restore-helper.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export default function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test('rejects backup imports and restore selectors in the inbox check', () => {
   const result = runFixture({
     inbox: [

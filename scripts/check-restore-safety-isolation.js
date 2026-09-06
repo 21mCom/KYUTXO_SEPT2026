@@ -76,82 +76,188 @@ const focusedRequirements = [
 ];
 
 function reachedFocusedSyntax(source) {
-  const sourceFile = ts.createSourceFile(
-    focusedRelative,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.JS,
-  );
-  if (sourceFile.parseDiagnostics.length > 0) {
-    for (const diagnostic of sourceFile.parseDiagnostics) {
-      failures.push(
-        `${focusedRelative} could not be parsed: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`,
-      );
+  const modules = new Map();
+
+  function parseModule(relative, suppliedSource) {
+    if (modules.has(relative)) return modules.get(relative);
+    const moduleSource = suppliedSource ?? readRequired(relative);
+    const sourceFile = ts.createSourceFile(
+      relative,
+      moduleSource,
+      ts.ScriptTarget.Latest,
+      true,
+      relative.endsWith('.ts') || relative.endsWith('.tsx')
+        ? ts.ScriptKind.TS
+        : ts.ScriptKind.JS,
+    );
+    const module = {
+      relative,
+      sourceFile,
+      localFunctions: new Map(),
+      imports: new Map(),
+      exports: new Map(),
+      dependencies: [],
+    };
+    modules.set(relative, module);
+    if (sourceFile.parseDiagnostics.length > 0) {
+      for (const diagnostic of sourceFile.parseDiagnostics) {
+        failures.push(
+          `${relative} could not be parsed: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`,
+        );
+      }
+      return module;
     }
-    return '';
-  }
 
-  const localFunctions = new Map();
-  function collectLocalFunctions(node) {
-    if (ts.isFunctionDeclaration(node) && node.name && node.body) {
-      localFunctions.set(node.name.text, node);
-    } else if (ts.isVariableDeclaration(node) &&
-        ts.isIdentifier(node.name) &&
-        node.initializer &&
-        (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
-      localFunctions.set(node.name.text, node.initializer);
+    function collectLocalFunctions(node) {
+      if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+        module.localFunctions.set(node.name.text, node);
+      } else if (ts.isVariableDeclaration(node) &&
+          ts.isIdentifier(node.name) &&
+          node.initializer &&
+          (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+        module.localFunctions.set(node.name.text, node.initializer);
+      }
+      ts.forEachChild(node, collectLocalFunctions);
     }
-    ts.forEachChild(node, collectLocalFunctions);
-  }
-  collectLocalFunctions(sourceFile);
+    collectLocalFunctions(sourceFile);
 
-  const reached = [];
-  const visitedFunctions = new Set();
-
-  function visitExpression(node) {
-    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return;
-    reached.push(node.getText(sourceFile));
-    if (ts.isCallExpression(node)) {
-      let callee = node.expression;
-      while (ts.isPropertyAccessExpression(callee)) callee = callee.expression;
-      if (ts.isIdentifier(callee)) {
-        const declaration = localFunctions.get(callee.text);
-        if (declaration && !visitedFunctions.has(declaration)) {
-          visitedFunctions.add(declaration);
-          if (ts.isBlock(declaration.body)) {
-            visitStatements(declaration.body.statements);
+    for (const statement of sourceFile.statements) {
+      if (ts.isFunctionDeclaration(statement) &&
+          statement.name &&
+          statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword)) {
+        module.exports.set('default', { local: statement.name.text });
+      }
+      if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+        const target = resolveLocalImport(relative, statement.moduleSpecifier.text);
+        if (!target) continue;
+        module.dependencies.push(target);
+        const clause = statement.importClause;
+        if (clause?.name) module.imports.set(clause.name.text, { target, imported: 'default' });
+        if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+          for (const element of clause.namedBindings.elements) {
+            module.imports.set(element.name.text, {
+              target,
+              imported: element.propertyName?.text ?? element.name.text,
+            });
+          }
+        } else if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+          module.imports.set(clause.namedBindings.name.text, { target, namespace: true });
+        }
+      } else if (ts.isExportDeclaration(statement)) {
+        if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+          const target = resolveLocalImport(relative, statement.moduleSpecifier.text);
+          if (!target) continue;
+          module.dependencies.push(target);
+          if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+            for (const element of statement.exportClause.elements) {
+              module.exports.set(element.name.text, {
+                target,
+                imported: element.propertyName?.text ?? element.name.text,
+              });
+            }
           } else {
-            visitExpression(declaration.body);
+            module.exports.set('*', { target, star: true });
+          }
+        } else if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+          for (const element of statement.exportClause.elements) {
+            module.exports.set(element.name.text, {
+              local: element.propertyName?.text ?? element.name.text,
+            });
           }
         }
       }
     }
-    ts.forEachChild(node, visitExpression);
+    return module;
   }
 
-  function visitStatement(statement) {
+  const entryModule = parseModule(focusedRelative, source);
+
+  const reached = [];
+  const visitedFunctions = new Set();
+  const visitedModules = new Set();
+
+  function resolveExport(module, name, seen = new Set()) {
+    const key = `${module.relative}:${name}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    const localName = name === 'default' ? 'default' : name;
+    if (module.localFunctions.has(localName)) {
+      return { module, declaration: module.localFunctions.get(localName) };
+    }
+    const direct = module.exports.get(name);
+    if (direct) {
+      if (direct.local && module.localFunctions.has(direct.local)) {
+        return { module, declaration: module.localFunctions.get(direct.local) };
+      }
+      return resolveExport(parseModule(direct.target), direct.imported, seen);
+    }
+    for (const entry of module.exports.values()) {
+      if (entry.star) {
+        const resolved = resolveExport(parseModule(entry.target), name, seen);
+        if (resolved) return resolved;
+      }
+    }
+    return null;
+  }
+
+  function resolveCall(module, expression) {
+    if (ts.isIdentifier(expression)) {
+      const local = module.localFunctions.get(expression.text);
+      if (local) return { module, declaration: local };
+      const imported = module.imports.get(expression.text);
+      if (imported && !imported.namespace) {
+        return resolveExport(parseModule(imported.target), imported.imported);
+      }
+    }
+    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+      const imported = module.imports.get(expression.expression.text);
+      if (imported?.namespace) {
+        return resolveExport(parseModule(imported.target), expression.name.text);
+      }
+    }
+    return null;
+  }
+
+  function visitExpression(module, node) {
+    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return;
+    reached.push(node.getText(module.sourceFile));
+    if (ts.isCallExpression(node)) {
+      const resolved = resolveCall(module, node.expression);
+      if (resolved && !visitedFunctions.has(resolved.declaration)) {
+        visitedFunctions.add(resolved.declaration);
+        if (ts.isBlock(resolved.declaration.body)) {
+          visitStatements(resolved.module, resolved.declaration.body.statements);
+        } else {
+          visitExpression(resolved.module, resolved.declaration.body);
+        }
+      }
+    }
+    ts.forEachChild(node, (child) => visitExpression(module, child));
+  }
+
+  function visitStatement(module, statement) {
+    if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) return true;
     if (ts.isFunctionDeclaration(statement)) return true;
     if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) {
-      reached.push(statement.getText(sourceFile));
-      if (statement.expression) visitExpression(statement.expression);
+      reached.push(statement.getText(module.sourceFile));
+      if (statement.expression) visitExpression(module, statement.expression);
       return false;
     }
     if (ts.isIfStatement(statement)) {
-      reached.push(statement.expression.getText(sourceFile));
-      visitExpression(statement.expression);
+      reached.push(statement.expression.getText(module.sourceFile));
+      visitExpression(module, statement.expression);
       if (statement.expression.kind === ts.SyntaxKind.FalseKeyword) {
-        if (statement.elseStatement) visitStatement(statement.elseStatement);
+        if (statement.elseStatement) visitStatement(module, statement.elseStatement);
       } else if (statement.expression.kind === ts.SyntaxKind.TrueKeyword) {
-        visitStatement(statement.thenStatement);
+        visitStatement(module, statement.thenStatement);
       } else {
-        visitStatement(statement.thenStatement);
-        if (statement.elseStatement) visitStatement(statement.elseStatement);
+        visitStatement(module, statement.thenStatement);
+        if (statement.elseStatement) visitStatement(module, statement.elseStatement);
       }
       return true;
     }
     if (ts.isBlock(statement)) {
-      visitStatements(statement.statements);
+      visitStatements(module, statement.statements);
       return true;
     }
     if (ts.isVariableStatement(statement)) {
@@ -161,23 +267,30 @@ function reachedFocusedSyntax(source) {
             !ts.isFunctionExpression(declaration.initializer)),
       );
       for (const declaration of executableDeclarations) {
-        reached.push(declaration.getText(sourceFile));
-        if (declaration.initializer) visitExpression(declaration.initializer);
+        reached.push(declaration.getText(module.sourceFile));
+        if (declaration.initializer) visitExpression(module, declaration.initializer);
       }
       return true;
     }
-    reached.push(statement.getText(sourceFile));
-    ts.forEachChild(statement, visitExpression);
+    reached.push(statement.getText(module.sourceFile));
+    ts.forEachChild(statement, (child) => visitExpression(module, child));
     return true;
   }
 
-  function visitStatements(statements) {
+  function visitStatements(module, statements) {
     for (const statement of statements) {
-      if (!visitStatement(statement)) break;
+      if (!visitStatement(module, statement)) break;
     }
   }
 
-  visitStatements(sourceFile.statements);
+  function visitModule(module) {
+    if (visitedModules.has(module.relative)) return;
+    visitedModules.add(module.relative);
+    for (const dependency of module.dependencies) visitModule(parseModule(dependency));
+    visitStatements(module, module.sourceFile.statements);
+  }
+
+  visitModule(entryModule);
   return reached.join('\n');
 }
 
