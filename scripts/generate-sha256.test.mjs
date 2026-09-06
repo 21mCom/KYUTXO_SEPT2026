@@ -4,7 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { findExecutables, sha256File, writeChecksums } from './generate-sha256.mjs';
+import {
+  findExecutables,
+  sha256File,
+  verifyChecksums,
+  writeChecksums,
+} from './generate-sha256.mjs';
 
 test('writes the standard SHA-256 sidecar format for every executable', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-checksum-'));
@@ -33,5 +38,64 @@ test('fails closed when a directory contains no executable', () => {
     assert.throws(() => writeChecksums([dir]), /no \.exe release assets found/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('verifies every executable against its matching sidecar', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-checksum-verify-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'KYUTXO-1.exe'), 'one');
+    fs.writeFileSync(path.join(dir, 'KYUTXO-2.exe'), 'two');
+    writeChecksums([dir]);
+
+    const results = verifyChecksums([dir]);
+    assert.deepEqual(results.map(({ executable }) => path.basename(executable)), [
+      'KYUTXO-1.exe',
+      'KYUTXO-2.exe',
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('rejects missing, malformed, mismatched, and duplicate sidecars', () => {
+  const cases = [
+    {
+      name: 'missing',
+      mutate(dir) { fs.rmSync(path.join(dir, 'KYUTXO.exe.sha256')); },
+      error: /missing SHA-256 sidecar/,
+    },
+    {
+      name: 'malformed',
+      mutate(dir) { fs.writeFileSync(path.join(dir, 'KYUTXO.exe.sha256'), 'not-a-checksum\n'); },
+      error: /malformed SHA-256 sidecar/,
+    },
+    {
+      name: 'mismatched',
+      mutate(dir) { fs.writeFileSync(path.join(dir, 'KYUTXO.exe'), 'altered'); },
+      error: /SHA-256 mismatch/,
+    },
+    {
+      name: 'duplicate',
+      mutate(dir) {
+        fs.copyFileSync(
+          path.join(dir, 'KYUTXO.exe.sha256'),
+          path.join(dir, 'copy.exe.sha256'),
+        );
+      },
+      error: /duplicate or unmatched SHA-256 sidecar/,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `kyutxo-checksum-${testCase.name}-`));
+    try {
+      fs.writeFileSync(path.join(dir, 'KYUTXO.exe'), 'portable bytes');
+      writeChecksums([dir]);
+      testCase.mutate(dir);
+      assert.throws(() => verifyChecksums([dir]), testCase.error);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });

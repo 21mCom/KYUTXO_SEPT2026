@@ -150,6 +150,10 @@ test('build is read-only, publishing is isolated, and every action is SHA-pinned
 test('the exact packaged executable and checksum are uploaded and released together', () => {
   assert.match(workflow, /run: npm run release:checksums/);
   assert.match(workflow, /release\/\*\.exe\.sha256/);
+  assert.match(
+    workflow,
+    /node scripts\/generate-sha256\.mjs --verify release-assets[^]*find release-assets/,
+  );
   assert.match(workflow, /find release-assets[^]*-name '\*\.exe'/);
   assert.match(workflow, /find release-assets[^]*-name '\*\.exe\.sha256'/);
   assert.match(

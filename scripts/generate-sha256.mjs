@@ -59,14 +59,71 @@ export function writeChecksums(inputs) {
   });
 }
 
-function main() {
-  const inputs = process.argv.slice(2);
-  if (inputs.length === 0) {
-    throw new Error(`Usage: node scripts/generate-sha256.mjs <exe-or-directory> [...]`);
+export function verifyChecksums(inputs) {
+  const executables = findExecutables(inputs);
+  if (executables.length === 0) {
+    throw new Error(`${TAG} no .exe release assets found`);
   }
-  for (const result of writeChecksums(inputs)) {
+
+  const directories = new Set(executables.map((executable) => path.dirname(executable)));
+  const sidecars = [];
+  for (const directory of directories) {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const candidate = path.join(directory, name);
+      if (/\.exe\.sha256$/i.test(name) && fs.statSync(candidate).isFile()) {
+        sidecars.push(candidate);
+      }
+    }
+  }
+
+  const expectedSidecars = new Set(executables.map((executable) => `${executable}.sha256`));
+  for (const sidecar of sidecars) {
+    if (!expectedSidecars.has(sidecar)) {
+      throw new Error(`${TAG} duplicate or unmatched SHA-256 sidecar: ${sidecar}`);
+    }
+  }
+
+  return executables.map((executable) => {
+    const checksumPath = `${executable}.sha256`;
+    if (!fs.existsSync(checksumPath)) {
+      throw new Error(`${TAG} missing SHA-256 sidecar for ${path.basename(executable)}`);
+    }
+
+    const text = fs.readFileSync(checksumPath, 'utf8');
+    const match = /^([a-f0-9]{64})  ([^\r\n/\\]+)\r?\n?$/i.exec(text);
+    if (!match) {
+      throw new Error(`${TAG} malformed SHA-256 sidecar: ${checksumPath}`);
+    }
+    if (match[2] !== path.basename(executable)) {
+      throw new Error(
+        `${TAG} SHA-256 sidecar filename mismatch for ${path.basename(executable)}: ${match[2]}`,
+      );
+    }
+
+    const expectedDigest = match[1].toLowerCase();
+    const actualDigest = sha256File(executable);
+    if (actualDigest !== expectedDigest) {
+      throw new Error(
+        `${TAG} SHA-256 mismatch for ${path.basename(executable)}: ` +
+        `expected ${expectedDigest}, got ${actualDigest}`,
+      );
+    }
+    return { executable, checksumPath, digest: actualDigest };
+  });
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  const verify = args[0] === '--verify';
+  const inputs = verify ? args.slice(1) : args;
+  if (inputs.length === 0) {
+    throw new Error(
+      `Usage: node scripts/generate-sha256.mjs [--verify] <exe-or-directory> [...]`,
+    );
+  }
+  for (const result of verify ? verifyChecksums(inputs) : writeChecksums(inputs)) {
     console.log(
-      `${TAG} ${path.relative(ROOT, result.checksumPath)} -> ${result.digest}`,
+      `${TAG} ${verify ? 'verified ' : ''}${path.relative(ROOT, result.checksumPath)} -> ${result.digest}`,
     );
   }
 }

@@ -326,6 +326,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout checksum verifier
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
       - name: Download validated release assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -379,10 +382,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: v${{ needs.build-windows.outputs.version }}
         run: |
+          set -euo pipefail
+          node scripts/generate-sha256.mjs --verify release-assets
           mapfile -t EXES < <(find release-assets -maxdepth 1 -type f -name '*.exe' -print)
           mapfile -t SUMS < <(find release-assets -maxdepth 1 -type f -name '*.exe.sha256' -print)
           mapfile -t SMOKE_LOGS < <(find native-power-smoke -maxdepth 1 -type f -name '*.log' -print)
-          if [ "${#EXES[@]}" -eq 0 ] || [ "${#SUMS[@]}" -eq 0 ] || [ "${#SMOKE_LOGS[@]}" -ne 5 ]; then
+          if [ "${#EXES[@]}" -eq 0 ] || [ "${#EXES[@]}" -ne "${#SUMS[@]}" ] || [ "${#SMOKE_LOGS[@]}" -ne 5 ]; then
             echo "::error::Validated executable, SHA-256 sidecar, or native power evidence is missing"
             exit 1
           fi
