@@ -13,6 +13,7 @@ import {
   torProxySettingsFromNodeSettings,
 } from '@/lib/tor-proxy-settings-sync';
 import {
+  failRuntimeNetworkSettingsClosed,
   getForgottenNetworkSourceUpdates,
   replaceRuntimeNetworkSettings,
   serializeNodeSettingsWrite,
@@ -129,10 +130,15 @@ export function useNodeSettings() {
         ...existing,
         ...updates,
       };
-      if (existing) {
-        await updateStoredNodeSettings('default', updates);
-      } else {
-        await putNodeSettings(latestSettings);
+      try {
+        if (existing) {
+          await updateStoredNodeSettings('default', updates);
+        } else {
+          await putNodeSettings(latestSettings);
+        }
+      } catch (error) {
+        failRuntimeNetworkSettingsClosed(existing, nodeSettings);
+        throw error;
       }
     });
   };
@@ -141,10 +147,15 @@ export function useNodeSettings() {
     replaceRuntimeNetworkSettings(getResetSettings, nodeSettings);
     await serializeNodeSettingsWrite(async () => {
       const existing = await getNodeSettings('default');
-      await putNodeSettings(getResetSettings({
-        ...DEFAULT_NODE_SETTINGS,
-        ...existing,
-      }));
+      try {
+        await putNodeSettings(getResetSettings({
+          ...DEFAULT_NODE_SETTINGS,
+          ...existing,
+        }));
+      } catch (error) {
+        failRuntimeNetworkSettingsClosed(existing, nodeSettings);
+        throw error;
+      }
     });
   };
 

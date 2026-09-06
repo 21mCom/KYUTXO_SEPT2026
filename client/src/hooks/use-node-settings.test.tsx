@@ -173,6 +173,67 @@ describe("useNodeSettings", () => {
     expect(() => assertNetworkAccessAllowed()).toThrow("No network source is configured");
   });
 
+  it("fails closed when enabling network access cannot be persisted", async () => {
+    const stored = {
+      id: "default",
+      providerType: "mempool-space",
+      networkPrivacyMode: "public-direct" as const,
+      networkOnboardingStage: "complete" as const,
+      networkAccessEnabled: false,
+    };
+    mockQueryReturn = stored;
+    nodeSettingsCrudMocks.getNodeSettings.mockResolvedValue(stored);
+    nodeSettingsCrudMocks.updateNodeSettings.mockRejectedValueOnce(new Error("save rejected"));
+    const { result } = renderHook(() => useNodeSettings());
+
+    await expect(act(async () => {
+      await result.current.updateSettings({ networkAccessEnabled: true });
+    })).rejects.toThrow("save rejected");
+
+    expect(() => assertNetworkAccessAllowed()).toThrow("Network access is offline");
+  });
+
+  it("stays offline when disabling network access cannot be persisted", async () => {
+    const stored = {
+      id: "default",
+      providerType: "mempool-space",
+      networkPrivacyMode: "public-direct" as const,
+      networkOnboardingStage: "complete" as const,
+      networkAccessEnabled: true,
+    };
+    mockQueryReturn = stored;
+    nodeSettingsCrudMocks.getNodeSettings.mockResolvedValue(stored);
+    nodeSettingsCrudMocks.updateNodeSettings.mockRejectedValueOnce(new Error("save rejected"));
+    const { result } = renderHook(() => useNodeSettings());
+
+    await expect(act(async () => {
+      await result.current.updateSettings({ networkAccessEnabled: false });
+    })).rejects.toThrow("save rejected");
+
+    expect(() => assertNetworkAccessAllowed()).toThrow("Network access is offline");
+  });
+
+  it("restores the stored source but stays offline when forgetting it cannot be persisted", async () => {
+    const stored = {
+      id: "default",
+      providerType: "custom-electrs",
+      customUrl: "http://umbrel.local:3006/api",
+      networkPrivacyMode: "own-node" as const,
+      networkOnboardingStage: "complete" as const,
+      networkAccessEnabled: true,
+    };
+    mockQueryReturn = stored;
+    nodeSettingsCrudMocks.getNodeSettings.mockResolvedValue(stored);
+    nodeSettingsCrudMocks.updateNodeSettings.mockRejectedValueOnce(new Error("save rejected"));
+    const { result } = renderHook(() => useNodeSettings());
+
+    await expect(act(async () => {
+      await result.current.forgetNetworkSource();
+    })).rejects.toThrow("save rejected");
+
+    expect(() => assertNetworkAccessAllowed()).toThrow("Network access is offline");
+  });
+
   it("keeps an optimistic offline policy authoritative across a rerender", async () => {
     mockQueryReturn = {
       id: "default",
@@ -272,6 +333,26 @@ describe("useNodeSettings", () => {
       networkAccessEnabled: false,
       firstSyncConfirmedAt: 123,
     }));
+  });
+
+  it("fails closed when resetting settings cannot be persisted", async () => {
+    const stored = {
+      id: "default",
+      providerType: "custom-electrs",
+      networkPrivacyMode: "own-node" as const,
+      networkOnboardingStage: "complete" as const,
+      networkAccessEnabled: true,
+    };
+    mockQueryReturn = stored;
+    nodeSettingsCrudMocks.getNodeSettings.mockResolvedValue(stored);
+    nodeSettingsCrudMocks.putNodeSettings.mockRejectedValueOnce(new Error("save rejected"));
+    const { result } = renderHook(() => useNodeSettings());
+
+    await expect(act(async () => {
+      await result.current.resetToDefaults();
+    })).rejects.toThrow("save rejected");
+
+    expect(() => assertNetworkAccessAllowed()).toThrow("Network access is offline");
   });
 
   it("persists a remote-DNS migration for legacy socks5 proxy settings", async () => {

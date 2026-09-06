@@ -68,6 +68,22 @@ export function replaceRuntimeNetworkSettings(
   runtimeSettings = replace(runtimeSettings ?? fallback);
 }
 
+/**
+ * A rejected settings write must never leave an optimistic network policy
+ * active. Restore the authoritative snapshot, but force access offline for the
+ * rest of the session so both failed enables and failed disables fail closed.
+ */
+export function failRuntimeNetworkSettingsClosed(
+  persisted: NodeSettings | undefined,
+  fallback: NodeSettings,
+): void {
+  runtimeSettings = {
+    ...fallback,
+    ...persisted,
+    networkAccessEnabled: false,
+  };
+}
+
 export function isExplicitNetworkChoice(settings: NodeSettings): boolean {
   return settings.networkPrivacyMode !== undefined;
 }
