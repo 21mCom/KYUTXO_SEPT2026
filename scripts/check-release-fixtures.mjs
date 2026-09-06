@@ -45,6 +45,10 @@ function snapshot(root, files) {
   return new Map(files.map((file) => [file, digest(path.join(root, file))]));
 }
 
+function displayFilename(file) {
+  return /[\u0000-\u001f\u007f-\u009f]/u.test(file) ? JSON.stringify(file) : file;
+}
+
 function main() {
   const separator = process.argv.indexOf('--');
   const command = separator === -1 ? [] : process.argv.slice(separator + 1);
@@ -91,7 +95,9 @@ function main() {
     console.error(
       `${TAG} FAIL: test command modified ${modified.length} checked-in sample document(s):`,
     );
-    for (const { file, status } of modified) console.error(`  ${status}: ${file}`);
+    for (const { file, status } of modified) {
+      console.error(`  ${status}: ${displayFilename(file)}`);
+    }
     console.error(`${TAG} Files were left untouched so the changes can be inspected.`);
   }
 

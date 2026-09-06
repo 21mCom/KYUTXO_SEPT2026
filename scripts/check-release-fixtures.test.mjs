@@ -43,22 +43,26 @@ test('passes when a test command leaves tracked documents unchanged', (t) => {
 test('labels deleted and rewritten documents together without reverting remaining damage', (t) => {
   const root = makeRepo();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const unusualFilename = 'damaged\nsample.pdf';
+  fs.writeFileSync(path.join(root, unusualFilename), 'unusual original');
+  spawnSync('git', ['add', unusualFilename], { cwd: root });
   fs.writeFileSync(path.join(root, 'sample.pdf'), 'pre-existing user edit');
 
   const result = run(
     root,
     [
       `const fs = require('node:fs')`,
-      `fs.rmSync('sample.pdf')`,
+      `fs.rmSync(${JSON.stringify(unusualFilename)})`,
       `fs.writeFileSync('nested.docx', 'test rewrite')`,
     ].join(';'),
   );
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /deleted: sample\.pdf/);
+  assert.match(result.stderr, /deleted: "damaged\\nsample\.pdf"/);
   assert.match(result.stderr, /rewritten: nested\.docx/);
+  assert.doesNotMatch(result.stderr, /rewritten: "nested\.docx"/);
   assert.match(result.stderr, /left untouched/);
-  assert.equal(fs.existsSync(path.join(root, 'sample.pdf')), false);
+  assert.equal(fs.existsSync(path.join(root, unusualFilename)), false);
   assert.equal(fs.readFileSync(path.join(root, 'nested.docx'), 'utf8'), 'test rewrite');
 });
 
