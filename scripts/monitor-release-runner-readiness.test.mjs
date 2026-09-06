@@ -64,6 +64,48 @@ function workflowCron(workflow) {
   return match[1];
 }
 
+function cronFieldValues(field, minimum, maximum) {
+  const values = new Set();
+  for (const item of field.split(',')) {
+    const [range, stepText] = item.split('/');
+    const step = stepText === undefined ? 1 : Number(stepText);
+    const [start, end] = range === '*'
+      ? [minimum, maximum]
+      : range.includes('-')
+        ? range.split('-').map(Number)
+        : [Number(range), Number(range)];
+    for (let value = start; value <= end; value += step) values.add(value);
+  }
+  return values;
+}
+
+function maximumScheduleGapMinutes(expression) {
+  assertGithubActionsCron(expression);
+  const fields = expression.trim().split(/\s+/);
+  const allowed = fields.map((field, index) => (
+    cronFieldValues(field, ...GITHUB_ACTIONS_CRON_FIELD_RANGES[index])
+  ));
+  const matches = [];
+  const start = Date.UTC(2028, 0, 1);
+  const end = start + 8 * 24 * 60 * 60_000;
+  for (let timestamp = start; timestamp < end; timestamp += 60_000) {
+    const date = new Date(timestamp);
+    const minuteMatches = allowed[0].has(date.getUTCMinutes());
+    const hourMatches = allowed[1].has(date.getUTCHours());
+    const monthMatches = allowed[3].has(date.getUTCMonth() + 1);
+    const dayOfMonthMatches = allowed[2].has(date.getUTCDate());
+    const dayOfWeekMatches = allowed[4].has(date.getUTCDay());
+    const dayMatches = fields[2] === '*' || fields[4] === '*'
+      ? dayOfMonthMatches && dayOfWeekMatches
+      : dayOfMonthMatches || dayOfWeekMatches;
+    if (minuteMatches && hourMatches && monthMatches && dayMatches) matches.push(timestamp);
+  }
+  assert.ok(matches.length >= 2, `schedule must run at least twice in the evaluation window: ${expression}`);
+  return Math.max(
+    ...matches.slice(1).map((timestamp, index) => (timestamp - matches[index]) / 60_000),
+  );
+}
+
 test('GitHub Actions cron validation rejects malformed schedules', () => {
   for (const expression of [
     '*/5 * * *',
@@ -77,6 +119,12 @@ test('GitHub Actions cron validation rejects malformed schedules', () => {
   ]) {
     assert.throws(() => assertGithubActionsCron(expression), undefined, expression);
   }
+});
+
+test('maximum schedule gap is derived from valid GitHub Actions cron expressions', () => {
+  assert.equal(maximumScheduleGapMinutes('*/5 * * * *'), 5);
+  assert.equal(maximumScheduleGapMinutes('7,22,37,52 * * * *'), 15);
+  assert.equal(maximumScheduleGapMinutes('0 */2 * * *'), 120);
 });
 
 test('stale queued readiness jobs resolve to their exact release-runner labels', () => {
@@ -238,7 +286,11 @@ test('hosted monitor is scheduled, least-privilege, and does not manage runners'
   );
   const cron = workflowCron(workflow);
   assertGithubActionsCron(cron);
-  assert.equal(cron, '*/5 * * * *');
+  const maximumGapMinutes = maximumScheduleGapMinutes(cron);
+  assert.ok(
+    maximumGapMinutes <= THRESHOLD_MINUTES,
+    `monitor maximum schedule gap (${maximumGapMinutes}m) must not exceed stale-runner threshold (${THRESHOLD_MINUTES}m)`,
+  );
   assert.match(workflow, /runs-on: ubuntu-latest/);
   assert.match(workflow, /permissions:\s*\n\s+actions: read\s*\n\s+contents: read\s*\n\s+issues: write/);
   assert.doesNotMatch(workflow, /self-hosted|administration:|organization:|runner-groups:/);
@@ -386,7 +438,11 @@ test('independent watchdog is scheduled, least-privilege, and never uses release
   );
   const cron = workflowCron(workflow);
   assertGithubActionsCron(cron);
-  assert.equal(cron, '7,22,37,52 * * * *');
+  const maximumGapMinutes = maximumScheduleGapMinutes(cron);
+  assert.ok(
+    maximumGapMinutes * 2 <= watchdog.SILENCE_MINUTES,
+    `watchdog maximum schedule gap (${maximumGapMinutes}m) must leave a full extra cadence inside its silence threshold (${watchdog.SILENCE_MINUTES}m)`,
+  );
   assert.match(workflow, /runs-on: ubuntu-latest/);
   assert.match(workflow, /permissions:\s*\n\s+actions: read\s*\n\s+contents: read\s*\n\s+issues: write/);
   assert.doesNotMatch(workflow, /self-hosted|administration:|organization:|runner-groups:/);
