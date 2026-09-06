@@ -34,11 +34,17 @@ const PASSWORD = 'PackagedForgottenSource#2026';
 const CUSTOM_URL = 'https://node.forgotten-source.test';
 const TOR_PROXY = 'socks5h://127.0.0.1:19050';
 const ELECTRUM_HOST = 'electrum.forgotten-source.test';
+const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const TASKKILL_TIMEOUT_MS = 15_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function run(command, args) {
   console.log(`${TAG} $ ${command} ${args.join(' ')}`);
-  if (spawnSync(command, args, { cwd: ROOT, stdio: 'inherit' }).status !== 0) {
+  const result = spawnSync(command, args, { cwd: ROOT, stdio: 'inherit', timeout: BUILD_COMMAND_TIMEOUT_MS });
+  if (result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM') {
+    throw new Error(`${TAG} timed out during package build command ${command} after ${BUILD_COMMAND_TIMEOUT_MS}ms`);
+  }
+  if (result.status !== 0) {
     throw new Error(`${TAG} command failed: ${command}`);
   }
 }
@@ -114,7 +120,9 @@ async function rendererPage(browser) {
 async function stop(child) {
   if (!child?.pid) return;
   if (IS_WINDOWS) {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { cwd: ROOT, stdio: 'inherit' });
+    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+      cwd: ROOT, stdio: 'inherit', timeout: TASKKILL_TIMEOUT_MS,
+    });
     return;
   }
   try { child.kill('SIGTERM'); } catch {}

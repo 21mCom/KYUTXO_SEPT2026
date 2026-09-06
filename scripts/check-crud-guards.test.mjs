@@ -45,7 +45,7 @@ function runModifiedScanner(modifiedSrc, extraArgs = []) {
   const tmpScanner = path.join(tmpDir, 'check-crud-guards.js');
   fs.writeFileSync(tmpScanner, modifiedSrc);
   try {
-    return spawnSync('node', [tmpScanner, ...extraArgs], { cwd: ROOT, encoding: 'utf8' });
+    return spawnSync('node', [tmpScanner, ...extraArgs], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

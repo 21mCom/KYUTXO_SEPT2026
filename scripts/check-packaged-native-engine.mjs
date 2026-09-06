@@ -106,10 +106,20 @@ const NATIVE_REL = path.join(
   'better_sqlite3.node',
 );
 const TAG = '[packaged-native-engine]';
+const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
 
 function run(cmd, args) {
   console.log(`${TAG} $ ${cmd} ${args.join(' ')}`);
-  execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit' });
+  try {
+    execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit', timeout: BUILD_COMMAND_TIMEOUT_MS });
+  } catch (error) {
+    if (error?.code === 'ETIMEDOUT' || error?.killed === true) {
+      throw new Error(`${TAG} timed out during package build command ${cmd} after ${BUILD_COMMAND_TIMEOUT_MS}ms`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 }
 
 function buildAsar() {

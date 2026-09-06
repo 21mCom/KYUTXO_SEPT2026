@@ -127,6 +127,7 @@ describe('browser-check unlock guard', () => {
       const result = spawnSync(process.execPath, [unlockGuardPath], {
         cwd: root,
         encoding: 'utf8',
+        timeout: 30_000,
         env: {
           ...process.env,
           BROWSER_CHECK_UNLOCK_GUARD_SCRIPTS_DIR: fixtureScriptsDir,

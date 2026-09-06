@@ -13,11 +13,11 @@ const SCRIPT = path.resolve(
 
 function makeRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'release-fixtures-test-'));
-  spawnSync('git', ['init', '-q'], { cwd: root });
+  spawnSync('git', ['init', '-q'], { cwd: root, timeout: 30_000 });
   fs.writeFileSync(path.join(root, 'sample.pdf'), 'original pdf');
   fs.writeFileSync(path.join(root, 'nested.docx'), 'original docx');
   fs.writeFileSync(path.join(root, 'notes.txt'), 'not a protected document');
-  spawnSync('git', ['add', '.'], { cwd: root });
+  spawnSync('git', ['add', '.'], { cwd: root, timeout: 30_000 });
   return root;
 }
 
@@ -26,6 +26,7 @@ function run(root, source) {
     cwd: root,
     env: { ...process.env, CHECK_RELEASE_FIXTURES_ROOT: root },
     encoding: 'utf8',
+    timeout: 30_000,
   });
 }
 

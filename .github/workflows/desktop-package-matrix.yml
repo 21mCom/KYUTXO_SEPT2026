@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   packaged-native-boundary:
+    timeout-minutes: 60
     name: ${{ matrix.platform }}-${{ matrix.arch }}
     strategy:
       fail-fast: false

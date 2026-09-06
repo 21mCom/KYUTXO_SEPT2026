@@ -7,12 +7,14 @@ import { fileURLToPath } from 'node:url';
 
 const TAG = '[release-runner-readiness]';
 const PLATFORM_ALIASES = Object.freeze({ win32: 'win', darwin: 'darwin', linux: 'linux' });
+const COMMAND_PROBE_TIMEOUT_MS = 30_000;
 
 function run(command, args) {
   return spawnSync(command, args, {
     encoding: 'utf8',
     windowsHide: true,
     env: process.env,
+    timeout: COMMAND_PROBE_TIMEOUT_MS,
   });
 }
 

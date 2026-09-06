@@ -27,13 +27,13 @@ const MANAGED_KEYS = [...installerSource.matchAll(/^install_check "([^"]+)"/gm)]
 
 function makeRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'install-hooks-test-'));
-  const init = spawnSync('git', ['init', '-q', dir], { encoding: 'utf8' });
+  const init = spawnSync('git', ['init', '-q', dir], { encoding: 'utf8', timeout: 30_000 });
   assert.equal(init.status, 0, init.stderr);
   return dir;
 }
 
 function runInstaller(repoDir) {
-  const result = spawnSync('sh', [INSTALLER], { cwd: repoDir, encoding: 'utf8' });
+  const result = spawnSync('sh', [INSTALLER], { cwd: repoDir, encoding: 'utf8', timeout: 30_000 });
   assert.equal(result.status, 0, result.stderr);
   return result;
 }
@@ -258,7 +258,7 @@ test('scanner in full-scan mode flags a raw-Dexie write inside a .test.ts file',
 
   let result;
   try {
-    result = spawnSync('node', [SCANNER], { cwd: ROOT, encoding: 'utf8' });
+    result = spawnSync('node', [SCANNER], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
   } finally {
     fs.rmSync(fixtureDir, { recursive: true, force: true });
   }
@@ -292,7 +292,7 @@ test('scanner in --production-only mode ignores a raw-Dexie write inside a .test
 
   let result;
   try {
-    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8' });
+    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
   } finally {
     fs.rmSync(fixtureDir, { recursive: true, force: true });
   }
@@ -325,7 +325,7 @@ test('scanner in --production-only mode flags a raw-Dexie write inside a non-tes
 
   let result;
   try {
-    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8' });
+    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
   } finally {
     fs.rmSync(fixtureDir, { recursive: true, force: true });
   }
@@ -365,7 +365,7 @@ test('scanner in --production-only mode flags a raw-Dexie write in a file whose 
 
   let result;
   try {
-    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8' });
+    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
   } finally {
     fs.rmSync(fixtureDir, { recursive: true, force: true });
   }
@@ -408,7 +408,7 @@ test('scanner in --production-only mode flags a raw-Dexie write inside a non-tes
 
   let result;
   try {
-    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8' });
+    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
   } finally {
     fs.rmSync(fixtureFile, { force: true });
     // Only remove the directory if we created it.

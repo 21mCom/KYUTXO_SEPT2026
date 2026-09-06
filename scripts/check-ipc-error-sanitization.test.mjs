@@ -57,6 +57,7 @@ function runGuard(
     return spawnSync(process.execPath, [SCRIPT], {
       env: { ...process.env, CHECK_IPC_SANITIZATION_DIR: dir },
       encoding: 'utf8',
+      timeout: 30_000,
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

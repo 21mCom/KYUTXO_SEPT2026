@@ -45,6 +45,7 @@ function runGuard(files) {
     return spawnSync(process.execPath, [SCRIPT], {
       env: { ...process.env, CHECK_WIN32_PATH_SCRIPTS_DIR: dir },
       encoding: 'utf8',
+      timeout: 30_000,
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -119,6 +120,6 @@ test('fails loudly when there are no scripts to scan', () => {
 });
 
 test('the real scripts/ directory currently passes the guard', () => {
-  const result = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8', timeout: 30_000 });
   assert.equal(result.status, 0, result.stderr);
 });

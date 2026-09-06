@@ -72,6 +72,7 @@ function runGuard({ mainCjs = MAIN_CJS, browserCheck = BROWSER_CHECK, packagedGa
     return spawnSync(process.execPath, [SCRIPT], {
       env: { ...process.env, CHECK_TT_CSP_SYNC_ROOT: dir },
       encoding: 'utf8',
+      timeout: 30_000,
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

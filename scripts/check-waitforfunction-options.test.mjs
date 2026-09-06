@@ -25,6 +25,7 @@ function runGuard(files) {
     return spawnSync(process.execPath, [SCRIPT], {
       env: { ...process.env, CHECK_WAITFORFUNCTION_SCRIPTS_DIR: dir },
       encoding: 'utf8',
+      timeout: 30_000,
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -144,6 +145,6 @@ test('reports multiple violations across files', () => {
 });
 
 test('the real scripts directory currently passes the guard', () => {
-  const res = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' });
+  const res = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8', timeout: 30_000 });
   assert.equal(res.status, 0, res.stderr);
 });

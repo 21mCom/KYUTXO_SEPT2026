@@ -97,7 +97,7 @@ function runScanner({ scriptPatches = [], schemaOverrides = {} } = {}) {
 
     const tmpScanner = path.join(tmpDir, 'check-table-index-usage.js');
     fs.writeFileSync(tmpScanner, src);
-    return spawnSync('node', [tmpScanner], { cwd: ROOT, encoding: 'utf8' });
+    return spawnSync('node', [tmpScanner], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

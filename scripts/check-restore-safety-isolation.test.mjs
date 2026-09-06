@@ -62,6 +62,7 @@ function runFixture({
   try {
     return spawnSync(process.execPath, [guard], {
       encoding: 'utf8',
+      timeout: 30_000,
       env: { ...process.env, CHECK_RESTORE_SAFETY_ROOT: root },
       timeout: 5_000,
     });
@@ -307,6 +308,6 @@ test('rejects a guard omitted from the normal validation set', () => {
 });
 
 test('the real repository passes the guard', () => {
-  const result = spawnSync(process.execPath, [guard], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [guard], { encoding: 'utf8', timeout: 30_000 });
   assert.equal(result.status, 0, result.stderr);
 });

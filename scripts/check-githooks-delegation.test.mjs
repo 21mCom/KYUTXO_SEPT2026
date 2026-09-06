@@ -49,6 +49,7 @@ function makeFixtureDir({ preCommit = GOOD_PRE_COMMIT, prePush = GOOD_PRE_PUSH, 
 function runGuard(hooksDir) {
   return spawnSync(process.execPath, [GUARD], {
     encoding: 'utf8',
+    timeout: 30_000,
     env: { ...process.env, CHECK_GITHOOKS_DIR: hooksDir },
   });
 }
@@ -155,6 +156,6 @@ test('pre-commit that is a directory fails as not a regular file', () => {
 });
 
 test('guard still passes against the real repo .githooks (no override)', () => {
-  const result = spawnSync(process.execPath, [GUARD], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [GUARD], { encoding: 'utf8', timeout: 30_000 });
   assert.equal(result.status, 0, `real .githooks failed the guard:\n${result.stderr}`);
 });

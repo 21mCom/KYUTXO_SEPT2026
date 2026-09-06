@@ -9,11 +9,21 @@ import { fileURLToPath } from 'node:url';
 const TAG = '[release-fixtures]';
 const DEFAULT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DOCUMENT_GLOBS = ['*.pdf', '*.doc', '*.docx', '*.odt'];
+const GIT_TIMEOUT_MS = 30_000;
+const FAST_TEST_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const FULL_TEST_COMMAND_TIMEOUT_MS = 30 * 60_000;
+
+function testCommandTimeout(command) {
+  return command.some((argument) => argument.includes('test:full'))
+    ? FULL_TEST_COMMAND_TIMEOUT_MS
+    : FAST_TEST_COMMAND_TIMEOUT_MS;
+}
 
 function trackedDocuments(root) {
   const result = spawnSync('git', ['ls-files', '-z', '--', ...DOCUMENT_GLOBS], {
     cwd: root,
     encoding: 'buffer',
+    timeout: GIT_TIMEOUT_MS,
   });
   if (result.error || result.status !== 0) {
     const detail = result.error?.message ?? result.stderr.toString('utf8').trim();
@@ -58,11 +68,13 @@ function main() {
   const before = snapshot(root, files);
   console.log(`${TAG} protecting ${files.length} tracked sample document(s)`);
 
+  const timeout = testCommandTimeout(command);
   const result = spawnSync(command[0], command.slice(1), {
     cwd: root,
     env: process.env,
     stdio: 'inherit',
     shell: process.platform === 'win32',
+    timeout: timeout,
   });
 
   const modified = files
@@ -84,7 +96,11 @@ function main() {
   }
 
   if (result.error) {
-    console.error(`${TAG} FAIL: could not run test command: ${result.error.message}`);
+    if (result.error.code === 'ETIMEDOUT' || result.signal === 'SIGTERM') {
+      console.error(`${TAG} FAIL: timed out running test command after ${timeout}ms`);
+    } else {
+      console.error(`${TAG} FAIL: could not run test command: ${result.error.message}`);
+    }
   }
 
   if (modified.length > 0 || result.error) process.exit(1);

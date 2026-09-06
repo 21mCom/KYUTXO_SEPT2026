@@ -39,12 +39,17 @@ const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_NETWORK_PRIVACY_CDP_PORT || 
 const TAG = '[packaged-network-privacy-activity]';
 const PASSWORD = 'packaged-network-privacy-activity-check';
 const PROVIDER_URL = 'https://provider.example.test/api';
+const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const TASKKILL_TIMEOUT_MS = 15_000;
 const FIXTURE_ADDRESS = 'bc1qpackagednetworkprivacyfixture';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function run(command, args) {
   console.log(`${TAG} $ ${command} ${args.join(' ')}`);
-  const result = spawnSync(command, args, { cwd: ROOT, stdio: 'inherit' });
+  const result = spawnSync(command, args, { cwd: ROOT, stdio: 'inherit', timeout: BUILD_COMMAND_TIMEOUT_MS });
+  if (result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM') {
+    throw new Error(`${TAG} timed out during package build command ${command} after ${BUILD_COMMAND_TIMEOUT_MS}ms`);
+  }
   if (result.status !== 0) {
     throw new Error(`${TAG} command failed (exit ${result.status}): ${command}`);
   }
@@ -142,6 +147,7 @@ function killWindowsProcessTree(child, force) {
     cwd: ROOT,
     stdio: 'inherit',
     windowsHide: true,
+    timeout: TASKKILL_TIMEOUT_MS,
   });
   console.log(`${TAG} taskkill (${force ? 'forced' : 'graceful'}) exit=${result.status}`);
 }

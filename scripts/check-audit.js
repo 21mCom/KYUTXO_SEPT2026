@@ -18,6 +18,7 @@ const ALLOWLIST_FILE = process.env.CHECK_AUDIT_ALLOWLIST_FILE
   ? path.resolve(process.env.CHECK_AUDIT_ALLOWLIST_FILE)
   : path.resolve(__dirname, 'audit-allowlist.json');
 const FAILING_SEVERITIES = new Set(['high', 'critical']);
+const AUDIT_TIMEOUT_MS = 2 * 60_000;
 
 function runAudit() {
   // Test hook: read a captured `npm audit --json` payload from disk instead of
@@ -39,13 +40,17 @@ function runAudit() {
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 64 * 1024 * 1024,
       shell: process.platform === 'win32',
+      timeout: AUDIT_TIMEOUT_MS,
     });
   } catch (error) {
     if (error.stdout) {
       return error.stdout;
     }
+    const detail = error?.code === 'ETIMEDOUT' || error?.killed === true
+      ? `timed out after ${AUDIT_TIMEOUT_MS}ms`
+      : error.message;
     console.error(
-      `[check-audit] FAIL: could not run "npm audit --json": ${error.message}\n` +
+      `[check-audit] FAIL: could not run "npm audit --json": ${detail}\n` +
         'Refusing to pass — fix the audit invocation rather than skipping this check.'
     );
     process.exit(1);

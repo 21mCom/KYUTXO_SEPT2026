@@ -16,6 +16,7 @@ function run(files) {
   }
   const result = spawnSync(process.execPath, [checker], {
     encoding: 'utf8',
+    timeout: 30_000,
     env: { ...process.env, PACKAGED_STORAGE_SCAN_ROOT: root },
   });
   fs.rmSync(root, { recursive: true, force: true });

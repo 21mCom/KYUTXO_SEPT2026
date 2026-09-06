@@ -39,12 +39,17 @@ const UI_PAGE_SIZE = 100;
 const IPC_PAGE_CAP = 250;
 const CONSOLIDATED_ORIGINS = 301;
 const EXTRA_OUTPOINTS = 300;
+const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const TASKKILL_TIMEOUT_MS = 15_000;
 const CONSOLIDATION_TXID = 'f'.repeat(64);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function run(command, args) {
   console.log(`${TAG} $ ${command} ${args.join(' ')}`);
-  const result = spawnSync(command, args, { cwd: ROOT, stdio: 'inherit' });
+  const result = spawnSync(command, args, { cwd: ROOT, stdio: 'inherit', timeout: BUILD_COMMAND_TIMEOUT_MS });
+  if (result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM') {
+    throw new Error(`${TAG} timed out during package build command ${command} after ${BUILD_COMMAND_TIMEOUT_MS}ms`);
+  }
   if (result.status !== 0) {
     throw new Error(`${TAG} command failed (exit ${result.status}): ${command}`);
   }
@@ -264,7 +269,7 @@ async function waitForPage(browser) {
 function killTree(child) {
   if (!child?.pid) return;
   try {
-    if (IS_WINDOWS) spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f']);
+    if (IS_WINDOWS) spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { timeout: TASKKILL_TIMEOUT_MS });
     else process.kill(-child.pid, 'SIGTERM');
   } catch {
     child.kill?.('SIGTERM');

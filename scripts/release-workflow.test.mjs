@@ -16,6 +16,7 @@ function run(command, args, cwd) {
   return spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
+    timeout: 30_000,
     env: { ...process.env, npm_config_ignore_scripts: 'true' },
     shell: process.platform === 'win32',
   });

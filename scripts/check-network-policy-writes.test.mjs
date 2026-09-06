@@ -26,6 +26,7 @@ function runGuard(files) {
     }
     return spawnSync(process.execPath, [GUARD], {
       encoding: 'utf8',
+      timeout: 30_000,
       env: { ...process.env, CHECK_NETWORK_POLICY_SOURCE_DIR: directory },
     });
   } finally {
@@ -185,7 +186,7 @@ test('ignores test sources and permits the approved serialized modules', () => {
 });
 
 test('the real production source tree passes', () => {
-  const result = spawnSync(process.execPath, [GUARD], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [GUARD], { encoding: 'utf8', timeout: 30_000 });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /OK/);
 });

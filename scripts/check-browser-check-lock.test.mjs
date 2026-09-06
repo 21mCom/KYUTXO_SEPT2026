@@ -35,6 +35,7 @@ function runGuard(files) {
     return spawnSync(process.execPath, [SCRIPT], {
       env: { ...process.env, CHECK_BROWSER_CHECK_LOCK_SCRIPTS_DIR: dir },
       encoding: 'utf8',
+      timeout: 30_000,
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -165,7 +166,7 @@ test('reports missing import and call with the correct fixture filename', () => 
 });
 
 test('the real scripts directory currently passes the guard', () => {
-  const res = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' });
+  const res = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8', timeout: 30_000 });
   assert.equal(res.status, 0, res.stderr);
 });
 
@@ -182,6 +183,7 @@ test('creates a missing parent directory before acquiring the lock', () => {
       {
         env: { ...process.env, BROWSER_CHECK_LOCK_DIR: lockDir },
         encoding: 'utf8',
+        timeout: 30_000,
         timeout: 5000,
       },
     );
@@ -199,6 +201,7 @@ test('reaps a lock whose recorded owner process has died', () => {
   try {
     const exitedOwner = spawnSync(process.execPath, ['-e', ''], {
       encoding: 'utf8',
+      timeout: 30_000,
     });
     assert.equal(exitedOwner.status, 0, exitedOwner.stderr);
     fs.writeFileSync(
@@ -215,6 +218,7 @@ test('reaps a lock whose recorded owner process has died', () => {
       {
         env: { ...process.env, BROWSER_CHECK_LOCK_DIR: lockDir },
         encoding: 'utf8',
+        timeout: 30_000,
         timeout: 5000,
       },
     );
@@ -256,6 +260,7 @@ test(
         {
           env: { ...process.env, BROWSER_CHECK_LOCK_DIR: aged.lockDir },
           encoding: 'utf8',
+          timeout: 30_000,
           timeout: 5000,
         },
       );

@@ -53,6 +53,8 @@ const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9224);
 const TAG = '[packaged-vault-migration]';
+const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const TASKKILL_TIMEOUT_MS = 15_000;
 const FIXTURE_TOKENS = [
   'KYUTXO_PROTECTED_ROW_6d974c29f24a',
   'KYUTXO_PROTECTED_ATTACHMENT_3ac89e7441bf',
@@ -66,7 +68,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function run(command, args) {
   console.log(`${TAG} $ ${command} ${args.join(' ')}`);
-  const result = spawnSync(command, args, { cwd: ROOT, stdio: 'inherit' });
+  const result = spawnSync(command, args, { cwd: ROOT, stdio: 'inherit', timeout: BUILD_COMMAND_TIMEOUT_MS });
+  if (result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM') {
+    throw new Error(`${TAG} timed out during package build command ${command} after ${BUILD_COMMAND_TIMEOUT_MS}ms`);
+  }
   if (result.status !== 0) {
     throw new Error(`${TAG} command failed (exit ${result.status}): ${command}`);
   }
@@ -117,7 +122,7 @@ async function waitForPage(browser) {
 function killTree(child) {
   if (!child?.pid) return;
   try {
-    if (IS_WINDOWS) spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f']);
+    if (IS_WINDOWS) spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { timeout: TASKKILL_TIMEOUT_MS });
     else process.kill(-child.pid, 'SIGTERM');
   } catch {
     child.kill?.('SIGTERM');

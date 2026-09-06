@@ -85,7 +85,7 @@ function runScanner({ scriptPatches = [], schemaTokens = LIVE_SCHEMA_TOKENS } = 
 
     const tmpScanner = path.join(tmpDir, 'check-records-index-usage.js');
     fs.writeFileSync(tmpScanner, src);
-    return spawnSync('node', [tmpScanner], { cwd: ROOT, encoding: 'utf8' });
+    return spawnSync('node', [tmpScanner], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

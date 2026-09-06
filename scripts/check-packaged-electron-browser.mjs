@@ -73,6 +73,8 @@ const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9223);
 const TAG = '[packaged-electron]';
 const PORTABLE_CHECK_PASSWORD = 'portable-check-password';
+const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const TASKKILL_TIMEOUT_MS = 15_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -82,7 +84,11 @@ function run(cmd, args, opts = {}) {
     cwd: ROOT,
     stdio: 'inherit',
     env: { ...process.env, ...opts.env },
+    timeout: BUILD_COMMAND_TIMEOUT_MS,
   });
+  if (res.error?.code === 'ETIMEDOUT' || res.signal === 'SIGTERM') {
+    throw new Error(`${TAG} timed out during package build command ${cmd} after ${BUILD_COMMAND_TIMEOUT_MS}ms`);
+  }
   if (res.status !== 0) {
     throw new Error(`${TAG} command failed (exit ${res.status}): ${cmd} ${args.join(' ')}`);
   }
@@ -280,6 +286,7 @@ function killWindowsProcessTree(child, { force }) {
     cwd: ROOT,
     stdio: 'inherit',
     windowsHide: true,
+    timeout: TASKKILL_TIMEOUT_MS,
   });
   console.log(
     `${TAG} taskkill portable process tree (${force ? 'forced' : 'graceful'}) exit=${result.status}`,

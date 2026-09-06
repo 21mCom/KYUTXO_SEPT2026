@@ -40,6 +40,8 @@ import {
 
 export const NATIVE_EVENT_TIMEOUT_MS = 120_000;
 export const STARTUP_TIMEOUT_MS = 90_000;
+const PACKAGE_BUILD_TIMEOUT_MS = 15 * 60_000;
+const TASKKILL_TIMEOUT_MS = 15_000;
 export const CHECK_PASSWORD = 'native-power-smoke-password';
 
 const ROOT = repoRootFromModuleUrl(import.meta.url);
@@ -166,7 +168,11 @@ function runSync(command, args, options = {}) {
     stdio: 'inherit',
     env: { ...process.env, ...options.env },
     windowsHide: true,
+    timeout: options.timeout ?? PACKAGE_BUILD_TIMEOUT_MS,
   });
+  if (result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM') {
+    throw new Error(`${TAG} timed out during ${options.phase ?? 'native power command'} after ${options.timeout ?? PACKAGE_BUILD_TIMEOUT_MS}ms`);
+  }
   if (result.error) throw result.error;
   if (result.status !== 0 && options.allowNonZero !== true) {
     throw new Error(`${TAG} native command failed (exit ${result.status}): ${command}`);
@@ -228,7 +234,7 @@ function buildPackagedOutput(target) {
     assertPackagedAsarFresh({ tag: TAG, asarPath: output.asar });
     return output;
   }
-  runSync('npm', ['run', 'build']);
+  runSync('npm', ['run', 'build'], { phase: 'renderer build' });
   assertPackagedBundleFresh({ tag: TAG });
   runSync('npx', [
     'electron-builder',
@@ -239,7 +245,7 @@ function buildPackagedOutput(target) {
     `--${target.arch}`,
     '--publish',
     'never',
-  ]);
+  ], { phase: 'desktop package build' });
   return assertPackagedOutput(target);
 }
 
@@ -301,7 +307,11 @@ function launchApp(target, packaged, env, cdpPort) {
 async function stopApp(child) {
   if (!child?.pid) return;
   if (IS_WINDOWS) {
-    runSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { allowNonZero: true });
+    runSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+      allowNonZero: true,
+      phase: 'Windows process cleanup',
+      timeout: TASKKILL_TIMEOUT_MS,
+    });
     return;
   }
   try {

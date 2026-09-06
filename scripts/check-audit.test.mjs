@@ -116,6 +116,7 @@ function runGate({ report, allowlist }) {
             CHECK_AUDIT_ALLOWLIST_FILE: allowlistFile,
           },
           encoding: 'utf8',
+          timeout: 30_000,
         })
       )
   );
