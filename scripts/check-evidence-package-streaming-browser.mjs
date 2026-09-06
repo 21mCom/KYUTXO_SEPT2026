@@ -71,6 +71,7 @@ const ATTACHMENT_SIZE = 20 * 1024 * 1024; // 20 MiB — under the 25 MiB per-fil
 const ATTACHMENT_COUNT = 4; // 80 MiB total — over the 75 MiB aggregate cap
 const TOTAL_SIZE = ATTACHMENT_SIZE * ATTACHMENT_COUNT;
 const AGGREGATE_CAP = 75 * 1024 * 1024;
+const INJECT_PAGE_ERRORS = process.env.KYUTXO_TEST_EVIDENCE_STREAM_PAGE_ERRORS === '1';
 const ENGINE_SHIM = buildEngineBridgeInitScript({
   alwaysEnabled: true,
   queryHandlers: '// This check does not serve engine queries.',
@@ -300,6 +301,41 @@ async function launchWithRetry(exe, attempts = 3) {
   throw lastErr;
 }
 
+async function runInjectedPageErrorCheck(browser, step) {
+  const contexts = [
+    { label: 'browser streaming path', initScripts: [FS_ACCESS_SHIM] },
+    { label: 'desktop streaming path', initScripts: [ENGINE_SHIM, ELECTRON_SHIM] },
+  ];
+
+  for (const { label, initScripts } of contexts) {
+    const context = await browser.newContext();
+    try {
+      for (const script of initScripts) await context.addInitScript(script);
+      const page = await context.newPage();
+      const pageErrors = [];
+      page.on('pageerror', (error) => {
+        pageErrors.push(error.message);
+        console.log(`[evidence-stream][page-error] ${error.message}`);
+      });
+
+      const injectedMessage = `Injected renderer crash (${label})`;
+      await page.evaluate((message) => {
+        setTimeout(() => {
+          throw new Error(message);
+        }, 0);
+      }, injectedMessage);
+      await page.waitForEvent('pageerror', { timeout: 10_000 });
+      step(
+        `${label} has no unexpected page errors`,
+        pageErrors.length === 0,
+        pageErrors.join(' | '),
+      );
+    } finally {
+      await context.close();
+    }
+  }
+}
+
 // Seeds one evidence item with ATTACHMENT_COUNT real attachments of
 // ATTACHMENT_SIZE bytes each, via the app's own upload path (attachments.ts),
 // so the export builder reads and hashes genuine stored bytes. Returns the
@@ -342,7 +378,9 @@ async function main() {
 
   let devProc = null;
   let startedServer = false;
-  if (await isServerUp(BASE_URL)) {
+  if (INJECT_PAGE_ERRORS) {
+    console.log('[evidence-stream] test-only renderer fault injection enabled');
+  } else if (await isServerUp(BASE_URL)) {
     console.log(`[evidence-stream] reusing dev server at ${BASE_URL}`);
   } else {
     console.log('[evidence-stream] starting dev server (npm run dev) ...');
@@ -361,6 +399,9 @@ async function main() {
 
   const browser = await launchWithRetry(exe);
   try {
+    if (INJECT_PAGE_ERRORS) {
+      await runInjectedPageErrorCheck(browser, step);
+    } else {
     // ═══════════════ Context A: File System Access API path ═══════════════
     console.log('\n[evidence-stream] === Context A: browser File System Access streaming ===');
     {
@@ -609,6 +650,7 @@ async function main() {
       );
 
       await context.close();
+    }
     }
   } finally {
     await browser.close();
