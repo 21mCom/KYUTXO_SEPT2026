@@ -39,6 +39,7 @@ isValidation = true
 
 function runFixture({
   inbox = '// inbox-only journey\n',
+  focused = validFocusedProof(),
   helpers = {},
   replit = validReplit(),
 } = {}) {
@@ -50,7 +51,7 @@ function runFixture({
   );
   fs.writeFileSync(
     path.join(root, 'scripts/check-encrypted-backup-restore-safety-browser.mjs'),
-    '// focused proof\n',
+    focused,
   );
   for (const [relative, source] of Object.entries(helpers)) {
     const absolute = path.join(root, relative);
@@ -67,6 +68,47 @@ function runFixture({
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+}
+
+function validFocusedProof() {
+  return `
+page.getByTestId('button-open-restore');
+page.getByTestId('input-restore-file');
+page.getByTestId('radio-replace');
+page.getByTestId('input-restore-password');
+page.getByTestId('button-continue-restore');
+page.getByTestId('restore-preferences-preview');
+page.getByTestId('button-confirm-restore');
+record(
+  'malformed-plaintext-non-destructive',
+  !malformedConfirmVisible &&
+    JSON.stringify(afterMalformed) === JSON.stringify(beforeMalformed),
+);
+record(
+  \`\${label}-wrong-password-non-destructive\`,
+  !previewVisible && JSON.stringify(afterWrong) === JSON.stringify(beforeWrong),
+);
+record(
+  \`\${label}-corrupt-ciphertext-non-destructive\`,
+  failureMessageVisible &&
+    !corruptPreviewVisible &&
+    JSON.stringify(afterCorrupt) === JSON.stringify(beforeWrong),
+);
+record(
+  \`\${label}-correct-password-retry\`,
+  verification.passed,
+  verification.detail,
+);
+proveWrongThenCorrect({ label: 'v3' });
+proveWrongThenCorrect({
+  label: 'legacy',
+  corruptBackupBuffer: corruptLegacyBackup,
+});
+const failed = steps.filter((step) => !step.passed);
+if (failed.length) {
+  throw new Error('focused proof failed');
+}
+`;
 }
 
 test('accepts an isolated inbox check and complete validation wiring', () => {
@@ -178,6 +220,34 @@ test('rejects a focused restore check that is no longer validation', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /encrypted-backup-restore-safety-browser-check is no longer marked/);
 });
+
+const requiredFocusedFragments = [
+  ['restore selector button-open-restore', "page.getByTestId('button-open-restore');"],
+  ['restore selector input-restore-file', "page.getByTestId('input-restore-file');"],
+  ['restore selector radio-replace', "page.getByTestId('radio-replace');"],
+  ['restore selector input-restore-password', "page.getByTestId('input-restore-password');"],
+  ['restore selector button-continue-restore', "page.getByTestId('button-continue-restore');"],
+  ['restore selector restore-preferences-preview', "page.getByTestId('restore-preferences-preview');"],
+  ['restore selector button-confirm-restore', "page.getByTestId('button-confirm-restore');"],
+  ['malformed plaintext non-destructive assertion', "'malformed-plaintext-non-destructive'"],
+  ['wrong-password non-destructive assertion', '`${label}-wrong-password-non-destructive`'],
+  ['corrupt-ciphertext non-destructive assertion', '`${label}-corrupt-ciphertext-non-destructive`'],
+  ['successful intact-backup retry assertion', '`${label}-correct-password-retry`'],
+  ['v3 restore proof invocation', "label: 'v3'"],
+  ['legacy restore proof invocation', "label: 'legacy'"],
+  ['corrupt legacy ciphertext proof input', 'corruptBackupBuffer: corruptLegacyBackup'],
+  ['failed-step enforcement', 'const failed = steps.filter((step) => !step.passed);'],
+];
+
+for (const [description, fragment] of requiredFocusedFragments) {
+  test(`rejects a focused restore check missing its ${description}`, () => {
+    const focused = validFocusedProof();
+    assert.ok(focused.includes(fragment), `fixture is missing ${fragment}`);
+    const result = runFixture({ focused: focused.replace(fragment, '') });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, new RegExp(`missing its required ${description}`));
+  });
+}
 
 test('rejects a guard omitted from the normal validation set', () => {
   const result = runFixture({

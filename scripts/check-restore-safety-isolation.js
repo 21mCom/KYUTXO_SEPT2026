@@ -22,6 +22,57 @@ const localImportPattern =
   /\b(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 const coupledPattern =
   /\b(?:backup|restore)\w*\b|JSZip|input-restore|button-open-restore/i;
+const focusedRequirements = [
+  ...[
+    'button-open-restore',
+    'input-restore-file',
+    'radio-replace',
+    'input-restore-password',
+    'button-continue-restore',
+    'restore-preferences-preview',
+    'button-confirm-restore',
+  ].map((selector) => ({
+    description: `restore selector ${selector}`,
+    pattern: new RegExp(`getByTestId\\(\\s*['"]${selector}['"]\\s*\\)`),
+  })),
+  {
+    description: 'malformed plaintext non-destructive assertion',
+    pattern:
+      /record\(\s*['"]malformed-plaintext-non-destructive['"]\s*,\s*!malformedConfirmVisible\s*&&\s*JSON\.stringify\(afterMalformed\)\s*===\s*JSON\.stringify\(beforeMalformed\)/s,
+  },
+  {
+    description: 'wrong-password non-destructive assertion',
+    pattern:
+      /record\(\s*`\$\{label\}-wrong-password-non-destructive`\s*,\s*!previewVisible\s*&&\s*JSON\.stringify\(afterWrong\)\s*===\s*JSON\.stringify\(beforeWrong\)/s,
+  },
+  {
+    description: 'corrupt-ciphertext non-destructive assertion',
+    pattern:
+      /record\(\s*`\$\{label\}-corrupt-ciphertext-non-destructive`\s*,\s*failureMessageVisible\s*&&\s*!corruptPreviewVisible\s*&&\s*JSON\.stringify\(afterCorrupt\)\s*===\s*JSON\.stringify\(beforeWrong\)/s,
+  },
+  {
+    description: 'successful intact-backup retry assertion',
+    pattern:
+      /record\(\s*`\$\{label\}-correct-password-retry`\s*,\s*verification\.passed\s*,\s*verification\.detail\s*,?\s*\)/s,
+  },
+  {
+    description: 'v3 restore proof invocation',
+    pattern: /label:\s*['"]v3['"]/,
+  },
+  {
+    description: 'legacy restore proof invocation',
+    pattern: /label:\s*['"]legacy['"]/,
+  },
+  {
+    description: 'corrupt legacy ciphertext proof input',
+    pattern: /corruptBackupBuffer:\s*corruptLegacyBackup/,
+  },
+  {
+    description: 'failed-step enforcement',
+    pattern:
+      /const failed = steps\.filter\(\(step\) => !step\.passed\);[\s\S]*?if \(failed\.length\)\s*\{[\s\S]*?throw new Error\(/,
+  },
+];
 
 function readRequired(relative) {
   const absolute = path.join(root, relative);
@@ -95,8 +146,16 @@ function inboxJourneyFiles(entryRelative) {
 }
 
 const inboxFiles = inboxJourneyFiles(inboxRelative);
-readRequired(focusedRelative);
+const focusedSource = readRequired(focusedRelative);
 const dotReplit = readRequired(dotReplitRelative);
+
+for (const requirement of focusedRequirements) {
+  if (!requirement.pattern.test(focusedSource)) {
+    failures.push(
+      `${focusedRelative} is missing its required ${requirement.description}.`,
+    );
+  }
+}
 
 // Intentionally broad: this journey has no reason to name or import backup or
 // restore concepts. Catching comments and fixture names prevents old coupled
@@ -146,5 +205,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  'check-restore-safety-isolation: OK — inbox is restore-independent and the focused proof plus guard remain in validation.',
+  'check-restore-safety-isolation: OK — inbox is restore-independent and the focused safety proof plus guard remain complete and in validation.',
 );
