@@ -14,3 +14,7 @@ vi.mock("@/lib/database", async (importOriginal) => {
 });
 ```
 **Why:** the harness intentionally pulls the full provider stack so future UI tweaks can't crash the tree; the cost is its import graph is large. Adding constants one-by-one to a wholesale mock is whack-a-mole — prefer importOriginal.
+
+The same rule applies to `@/lib/repository`, with one extra constraint: the repository is a class instance, so spreading it drops prototype methods such as `list`. When a provider-harness test must intercept one repository method, return a `Proxy` around the real instance, override only that property, and bind all other function properties to the real target.
+
+**How to apply:** use this for focused page tests that need to stub one repository query while keeping `RecordPreviewProvider` and other shared providers operational.

@@ -7,6 +7,10 @@ import {
   NETWORK_BLOCKED_MESSAGE,
   NETWORK_CHOICE_REQUIRED_MESSAGE,
 } from "@/lib/network-privacy";
+import {
+  consumePendingSyncAddresses,
+  setPendingSyncAddresses,
+} from "@/lib/sync/pendingSyncTargets";
 
 const mocks = vi.hoisted(() => {
   const nodeSettings = {
@@ -31,6 +35,8 @@ const mocks = vi.hoisted(() => {
     updateProvider: vi.fn(),
     resumeSync: vi.fn(),
     syncSingleAddress: vi.fn(),
+    syncWithDepth: vi.fn(),
+    query: vi.fn(),
     getPausedState: vi.fn(),
     toast: vi.fn(),
     markFirstSyncConfirmed: vi.fn(),
@@ -49,6 +55,25 @@ vi.mock("@/lib/network-privacy", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/network-privacy")>()),
   markFirstSyncConfirmed: (...args: unknown[]) => mocks.markFirstSyncConfirmed(...args),
 }));
+
+vi.mock("@/lib/repository", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/repository")>();
+  return {
+    ...actual,
+    getVaultRepository: () => {
+      const repository = actual.getVaultRepository();
+      return new Proxy(repository, {
+        get(target, property, receiver) {
+          if (property === "query") {
+            return (...args: unknown[]) => mocks.query(...args);
+          }
+          const value = Reflect.get(target, property, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+});
 
 vi.mock("@/lib/transaction-sync", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/transaction-sync")>()),
@@ -73,6 +98,8 @@ vi.mock("@/lib/transaction-sync", async (importOriginal) => ({
     updateProvider: (...args: unknown[]) => mocks.updateProvider(...args),
     resumeSync: (...args: unknown[]) => mocks.resumeSync(...args),
     syncSingleAddress: (...args: unknown[]) => mocks.syncSingleAddress(...args),
+    syncWithDepth: (...args: unknown[]) => mocks.syncWithDepth(...args),
+    setSyncProtection: vi.fn(),
   },
 }));
 
@@ -125,10 +152,17 @@ describe.each([
 ])("Transaction Sync provider recovery — %s", (_label, message) => {
   beforeEach(() => {
     vi.clearAllMocks();
+    consumePendingSyncAddresses();
     window.history.replaceState({}, "", "/transaction-sync");
     mocks.nodeSettings.firstSyncConfirmedAt = undefined;
     mocks.markFirstSyncConfirmed.mockResolvedValue(undefined);
     mocks.getPausedState.mockResolvedValue(PAUSED_STATE);
+    mocks.query.mockResolvedValue([{
+      id: 42,
+      type: "address",
+      inputString: ADDRESS,
+      inputStringLower: ADDRESS,
+    }]);
     mocks.updateProvider.mockImplementation(() => {
       throw new Error(message);
     });
@@ -212,5 +246,74 @@ describe.each([
     await waitFor(() => {
       expect((screen.getByTestId("button-single-sync") as HTMLButtonElement).disabled).toBe(false);
     });
+  });
+
+  it("offers Node Settings when deferred report-targeted provider construction is blocked after approval", async () => {
+    const settingsBefore = JSON.stringify(mocks.nodeSettings);
+    setPendingSyncAddresses([ADDRESS]);
+    renderWithProviders(<TransactionSync />);
+
+    expect(await screen.findByTestId("dialog-first-sync-disclosure")).toBeTruthy();
+    expect(mocks.updateProvider).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
+
+    await expectSettingsActionWithoutMutation(settingsBefore, "Sync Failed", message);
+    expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(1);
+    expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
+    expect(mocks.syncWithDepth).not.toHaveBeenCalled();
+  });
+});
+
+describe("Transaction Sync report-targeted first-sync approval", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    consumePendingSyncAddresses();
+    window.history.replaceState({}, "", "/transaction-sync");
+    mocks.nodeSettings.firstSyncConfirmedAt = undefined;
+    mocks.markFirstSyncConfirmed.mockResolvedValue(undefined);
+    mocks.getPausedState.mockResolvedValue(null);
+    mocks.updateProvider.mockImplementation(() => undefined);
+    mocks.query.mockResolvedValue([{
+      id: 42,
+      type: "address",
+      inputString: ADDRESS,
+      inputStringLower: ADDRESS,
+    }]);
+    mocks.syncWithDepth.mockResolvedValue({
+      success: true,
+      addressesSynced: 1,
+      addressesSkipped: 0,
+      addressesFiltered: 0,
+      transactionsImported: 0,
+      newlyQueuedTransactions: 0,
+      newAddressRecords: 0,
+      errors: [],
+    });
+  });
+
+  afterEach(() => {
+    consumePendingSyncAddresses();
+    cleanup();
+  });
+
+  it("runs the report-targeted sync exactly once after approving the disclosure", async () => {
+    setPendingSyncAddresses([ADDRESS]);
+    renderWithProviders(<TransactionSync />);
+
+    expect(await screen.findByTestId("dialog-first-sync-disclosure")).toBeTruthy();
+    expect(mocks.syncWithDepth).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
+
+    await waitFor(() => expect(mocks.syncWithDepth).toHaveBeenCalledTimes(1));
+    expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(1);
+    expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
+    expect(mocks.syncWithDepth).toHaveBeenCalledWith(
+      {
+        sourceFilter: "all",
+        maxDepth: 1,
+        specificRecordIds: [42],
+      },
+      undefined,
+    );
   });
 });
