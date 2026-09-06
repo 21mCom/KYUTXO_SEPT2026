@@ -18,6 +18,16 @@ function isSilent(run, now = Date.now(), silenceMinutes = SILENCE_MINUTES) {
   return !timestamp || Date.parse(timestamp) <= now - silenceMinutes * 60_000;
 }
 
+function shouldCloseRecoveredAlert(lastCompletedAt, alertCreatedAt) {
+  const completionTime = Date.parse(lastCompletedAt);
+  if (!Number.isFinite(completionTime)) return false;
+  const alertCreationTime = Date.parse(alertCreatedAt);
+  // An unusable issue timestamp cannot establish a recovery lower bound. Fail
+  // safe toward recovery once the watchdog has independently validated a
+  // current completion, rather than leaving the alert permanently open.
+  return !Number.isFinite(alertCreationTime) || completionTime > alertCreationTime;
+}
+
 function alertBody({ latestRunUrl, lastCompletedAt }) {
   return [
     `The independent watchdog has not seen **${MONITOR_NAME}** complete within ${SILENCE_MINUTES} minutes.`,
@@ -71,7 +81,12 @@ async function run({ github, context, core, now = Date.now() }) {
     return;
   }
 
-  if (!alert || Date.parse(lastCompletedAt) <= Date.parse(alert.created_at)) return;
+  if (!alert || !shouldCloseRecoveredAlert(lastCompletedAt, alert.created_at)) return;
+  if (!Number.isFinite(Date.parse(alert.created_at))) {
+    core.warning(
+      `Alert issue ${alert.number} has no valid creation timestamp; closing it because a valid current completion was observed.`,
+    );
+  }
   await github.rest.issues.createComment({
     owner,
     repo,
@@ -97,5 +112,6 @@ module.exports = {
   completedAt,
   isSilent,
   run,
+  shouldCloseRecoveredAlert,
   workflowUrl,
 };

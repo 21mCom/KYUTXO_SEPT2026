@@ -555,3 +555,36 @@ test('watchdog opens one alert after silence and closes it only after a newer co
   assert.equal(calls.filter((call) => call.type === 'comment').length, 1);
   assert.equal(calls.filter((call) => call.type === 'update').length, 1);
 });
+
+for (const [description, createdAt] of [
+  ['malformed', 'not-a-timestamp'],
+  ['missing', undefined],
+]) {
+  test(`watchdog closes a recovered alert with a ${description} issue creation timestamp`, async () => {
+    const { calls, invocation } = watchdogHarness({
+      runs: [{
+        status: 'completed',
+        updated_at: '2026-09-05T12:05:00Z',
+        html_url: `https://example.test/runs/recovered-${description}`,
+      }],
+      openIssues: [{
+        number: 12,
+        title: watchdog.ALERT_TITLE,
+        created_at: createdAt,
+        html_url: `https://example.test/issues/${description}`,
+      }],
+    });
+
+    await watchdog.run(invocation);
+
+    const comment = calls.find((call) => call.type === 'comment');
+    assert.ok(comment);
+    assert.match(comment.request.body, new RegExp(`runs/recovered-${description}`));
+    assert.equal(calls.filter((call) => call.type === 'update').length, 1);
+    assert.equal(calls.find((call) => call.type === 'update').request.state, 'closed');
+    assert.match(
+      calls.find((call) => call.type === 'warning').message,
+      /no valid creation timestamp; closing it because a valid current completion was observed/,
+    );
+  });
+}
