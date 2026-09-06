@@ -4,6 +4,7 @@ import { getAllTransactionParticipants, getAllTransactions } from "./data/transa
 import {
   calculateCoinOrigins,
   filterCoinOrigins,
+  filterCoinOriginsByOwner,
   pageCoinOriginsLedger,
   type CoinOriginsInput,
   type CoinOriginsLedger,
@@ -56,7 +57,7 @@ function snapshotInput(
   };
 }
 
-export async function loadCoinOrigins(walletName?: string, owner?: string): Promise<CoinOriginsLedger> {
+export async function loadCoinOrigins(walletName?: string, owners?: string[]): Promise<CoinOriginsLedger> {
   const [records, transactions, participants, metadata] = await Promise.all([
     getAllRecords(),
     getAllTransactions(),
@@ -64,13 +65,13 @@ export async function loadCoinOrigins(walletName?: string, owner?: string): Prom
     db.transactionMetadata.toArray(),
   ]);
   const ledger = calculateCoinOrigins(snapshotInput(records, transactions, participants, metadata));
-  return filterCoinOrigins(ledger, { walletName, owner });
+  return filterCoinOriginsByOwner(filterCoinOrigins(ledger, { walletName }), owners);
 }
 
 export async function loadCoinOriginsPage(
-  opts: CoinOriginsPageOptions = {},
+  opts: CoinOriginsPageOptions & { owners?: string[] } = {},
 ): Promise<{ ledger: CoinOriginsLedger; page: CoinOriginsPage }> {
-  const ledger = await loadCoinOrigins(opts.walletName, opts.owner);
+  const ledger = await loadCoinOrigins(opts.walletName, opts.owners);
   // The fallback has no persisted derived checkpoint; this key is local to the
   // immutable ledger returned by this load and keeps detail/list paging paired.
   const checkpointKey = `fallback:${ledger.outpoints.length}:${ledger.lots.length}:${ledger.hops.length}`;
@@ -83,8 +84,8 @@ export function calculateCoinOriginsFromRows(
   participants: TransactionParticipant[],
   walletName?: string,
   metadata: TransactionMetadata[] = [],
-  owner?: string,
+  owners?: string[],
 ): CoinOriginsLedger {
   const ledger = calculateCoinOrigins(snapshotInput(records, transactions, participants, metadata));
-  return filterCoinOrigins(ledger, { walletName, owner });
+  return filterCoinOriginsByOwner(filterCoinOrigins(ledger, { walletName }), owners);
 }

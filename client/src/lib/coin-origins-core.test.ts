@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { calculateCoinOrigins, filterCoinOrigins, filterCoinOriginsByWallet, UNKNOWN_ORIGIN_ID } from "./coin-origins-core";
+import { calculateCoinOrigins, filterCoinOrigins, filterCoinOriginsByOwner, filterCoinOriginsByWallet, UNKNOWN_ORIGIN_ID } from "./coin-origins-core";
+import { UNASSIGNED_OWNER_VALUE } from "./owner-constants";
 
 const owned = [{ inputString: "owned", type: "address", addressImportance: "manual", walletName: "Cold" }];
 
@@ -253,5 +254,22 @@ describe("coin origins ledger", () => {
     });
     expect(ledger.hops.find((hop) => hop.txid === "spend")?.kind).not.toBe("coinjoin");
     expect(ledger.outpoints[0].allocations).toEqual([{ lotId: "lot:a:0", sats: 500 }]);
+  });
+
+  it("scopes holdings by selected owner, including the shared unassigned value", () => {
+    const ledger = calculateCoinOrigins({
+      addresses: [
+        { inputString: "alice", type: "address", addressImportance: "manual", owner: "Alice" },
+        { inputString: "blank", type: "address", addressImportance: "manual" },
+      ],
+      transactions: [{ txid: "fund", blockHeight: 1, blockTime: 100 }],
+      participants: [
+        { txid: "fund", role: "output", address: "alice", amount: 100, vout: 0 },
+        { txid: "fund", role: "output", address: "blank", amount: 200, vout: 1 },
+      ],
+    });
+    expect(filterCoinOriginsByOwner(ledger, ["Alice"]).summary.currentSats).toBe(100);
+    expect(filterCoinOriginsByOwner(ledger, [UNASSIGNED_OWNER_VALUE]).summary.currentSats).toBe(200);
+    expect(filterCoinOriginsByOwner(ledger, ["Alice", UNASSIGNED_OWNER_VALUE]).summary.currentSats).toBe(300);
   });
 });

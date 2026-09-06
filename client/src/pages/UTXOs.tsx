@@ -70,6 +70,7 @@ import {
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { getOwners, getWalletNames, getTags, getCategories, getParticipantsByAddresses, getSpendInputsByOutpoints } from "@/lib/dataFacade";
+import { UNASSIGNED_OWNER_OPTION, UNASSIGNED_OWNER_VALUE } from "@/lib/owner-constants";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BuildPsbtDialog } from "@/components/BuildPsbtDialog";
@@ -98,8 +99,6 @@ const DEFAULT_SORT_DIRECTION: SortDirection = "desc";
 const DEFAULT_UTXO_MODE: UTXOCalculationMode = "heuristic";
 
 /** Sentinel option in the owner/wallet/tag/category multi-selects meaning "no value assigned". */
-const UNASSIGNED_SENTINEL = "Unassigned";
-
 function satsToBtc(sats: number): string {
   return (sats / 100_000_000).toFixed(8);
 }
@@ -1633,25 +1632,25 @@ export default function UTXOs() {
     // "Unassigned" sentinel) and AND-across (must also satisfy other dims).
     if (ownerFilter.length > 0) {
       filtered = filtered.filter(g =>
-        ownerFilter.some(v => v === UNASSIGNED_SENTINEL ? !g.owner : g.owner === v)
+        ownerFilter.some(v => v === UNASSIGNED_OWNER_VALUE ? !g.owner : g.owner === v)
       );
     }
 
     if (walletFilter.length > 0) {
       filtered = filtered.filter(g =>
-        walletFilter.some(v => v === UNASSIGNED_SENTINEL ? !g.walletName : g.walletName === v)
+        walletFilter.some(v => v === UNASSIGNED_OWNER_VALUE ? !g.walletName : g.walletName === v)
       );
     }
 
     if (tagFilter.length > 0) {
       filtered = filtered.filter(g =>
-        tagFilter.some(v => v === UNASSIGNED_SENTINEL ? (!g.tags || g.tags.length === 0) : !!g.tags?.includes(v))
+        tagFilter.some(v => v === UNASSIGNED_OWNER_VALUE ? (!g.tags || g.tags.length === 0) : !!g.tags?.includes(v))
       );
     }
 
     if (categoryFilter.length > 0) {
       filtered = filtered.filter(g =>
-        categoryFilter.some(v => v === UNASSIGNED_SENTINEL ? (!g.categories || g.categories.length === 0) : !!g.categories?.includes(v))
+        categoryFilter.some(v => v === UNASSIGNED_OWNER_VALUE ? (!g.categories || g.categories.length === 0) : !!g.categories?.includes(v))
       );
     }
 
@@ -2082,8 +2081,9 @@ export default function UTXOs() {
               <MultiSelectCombobox
                 values={ownerFilter}
                 onChange={setOwnerFilter}
-                options={[UNASSIGNED_SENTINEL, ...owners]}
+                options={[UNASSIGNED_OWNER_VALUE, ...owners]}
                 placeholder="All Owners"
+                optionLabels={{ [UNASSIGNED_OWNER_VALUE]: UNASSIGNED_OWNER_OPTION.label }}
                 searchPlaceholder="Search owners..."
                 testId="select-owner"
               />
@@ -2094,7 +2094,7 @@ export default function UTXOs() {
               <MultiSelectCombobox
                 values={walletFilter}
                 onChange={setWalletFilter}
-                options={[UNASSIGNED_SENTINEL, ...walletNames]}
+                options={[UNASSIGNED_OWNER_VALUE, ...walletNames]}
                 placeholder="All Wallets"
                 searchPlaceholder="Search wallets..."
                 testId="select-wallet"
@@ -2106,7 +2106,7 @@ export default function UTXOs() {
               <MultiSelectCombobox
                 values={tagFilter}
                 onChange={setTagFilter}
-                options={[UNASSIGNED_SENTINEL, ...tags]}
+                options={[UNASSIGNED_OWNER_VALUE, ...tags]}
                 placeholder="All Tags"
                 searchPlaceholder="Search tags..."
                 testId="select-tag"
@@ -2118,7 +2118,7 @@ export default function UTXOs() {
               <MultiSelectCombobox
                 values={categoryFilter}
                 onChange={setCategoryFilter}
-                options={[UNASSIGNED_SENTINEL, ...categories]}
+                options={[UNASSIGNED_OWNER_VALUE, ...categories]}
                 placeholder="All Categories"
                 searchPlaceholder="Search categories..."
                 testId="select-category"

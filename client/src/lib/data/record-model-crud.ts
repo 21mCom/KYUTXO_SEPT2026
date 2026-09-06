@@ -145,8 +145,19 @@ export async function putTransactionLegMetadata(input: Omit<TransactionLegMetada
   notifyDbChange('transactionLegMetadata');
 }
 
+export async function clearTransactionLegMetadata(txid: string, legKey: string): Promise<void> {
+  await db.transactionLegMetadata.where('[txid+legKey]').equals([txid, legKey]).delete();
+  notifyDbChange('transactionLegMetadata');
+}
+
 export async function getAddressOwnership(recordId: number): Promise<AddressOwnership | undefined> {
   return db.addressOwnership.where('recordId').equals(recordId).first();
+}
+
+/** Batched ownership read for annotation context construction. */
+export async function getAddressOwnershipForRecords(recordIds: number[]): Promise<AddressOwnership[]> {
+  if (!recordIds.length) return [];
+  return db.addressOwnership.where('recordId').anyOf(recordIds).toArray();
 }
 
 export interface RecordModelMigrationProgress { phase: 'addresses' | 'transactions' | 'complete'; processed: number; }

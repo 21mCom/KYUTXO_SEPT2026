@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Filter, Plus, X, ChevronDown, ChevronRight } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
+import { UNASSIGNED_OWNER_OPTION, UNASSIGNED_OWNER_VALUE } from "@/lib/owner-constants";
 import { type AddressImportance, ALL_IMPORTANCE_TIERS } from "@/lib/database";
 
 export interface ColumnFilter {
@@ -137,6 +138,8 @@ export const FACET_LABELS: Record<FacetKey, string> = {
   walletName: 'Wallet',
   seedName: 'Seed',
 };
+/** Stable filter token for records with no owner (not a vocabulary value). */
+export { UNASSIGNED_OWNER_VALUE };
 
 export function getFacetValues(filters: ColumnFilter[], key: FacetKey): string[] {
   const entry = filters.find((f) => f.id === FACET_FILTER_ID[key]);
@@ -371,7 +374,9 @@ export function RecordFilters({ filters, onFiltersChange, uniqueValues, tableCol
         </Select>
 
         {FACET_KEYS.map((key) => {
-          const options = uniqueValues[key] || [];
+          const options = key === 'owner'
+            ? [UNASSIGNED_OWNER_VALUE, ...(uniqueValues[key] || []).filter(v => v !== UNASSIGNED_OWNER_VALUE)]
+            : (uniqueValues[key] || []);
           if (!showFacet[key] || options.length === 0) return null;
           const ui = FACET_UI[key];
           return (
@@ -383,6 +388,7 @@ export function RecordFilters({ filters, onFiltersChange, uniqueValues, tableCol
                 placeholder={ui.placeholder}
                 searchPlaceholder={ui.searchPlaceholder}
                 testId={ui.testId}
+                optionLabels={key === 'owner' ? { [UNASSIGNED_OWNER_VALUE]: UNASSIGNED_OWNER_OPTION.label } : undefined}
               />
             </div>
           );

@@ -27,6 +27,8 @@ interface MultiSelectComboboxProps {
   disabled?: boolean;
   testId?: string;
   className?: string;
+  /** Presentation labels for stable stored option values. */
+  optionLabels?: Record<string, string>;
 }
 
 export function MultiSelectCombobox({
@@ -39,7 +41,9 @@ export function MultiSelectCombobox({
   disabled = false,
   testId,
   className,
+  optionLabels,
 }: MultiSelectComboboxProps) {
+  const labelFor = (item: string) => optionLabels?.[item] ?? item;
   const [open, setOpen] = useState(false);
   const [inputValue, setInputValue] = useState("");
 
@@ -82,7 +86,7 @@ export function MultiSelectCombobox({
               variant="secondary"
               className="gap-1 pr-1"
             >
-              {item}
+              {labelFor(item)}
               <button
                 type="button"
                 onClick={() => handleRemove(item)}
@@ -145,7 +149,7 @@ export function MultiSelectCombobox({
                         values.includes(item) ? "opacity-100" : "opacity-0"
                       )}
                     />
-                    {item}
+                    {labelFor(item)}
                   </CommandItem>
                 ))}
                 {isNewValue && onAddNew && (

@@ -83,6 +83,7 @@ import {
   type TransactionPageRow,
 } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 const ITEMS_PER_PAGE = 25;
 const MAX_COLLECTED_MATCHES = 50_000;
@@ -124,6 +125,7 @@ export function TransactionCard({
   onToggleExpand,
   addressToRecord,
   participantsLoaded = true,
+  onAnnotate,
 }: {
   tx: BlockchainTransaction;
   inputs: TransactionParticipant[];
@@ -133,6 +135,7 @@ export function TransactionCard({
   onToggleExpand: () => void;
   addressToRecord: Map<string, Record>;
   participantsLoaded?: boolean;
+  onAnnotate?: () => void;
 }) {
   const txDate = new Date(tx.blockTime * 1000);
 
@@ -178,7 +181,10 @@ export function TransactionCard({
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3">
+                  {onAnnotate && <Button size="sm" variant="outline" onClick={event => { event.stopPropagation(); onAnnotate(); }} data-testid={`button-annotate-transaction-${tx.txid}`}>
+                    Annotate
+                  </Button>}
                 <div className="text-right">
                   <div className="font-mono text-sm font-medium" data-testid={`text-amount-${tx.txid.slice(0, 8)}`}>
                     {participantsLoaded ? `${satsToBtc(totalOutputValue)} BTC` : '\u2014'}
@@ -338,12 +344,14 @@ export function VirtualizedTransactionList({
   toggleExpanded,
   baseAddressToRecord,
   onStatsChange,
+  onAnnotate,
 }: {
   transactions: BlockchainTransaction[];
   expandedTxs: Set<string>;
   toggleExpanded: (txid: string) => void;
   baseAddressToRecord: Map<string, Record>;
   onStatsChange?: (stats: VirtualizedLoadedStats) => void;
+  onAnnotate?: (transaction: BlockchainTransaction) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const participantCacheRef = useRef(new Map<string, TransactionParticipant[]>());
@@ -544,6 +552,7 @@ export function VirtualizedTransactionList({
                 onToggleExpand={() => toggleExpanded(tx.txid)}
                 addressToRecord={mergedAddressToRecord}
                 participantsLoaded={isLoaded}
+                onAnnotate={onAnnotate ? () => onAnnotate(tx) : undefined}
               />
             </div>
           );
@@ -560,6 +569,7 @@ export function VirtualizedTransactionList({
 }
 
 export default function Transactions() {
+  const { openTransactionAnnotation } = useRecordPreview();
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [expandedTxs, setExpandedTxs] = useState<Set<string>>(new Set());
@@ -1787,6 +1797,7 @@ export default function Transactions() {
           toggleExpanded={toggleExpanded}
           baseAddressToRecord={addressToRecord}
           onStatsChange={handleVirtualizedStatsChange}
+          onAnnotate={transaction => void openTransactionAnnotation(transaction)}
         />
       ) : (
         <div className="flex-1 overflow-y-auto space-y-3">
@@ -1870,6 +1881,7 @@ export default function Transactions() {
                   isExpanded={expandedTxs.has(tx.txid)}
                   onToggleExpand={() => toggleExpanded(tx.txid)}
                   addressToRecord={addressToRecord}
+                  onAnnotate={() => void openTransactionAnnotation(tx)}
                 />
               );
             })

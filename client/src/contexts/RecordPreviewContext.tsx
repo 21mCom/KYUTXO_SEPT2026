@@ -8,6 +8,8 @@ import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import type { TransactionAddresses } from "@/components/RecordFormDialog";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
+import { AnnotationPanel } from "@/components/AnnotationPanel";
+import type { BlockchainTransaction } from "@/lib/database";
 import { useToast } from "@/hooks/use-toast";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
@@ -23,6 +25,9 @@ interface RecordPreviewContextType {
   openRecordPreview: (recordId: number) => Promise<void>;
   openRecordPreviewByAddress: (inputString: string) => Promise<void>;
   openRecordEdit: (recordId: number, scrollToSection?: "acquisition") => Promise<void>;
+  openRecordAnnotation: (recordId: number) => Promise<void>;
+  openTransactionAnnotation: (transaction: BlockchainTransaction) => Promise<void>;
+  openIdentifierAnnotation: (inputString: string) => Promise<void>;
   closePreview: () => void;
   isOpen: boolean;
   isLoading: boolean;
@@ -105,6 +110,8 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
   const [editScrollSection, setEditScrollSection] = useState<"acquisition" | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
+  const [annotationRecord, setAnnotationRecord] = useState<DbRecord | undefined>();
+  const [annotationTransaction, setAnnotationTransaction] = useState<BlockchainTransaction | undefined>();
 
   // Vocabulary lists power the edit form's autosuggest (small master tables).
   const { tags } = useTags();
@@ -225,6 +232,39 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     setRecord(null);
     setAttachments([]);
   }, []);
+
+  const openRecordAnnotation = useCallback(async (recordId: number) => {
+    const found = await getRecord(recordId);
+    if (!found) {
+      toast({ title: "Record not found", variant: "destructive" });
+      return;
+    }
+    setAnnotationRecord(found);
+    setAnnotationTransaction(undefined);
+  }, [toast]);
+
+  const openTransactionAnnotation = useCallback(async (transaction: BlockchainTransaction) => {
+    const matches = await getRecordsByInputString(transaction.txid);
+    setAnnotationRecord(matches.length ? selectBestRecord(matches) : undefined);
+    setAnnotationTransaction(transaction);
+  }, []);
+
+  const openIdentifierAnnotation = useCallback(async (inputString: string) => {
+    const matches = await getRecordsByInputString(inputString);
+    if (matches.length) {
+      setAnnotationRecord(selectBestRecord(matches));
+      setAnnotationTransaction(undefined);
+      return;
+    }
+    const validation = validateBitcoinInput(inputString);
+    if (!validation.isValid || validation.type !== "address") {
+      toast({ title: "Address required", description: "This annotation entry needs a valid address.", variant: "destructive" });
+      return;
+    }
+    const now = Date.now();
+    setAnnotationRecord({ type: "address", inputString, label: "", tags: [], categories: [], createdAt: now, updatedAt: now });
+    setAnnotationTransaction(undefined);
+  }, [toast]);
 
   const handleAttachmentsChange = useCallback(async () => {
     if (record) {
@@ -585,6 +625,9 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         openRecordPreview,
         openRecordPreviewByAddress,
         openRecordEdit,
+        openRecordAnnotation,
+        openTransactionAnnotation,
+        openIdentifierAnnotation,
         closePreview,
         isOpen,
         isLoading,
@@ -594,7 +637,8 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
       <RecordDetailPanel
         open={isOpen}
         onClose={closePreview}
-        onEdit={record ? () => openRecordEdit(Number(record.id)) : undefined}
+        onEdit={record ? () => void openRecordAnnotation(Number(record.id)) : undefined}
+        onAnnotate={record ? () => void openRecordAnnotation(Number(record.id)) : undefined}
         record={record ?? undefined}
         attachments={attachments}
         onAttachmentsChange={handleAttachmentsChange}
@@ -622,6 +666,18 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         onAttachmentDeleted={refreshEditingAttachments}
         scrollToSection={editScrollSection}
         isEditing={editingRecord != null}
+      />
+      <AnnotationPanel
+        open={Boolean(annotationRecord) || Boolean(annotationTransaction)}
+        record={annotationRecord}
+        transaction={annotationTransaction}
+        onAdvancedEdit={annotationRecord?.id ? () => {
+          const id = annotationRecord.id!;
+          setAnnotationRecord(undefined);
+          setAnnotationTransaction(undefined);
+          void openRecordEdit(id);
+        } : undefined}
+        onClose={() => { setAnnotationRecord(undefined); setAnnotationTransaction(undefined); }}
       />
     </RecordPreviewContext.Provider>
   );

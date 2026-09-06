@@ -12,6 +12,7 @@ import { StorageCard, DatabaseDoctorCard, AboutCard } from "./settings/info-card
 import { SecurityAttachmentSection } from "./settings/security-attachment-section";
 import { DataManagementSection } from "./settings/data-management-section";
 import { OwnersSection } from "./settings/owners-section";
+import { CategoryMappingSection } from "./settings/category-mapping-section";
 export { resetEntityErrorOpenState } from "./settings/entity-errors";
 
 export default function SettingsPage() {
@@ -29,6 +30,7 @@ export default function SettingsPage() {
         <FieldVisibilitySection />
         <OwnersSection />
         <VocabularyManager />
+        <CategoryMappingSection />
         <AnalysisLimitsSection />
         <EntityListSection />
         <HoverTooltipSection />

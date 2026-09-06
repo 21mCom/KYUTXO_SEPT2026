@@ -72,6 +72,7 @@ interface RecordDetailPanelProps {
   open: boolean;
   onClose: () => void;
   onEdit?: () => void;
+  onAnnotate?: () => void;
   onSyncComplete?: () => void;
   record?: {
     id: string;
@@ -514,6 +515,7 @@ export function RecordDetailPanel({
   open, 
   onClose, 
   onEdit,
+  onAnnotate,
   onSyncComplete,
   record, 
   attachments = [], 
@@ -722,6 +724,9 @@ export function RecordDetailPanel({
               </div>
             </div>
             <div className="flex gap-1">
+              <Button size="sm" variant="outline" onClick={onAnnotate} data-testid="button-annotate-panel">
+                Annotate
+              </Button>
               <Button size="icon" variant="ghost" onClick={onEdit} data-testid="button-edit-panel">
                 <Edit className="h-4 w-4" />
               </Button>

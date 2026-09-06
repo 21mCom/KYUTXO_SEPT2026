@@ -64,6 +64,7 @@ import {
   type AcquisitionMethod,
   type DispositionType,
 } from "@/lib/database";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 // Address importance options for dropdown (derived from the shared tier set)
 const ADDRESS_IMPORTANCE_OPTIONS: { value: AddressImportance; label: string }[] = getImportanceTierOptions();
@@ -84,6 +85,7 @@ type Step = 'paste' | 'review' | 'metadata' | 'complete';
 
 export default function QuickTagger() {
   const { toast } = useToast();
+  const { openRecordAnnotation, openIdentifierAnnotation } = useRecordPreview();
   const [step, setStep] = useState<Step>('paste');
   const [mode, setMode] = useState<TaggerMode>('address');
   const [pastedText, setPastedText] = useState("");
@@ -635,6 +637,13 @@ export default function QuickTagger() {
               )}
 
               <div className="flex items-center gap-4">
+                {totalCount === 1 && selected[0] && (
+                  <Button variant="outline" size="sm" onClick={() => selected[0].existingRecordId
+                    ? void openRecordAnnotation(selected[0].existingRecordId)
+                    : void openIdentifierAnnotation(selected[0].raw)} data-testid="button-annotate-single-record">
+                    Annotate selected record
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"

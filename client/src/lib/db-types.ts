@@ -679,6 +679,54 @@ export interface Settings {
   // portable backup preferences because it describes this installation's
   // physical security environment.
   desktopLockSettings?: DesktopLockSettings;
+  // Staged choices in the category-retirement workflow.  They are deliberately
+  // preferences rather than record data: nothing is changed until Apply is
+  // pressed, and the reviewer can leave Settings and resume later.
+  categoryMappingDraft?: { [category: string]: CategoryMappingDraftDecision };
+  /** Completed/partially-completed category retirement decisions. Kept with
+   * the draft so an interrupted Apply can resume without replaying writes. */
+  categoryMappingCheckpoints?: { [category: string]: CategoryMappingCheckpoint };
+}
+
+export type CategoryMappingClassification =
+  | 'flowType:received' | 'flowType:sent' | 'flowType:self-transfer' | 'flowType:consolidation'
+  | 'acquisitionMethod:purchase' | 'acquisitionMethod:mining' | 'acquisitionMethod:staking'
+  | 'acquisitionMethod:airdrop' | 'acquisitionMethod:fork' | 'acquisitionMethod:gift-received'
+  | 'acquisitionMethod:inheritance' | 'acquisitionMethod:salary'
+  | 'acquisitionMethod:payment-for-services' | 'acquisitionMethod:loan'
+  | 'acquisitionMethod:unknown'
+  | 'dispositionType:sale' | 'dispositionType:payment' | 'dispositionType:gift-given'
+  | 'dispositionType:donation' | 'dispositionType:theft-loss'
+  | 'dispositionType:loan-repayment' | 'dispositionType:unknown'
+  | 'counterpartyType:exchange' | 'counterpartyType:individual'
+  | 'counterpartyType:business' | 'counterpartyType:mining-pool'
+  | 'counterpartyType:mixer' | 'counterpartyType:unknown';
+
+/** Runtime source of truth used at both the backup boundary and write boundary.
+ * Do not accept arbitrary `field:value` strings: category mapping is a bulk
+ * record mutation and must never become a generic field-write primitive. */
+export const CATEGORY_MAPPING_CLASSIFICATIONS: readonly CategoryMappingClassification[] = [
+  ...FLOW_TYPE_OPTIONS.map(({ value }) => `flowType:${value}` as CategoryMappingClassification),
+  ...ACQUISITION_METHOD_OPTIONS.map(({ value }) => `acquisitionMethod:${value}` as CategoryMappingClassification),
+  ...DISPOSITION_TYPE_OPTIONS.map(({ value }) => `dispositionType:${value}` as CategoryMappingClassification),
+  ...COUNTERPARTY_TYPE_OPTIONS.map(({ value }) => `counterpartyType:${value}` as CategoryMappingClassification),
+];
+
+export function isCategoryMappingClassification(value: unknown): value is CategoryMappingClassification {
+  return typeof value === 'string' &&
+    (CATEGORY_MAPPING_CLASSIFICATIONS as readonly string[]).includes(value);
+}
+
+export type CategoryMappingDraftDecision =
+  | { kind: 'tag'; tagName: string }
+  | { kind: 'rename'; categoryName: string }
+  | { kind: 'classification'; classification: CategoryMappingClassification }
+  | { kind: 'drop' }
+  | { kind: 'skip' };
+
+export interface CategoryMappingCheckpoint {
+  status: 'applied' | 'partially-applied';
+  appliedAt: number;
 }
 
 export type BackupCadenceDays = 1 | 7 | 14 | 30 | 90;

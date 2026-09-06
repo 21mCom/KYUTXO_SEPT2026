@@ -1,8 +1,9 @@
-import { db, notifyDbChange, USER_CURATED_TIERS, type BlockchainTransaction, type TransactionParticipant, type TransactionCurationState, type Record, type SavedInboxView, type SavedInboxViewFilters } from '../database';
 import { getAttachmentsByRecordId } from './attachments-crud';
 import { getRecordsByInputStrings } from './record-crud';
 import Dexie from 'dexie';
 import { getVaultRepository, ProtectedVaultRepository } from '../repository';
+import { db, notifyDbChange, USER_CURATED_TIERS, type BlockchainTransaction, type TransactionParticipant, type TransactionCurationState, type Record, type SavedInboxView, type SavedInboxViewFilters, type TransactionMetadata, type TransactionLegMetadata } from '../database';
+import { UNASSIGNED_OWNER_VALUE } from '../owner-constants';
 
 const protectedTransactionQuery = <T>(table: 'blockchainTransactions' | 'transactionParticipants', name: Parameters<ProtectedVaultRepository['query']>[1], value: unknown, limit?: number) => {
   const repository = getVaultRepository();
@@ -11,6 +12,20 @@ const protectedTransactionQuery = <T>(table: 'blockchainTransactions' | 'transac
 
 export type CreateTransactionData = Omit<BlockchainTransaction, 'id'>;
 
+/** Read model for context-aware annotation screens. Keeping this here prevents
+ * UI components from bypassing the transaction repository. */
+export async function getTransactionAnnotationRows(txid: string): Promise<{
+  participants: TransactionParticipant[];
+  metadata?: TransactionMetadata;
+  legMetadata: TransactionLegMetadata[];
+}> {
+  const [participants, metadata, legMetadata] = await Promise.all([
+    db.transactionParticipants.where('txid').equals(txid).toArray(),
+    db.transactionMetadata.where('txid').equals(txid).first(),
+    db.transactionLegMetadata.where('txid').equals(txid).toArray(),
+  ]);
+  return { participants, metadata, legMetadata };
+}
 export interface TransactionWriteOptions {
   skipNotification?: boolean;
 }
@@ -686,7 +701,23 @@ function entityFilterRecordIdLoaders(filter: TxEntityFilter): Array<() => Promis
   }
   const owner = toValueArray(filter.owner);
   if (owner) {
-    recordDims.push(async () => (await db.records.where('owner').anyOf(owner).primaryKeys()) as number[]);
+    recordDims.push(async () => {
+      const namedOwners = owner.filter(value => value !== UNASSIGNED_OWNER_VALUE);
+      const ids = new Set<number>(
+        namedOwners.length
+          ? (await db.records.where('owner').anyOf(namedOwners).primaryKeys()) as number[]
+          : [],
+      );
+      // Empty strings are not indexed consistently across historical Dexie
+      // schemas, so the synthetic option deliberately uses a small residual
+      // scan. It unions with named owners (OR within this dimension).
+      if (owner.includes(UNASSIGNED_OWNER_VALUE)) {
+        await db.records.filter(record => !record.owner?.trim()).each(record => {
+          if (typeof record.id === 'number') ids.add(record.id);
+        });
+      }
+      return [...ids];
+    });
   }
   const tag = toValueArray(filter.tag);
   if (tag) {

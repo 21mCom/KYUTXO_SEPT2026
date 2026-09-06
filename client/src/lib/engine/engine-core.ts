@@ -24,14 +24,14 @@
 import {
   calculateCoinOrigins,
   filterCoinOrigins,
+  filterCoinOriginsByOwner,
   type CoinOriginAddress,
   type CoinOriginParticipant,
   type CoinOriginTransaction,
   type CoinOriginsPage,
   type CoinOriginsLedger,
 } from '../coin-origins-core';
-
-
+import { UNASSIGNED_OWNER_VALUE } from '../owner-constants';
 /**
  * Minimal database driver contract this engine runs against. Implemented by a
  * thin adapter over better-sqlite3 (production worker + Node tests/benchmark).
@@ -1121,7 +1121,8 @@ export interface TransactionEntityFilter {
   wallet?: string | string[];
   /** A participant linked to a record whose seedName matches any of these. */
   seed?: string | string[];
-  /** A participant linked to a record whose owner matches any of these. */
+  /** A participant linked to a record whose owner matches any of these.
+   * `UNASSIGNED_OWNER_VALUE` additionally matches NULL/blank owners. */
   owner?: string | string[];
   /** A participant linked to a record whose tags JSON array contains any of these. */
   tag?: string | string[];
@@ -1230,8 +1231,19 @@ function buildTransactionMatchSubquery(
   }
   const owner = toValueArray(opts.owner);
   if (owner) {
-    selects.push(participantRecordTxidSelect(`r.owner IN (${inPlaceholders(owner)})`));
-    bind.push(...owner);
+    const namedOwners = owner.filter(value => value !== UNASSIGNED_OWNER_VALUE);
+    const ownerParts: string[] = [];
+    if (namedOwners.length) {
+      ownerParts.push(`r.owner IN (${inPlaceholders(namedOwners)})`);
+      bind.push(...namedOwners);
+    }
+    if (owner.includes(UNASSIGNED_OWNER_VALUE)) {
+      ownerParts.push(`r.owner IS NULL OR trim(r.owner) = ''`);
+    }
+    // owner is non-empty, so at least one branch is always present. Parentheses
+    // preserve OR-within-owner before this select is INTERSECTed with other
+    // dimensions.
+    selects.push(participantRecordTxidSelect(`(${ownerParts.join(' OR ')})`));
   }
   const tag = toValueArray(opts.tag);
   if (tag) {
@@ -1685,10 +1697,10 @@ export function getVaultSummaries(db: EngineDb, opts: { search?: string } = {}):
  */
 export function getCoinOrigins(
   db: EngineDb,
-  opts: { walletName?: string; owner?: string } = {},
+  opts: { walletName?: string; owners?: string[] } = {},
 ): CoinOriginsLedger {
   const ledger = getCoinOriginsCheckpoint(db).ledger;
-  return filterCoinOrigins(ledger, opts);
+  return filterCoinOriginsByOwner(filterCoinOrigins(ledger, { walletName: opts.walletName }), opts.owners);
 }
 
 interface CoinOriginsCheckpoint {
@@ -1749,17 +1761,25 @@ function getCoinOriginsCheckpoint(db: EngineDb): CoinOriginsCheckpoint {
 
 export interface CoinOriginsPageOptions {
   walletName?: string;
-  /** Empty string selects unassigned current outpoints. */
-  owner?: string;
+  /** Empty selection means all; UNASSIGNED_OWNER_VALUE selects blank owners. */
+  owners?: string[];
+
   holdingsOffset?: number;
+
   outpointsOffset?: number;
+
   allocationsOffset?: number;
+
   hopsOffset?: number;
+
   limit?: number;
   /** Return one passport's ancestry instead of a normal outpoint window. */
+
   outpoint?: string;
   /** Refuse detail from a snapshot other than the displayed list checkpoint. */
+
   expectedCheckpointKey?: string;
+
 }
 
 function pageLimit(value: number | undefined): number {
@@ -1778,7 +1798,7 @@ export function getCoinOriginsPage(db: EngineDb, opts: CoinOriginsPageOptions = 
   if (opts.expectedCheckpointKey && opts.expectedCheckpointKey !== checkpoint.key) {
     throw new Error('Coin Origins checkpoint changed; reload the active window');
   }
-  const ledger = filterCoinOrigins(checkpoint.ledger, { walletName: opts.walletName, owner: opts.owner });
+  const ledger = filterCoinOriginsByOwner(filterCoinOrigins(checkpoint.ledger, { walletName: opts.walletName }), opts.owners);
   const limit = pageLimit(opts.limit);
   const holdingsOffset = Math.max(0, Math.trunc(opts.holdingsOffset ?? 0));
   const outpointsOffset = Math.max(0, Math.trunc(opts.outpointsOffset ?? 0));

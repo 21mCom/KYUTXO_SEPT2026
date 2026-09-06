@@ -35,6 +35,7 @@ import { getParticipantsByTxid, getTransactionByTxid, getRecordsByType } from "@
 import { cn } from "@/lib/utils";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 interface UTXO {
   id: string;
@@ -82,6 +83,7 @@ function formatUsdValue(value: number | undefined): string {
 }
 
 export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetailPanelProps) {
+  const { openTransactionAnnotation, openIdentifierAnnotation } = useRecordPreview();
   const [fundingInputs, setFundingInputs] = useState<FundingInput[]>([]);
   const [fundingTx, setFundingTx] = useState<BlockchainTransaction | null>(null);
   const [fundingOpen, setFundingOpen] = useState(true);
@@ -174,6 +176,9 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
             <div>
               <h4 className="text-sm font-medium mb-3">Transaction Output</h4>
               <div className="space-y-3">
+                 {fundingTx && <Button variant="outline" size="sm" onClick={() => void openTransactionAnnotation(fundingTx)} data-testid="button-annotate-utxo-transaction">
+                   Annotate transaction
+                 </Button>}
                 <div>
                   <span className="text-xs text-muted-foreground">Transaction ID</span>
                   <div className="flex items-center gap-2 mt-1" data-testid="text-txid">
@@ -279,6 +284,7 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
                       recordId={utxo.recordId}
                       truncate={false}
                     />
+                    <Button size="sm" variant="outline" onClick={() => void openIdentifierAnnotation(utxo.address)} data-testid="button-annotate-utxo-address">Annotate</Button>
                   </div>
                 </div>
                 {utxo.label && (

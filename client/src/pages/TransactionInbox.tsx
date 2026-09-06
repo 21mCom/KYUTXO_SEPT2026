@@ -20,17 +20,20 @@ import {
   TransactionSearchFilters,
   defaultFilters,
   filterByDateAndAmount,
+  UNASSIGNED_OWNER_VALUE,
   type SearchFilters,
+  type EntityFilterOptions,
 } from "@/components/TransactionSearchFilters";
+import { getCategories, getOwners, getRecordEntityValues, getSeedNames, getTags, getWalletNames } from "@/lib/data/vocabulary-crud";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 type InboxTab = TransactionCurationState;
 type UndoEntry = Array<{
@@ -163,6 +166,7 @@ function SnoozePicker({
 
 export default function TransactionInbox() {
   const { toast } = useToast();
+  const { openTransactionAnnotation } = useRecordPreview();
   const [tab, setTab] = useState<InboxTab>("new");
   const [rows, setRows] = useState<BlockchainTransaction[]>([]);
   const [nextBeforeId, setNextBeforeId] = useState<number | undefined>();
@@ -171,7 +175,6 @@ export default function TransactionInbox() {
   const [filters, setFilters] = useState<SearchFilters>(defaultFilters);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [drafts, setDrafts] = useState<Map<string, { label: string; notes: string }>>(new Map());
   const [undo, setUndo] = useState<UndoEntry | null>(null);
   const [viewName, setViewName] = useState("");
   const [activeViewId, setActiveViewId] = useState("");
@@ -252,6 +255,30 @@ export default function TransactionInbox() {
     () => new Map(addressRecords.filter(r => r.inputString).map(r => [r.inputString, r])),
     [addressRecords],
   );
+  // Keep the Inbox's local (bounded) filter control aligned with Transactions.
+  // Vocabulary and stored record values are merged because older imports may
+  // contain an owner that was never added to vocabulary.
+  const entityOptions = useLiveQuery(async (): Promise<EntityFilterOptions> => {
+    const [wallets, seeds, owners, tags, categories, values] = await Promise.all([
+      getWalletNames(), getSeedNames(), getOwners(), getTags(), getCategories(), getRecordEntityValues(),
+    ]);
+    const merge = (vocab: string[], stored: string[]) => {
+      const seen = new Set<string>();
+      return [...vocab, ...stored].filter(value => {
+        const key = value.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+    return {
+      wallets: merge(wallets.map(value => value.name), values.wallets),
+      seeds: merge(seeds.map(value => value.name), values.seeds),
+      owners: merge(owners.map(value => value.name), values.owners),
+      tags: merge(tags.map(value => value.name), values.tags),
+      categories: merge(categories.map(value => value.name), values.categories),
+    };
+  }, [dbSignal]);
 
   const visibleRows = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -263,6 +290,28 @@ export default function TransactionInbox() {
         .filter(p => p.role === "output")
         .reduce((sum, p) => sum + p.amount, 0),
     );
+    const matchesAny = (value: string | undefined, selected: string[] | undefined, unassigned = false) =>
+      !selected?.length || selected.some(candidate =>
+        (unassigned && candidate === UNASSIGNED_OWNER_VALUE && !value?.trim()) ||
+        candidate === value,
+      );
+    const matchesArray = (values: string[] | undefined, selected: string[] | undefined) =>
+      !selected?.length || values?.some(value => selected.includes(value)) === true;
+    if (filters.entityAddress?.trim() || filters.entityWallet?.length || filters.entitySeed?.length ||
+      filters.entityOwner?.length || filters.entityTag?.length || filters.entityCategory?.length) {
+      filtered = filtered.filter(tx => {
+        const txParticipants = participantsByTxid.get(tx.txid) ?? [];
+        const linked = txParticipants
+          .map(participant => addressToRecord.get(participant.address))
+          .filter((record): record is Record => !!record);
+        return (!filters.entityAddress?.trim() || txParticipants.some(p => p.address === filters.entityAddress!.trim())) &&
+          (!filters.entityWallet?.length || linked.some(r => matchesAny(r.walletName, filters.entityWallet))) &&
+          (!filters.entitySeed?.length || linked.some(r => matchesAny(r.seedName, filters.entitySeed))) &&
+          (!filters.entityOwner?.length || linked.some(r => matchesAny(r.owner, filters.entityOwner, true))) &&
+          (!filters.entityTag?.length || linked.some(r => matchesArray(r.tags, filters.entityTag))) &&
+          (!filters.entityCategory?.length || linked.some(r => matchesArray(r.categories, filters.entityCategory)));
+      });
+    }
     if (needle) {
       filtered = filtered.filter(tx => {
         const record = txRecordByTxid.get(tx.txid);
@@ -273,7 +322,7 @@ export default function TransactionInbox() {
       });
     }
     return filtered;
-  }, [rows, filters, search, participantsByTxid, txRecordByTxid]);
+  }, [rows, filters, search, participantsByTxid, txRecordByTxid, addressToRecord]);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -299,33 +348,6 @@ export default function TransactionInbox() {
     setUndo(previous);
     setSelected(new Set());
   }, [rows]);
-
-  const annotate = async (txid: string) => {
-    const draft = drafts.get(txid) ?? { label: "", notes: "" };
-    if (!draft.label.trim() && !draft.notes.trim()) {
-      toast({ title: "Add a label or note first", variant: "destructive" });
-      return;
-    }
-    const record = txRecordByTxid.get(txid);
-    if (record?.id) {
-      await updateRecord(record.id, { label: draft.label.trim(), notes: draft.notes.trim() });
-    } else {
-      await createRecord({
-        type: "transaction",
-        inputString: txid,
-        label: draft.label.trim(),
-        notes: draft.notes.trim(),
-        tags: [],
-        categories: [],
-      });
-    }
-    await applyState([txid], "annotated");
-    setDrafts(current => {
-      const next = new Map(current);
-      next.delete(txid);
-      return next;
-    });
-  };
 
   const saveView = async () => {
     const name = viewName.trim();
@@ -418,7 +440,7 @@ export default function TransactionInbox() {
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input className="pl-9" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search txid, address, label, or notes…" data-testid="input-inbox-search" />
         </div>
-        <TransactionSearchFilters filters={filters} onChange={setFilters} onClear={() => setFilters(defaultFilters)} showEntityFilters={false} />
+        <TransactionSearchFilters filters={filters} onChange={setFilters} onClear={() => setFilters(defaultFilters)} entityOptions={entityOptions} />
       </div>
 
       <Card>
@@ -453,7 +475,7 @@ export default function TransactionInbox() {
               Delete view
             </Button>
           </div>
-          <p className="mt-2 text-xs text-muted-foreground">Saved views remember this tab, search, date, and amount filters.</p>
+          <p className="mt-2 text-xs text-muted-foreground">Saved views remember this tab, search, and all advanced filters.</p>
         </CardContent>
       </Card>
 
@@ -481,7 +503,6 @@ export default function TransactionInbox() {
             const txParticipants = participantsByTxid.get(tx.txid) ?? [];
             const inputs = txParticipants.filter(p => p.role === "input");
             const outputs = txParticipants.filter(p => p.role === "output");
-            const draft = drafts.get(tx.txid) ?? { label: "", notes: "" };
             return (
               <div key={tx.txid} ref={virtualizer.measureElement} data-index={item.index} className="absolute left-0 right-0 pb-3" style={{ transform: `translateY(${item.start}px)` }}>
                 <div className="flex items-start gap-2">
@@ -503,17 +524,14 @@ export default function TransactionInbox() {
                         return next;
                       })}
                       addressToRecord={addressToRecord}
+                      onAnnotate={() => void openTransactionAnnotation(tx)}
                     />
                     {tab === "new" && (
                       <Card>
-                        <CardContent className="pt-4 grid gap-2 md:grid-cols-[1fr_1fr_auto]">
-                          <Input value={draft.label} onChange={event => setDrafts(current => new Map(current).set(tx.txid, { ...draft, label: event.target.value }))} placeholder="Label" data-testid={`input-inbox-label-${tx.txid}`} />
-                          <Textarea className="min-h-9 h-9" value={draft.notes} onChange={event => setDrafts(current => new Map(current).set(tx.txid, { ...draft, notes: event.target.value }))} placeholder="Notes" />
-                          <div className="flex flex-wrap gap-2">
-                            <Button size="sm" onClick={() => annotate(tx.txid)}>Save annotation</Button>
+                        <CardContent className="pt-4 flex flex-wrap gap-2">
+                            <Button size="sm" onClick={() => void openTransactionAnnotation(tx)} data-testid={`button-inbox-annotate-${tx.txid}`}>Annotate</Button>
                             <Button size="sm" variant="outline" onClick={() => applyState([tx.txid], "ignored")}>Ignore</Button>
                             <SnoozePicker onSnooze={until => applyState([tx.txid], "snoozed", until)} testId={`button-inbox-snooze-${tx.txid}`} />
-                          </div>
                         </CardContent>
                       </Card>
                     )}

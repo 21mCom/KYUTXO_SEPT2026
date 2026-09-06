@@ -2,9 +2,7 @@ import type { Owner, OwnerKind, OwnerMatchingMethod, OwnerResidency } from '../d
 import { getVaultRepository, type VaultRows, type VaultTableName } from '../repository';
 import { loadCoinOrigins } from '../coin-origins';
 import { propagateStringFieldRename } from './vocabulary-crud';
-
-export const UNASSIGNED_OWNER_VALUE = '__unassigned__';
-export const UNASSIGNED_OWNER_OPTION = { value: UNASSIGNED_OWNER_VALUE, label: 'Unassigned' } as const;
+import { UNASSIGNED_OWNER_VALUE, UNASSIGNED_OWNER_OPTION } from '../owner-constants';
 
 export interface OwnerSelectorOption {
   value: string;

@@ -13,6 +13,7 @@ import {
   getTypeFilterValue,
   setFacetValues,
   setTypeFilterValue,
+  UNASSIGNED_OWNER_VALUE,
 } from "@/components/RecordFilters";
 
 interface ActiveFiltersBarProps {
@@ -113,7 +114,7 @@ export function ActiveFiltersBar({
                 onClick={() => removeFacetValue(key, value)}
                 data-testid={`chip-facet-${key}`}
               >
-                {FACET_LABELS[key]}: {value}
+                {FACET_LABELS[key]}: {key === 'owner' && value === UNASSIGNED_OWNER_VALUE ? 'Unassigned' : value}
                 <X className="h-3 w-3 ml-1" />
               </Badge>
             )),

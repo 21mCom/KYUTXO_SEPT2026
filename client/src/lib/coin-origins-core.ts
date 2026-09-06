@@ -1,11 +1,4 @@
-/**
- * Deterministic, integer-only coin-origin accounting.
- *
- * This file deliberately has no Dexie, React, Electron, or browser imports. It
- * is used by the renderer fallback and by the native read-engine so both paths
- * produce the same payload. The ledger is descriptive, not a tax calculation:
- * an unresolved prevout is carried as UNKNOWN rather than guessed.
- */
+import { UNASSIGNED_OWNER_VALUE } from "./owner-constants";
 
 export const UNKNOWN_ORIGIN_ID = "unknown";
 
@@ -673,6 +666,22 @@ export function filterCoinOrigins(ledger: CoinOriginsLedger, scope: CoinOriginsS
 /** Backward-compatible wallet-only facade for existing callers. */
 export function filterCoinOriginsByWallet(ledger: CoinOriginsLedger, walletName?: string): CoinOriginsLedger {
   return filterCoinOrigins(ledger, { walletName });
+}
+
+/** Owner counterpart to wallet scoping; empty selection deliberately means all. */
+export function filterCoinOriginsByOwner(ledger: CoinOriginsLedger, owners?: string[]): CoinOriginsLedger {
+  if (!owners?.length) return ledger;
+  const keep = new Set(ledger.outpoints
+    .filter((outpoint) => owners.includes(outpoint.owner?.trim() || UNASSIGNED_OWNER_VALUE))
+    .map((outpoint) => outpointKey(outpoint.txid, outpoint.vout)));
+  // Reuse the wallet scoping reducer by presenting each kept outpoint under a
+  // unique temporary wallet key; this retains allocation/summary invariants.
+  const token = '__owner_scope__';
+  return filterCoinOriginsByWallet({
+    ...ledger,
+    outpoints: ledger.outpoints.map(outpoint =>
+      keep.has(outpointKey(outpoint.txid, outpoint.vout)) ? { ...outpoint, walletName: token } : outpoint),
+  }, token);
 }
 
 /** Build the same bounded renderer payload used by the native worker. */

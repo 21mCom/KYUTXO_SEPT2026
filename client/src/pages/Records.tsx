@@ -50,7 +50,6 @@ import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { TxidLink } from "@/components/TxidLink";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { RecordFilters, ColumnFilter } from "@/components/RecordFilters";
 import { ActiveFiltersBar } from "@/components/ActiveFiltersBar";
 import { BehaviorFilter } from "@/components/BehaviorFilter";
 import { behaviorLabelFromCachedStats, type BehaviorLabel } from "@/lib/behavior-profile";
@@ -81,6 +80,7 @@ import { getVaultRepository } from "@/lib/repository";
 // The records list and the detail panel share one converter so any new DB
 // field flows through to both automatically (see `toPanelRecord`). `ConvertedRecord`
 // stays as a local alias to avoid churn at the many existing call sites.
+import { RecordFilters, ColumnFilter, UNASSIGNED_OWNER_VALUE } from "@/components/RecordFilters";
 type ConvertedRecord = PanelRecord;
 
 const convertRecord = toPanelRecord;
@@ -188,7 +188,13 @@ function matchesColumnFilter(record: DbRecord, filter: ColumnFilter): boolean {
         allowed = [];
       }
       if (allowed.length === 0) return true;
-      const normalizedAllowed = allowed.map((v) => v.toLowerCase());
+      // Owner's synthetic Unassigned choice belongs to the same OR group as
+      // named owners. Empty and whitespace-only legacy values are unassigned.
+      if (filter.field === 'owner' && allowed.includes(UNASSIGNED_OWNER_VALUE) &&
+        (!value || String(value).trim() === '')) return true;
+      const normalizedAllowed = allowed
+        .filter(v => v !== UNASSIGNED_OWNER_VALUE)
+        .map((v) => v.toLowerCase());
       if (Array.isArray(value)) return value.some((v: unknown) => normalizedAllowed.includes(String(v).toLowerCase()));
       return normalizedAllowed.includes(String(value ?? '').toLowerCase());
     }
@@ -198,7 +204,7 @@ function matchesColumnFilter(record: DbRecord, filter: ColumnFilter): boolean {
 
 export default function Records() {
   const [location, navigate] = useLocation();
-  const { openRecordEdit } = useRecordPreview();
+  const { openRecordEdit, openRecordAnnotation } = useRecordPreview();
   
   const PAGE_SIZE = 50;
   const [currentPage, setCurrentPage] = useState(1);
@@ -1327,7 +1333,8 @@ export default function Records() {
             open={true}
             record={selectedRecord}
             onClose={() => navigate("/records")}
-            onEdit={selectedRecord ? () => openRecordEdit(Number(selectedRecord.id)) : undefined}
+            onEdit={selectedRecord ? () => void openRecordAnnotation(Number(selectedRecord.id)) : undefined}
+            onAnnotate={selectedRecord ? () => void openRecordAnnotation(Number(selectedRecord.id)) : undefined}
             onSyncComplete={handleSyncComplete}
             customFieldDefs={customFieldDefs}
           />
@@ -1587,7 +1594,11 @@ export default function Records() {
                     <RecordTable 
                       records={displayRecords}
                       showAddedColumn={dateAddedActive}
-                      onRowClick={setSelectedRecordId}
+                      // RecordTable ids are numeric while the route/detail
+                      // state deliberately uses a string (it is also fed by
+                      // URL parameters). Normalize at this boundary so a
+                      // click can actually resolve the selected record.
+                      onRowClick={(id) => setSelectedRecordId(String(id))}
                       onDelete={handleDeleteRequest}
                       selectionEnabled={true}
                       selectedIds={selectedIds}
@@ -1660,7 +1671,8 @@ export default function Records() {
                 open={true}
                 record={selectedRecord}
                 onClose={() => setSelectedRecordId(null)}
-                onEdit={selectedRecord ? () => openRecordEdit(Number(selectedRecord.id)) : undefined}
+                onEdit={selectedRecord ? () => void openRecordAnnotation(Number(selectedRecord.id)) : undefined}
+                onAnnotate={selectedRecord ? () => void openRecordAnnotation(Number(selectedRecord.id)) : undefined}
                 onSyncComplete={handleSyncComplete}
                 customFieldDefs={customFieldDefs}
               />

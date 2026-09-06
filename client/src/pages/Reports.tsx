@@ -4,6 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
+import { UNASSIGNED_OWNER_OPTION, UNASSIGNED_OWNER_VALUE } from "@/lib/owner-constants";
 import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download, Printer, ChevronLeft, ChevronRight, Copy } from "lucide-react";
 import { SourceOfFundsReport } from "@/components/reports/SourceOfFundsReport";
 import { HopPointReport } from "@/components/reports/HopPointReport";
@@ -50,7 +52,9 @@ export function PrivacyAuditReportPanel() {
   const { walletNames } = useWalletNames();
   const { toast } = useToast();
 
-  const [selectedOwner, setSelectedOwner] = useState("all");
+  // Empty selection is intentionally the default: all owners, including
+  // records that have not yet been assigned an owner.
+  const [selectedOwner, setSelectedOwner] = useState<string[]>([]);
   const [selectedWallet, setSelectedWallet] = useState("all");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<PrivacyAuditResult | null>(null);
@@ -130,7 +134,9 @@ export function PrivacyAuditReportPanel() {
     setHighlightedType(null);
     setFocusedFindingIndex(null);
     const scope: ExportScope = {
-      owner: selectedOwner === "all" ? null : selectedOwner,
+      owner: selectedOwner.length ? selectedOwner.map(value =>
+        value === UNASSIGNED_OWNER_VALUE ? UNASSIGNED_OWNER_OPTION.label : value,
+      ).join(", ") : null,
       wallet: selectedWallet === "all" ? null : selectedWallet,
     };
     try {
@@ -141,7 +147,9 @@ export function PrivacyAuditReportPanel() {
         if (page.length === 0) break;
         for (const r of page) {
           if (!r.inputString) continue;
-          if (scope.owner !== null && r.owner !== scope.owner) continue;
+          if (selectedOwner.length && !selectedOwner.some(owner =>
+            owner === UNASSIGNED_OWNER_VALUE ? !r.owner?.trim() : r.owner === owner,
+          )) continue;
           if (scope.wallet !== null && r.walletName !== scope.wallet) continue;
           allAddresses.push(r.inputString);
         }
@@ -245,15 +253,15 @@ export function PrivacyAuditReportPanel() {
       <div className="flex flex-wrap gap-3 items-end">
         <div className="space-y-1 min-w-[160px]">
           <label className="text-xs text-muted-foreground">Owner</label>
-          <Select value={selectedOwner} onValueChange={setSelectedOwner}>
-            <SelectTrigger data-testid="select-privacy-report-owner">
-              <SelectValue placeholder="All Owners" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Owners</SelectItem>
-              {owners.map(o => <SelectItem key={o.name} value={o.name}>{o.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <MultiSelectCombobox
+            values={selectedOwner}
+            onChange={setSelectedOwner}
+            options={[UNASSIGNED_OWNER_VALUE, ...owners.map(o => o.name).filter(name => name !== UNASSIGNED_OWNER_VALUE)]}
+            placeholder="All Owners"
+            searchPlaceholder="Search owners..."
+            optionLabels={{ [UNASSIGNED_OWNER_VALUE]: UNASSIGNED_OWNER_OPTION.label }}
+            testId="select-privacy-report-owner"
+          />
         </div>
         <div className="space-y-1 min-w-[160px]">
           <label className="text-xs text-muted-foreground">Wallet</label>

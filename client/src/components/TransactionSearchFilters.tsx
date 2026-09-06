@@ -19,11 +19,15 @@ import {
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { cn } from "@/lib/utils";
+import { UNASSIGNED_OWNER_OPTION, UNASSIGNED_OWNER_VALUE } from "@/lib/owner-constants";
 
 const SATS_PER_BTC = 100_000_000;
 
 /** Display unit for the amount-range filter; storage stays canonical BTC. */
 export type AmountDisplayUnit = "btc" | "sats";
+
+/** Stored filter value, deliberately distinct from a user-entered owner name. */
+export { UNASSIGNED_OWNER_VALUE };
 
 function btcToDisplay(btc: number | undefined, unit: AmountDisplayUnit): number | undefined {
   if (btc === undefined) return undefined;
@@ -404,7 +408,14 @@ export function TransactionSearchFilters({
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   {ENTITY_DIMENSIONS.map((dim) => {
-                    const options = entityOptions?.[dim.optionsKey] ?? [];
+                    // Owner is the one entity dimension for which an empty
+                    // record value is meaningful. Keep the synthetic option in
+                    // the shared control so Transactions and saved Inbox views
+                    // have exactly the same serializable value.
+                    const options = dim.key === "entityOwner"
+                      ? [UNASSIGNED_OWNER_VALUE, ...(entityOptions?.owners ?? [])
+                          .filter(owner => owner !== UNASSIGNED_OWNER_VALUE)]
+                      : (entityOptions?.[dim.optionsKey] ?? []);
                     const values = filters[dim.key] ?? [];
                     return (
                       <div key={dim.key}>
@@ -413,9 +424,12 @@ export function TransactionSearchFilters({
                           values={values}
                           onChange={(v) => updateFilter(dim.key, v.length ? v : undefined)}
                           options={options}
-                          placeholder="Any"
+                           placeholder={dim.key === "entityOwner" ? "All owners" : "Any"}
                           searchPlaceholder={`Search ${dim.label.toLowerCase()}...`}
                           testId={`select-entity-${dim.label.toLowerCase()}`}
+                           optionLabels={dim.key === "entityOwner"
+                             ? { [UNASSIGNED_OWNER_VALUE]: UNASSIGNED_OWNER_OPTION.label }
+                             : undefined}
                         />
                       </div>
                     );
@@ -510,7 +524,13 @@ export function TransactionSearchFilters({
             data-testid={`chip-entity-${dim.label.toLowerCase()}`}
           >
             <LinkIcon className="h-3 w-3 text-muted-foreground" />
-            <span className="max-w-[220px] truncate">{dim.label}: {values.join(", ")}</span>
+            <span className="max-w-[220px] truncate">
+              {dim.label}: {values.map(value =>
+                dim.key === "entityOwner" && value === UNASSIGNED_OWNER_VALUE
+                  ? UNASSIGNED_OWNER_OPTION.label
+                  : value,
+              ).join(", ")}
+            </span>
             <Button
               variant="ghost"
               size="icon"

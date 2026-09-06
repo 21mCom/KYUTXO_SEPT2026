@@ -18,6 +18,7 @@
 // guarded and are read/cleared directly.
 
 import { getVaultRepository, type VaultRows, type VaultTableName } from "@/lib/repository";
+import { isCategoryMappingClassification } from "@/lib/db-types";
 import {
   getTags,
   getCategories,
@@ -153,6 +154,19 @@ interface PortablePreferenceDescriptor {
   format: (value: unknown) => string;
 }
 
+function sanitizeCategoryMappingDraft(value: unknown): unknown | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const result: Record<string, unknown> = {};
+  for (const [key, decision] of Object.entries(value)) {
+    if (!key.trim() || !decision || typeof decision !== 'object') continue;
+    const d = decision as Record<string, unknown>;
+    if (d.kind === 'drop' || d.kind === 'skip') result[key] = { kind: d.kind };
+    else if (d.kind === 'tag' && typeof d.tagName === 'string') result[key] = { kind: 'tag', tagName: d.tagName };
+    else if (d.kind === 'rename' && typeof d.categoryName === 'string') result[key] = { kind: 'rename', categoryName: d.categoryName };
+    else if (d.kind === 'classification' && isCategoryMappingClassification(d.classification)) result[key] = { kind: 'classification', classification: d.classification };
+  }
+  return Object.keys(result).length ? result : undefined;
+}
 const PORTABLE_PREFERENCES: PortablePreferenceDescriptor[] = [
   {
     key: "disableOrphanCheck",
@@ -264,6 +278,18 @@ const PORTABLE_PREFERENCES: PortablePreferenceDescriptor[] = [
       const n = (v as SavedInboxView[]).length;
       return `${n} ${n === 1 ? "view" : "views"}`;
     },
+  },
+  {
+    key: "categoryMappingDraft",
+    label: "Category mapping draft",
+    extract: (s) => sanitizeCategoryMappingDraft(s.categoryMappingDraft),
+    format: (v) => `${Object.keys(v as object).length} decision(s)`,
+  },
+  {
+    key: "categoryMappingCheckpoints",
+    label: "Category mapping progress",
+    extract: (s) => sanitizeCategoryMappingCheckpoints(s.categoryMappingCheckpoints),
+    format: (v) => `${Object.keys(v as object).length} checkpoint(s)`,
   },
 ];
 
@@ -959,4 +985,18 @@ async function readAllRepositoryRows<T extends VaultTableName>(table: T): Promis
     cursor = page.cursor;
   } while (cursor !== undefined);
   return rows;
+}
+
+function sanitizeCategoryMappingCheckpoints(value: unknown): unknown | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const result: Record<string, unknown> = {};
+  for (const [key, checkpoint] of Object.entries(value)) {
+    if (!key.trim() || !checkpoint || typeof checkpoint !== 'object') continue;
+    const c = checkpoint as Record<string, unknown>;
+    if ((c.status === 'applied' || c.status === 'partially-applied') &&
+      typeof c.appliedAt === 'number' && Number.isFinite(c.appliedAt)) {
+      result[key] = { status: c.status, appliedAt: c.appliedAt };
+    }
+  }
+  return Object.keys(result).length ? result : undefined;
 }

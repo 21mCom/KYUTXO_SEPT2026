@@ -862,7 +862,7 @@ export async function engineGetVaultSummaries(
 
 /** Compositional origin ledger calculated in the native worker. */
 export async function engineGetCoinOrigins(
-  opts: { walletName?: string; owner?: string } = {},
+  opts: { walletName?: string; owners?: string[] } = {},
 ): Promise<CoinOriginsLedger> {
   await ensureEngineInit();
   return unwrap<CoinOriginsLedger>(getEngine().query('getCoinOrigins', opts));

@@ -19,10 +19,10 @@ import {
 } from "@/lib/coin-origins-export";
 import { downloadBlob } from "@/lib/backup/sink";
 import { formatUnixSeconds } from "@/lib/unix-seconds";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
+import { UNASSIGNED_OWNER_OPTION, UNASSIGNED_OWNER_VALUE } from "@/lib/owner-constants";
 
 const ALL_WALLETS = "__all_wallets__";
-const ALL_OWNERS = "__all_owners__";
-const UNASSIGNED_OWNER = "__unassigned_owner__";
 
 const ORIGINS_PAGE_SIZE = 100;
 function short(value: string): string {
@@ -169,7 +169,7 @@ export default function CoinOriginsPage() {
     [records],
   );
   const [wallet, setWallet] = useState(ALL_WALLETS);
-  const [owner, setOwner] = useState(ALL_OWNERS);
+  const [owners, setOwners] = useState<string[]>([]);
   const [ledger, setLedger] = useState<CoinOriginsLedger>();
   const [nativePage, setNativePage] = useState<CoinOriginsPage>();
   const [nativeBacked, setNativeBacked] = useState(false);
@@ -191,13 +191,12 @@ export default function CoinOriginsPage() {
     setPassportPage(undefined);
     setNativePage(undefined);
     const walletName = wallet === ALL_WALLETS ? undefined : wallet;
-    const ownerName = owner === ALL_OWNERS ? undefined : owner === UNASSIGNED_OWNER ? "" : owner;
     void (async () => {
       const gate = await evaluateEngineFreshness("coinOrigins");
       if (gate.useEngine) {
         const next = await engineGetCoinOriginsPage({
           walletName,
-          owner: ownerName,
+          owners,
           holdingsOffset: holdingsPageIndex * ORIGINS_PAGE_SIZE,
           outpointsOffset: outpointsPageIndex * ORIGINS_PAGE_SIZE,
           limit: ORIGINS_PAGE_SIZE,
@@ -210,7 +209,7 @@ export default function CoinOriginsPage() {
       } else {
         const next = await loadCoinOriginsPage({
           walletName,
-          owner: ownerName,
+          owners,
           holdingsOffset: holdingsPageIndex * ORIGINS_PAGE_SIZE,
           outpointsOffset: outpointsPageIndex * ORIGINS_PAGE_SIZE,
           limit: ORIGINS_PAGE_SIZE,
@@ -227,7 +226,7 @@ export default function CoinOriginsPage() {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [wallet, owner, holdingsPageIndex, outpointsPageIndex, dbSignal]);
+  }, [wallet, owners, holdingsPageIndex, outpointsPageIndex, dbSignal]);
 
   const selected = (passportPage && passportPage.checkpointKey === nativePage?.checkpointKey
     ? passportPage.outpoints.find((row) => `${row.txid}:${row.vout}` === selectedOutpoint)
@@ -247,7 +246,6 @@ export default function CoinOriginsPage() {
     if (!nativeBacked && ledger) {
       setPassportPage(pageCoinOriginsLedger(ledger, nativePage.checkpointKey, {
         walletName: wallet === ALL_WALLETS ? undefined : wallet,
-        owner: owner === ALL_OWNERS ? undefined : owner === UNASSIGNED_OWNER ? "" : owner,
         outpoint: selectedOutpoint,
         allocationsOffset: allocationsPageIndex * ORIGINS_PAGE_SIZE,
         hopsOffset: hopsPageIndex * ORIGINS_PAGE_SIZE,
@@ -258,7 +256,7 @@ export default function CoinOriginsPage() {
     }
     void engineGetCoinOriginsPage({
       walletName: wallet === ALL_WALLETS ? undefined : wallet,
-       owner: owner === ALL_OWNERS ? undefined : owner === UNASSIGNED_OWNER ? "" : owner,
+        owners,
       outpoint: selectedOutpoint,
       expectedCheckpointKey: nativePage.checkpointKey,
       allocationsOffset: allocationsPageIndex * ORIGINS_PAGE_SIZE,
@@ -275,13 +273,13 @@ export default function CoinOriginsPage() {
       if (!cancelled) setPassportLoading(false);
     });
     return () => { cancelled = true; };
-  }, [nativePage, nativeBacked, ledger, selectedOutpoint, wallet, owner, allocationsPageIndex, hopsPageIndex]);
+  }, [nativePage, nativeBacked, ledger, selectedOutpoint, wallet, owners, allocationsPageIndex, hopsPageIndex]);
 
   const exportLedger = async (kind: "csv" | "pdf", outpoint?: string) => {
     try {
       const exportSource = ledger ?? await engineGetCoinOrigins({
         walletName: wallet === ALL_WALLETS ? undefined : wallet,
-         owner: owner === ALL_OWNERS ? undefined : owner === UNASSIGNED_OWNER ? "" : owner,
+          owners,
       });
       const payload = buildCoinOriginsExportPayload(exportSource, {
         walletName: wallet === ALL_WALLETS ? undefined : wallet,
@@ -333,21 +331,23 @@ export default function CoinOriginsPage() {
             </div>
             <div>
               <Label>Owner scope</Label>
-              <Select value={owner} onValueChange={(value) => {
-                setOwner(value);
+              <MultiSelectCombobox
+                className="w-52"
+                values={owners}
+                onChange={(values) => {
+                setOwners(values);
                 setHoldingsPageIndex(0);
                 setOutpointsPageIndex(0);
                 setAllocationsPageIndex(0);
                 setHopsPageIndex(0);
                 setSelectedOutpoint("");
-              }}>
-                <SelectTrigger className="w-52" data-testid="coin-origin-owner"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_OWNERS}>All owners</SelectItem>
-                  <SelectItem value={UNASSIGNED_OWNER}>Unassigned</SelectItem>
-                  {ownerOptions.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+                }}
+                options={[UNASSIGNED_OWNER_VALUE, ...ownerOptions.filter((value) => value !== UNASSIGNED_OWNER_VALUE)]}
+                placeholder="All owners"
+                searchPlaceholder="Search owners..."
+                optionLabels={{ [UNASSIGNED_OWNER_VALUE]: UNASSIGNED_OWNER_OPTION.label }}
+                testId="coin-origin-owner"
+              />
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => void exportLedger("csv")} disabled={(!ledger && !nativePage) || loading} data-testid="coin-origins-csv"><Download className="mr-1 h-4 w-4" /> Export CSV</Button>
@@ -469,3 +469,295 @@ export default function CoinOriginsPage() {
     </div>
   );
 }
+/*
+export default function CoinOriginsPage() {
+  const { toast } = useToast();
+  const { records, isLoading: recordsLoading } = useAddressRecords({ includeBlockchainDiscovered: false });
+  const dbSignal = useDbChangeSignal(["records", "blockchainTransactions", "transactionParticipants"]);
+  const walletOptions = useMemo(
+    () => [...new Set(records.map((r) => r.walletName).filter((v): v is string => !!v))].sort(),
+    [records],
+  );
+  const ownerOptions = useMemo(
+    () => [...new Set(records.map((r) => r.owner).filter((v): v is string => !!v?.trim()))].sort(),
+    [records],
+  );
+  const [wallet, setWallet] = useState(ALL_WALLETS);
+  const [owners, setOwners] = useState<string[]>([]);
+  const [ledger, setLedger] = useState<CoinOriginsLedger>();
+  const [nativePage, setNativePage] = useState<CoinOriginsPage>();
+  const [passportPage, setPassportPage] = useState<CoinOriginsPage>();
+  const [holdingsPageIndex, setHoldingsPageIndex] = useState(0);
+  const [outpointsPageIndex, setOutpointsPageIndex] = useState(0);
+  const [allocationsPageIndex, setAllocationsPageIndex] = useState(0);
+  const [hopsPageIndex, setHopsPageIndex] = useState(0);
+  const [passportLoading, setPassportLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const initialOutpoint = useMemo(() => new URLSearchParams(window.location.search).get("outpoint") ?? "", []);
+  const [selectedOutpoint, setSelectedOutpoint] = useState(initialOutpoint);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    setPassportPage(undefined);
+    setNativePage(undefined);
+    const walletName = wallet === ALL_WALLETS ? undefined : wallet;
+    void (async () => {
+      const gate = await evaluateEngineFreshness("allMirrors");
+      if (gate.useEngine) {
+        const next = await engineGetCoinOriginsPage({
+          walletName,
+          owners: owners.length ? owners : undefined,
+          holdingsOffset: holdingsPageIndex * ORIGINS_PAGE_SIZE,
+          outpointsOffset: outpointsPageIndex * ORIGINS_PAGE_SIZE,
+          limit: ORIGINS_PAGE_SIZE,
+        });
+        if (!cancelled) {
+          setNativePage(next);
+          setLedger(undefined);
+        }
+      } else {
+        const next = await loadCoinOrigins(walletName, owners.length ? owners : undefined);
+        if (!cancelled) {
+          setLedger(next);
+          setNativePage(undefined);
+        }
+      }
+    })().catch((err) => {
+      if (!cancelled) setError(err instanceof Error ? err.message : "Could not build the origin ledger");
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [wallet, owners, holdingsPageIndex, outpointsPageIndex, dbSignal]);
+
+  const selected = (passportPage && passportPage.checkpointKey === nativePage?.checkpointKey
+    ? passportPage.outpoints.find((row) => `${row.txid}:${row.vout}` === selectedOutpoint)
+    : undefined)
+    ?? nativePage?.outpoints.find((row) => `${row.txid}:${row.vout}` === selectedOutpoint)
+    ?? ledger?.outpoints.find((row) => `${row.txid}:${row.vout}` === selectedOutpoint);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!nativePage || !selectedOutpoint) {
+      setPassportPage(undefined);
+      setPassportLoading(false);
+      return;
+    }
+    setPassportLoading(true);
+    setPassportPage(undefined);
+    void engineGetCoinOriginsPage({
+      walletName: wallet === ALL_WALLETS ? undefined : wallet,
+      owners: owners.length ? owners : undefined,
+      outpoint: selectedOutpoint,
+      expectedCheckpointKey: nativePage.checkpointKey,
+      allocationsOffset: allocationsPageIndex * ORIGINS_PAGE_SIZE,
+      hopsOffset: hopsPageIndex * ORIGINS_PAGE_SIZE,
+      limit: ORIGINS_PAGE_SIZE,
+    }).then((next) => {
+      if (!cancelled && next.checkpointKey === nativePage.checkpointKey) setPassportPage(next);
+    }).catch((err) => {
+      if (!cancelled) {
+        setPassportPage(undefined);
+        setError(err instanceof Error ? err.message : "Could not load the selected passport");
+      }
+    }).finally(() => {
+      if (!cancelled) setPassportLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [nativePage, selectedOutpoint, wallet, owners, allocationsPageIndex, hopsPageIndex]);
+
+  const exportLedger = async (kind: "csv" | "pdf", outpoint?: string) => {
+    try {
+      const exportSource = ledger ?? await engineGetCoinOrigins({
+        walletName: wallet === ALL_WALLETS ? undefined : wallet,
+          owners: owners.length ? owners : undefined,
+      });
+      const payload = buildCoinOriginsExportPayload(exportSource, {
+        walletName: wallet === ALL_WALLETS ? undefined : wallet,
+        outpoint,
+      });
+      const stamp = new Date().toISOString().slice(0, 10);
+      if (kind === "csv") {
+        downloadBlob(new Blob([buildCoinOriginsCsv(payload)], { type: "text/csv;charset=utf-8" }), `kyutxo-coin-origins-${stamp}.csv`);
+      } else {
+        downloadBlob(await buildCoinOriginsPdf(payload), `kyutxo-coin-origins-${stamp}.pdf`);
+      }
+      toast({ title: `${payload.title} exported`, description: `${kind.toUpperCase()} generated locally.` });
+    } catch (err) {
+      toast({ title: "Export failed", description: err instanceof Error ? err.message : "Could not generate export", variant: "destructive" });
+    }
+  };
+
+  return (
+    <div className="container mx-auto space-y-4 p-4" data-testid="coin-origins-page">
+      <div>
+        <h1 className="flex items-center gap-2 text-2xl font-bold"><Route className="h-6 w-6" /> Coin Origins</h1>
+        <p className="text-sm text-muted-foreground">A deterministic per-outpoint lot ledger. Unresolved prevouts stay visibly unknown.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-4">
+        <Card><CardHeader className="p-3"><CardDescription>Current holdings</CardDescription><CardTitle data-testid="origin-total">{(nativePage?.summary.currentSats ?? ledger?.summary.currentSats ?? 0).toLocaleString()} sats</CardTitle></CardHeader></Card>
+        <Card><CardHeader className="p-3"><CardDescription>Acquisition lots</CardDescription><CardTitle data-testid="origin-lots">{(nativePage?.lotsTotal ?? ledger?.lots.length ?? 0).toLocaleString()}</CardTitle></CardHeader></Card>
+        <Card><CardHeader className="p-3"><CardDescription>Unknown origin</CardDescription><CardTitle data-testid="origin-unknown">{(nativePage?.summary.unknownSats ?? ledger?.summary.unknownSats ?? 0).toLocaleString()} sats</CardTitle></CardHeader></Card>
+        <Card><CardHeader className="p-3"><CardDescription>Exact reconciliation</CardDescription><CardTitle data-testid="origin-reconciled">{(nativePage?.summary.reconciled ?? ledger?.summary.reconciled) ? "Yes" : "No"}</CardTitle></CardHeader></Card>
+      </div>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <Label>Wallet scope</Label>
+              <Select value={wallet} onValueChange={(value) => {
+                setWallet(value);
+                setHoldingsPageIndex(0);
+                setOutpointsPageIndex(0);
+                setAllocationsPageIndex(0);
+                setHopsPageIndex(0);
+                setSelectedOutpoint("");
+              }}>
+                <SelectTrigger className="w-52" data-testid="coin-origin-wallet"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_WALLETS}>Entire vault</SelectItem>
+                  {walletOptions.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Owner scope</Label>
+              <MultiSelectCombobox
+                className="w-52"
+                values={owners}
+                onChange={(values) => {
+                  setOwners(values);
+                  setHoldingsPageIndex(0);
+                  setOutpointsPageIndex(0);
+                  setSelectedOutpoint("");
+                }}
+                options={[UNASSIGNED_OWNER_VALUE, ...ownerOptions.filter(value => value !== UNASSIGNED_OWNER_VALUE)]}
+                placeholder="All owners"
+                searchPlaceholder="Search owners..."
+                optionLabels={{ [UNASSIGNED_OWNER_VALUE]: UNASSIGNED_OWNER_OPTION.label }}
+                testId="coin-origin-owner"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => void exportLedger("csv")} disabled={(!ledger && !nativePage) || loading} data-testid="coin-origins-csv"><Download className="mr-1 h-4 w-4" /> Export CSV</Button>
+              <Button variant="outline" onClick={() => void exportLedger("pdf")} disabled={(!ledger && !nativePage) || loading} data-testid="coin-origins-pdf"><FileText className="mr-1 h-4 w-4" /> Export PDF</Button>
+            </div>
+          </div>
+        </CardHeader>
+      </Card>
+      {loading || recordsLoading ? (
+        <div className="flex items-center justify-center gap-2 p-12 text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Building origin ledger…</div>
+      ) : error ? (
+        <Card><CardContent className="flex items-center gap-2 p-6 text-destructive"><ShieldQuestion className="h-5 w-5" /> {error}</CardContent></Card>
+      ) : (
+        <>
+          <Card>
+            <CardHeader><CardTitle>Holdings by Origin</CardTitle><CardDescription>Current balance grouped by acquisition lot, without double-counting consolidations.</CardDescription></CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader><TableRow><TableHead>Origin</TableHead><TableHead>Acquired</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Outpoints</TableHead><TableHead className="text-right">Current sats</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {(nativePage?.holdings ?? ledger?.holdings ?? []).map((row) => (
+                    <TableRow key={row.lotId} data-testid={`origin-holding-${row.lotId}`}>
+                      <TableCell><div>{row.label}</div><div className="font-mono text-xs text-muted-foreground">{row.acquiredTxid ? short(`${row.acquiredTxid}:${row.acquiredVout}`) : "Unresolved prevout boundary"}</div></TableCell>
+                      <TableCell>{row.acquiredAt ? formatUnixSeconds(row.acquiredAt, "yyyy-MM-dd") : "Unknown"}</TableCell>
+                      <TableCell>{boundaryBadge(row.boundary)}</TableCell>
+                      <TableCell className="text-right">{row.outpointCount}</TableCell>
+                      <TableCell className="text-right font-mono">{row.sats.toLocaleString()}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {(nativePage?.holdings ?? ledger?.holdings ?? []).length === 0 && <div className="p-8 text-center text-muted-foreground">No current owned outpoints were found.</div>}
+              {nativePage && nativePage.holdingsTotal > ORIGINS_PAGE_SIZE && (
+                <div className="mt-4 flex items-center justify-between gap-3 text-sm text-muted-foreground" data-testid="coin-origins-holdings-pagination">
+                  <span>{nativePage.holdingsOffset + 1}–{Math.min(nativePage.holdingsOffset + nativePage.holdings.length, nativePage.holdingsTotal)} of {nativePage.holdingsTotal.toLocaleString()} origins</span>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" disabled={holdingsPageIndex === 0 || loading} onClick={() => setHoldingsPageIndex((index) => Math.max(0, index - 1))}>Previous</Button>
+                    <Button size="sm" variant="outline" disabled={!nativePage.holdingsHasMore || loading} onClick={() => setHoldingsPageIndex((index) => index + 1)}>Next</Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Current outpoints</CardTitle><CardDescription>Open a Coin Passport for the composition and hop timeline.</CardDescription></CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader><TableRow><TableHead>Outpoint</TableHead><TableHead>Address</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Satoshis</TableHead><TableHead /></TableRow></TableHeader>
+                <TableBody>
+                  {(nativePage?.outpoints ?? ledger?.outpoints ?? []).map((row) => (
+                    <TableRow key={`${row.txid}:${row.vout}`} data-testid={`origin-outpoint-${row.txid}:${row.vout}`}>
+                      <TableCell className="font-mono text-xs">{short(`${row.txid}:${row.vout}`)}</TableCell>
+                      <TableCell className="font-mono text-xs">{short(row.address)}</TableCell>
+                      <TableCell>{boundaryBadge(row.boundary)}</TableCell>
+                      <TableCell className="text-right font-mono">{row.amountSats.toLocaleString()}</TableCell>
+                      <TableCell className="text-right"><Button size="sm" variant="outline" onClick={() => {
+                        setAllocationsPageIndex(0);
+                        setHopsPageIndex(0);
+                        setSelectedOutpoint(`${row.txid}:${row.vout}`);
+                      }}>Open passport</Button></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {nativePage && (
+                <div className="mt-4 flex items-center justify-between gap-3 text-sm text-muted-foreground" data-testid="coin-origins-pagination">
+                  <span>
+                    Showing {nativePage.outpointsTotal === 0 ? 0 : Math.min(nativePage.outpointsOffset + 1, nativePage.outpointsTotal)}–{Math.min(nativePage.outpointsOffset + nativePage.outpoints.length, nativePage.outpointsTotal)} of {nativePage.outpointsTotal.toLocaleString()} outpoints
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={outpointsPageIndex === 0 || loading}
+                      onClick={() => { setSelectedOutpoint(""); setOutpointsPageIndex((index) => Math.max(0, index - 1)); }}
+                      data-testid="coin-origins-previous"
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!nativePage.outpointsHasMore || loading}
+                      onClick={() => { setSelectedOutpoint(""); setOutpointsPageIndex((index) => index + 1); }}
+                      data-testid="coin-origins-next"
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          {selected && nativePage && passportLoading && (
+            <Card><CardContent className="flex items-center gap-2 p-6 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading passport ancestry…</CardContent></Card>
+          )}
+          {selected && (ledger || passportPage) && (
+            <CoinPassport
+              output={selected}
+              ledger={ledger ?? {
+                version: 1,
+                outpoints: [selected],
+                lots: passportPage?.detail?.lots ?? [],
+                disposals: [],
+                hops: passportPage?.detail?.hops ?? [],
+                holdings: passportPage?.holdings ?? [],
+                summary: passportPage?.summary ?? nativePage!.summary,
+              }}
+              onExport={(kind, outpoint) => void exportLedger(kind, outpoint)}
+              page={passportPage}
+              onAllocationPageChange={(delta) => setAllocationsPageIndex((index) => Math.max(0, index + delta))}
+              onHopPageChange={(delta) => setHopsPageIndex((index) => Math.max(0, index + delta))}
+            />
+          )}
+          {selectedOutpoint && !selected && <Card><CardContent className="p-6 text-muted-foreground">That outpoint is not current in this wallet scope.</CardContent></Card>}
+        </>
+      )}
+    </div>
+  );
+}
+*/

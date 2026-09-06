@@ -260,4 +260,36 @@ describe("settings preferences backup round-trip", () => {
       curationState: "new",
     });
   });
+
+  it("round-trips resumable category mapping decisions and checkpoints", async () => {
+    const draft = {
+      legacy: { kind: "tag" as const, tagName: "Archive" },
+      later: { kind: "skip" as const },
+    };
+    const checkpoints = {
+      legacy: { status: "applied" as const, appliedAt: 123 },
+    };
+    await putSettings({ ...BASE_SETTINGS, categoryMappingDraft: draft, categoryMappingCheckpoints: checkpoints }, { skipNotification: true });
+    const sink = new MemorySink();
+    await exportBackup({ sink: sink as BackupSink, encrypted: false, batchSize: 25, attachmentIO });
+    await updateSettings("default", {
+      categoryMappingDraft: { stale: { kind: "drop" } },
+      categoryMappingCheckpoints: {},
+    }, { skipNotification: true });
+    await restoreV3Backup({ source: blobChunks(sink.blob as Blob), attachmentWriter });
+    expect((await getSettings("default"))?.categoryMappingDraft).toEqual(draft);
+    expect((await getSettings("default"))?.categoryMappingCheckpoints).toEqual(checkpoints);
+  });
+
+  it("rejects crafted category classification fields from restored settings", async () => {
+    await putSettings({ ...BASE_SETTINGS }, { skipNotification: true });
+    await restoreSettingsPreferences([{
+      ...BASE_SETTINGS,
+      categoryMappingDraft: {
+        malicious: { kind: "classification", classification: "inputString:evil" },
+        arbitrary: { kind: "classification", classification: "unexpected:field" },
+      },
+    }]);
+    expect((await getSettings("default"))?.categoryMappingDraft).toBeUndefined();
+  });
 });

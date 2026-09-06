@@ -928,6 +928,13 @@ export async function getAllRecords(): Promise<Record[]> {
   return records;
 }
 
+/** Legacy category values are free-form strings, so this intentionally groups
+ * case variants rather than relying on Dexie's case-sensitive multi-entry
+ * index. Kept here so consumers do not bypass the records CRUD boundary. */
+export async function getRecordCategoryKeys(): Promise<string[]> {
+  const keys = await db.records.orderBy('categories').uniqueKeys();
+  return keys.filter((key): key is string => typeof key === 'string' && key.trim() !== '');
+}
 /**
  * Lightweight record search for pickers (e.g. re-attaching an orphaned file to a
  * record). Matches the trimmed query case-insensitively against the address /
@@ -2424,4 +2431,11 @@ export async function saveDerivationTemplate(template: {
     seedName: template.seedName,
     notes: template.notes,
   }, { skipNotification: true });
+}
+
+export async function getRecordsByCategoryCaseInsensitive(category: string): Promise<Record[]> {
+  const normalized = category.trim().toLocaleLowerCase();
+  if (!normalized) return [];
+  return (await db.records.toArray()).filter((record) =>
+    record.categories.some((value) => value.trim().toLocaleLowerCase() === normalized));
 }

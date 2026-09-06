@@ -67,6 +67,7 @@ vi.mock("@/lib/database", async () => {
 const { getTxidsForTxEntityFilter, getOrderedTxidsForTxEntityFilterPrefix } =
   await import("@/lib/data/transaction-crud");
 import type { TxEntityFilter } from "@/lib/data/transaction-crud";
+import { UNASSIGNED_OWNER_VALUE } from "@/lib/owner-constants";
 
 // ---------------------------------------------------------------------------
 // One shared fixture, seeded into BOTH engines
@@ -191,6 +192,8 @@ const FILTER_SHAPES: Array<{ name: string; filter: TxEntityFilter }> = [
   { name: "wallet", filter: { wallet: "W1" } },
   { name: "seed", filter: { seed: "S1" } },
   { name: "owner", filter: { owner: "O1" } },
+  { name: "unassigned owner", filter: { owner: UNASSIGNED_OWNER_VALUE } },
+  { name: "named or unassigned owner", filter: { owner: ["O2", UNASSIGNED_OWNER_VALUE] } },
   { name: "tag", filter: { tag: "red" } },
   { name: "category", filter: { category: "exchange" } },
   { name: "curatedOnly", filter: { curatedOnly: true } },
