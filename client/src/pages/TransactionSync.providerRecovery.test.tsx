@@ -317,3 +317,44 @@ describe("Transaction Sync report-targeted first-sync approval", () => {
     );
   });
 });
+
+describe("Transaction Sync first-sync confirmation recovery", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    consumePendingSyncAddresses();
+    window.history.replaceState({}, "", "/transaction-sync");
+    mocks.nodeSettings.firstSyncConfirmedAt = undefined;
+    mocks.getPausedState.mockResolvedValue(PAUSED_STATE);
+    mocks.updateProvider.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    consumePendingSyncAddresses();
+    cleanup();
+  });
+
+  it("keeps the requested sync pending when saving approval fails and allows retry", async () => {
+    mocks.markFirstSyncConfirmed
+      .mockRejectedValueOnce(new Error("settings write failed"))
+      .mockResolvedValueOnce(undefined);
+
+    renderWithProviders(<TransactionSync />);
+    fireEvent.click(await screen.findByTestId("button-resume-sync"));
+    fireEvent.click(await screen.findByTestId("button-confirm-first-sync"));
+
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledTimes(1));
+    const payload = mocks.toast.mock.calls[0][0];
+    expect(payload.title).toBe("Could Not Save Privacy Confirmation");
+    expect(payload.description).toContain("syncing did not start");
+    expect(payload.action).toBeTruthy();
+    expect(mocks.updateProvider).not.toHaveBeenCalled();
+    expect(mocks.resumeSync).not.toHaveBeenCalled();
+    expect(screen.getByTestId("dialog-first-sync-disclosure")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
+
+    await waitFor(() => expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.updateProvider).toHaveBeenCalledTimes(1));
+    expect(mocks.resumeSync).toHaveBeenCalledTimes(1);
+  });
+});

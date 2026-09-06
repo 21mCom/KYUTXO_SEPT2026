@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type MouseEvent } from "react";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -115,6 +115,7 @@ export default function TransactionSync() {
   // Connected-only sync mode
   const [connectedOnly, setConnectedOnly] = useState(false);
   const [firstSyncDisclosureCount, setFirstSyncDisclosureCount] = useState<number | null>(null);
+  const [isSavingFirstSyncApproval, setIsSavingFirstSyncApproval] = useState(false);
   const pendingFirstSyncAction = useRef<(() => Promise<void>) | null>(null);
   const firstSyncApprovedRef = useRef(false);
 
@@ -160,13 +161,35 @@ export default function TransactionSync() {
     setFirstSyncDisclosureCount(addressCount);
   }, [nodeSettings]);
 
-  const confirmFirstSync = async () => {
+  const confirmFirstSync = async (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    if (isSavingFirstSyncApproval) return;
     const action = pendingFirstSyncAction.current;
-    pendingFirstSyncAction.current = null;
-    await markFirstSyncConfirmed();
-    firstSyncApprovedRef.current = true;
-    setFirstSyncDisclosureCount(null);
-    if (action) await action();
+    setIsSavingFirstSyncApproval(true);
+    try {
+      await markFirstSyncConfirmed();
+      pendingFirstSyncAction.current = null;
+      firstSyncApprovedRef.current = true;
+      setFirstSyncDisclosureCount(null);
+      if (action) await action();
+    } catch {
+      toast({
+        title: "Could Not Save Privacy Confirmation",
+        description: "Your approval was not stored, so syncing did not start. Try again or review your vault settings.",
+        variant: "destructive",
+        action: (
+          <ToastAction
+            altText="Open Node Settings"
+            onClick={() => navigate("/node-settings")}
+            data-testid="action-open-node-settings"
+          >
+            Open Node Settings
+          </ToastAction>
+        ),
+      });
+    } finally {
+      setIsSavingFirstSyncApproval(false);
+    }
   };
 
   const loadStats = useCallback(async () => {
@@ -702,8 +725,12 @@ export default function TransactionSync() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmFirstSync} data-testid="button-confirm-first-sync">
-              Confirm and sync
+            <AlertDialogAction
+              onClick={confirmFirstSync}
+              disabled={isSavingFirstSyncApproval}
+              data-testid="button-confirm-first-sync"
+            >
+              {isSavingFirstSyncApproval ? "Saving confirmation…" : "Confirm and sync"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
