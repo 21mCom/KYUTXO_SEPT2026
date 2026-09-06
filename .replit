@@ -1049,6 +1049,10 @@ args = "packaged-coin-origins-browser-check"
 task = "workflow.run"
 args = "backup-schedule-concurrency-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backup-schedule-save-lock-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3818,6 +3822,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/backup/scheduled-settings.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "backup-schedule-save-lock-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-backup-schedule-save-lock-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
