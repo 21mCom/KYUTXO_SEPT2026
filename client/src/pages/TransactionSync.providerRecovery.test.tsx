@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
 import {
   NETWORK_BLOCKED_MESSAGE,
@@ -53,7 +59,8 @@ vi.mock("@/hooks/use-node-settings", () => ({
 
 vi.mock("@/lib/network-privacy", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/network-privacy")>()),
-  markFirstSyncConfirmed: (...args: unknown[]) => mocks.markFirstSyncConfirmed(...args),
+  markFirstSyncConfirmed: (...args: unknown[]) =>
+    mocks.markFirstSyncConfirmed(...args),
 }));
 
 vi.mock("@/lib/repository", async (importOriginal) => {
@@ -157,12 +164,14 @@ describe.each([
     mocks.nodeSettings.firstSyncConfirmedAt = undefined;
     mocks.markFirstSyncConfirmed.mockResolvedValue(undefined);
     mocks.getPausedState.mockResolvedValue(PAUSED_STATE);
-    mocks.query.mockResolvedValue([{
-      id: 42,
-      type: "address",
-      inputString: ADDRESS,
-      inputStringLower: ADDRESS,
-    }]);
+    mocks.query.mockResolvedValue([
+      {
+        id: 42,
+        type: "address",
+        inputString: ADDRESS,
+        inputStringLower: ADDRESS,
+      },
+    ]);
     mocks.updateProvider.mockImplementation(() => {
       throw new Error(message);
     });
@@ -174,24 +183,75 @@ describe.each([
     const settingsBefore = JSON.stringify(mocks.nodeSettings);
     renderWithProviders(<TransactionSync />);
 
+    fireEvent.click(await screen.findByTestId("button-resume-sync"));
+    expect(
+      await screen.findByTestId("dialog-first-sync-disclosure"),
+    ).toBeTruthy();
+    expect(mocks.updateProvider).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
+
+    await expectSettingsActionWithoutMutation(
+      settingsBefore,
+      "Resume Failed",
+      message,
+    );
+    expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(1);
+    expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
+    expect(mocks.resumeSync).not.toHaveBeenCalled();
+  });
+
+  it("offers Node Settings when resume returns a policy error", async () => {
+    mocks.nodeSettings.firstSyncConfirmedAt = 1;
+    mocks.updateProvider.mockReset();
+    mocks.resumeSync.mockResolvedValue(failedSyncResult(message));
+    const settingsBefore = JSON.stringify(mocks.nodeSettings);
+    renderWithProviders(<TransactionSync />);
+
+    fireEvent.click(await screen.findByTestId("button-resume-sync"));
+
+    await expectSettingsActionWithoutMutation(
+      settingsBefore,
+      "Sync Completed with Errors",
+      message,
+    );
+    expect(mocks.updateProvider).toHaveBeenCalledWith(mocks.nodeSettings);
+    expect(mocks.resumeSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Node Settings when deferred single-address provider construction is blocked after approval", async () => {
+    const settingsBefore = JSON.stringify(mocks.nodeSettings);
+    renderWithProviders(<TransactionSync />);
+
     fireEvent.change(await screen.findByTestId("input-single-address"), {
       target: { value: ADDRESS },
     });
     fireEvent.click(screen.getByTestId("button-single-sync"));
+    expect(
+      await screen.findByTestId("dialog-first-sync-disclosure"),
+    ).toBeTruthy();
+    expect(mocks.updateProvider).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
 
     await expectSettingsActionWithoutMutation(
       settingsBefore,
-      "Single Address Sync Failed",
+      "Sync Failed",
       message,
     );
-    expect(mocks.updateProvider).toHaveBeenCalledWith(mocks.nodeSettings);
-    expect(mocks.syncSingleAddress).toHaveBeenCalledTimes(1);
+    expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(1);
+    expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
+    expect(mocks.syncSingleAddress).not.toHaveBeenCalled();
     await waitFor(() => {
-      expect((screen.getByTestId("button-single-sync") as HTMLButtonElement).disabled).toBe(false);
+      expect(
+        (screen.getByTestId("button-single-sync") as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
     });
   });
 
-  it("offers Node Settings when deferred report-targeted provider construction is blocked after approval", async () => {
+  it("offers Node Settings when single-address sync returns a policy error", async () => {
+    mocks.nodeSettings.firstSyncConfirmedAt = 1;
+    mocks.updateProvider.mockReset();
+    mocks.syncSingleAddress.mockResolvedValue(failedSyncResult(message));
     const settingsBefore = JSON.stringify(mocks.nodeSettings);
     renderWithProviders(<TransactionSync />);
 
@@ -208,49 +268,10 @@ describe.each([
     expect(mocks.updateProvider).toHaveBeenCalledWith(mocks.nodeSettings);
     expect(mocks.syncSingleAddress).toHaveBeenCalledTimes(1);
     await waitFor(() => {
-      expect((screen.getByTestId("button-single-sync") as HTMLButtonElement).disabled).toBe(false);
-    });
-  });
-
-  it("offers Node Settings when deferred report-targeted provider construction is blocked after approval", async () => {
-    const settingsBefore = JSON.stringify(mocks.nodeSettings);
-    renderWithProviders(<TransactionSync />);
-
-    fireEvent.change(await screen.findByTestId("input-single-address"), {
-      target: { value: ADDRESS },
-    });
-    fireEvent.click(screen.getByTestId("button-single-sync"));
-
-    await expectSettingsActionWithoutMutation(
-      settingsBefore,
-      "Single Address Sync Failed",
-      message,
-    );
-    expect(mocks.updateProvider).toHaveBeenCalledWith(mocks.nodeSettings);
-    expect(mocks.syncSingleAddress).toHaveBeenCalledTimes(1);
-    await waitFor(() => {
-      expect((screen.getByTestId("button-single-sync") as HTMLButtonElement).disabled).toBe(false);
-    });
-  });
-
-  it("offers Node Settings when deferred report-targeted provider construction is blocked after approval", async () => {
-    const settingsBefore = JSON.stringify(mocks.nodeSettings);
-    renderWithProviders(<TransactionSync />);
-
-    fireEvent.change(await screen.findByTestId("input-single-address"), {
-      target: { value: ADDRESS },
-    });
-    fireEvent.click(screen.getByTestId("button-single-sync"));
-
-    await expectSettingsActionWithoutMutation(
-      settingsBefore,
-      "Single Address Sync Failed",
-      message,
-    );
-    expect(mocks.updateProvider).toHaveBeenCalledWith(mocks.nodeSettings);
-    expect(mocks.syncSingleAddress).toHaveBeenCalledTimes(1);
-    await waitFor(() => {
-      expect((screen.getByTestId("button-single-sync") as HTMLButtonElement).disabled).toBe(false);
+      expect(
+        (screen.getByTestId("button-single-sync") as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
     });
   });
 
@@ -259,14 +280,68 @@ describe.each([
     setPendingSyncAddresses([ADDRESS]);
     renderWithProviders(<TransactionSync />);
 
-    expect(await screen.findByTestId("dialog-first-sync-disclosure")).toBeTruthy();
+    expect(
+      await screen.findByTestId("dialog-first-sync-disclosure"),
+    ).toBeTruthy();
     expect(mocks.updateProvider).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
 
-    await expectSettingsActionWithoutMutation(settingsBefore, "Sync Failed", message);
+    await expectSettingsActionWithoutMutation(
+      settingsBefore,
+      "Sync Failed",
+      message,
+    );
     expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(1);
     expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
     expect(mocks.syncWithDepth).not.toHaveBeenCalled();
+  });
+
+  it("offers Node Settings when a normal full sync returns a policy error", async () => {
+    mocks.nodeSettings.firstSyncConfirmedAt = 1;
+    mocks.getPausedState.mockResolvedValue(null);
+    mocks.updateProvider.mockReset();
+    mocks.syncWithDepth.mockResolvedValue(failedSyncResult(message));
+    const settingsBefore = JSON.stringify(mocks.nodeSettings);
+    renderWithProviders(<TransactionSync />);
+
+    const syncButton = (await screen.findByTestId(
+      "button-sync",
+    )) as HTMLButtonElement;
+    await waitFor(() => expect(syncButton.disabled).toBe(false));
+    fireEvent.click(syncButton);
+
+    await expectSettingsActionWithoutMutation(
+      settingsBefore,
+      "Sync Completed with Errors",
+      message,
+    );
+    expect(mocks.updateProvider).toHaveBeenCalledWith(mocks.nodeSettings);
+    expect(mocks.syncWithDepth).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Node Settings when a report-targeted full sync returns a policy error", async () => {
+    mocks.nodeSettings.firstSyncConfirmedAt = 1;
+    mocks.getPausedState.mockResolvedValue(null);
+    mocks.updateProvider.mockReset();
+    mocks.syncWithDepth.mockResolvedValue(failedSyncResult(message));
+    const settingsBefore = JSON.stringify(mocks.nodeSettings);
+    setPendingSyncAddresses([ADDRESS]);
+    renderWithProviders(<TransactionSync />);
+
+    await expectSettingsActionWithoutMutation(
+      settingsBefore,
+      "Sync Completed with Errors",
+      message,
+    );
+    expect(mocks.updateProvider).toHaveBeenCalledWith(mocks.nodeSettings);
+    expect(mocks.syncWithDepth).toHaveBeenCalledWith(
+      {
+        sourceFilter: "all",
+        maxDepth: 1,
+        specificRecordIds: [42],
+      },
+      undefined,
+    );
   });
 });
 
@@ -279,12 +354,14 @@ describe("Transaction Sync report-targeted first-sync approval", () => {
     mocks.markFirstSyncConfirmed.mockResolvedValue(undefined);
     mocks.getPausedState.mockResolvedValue(null);
     mocks.updateProvider.mockImplementation(() => undefined);
-    mocks.query.mockResolvedValue([{
-      id: 42,
-      type: "address",
-      inputString: ADDRESS,
-      inputStringLower: ADDRESS,
-    }]);
+    mocks.query.mockResolvedValue([
+      {
+        id: 42,
+        type: "address",
+        inputString: ADDRESS,
+        inputStringLower: ADDRESS,
+      },
+    ]);
     mocks.syncWithDepth.mockResolvedValue({
       success: true,
       addressesSynced: 1,
@@ -306,7 +383,9 @@ describe("Transaction Sync report-targeted first-sync approval", () => {
     setPendingSyncAddresses([ADDRESS]);
     renderWithProviders(<TransactionSync />);
 
-    expect(await screen.findByTestId("dialog-first-sync-disclosure")).toBeTruthy();
+    expect(
+      await screen.findByTestId("dialog-first-sync-disclosure"),
+    ).toBeTruthy();
     expect(mocks.syncWithDepth).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
 
@@ -350,32 +429,20 @@ describe("Transaction Sync first-sync confirmation recovery", () => {
 
     await waitFor(() => expect(mocks.toast).toHaveBeenCalledTimes(1));
     const payload = mocks.toast.mock.calls[0][0];
+    expect(payload.title).toBe("Could Not Save Privacy Confirmation");
+    expect(payload.description).toContain("syncing did not start");
+    expect(payload.action).toBeTruthy();
+    expect(mocks.updateProvider).not.toHaveBeenCalled();
+    expect(mocks.resumeSync).not.toHaveBeenCalled();
+    expect(screen.getByTestId("dialog-first-sync-disclosure")).toBeTruthy();
 
-    const unhandledRejection = vi.fn();
+    fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
 
-    const unhandledRejection = vi.fn();
-      await waitFor(() => expect(syncButton.disabled).toBe(false));
-      fireEvent.click(syncButton);
-      fireEvent.click(await screen.findByTestId("button-confirm-first-sync"));
-
-      await waitFor(() => expect(mocks.toast).toHaveBeenCalledTimes(1));
-      expect(mocks.toast.mock.calls[0][0].title).toBe("Could Not Save Privacy Confirmation");
-      expect(mocks.updateProvider).not.toHaveBeenCalled();
-      expect(mocks.syncWithDepth).not.toHaveBeenCalled();
-      expect(screen.getByTestId("dialog-first-sync-disclosure")).toBeTruthy();
-
-      await waitFor(() => {
-        expect((screen.getByTestId("button-confirm-first-sync") as HTMLButtonElement).disabled).toBe(false);
-      });
-      fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
-
-      await waitFor(() => expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(2));
-      await waitFor(() => expect(mocks.syncWithDepth).toHaveBeenCalledTimes(1));
-      expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
-      expect(unhandledRejection).not.toHaveBeenCalled();
-    } finally {
-      window.removeEventListener("unhandledrejection", unhandledRejection);
-    }
+    await waitFor(() =>
+      expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() => expect(mocks.updateProvider).toHaveBeenCalledTimes(1));
+    expect(mocks.resumeSync).toHaveBeenCalledTimes(1);
   });
 
   it("shows a failure toast when the report-targeted address lookup rejects", async () => {
@@ -387,7 +454,8 @@ describe("Transaction Sync first-sync confirmation recovery", () => {
     await waitFor(() => {
       expect(mocks.toast).toHaveBeenCalledWith({
         title: "Sync Failed",
-        description: "Could not look up the flagged addresses for syncing. Please try again.",
+        description:
+          "Could not look up the flagged addresses for syncing. Please try again.",
         variant: "destructive",
       });
     });
@@ -396,5 +464,3 @@ describe("Transaction Sync first-sync confirmation recovery", () => {
     expect(mocks.syncWithDepth).not.toHaveBeenCalled();
   });
 });
-
-      const syncButton = await screen.findByTestId("button-sync") as HTMLButtonElement;
