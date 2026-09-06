@@ -20,13 +20,13 @@ import {
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
+import { prepareWindowsPortableLaunch } from './packaged-windows-portable.mjs';
 
 await acquireBrowserCheckLock();
 
 const ROOT = repoRootFromModuleUrl(import.meta.url);
 const IS_WINDOWS = process.platform === 'win32';
-const RELEASE_DIR = path.join(ROOT, 'release');
-const UNPACKED_DIR = path.join(RELEASE_DIR, IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
+const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_FORGOTTEN_SOURCE_CDP_PORT || 9231);
 const TAG = '[packaged-forgotten-network-source]';
@@ -54,7 +54,6 @@ function buildPackage() {
     if (!fs.existsSync(ASAR)) throw new Error(`${TAG} KYUTXO_PACKAGED_SKIP_BUILD=1 but ${ASAR} is missing`);
     assertPackagedBundleFresh({ root: ROOT, tag: TAG });
     assertPackagedAsarFresh({ root: ROOT, asarPath: ASAR, tag: TAG });
-    if (IS_WINDOWS) findPortableArtifact();
     return;
   }
   run('npm', ['run', 'build']);
@@ -67,25 +66,6 @@ function buildPackage() {
     ...(IS_WINDOWS ? ['--win'] : ['--dir', '--linux', '-c.npmRebuild=false']),
   ]);
   if (!fs.existsSync(ASAR)) throw new Error(`${TAG} packaging produced no ${ASAR}`);
-  if (IS_WINDOWS) findPortableArtifact();
-}
-
-function findPortableArtifact() {
-  const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
-  const expected = path.join(RELEASE_DIR, `KYUTXO-${version}-Portable.exe`);
-  if (fs.existsSync(expected) && fs.statSync(expected).size > 0) {
-    if (fs.statSync(expected).mtimeMs + 1_000 < fs.statSync(ASAR).mtimeMs) {
-      throw new Error(`${TAG} portable artifact predates the validated app.asar: ${expected}`);
-    }
-    return expected;
-  }
-  const candidates = fs.existsSync(RELEASE_DIR)
-    ? fs.readdirSync(RELEASE_DIR).filter((name) => /^KYUTXO-.+-Portable\.exe$/i.test(name))
-    : [];
-  throw new Error(
-    `${TAG} generated portable artifact is missing or empty: ${expected}; ` +
-      `portable candidates found: ${candidates.join(', ') || 'none'}`,
-  );
 }
 
 async function cdpIsUp() {
@@ -141,35 +121,26 @@ async function main() {
   let xvfbBin;
   if (!IS_WINDOWS) ({ electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG }));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-forgotten-source-'));
-  const portableLaunchDir = path.join(home, 'portable-launch');
-  const tempDir = path.join(home, 'temp');
-  fs.mkdirSync(portableLaunchDir, { recursive: true });
-  fs.mkdirSync(tempDir, { recursive: true });
-  const { PORTABLE_EXECUTABLE_DIR: _portable, ...inheritedEnv } = process.env;
+  const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
+    root: ROOT, asarPath: ASAR, home, tag: TAG,
+  }) : null;
   const env = {
-    ...inheritedEnv, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'),
+    ...(portableSetup?.env || process.env), HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'),
     XDG_CACHE_HOME: path.join(home, '.cache'), XDG_DATA_HOME: path.join(home, '.local', 'share'),
     XDG_STATE_HOME: path.join(home, '.local', 'state'), NODE_ENV: 'production',
     KYUTXO_PROVIDER_TEST_PROBE: '1',
   };
-  if (IS_WINDOWS) Object.assign(env, {
-    USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'),
-    LOCALAPPDATA: path.join(home, 'AppData', 'Local'), TEMP: tempDir, TMP: tempDir,
-  });
   const display = process.env.KYUTXO_PACKAGED_DISPLAY || ':102';
   let xvfb;
   let child;
   let browser;
-  const executable = IS_WINDOWS
-    ? path.join(portableLaunchDir, path.basename(findPortableArtifact()))
-    : electronBin;
-  if (IS_WINDOWS) fs.copyFileSync(findPortableArtifact(), executable);
+  const executable = IS_WINDOWS ? portableSetup.executable : electronBin;
   const launch = () => {
     const args = IS_WINDOWS
       ? ['--disable-gpu', `--remote-debugging-port=${CDP_PORT}`]
       : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`];
     child = spawn(executable, args, {
-      cwd: IS_WINDOWS ? portableLaunchDir : home,
+      cwd: IS_WINDOWS ? portableSetup.launchDir : home,
       env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
       detached: !IS_WINDOWS, stdio: ['ignore', 'pipe', 'pipe'],
     });

@@ -26,13 +26,13 @@ import {
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
+import { prepareWindowsPortableLaunch } from './packaged-windows-portable.mjs';
 
 await acquireBrowserCheckLock();
 
 const ROOT = repoRootFromModuleUrl(import.meta.url);
 const IS_WINDOWS = process.platform === 'win32';
-const RELEASE_DIR = path.join(ROOT, 'release');
-const UNPACKED_DIR = path.join(RELEASE_DIR, IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
+const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_NETWORK_PRIVACY_CDP_PORT || 9227);
@@ -303,14 +303,11 @@ async function main() {
   }
 
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-network-privacy-'));
-  const portableLaunchDir = path.join(tempHome, 'portable-launch');
-  const tempDir = path.join(tempHome, 'temp');
-  fs.mkdirSync(portableLaunchDir, { recursive: true });
-  fs.mkdirSync(tempDir, { recursive: true });
-
-  const { PORTABLE_EXECUTABLE_DIR: _portableExecutableDir, ...inheritedEnv } = process.env;
+  const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
+    root: ROOT, asarPath: ASAR, home: tempHome, tag: TAG,
+  }) : null;
   const env = {
-    ...inheritedEnv,
+    ...(portableSetup?.env || process.env),
     HOME: tempHome,
     XDG_CONFIG_HOME: path.join(tempHome, '.config'),
     XDG_CACHE_HOME: path.join(tempHome, '.cache'),
@@ -319,30 +316,14 @@ async function main() {
     NODE_ENV: 'production',
   };
   if (IS_WINDOWS) {
-    env.USERPROFILE = tempHome;
-    env.APPDATA = path.join(tempHome, 'AppData', 'Roaming');
-    env.LOCALAPPDATA = path.join(tempHome, 'AppData', 'Local');
-    env.TEMP = tempDir;
-    env.TMP = tempDir;
   }
 
   let xvfb = null;
   let child = null;
   let browser = null;
   const display = process.env.KYUTXO_PACKAGED_DISPLAY || ':101';
-  const launchExecutable = IS_WINDOWS
-    ? path.join(portableLaunchDir, path.basename(
-        path.join(RELEASE_DIR, `KYUTXO-${JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version}-Portable.exe`),
-      ))
-    : electronBin;
-  if (IS_WINDOWS) {
-    const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
-    const portableArtifact = path.join(RELEASE_DIR, `KYUTXO-${version}-Portable.exe`);
-    if (!fs.existsSync(portableArtifact)) {
-      throw new Error(`${TAG} portable artifact is missing: ${portableArtifact}`);
-    }
-    fs.copyFileSync(portableArtifact, launchExecutable);
-  } else {
+  const launchExecutable = IS_WINDOWS ? portableSetup.executable : electronBin;
+  if (!IS_WINDOWS) {
     xvfb = spawn(xvfbBin, [display, '-screen', '0', '1280x800x24'], {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -357,7 +338,7 @@ async function main() {
     : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`];
   const launchPackagedProcess = () => {
     child = spawn(launchExecutable, launchArgs, {
-      cwd: IS_WINDOWS ? portableLaunchDir : tempHome,
+      cwd: IS_WINDOWS ? portableSetup.launchDir : tempHome,
       env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
       detached: !IS_WINDOWS,
       stdio: ['ignore', 'pipe', 'pipe'],

@@ -25,12 +25,12 @@ import {
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
+import { prepareWindowsPortableLaunch } from './packaged-windows-portable.mjs';
 
 await acquireBrowserCheckLock();
 
 const ROOT = repoRootFromModuleUrl(import.meta.url);
 const IS_WINDOWS = process.platform === 'win32';
-const RELEASE_DIR = path.join(ROOT, 'release');
 const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
@@ -68,21 +68,6 @@ function buildPackage() {
     IS_WINDOWS ? '--win' : '--linux',
   ]);
   if (!fs.existsSync(ASAR)) throw new Error(`${TAG} packaging produced no ${ASAR}`);
-}
-
-function findPortableArtifact() {
-  const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
-  const expected = path.join(RELEASE_DIR, `KYUTXO-${version}-Portable.exe`);
-  if (fs.existsSync(expected) && fs.statSync(expected).size > 0) {
-    return expected;
-  }
-  const candidates = fs.existsSync(RELEASE_DIR)
-    ? fs.readdirSync(RELEASE_DIR).filter((name) => /^KYUTXO-.+-Portable\.exe$/i.test(name))
-    : [];
-  throw new Error(
-    `${TAG} generated portable artifact is missing or empty: ${expected}; ` +
-      `portable candidates found: ${candidates.join(', ') || 'none'}`,
-  );
 }
 
 function txid(prefix) {
@@ -281,8 +266,9 @@ async function main() {
   buildPackage();
   const binaries = IS_WINDOWS ? { electronBin: null, xvfbBin: null } : findPackagedBinaries({ tag: TAG });
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-origins-'));
-  const portableLaunchDir = path.join(tempHome, 'portable-launch');
-  fs.mkdirSync(portableLaunchDir, { recursive: true });
+  const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
+    root: ROOT, asarPath: ASAR, home: tempHome, tag: TAG,
+  }) : null;
   const display = `:${500 + (process.pid % 300)}`;
   let xvfb;
   let child;
@@ -299,7 +285,7 @@ async function main() {
     }
 
     const env = {
-      ...process.env,
+      ...(portableSetup?.env || process.env),
       HOME: tempHome,
       XDG_CONFIG_HOME: path.join(tempHome, '.config'),
       XDG_CACHE_HOME: path.join(tempHome, '.cache'),
@@ -310,14 +296,12 @@ async function main() {
     };
     let launchExecutable = PACKAGED_EXECUTABLE;
     if (IS_WINDOWS) {
-      const portableArtifact = findPortableArtifact();
-      launchExecutable = path.join(portableLaunchDir, path.basename(portableArtifact));
-      fs.copyFileSync(portableArtifact, launchExecutable);
+      launchExecutable = portableSetup.executable;
       console.log(`${TAG} portable launch copy: ${launchExecutable}`);
     }
 
     child = spawn(launchExecutable, [`--remote-debugging-port=${CDP_PORT}`], {
-      cwd: IS_WINDOWS ? portableLaunchDir : tempHome,
+      cwd: IS_WINDOWS ? portableSetup.launchDir : tempHome,
       env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
       detached: !IS_WINDOWS,
       stdio: ['ignore', 'pipe', 'pipe'],

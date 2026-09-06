@@ -10,6 +10,10 @@ import {
   PACKAGED_BINARY_LOOKUP_TIMEOUT_MS,
   PACKAGED_BINARY_SPECS,
 } from './packaged-electron-binaries.mjs';
+import {
+  findWindowsPortableArtifact,
+  prepareWindowsPortableLaunch,
+} from './packaged-windows-portable.mjs';
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(SCRIPTS_DIR);
@@ -138,6 +142,35 @@ function assertUsesSharedBinaryDiscovery(filename, source) {
   );
 }
 
+function assertUsesSharedWindowsPortableSetup(filename, source) {
+  if (!/process\.platform === ['"]win32['"]/.test(source)) return;
+  const adHocPortablePattern =
+    /function\s+findPortableArtifact|readFileSync\([^)]*package\.json|copyFileSync\([^)]*portable|KYUTXO-\$\{[^}]+\}-Portable\.exe|const\s*\{\s*PORTABLE_EXECUTABLE_DIR[^}]*\}\s*=\s*process\.env/;
+  if (!/prepareWindowsPortableLaunch/.test(source)) {
+    assert.doesNotMatch(
+      source,
+      adHocPortablePattern,
+      `${filename} must use the shared Windows portable launch helper instead of ad hoc discovery or copying`,
+    );
+    return;
+  }
+  assert.match(
+    source,
+    /import\s*\{[\s\S]*prepareWindowsPortableLaunch[\s\S]*\}\s*from\s*['"]\.\/packaged-windows-portable\.mjs['"]/,
+    `${filename} must import the shared Windows portable launch helper`,
+  );
+  assert.match(
+    source,
+    /prepareWindowsPortableLaunch\s*\(\s*\{/,
+    `${filename} must prepare its Windows portable launch through the shared helper`,
+  );
+  assert.doesNotMatch(
+    source,
+    adHocPortablePattern,
+    `${filename} must not carry ad hoc Windows portable artifact discovery or copying`,
+  );
+}
+
 test('all packaged browser checks use the shared binary discovery module', () => {
   const filenames = discoverPackagedBrowserChecks(fs.readdirSync(SCRIPTS_DIR));
   assert.ok(filenames.length > 0, 'must discover packaged browser checks');
@@ -158,6 +191,87 @@ test('a newly added packaged browser check cannot escape shared discovery assert
     ),
     /check-packaged-future-feature-browser\.mjs must import the shared discovery helper/,
   );
+});
+
+test('all Windows packaged browser checks use the shared portable launch setup', () => {
+  const filenames = discoverPackagedBrowserChecks(fs.readdirSync(SCRIPTS_DIR));
+  for (const filename of filenames) {
+    assertUsesSharedWindowsPortableSetup(
+      filename,
+      fs.readFileSync(path.join(SCRIPTS_DIR, filename), 'utf8'),
+    );
+  }
+});
+
+test('a future Windows packaged check cannot restore ad hoc portable discovery', () => {
+  assert.throws(
+    () => assertUsesSharedWindowsPortableSetup(
+      'check-packaged-future-feature-browser.mjs',
+      [
+        "const IS_WINDOWS = process.platform === 'win32';",
+        "const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;",
+        'fs.copyFileSync(portableArtifact, launchExecutable);',
+      ].join('\n'),
+    ),
+    /must use the shared Windows portable launch helper instead of ad hoc discovery or copying/,
+  );
+});
+
+test('shared Windows portable lookup rejects missing, empty, and stale artifacts', (t) => {
+  const root = fs.mkdtempSync(path.join(SCRIPTS_DIR, '.portable-helper-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const releaseDir = path.join(root, 'release');
+  const asarPath = path.join(releaseDir, 'win-unpacked', 'resources', 'app.asar');
+  fs.mkdirSync(path.dirname(asarPath), { recursive: true });
+  fs.writeFileSync(path.join(root, 'package.json'), '{"version":"1.2.3"}');
+  fs.writeFileSync(asarPath, 'asar');
+
+  assert.throws(
+    () => findWindowsPortableArtifact({ root, asarPath, tag: '[test]' }),
+    /generated portable artifact is missing or empty.*KYUTXO-1\.2\.3-Portable\.exe/,
+  );
+  const artifactPath = path.join(releaseDir, 'KYUTXO-1.2.3-Portable.exe');
+  fs.writeFileSync(artifactPath, '');
+  assert.throws(
+    () => findWindowsPortableArtifact({ root, asarPath, tag: '[test]' }),
+    /missing or empty/,
+  );
+  fs.writeFileSync(artifactPath, 'portable');
+  const old = new Date(Date.now() - 10_000);
+  const fresh = new Date();
+  fs.utimesSync(artifactPath, old, old);
+  fs.utimesSync(asarPath, fresh, fresh);
+  assert.throws(
+    () => findWindowsPortableArtifact({ root, asarPath, tag: '[test]' }),
+    /portable artifact predates the validated app\.asar/,
+  );
+});
+
+test('shared Windows launch setup copies the fresh artifact and strips inherited portable state', (t) => {
+  const root = fs.mkdtempSync(path.join(SCRIPTS_DIR, '.portable-helper-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const releaseDir = path.join(root, 'release');
+  const asarPath = path.join(releaseDir, 'win-unpacked', 'resources', 'app.asar');
+  const artifactPath = path.join(releaseDir, 'KYUTXO-1.2.3-Portable.exe');
+  const home = path.join(root, 'home');
+  fs.mkdirSync(path.dirname(asarPath), { recursive: true });
+  fs.writeFileSync(path.join(root, 'package.json'), '{"version":"1.2.3"}');
+  fs.writeFileSync(asarPath, 'asar');
+  fs.writeFileSync(artifactPath, 'portable bytes');
+
+  const setup = prepareWindowsPortableLaunch({
+    root,
+    asarPath,
+    home,
+    tag: '[test]',
+    env: { KEEP_ME: 'yes', PORTABLE_EXECUTABLE_DIR: 'C:\\stale' },
+  });
+  assert.equal(fs.readFileSync(setup.executable, 'utf8'), 'portable bytes');
+  assert.equal(setup.launchDir, path.join(home, 'portable-launch'));
+  assert.equal(setup.env.PORTABLE_EXECUTABLE_DIR, undefined);
+  assert.equal(setup.env.KEEP_ME, 'yes');
+  assert.equal(setup.env.USERPROFILE, home);
+  assert.equal(setup.env.TEMP, path.join(home, 'temp'));
 });
 
 test('release and validation registrations enforce packaged browser check filenames', () => {
@@ -350,9 +464,9 @@ test('the packaged browser gate launches the generated Windows portable renderer
   assert.match(source, /process\.platform === 'win32'/);
   assert.match(source, /path\.join\(ROOT, 'release', IS_WINDOWS \? 'win-unpacked' : 'linux-unpacked'\)/);
   assert.match(source, /IS_WINDOWS \? 'KYUTXO\.exe' : 'kyutxo'/);
-  assert.match(source, /KYUTXO-\.\+-Portable\\\.exe/);
-  assert.match(source, /fs\.copyFileSync\(portableArtifact, launchExecutable\)/);
-  assert.match(source, /portableLaunchDir/);
+  assert.match(source, /prepareWindowsPortableLaunch/);
+  assert.match(source, /portableSetup\.executable/);
+  assert.match(source, /portableSetup\.launchDir/);
   assert.match(source, /taskkill.*args\.push\('\/F'\)/s);
   assert.match(source, /maxRetries: 10/);
   assert.match(source, /PORTABLE_CHECK_PASSWORD/);
@@ -426,10 +540,8 @@ test('the packaged Coin Passport gate is release-wired after the native worker c
   assert.match(script, /engine\.query\('getCoinOriginsPage'/);
   assert.match(script, /expectedCheckpointKey/);
   assert.match(script, /IPC_PAGE_CAP = 250/);
-  assert.match(script, /findPortableArtifact\(\)/);
-  assert.match(script, /KYUTXO-.+-Portable\\\.exe/);
+  assert.match(script, /prepareWindowsPortableLaunch/);
   assert.match(script, /portable launch copy/);
-  assert.match(script, /portable artifact predates the validated app\.asar/);
   assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
   assert.match(
     workflow,
@@ -452,11 +564,8 @@ test('the forgotten-source gate launches the copied Windows portable artifact an
   );
   const buildScript = fs.readFileSync(path.join(SCRIPTS_DIR, 'electron-build.sh'), 'utf8');
 
-  assert.match(script, /function findPortableArtifact\(\)/);
-  assert.match(script, /KYUTXO-\$\{version\}-Portable\.exe/);
-  assert.match(script, /portable artifact predates the validated app\.asar/);
-  assert.match(script, /fs\.copyFileSync\(findPortableArtifact\(\), executable\)/);
-  assert.match(script, /cwd: IS_WINDOWS \? portableLaunchDir : home/);
+  assert.match(script, /prepareWindowsPortableLaunch/);
+  assert.match(script, /cwd: IS_WINDOWS \? portableSetup\.launchDir : home/);
   assert.doesNotMatch(script, /path\.join\(UNPACKED_DIR, 'KYUTXO\.exe'\)/);
   assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
   assert.match(
@@ -486,8 +595,7 @@ test('the packaged Coin Origins gate is release-wired after the native worker ch
   assert.match(script, /lotsTotal === 2/);
   assert.match(script, /holdingsTotal === 3/);
   assert.match(script, /origin-holding-unknown/);
-  assert.match(script, /findPortableArtifact\(\)/);
-  assert.match(script, /KYUTXO-.+-Portable\\\.exe/);
+  assert.match(script, /prepareWindowsPortableLaunch/);
   assert.match(
     workflow,
     /- name: Verify Coin Origins wallet-scoped counts through packaged IPC\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-coin-origins-browser\.mjs/,

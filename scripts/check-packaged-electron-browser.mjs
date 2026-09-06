@@ -59,6 +59,10 @@ import {
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
+import {
+  findWindowsPortableArtifact,
+  prepareWindowsPortableLaunch,
+} from './packaged-windows-portable.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -67,7 +71,6 @@ await acquireBrowserCheckLock();
 const ROOT = repoRootFromModuleUrl(import.meta.url);
 const IS_WINDOWS = process.platform === 'win32';
 const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
-const RELEASE_DIR = path.join(ROOT, 'release');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9223);
@@ -130,36 +133,6 @@ function buildAsar() {
   if (!fs.existsSync(ASAR)) {
     throw new Error(`${TAG} electron-builder finished but ${ASAR} was not produced.`);
   }
-}
-
-function findPortableArtifact() {
-  let version;
-  try {
-    version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
-  } catch (err) {
-    throw new Error(`${TAG} could not read package version for portable artifact: ${err.message}`);
-  }
-
-  const expectedName = `KYUTXO-${version}-Portable.exe`;
-  const expectedPath = path.join(RELEASE_DIR, expectedName);
-  if (fs.existsSync(expectedPath) && fs.statSync(expectedPath).size > 0) {
-    return expectedPath;
-  }
-
-  let candidates = [];
-  try {
-    candidates = fs
-      .readdirSync(RELEASE_DIR)
-      .filter((name) => /^KYUTXO-.+-Portable\.exe$/i.test(name))
-      .map((name) => path.join(RELEASE_DIR, name));
-  } catch {
-    /* report the actionable expected path below */
-  }
-  const found = candidates.map((candidate) => path.basename(candidate)).join(', ') || 'none';
-  throw new Error(
-    `${TAG} generated portable artifact is missing or empty: ${expectedPath}; ` +
-      `portable candidates found: ${found}`,
-  );
 }
 
 async function waitForCdp(timeoutMs) {
@@ -333,7 +306,9 @@ async function main() {
         `${TAG} packaged Windows executable is missing: ${PACKAGED_EXECUTABLE}`,
       );
     }
-    portableArtifact = findPortableArtifact();
+    portableArtifact = findWindowsPortableArtifact({
+      root: ROOT, asarPath: ASAR, tag: TAG,
+    });
     console.log(`${TAG} unpacked executable (native-engine companion): ${PACKAGED_EXECUTABLE}`);
     console.log(`${TAG} generated portable artifact: ${portableArtifact}`);
   } else {
@@ -345,10 +320,7 @@ async function main() {
   // Fresh, isolated profile: Replit points XDG_CONFIG_HOME etc. at the
   // workspace, which would persist vault state across "fresh" runs.
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-check-'));
-  const portableLaunchDir = path.join(tmpHome, 'portable-launch');
-  const tempDir = path.join(tmpHome, 'temp');
-  fs.mkdirSync(portableLaunchDir, { recursive: true });
-  fs.mkdirSync(tempDir, { recursive: true });
+  let portableSetup = null;
   const outsideSentinel = path.join(tmpHome, 'outside-bundle-secret.txt');
   const outsideSentinelText = `outside-bundle-${process.pid}`;
   fs.writeFileSync(outsideSentinel, outsideSentinelText, 'utf8');
@@ -370,9 +342,14 @@ async function main() {
   const providerBaseUrl = `http://127.0.0.1:${fixtureAddress.port}/api`;
   // A portable executable can inherit this variable from a runner. Do not
   // allow an inherited portable directory to defeat the isolated profile.
-  const { PORTABLE_EXECUTABLE_DIR: _portableExecutableDir, ...inheritedEnv } = process.env;
+  if (IS_WINDOWS) {
+    portableSetup = prepareWindowsPortableLaunch({
+      root: ROOT, asarPath: ASAR, home: tmpHome, tag: TAG,
+    });
+    portableArtifact = portableSetup.artifactPath;
+  }
   const env = {
-    ...inheritedEnv,
+    ...(portableSetup?.env || process.env),
     HOME: tmpHome,
     XDG_CONFIG_HOME: path.join(tmpHome, '.config'),
     XDG_CACHE_HOME: path.join(tmpHome, '.cache'),
@@ -386,11 +363,6 @@ async function main() {
     // The portable wrapper sets PORTABLE_EXECUTABLE_DIR to the directory
     // containing the launched copy below. Keep every Windows fallback and the
     // wrapper's extraction temp files inside the same disposable directory.
-    env.USERPROFILE = tmpHome;
-    env.APPDATA = path.join(tmpHome, 'AppData', 'Roaming');
-    env.LOCALAPPDATA = path.join(tmpHome, 'AppData', 'Local');
-    env.TEMP = tempDir;
-    env.TMP = tempDir;
   }
 
   let xvfb = null;
@@ -428,8 +400,7 @@ async function main() {
       // self-extracting portable wrapper. Copying the exact generated artifact
       // into the disposable folder makes the wrapper select that folder for
       // PORTABLE_EXECUTABLE_DIR and prevents test data from reaching release/.
-      launchExecutable = path.join(portableLaunchDir, path.basename(portableArtifact));
-      fs.copyFileSync(portableArtifact, launchExecutable);
+      launchExecutable = portableSetup.executable;
       console.log(`${TAG} portable launch copy: ${launchExecutable}`);
     }
     const launchPackagedProcess = () => {
@@ -439,7 +410,7 @@ async function main() {
         IS_WINDOWS ? launchExecutable : electronBin,
         launchArgs,
         {
-          cwd: IS_WINDOWS ? portableLaunchDir : tmpHome,
+          cwd: IS_WINDOWS ? portableSetup.launchDir : tmpHome,
           env: IS_WINDOWS ? env : { ...env, DISPLAY },
           stdio: ['ignore', 'pipe', 'pipe'],
           detached: !IS_WINDOWS,
@@ -779,12 +750,12 @@ async function main() {
         throw new Error(`${TAG} first portable app process still owns CDP port ${CDP_PORT}.`);
       }
 
-      const portableDataDir = path.join(portableLaunchDir, 'KYUTXO_Data');
+      const portableDataDir = path.join(portableSetup.launchDir, 'KYUTXO_Data');
       const portableDataFiles = countRegularFiles(portableDataDir);
       const portableDataIsIsolated =
         fs.existsSync(portableDataDir) &&
         portableDataFiles > 0 &&
-        isPathWithin(portableLaunchDir, portableDataDir) &&
+        isPathWithin(portableSetup.launchDir, portableDataDir) &&
         isPathWithin(tmpHome, portableDataDir);
       steps.push({
         name: 'portable vault data is written under the disposable executable directory',
