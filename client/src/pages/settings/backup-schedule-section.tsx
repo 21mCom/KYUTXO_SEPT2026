@@ -28,6 +28,7 @@ export function BackupScheduleSection() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const saveInFlightRef = useRef(false);
+  const folderPickerGenerationRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,7 +42,9 @@ export function BackupScheduleSection() {
   }, []);
 
   const chooseFolder = async () => {
+    const pickerGeneration = folderPickerGenerationRef.current;
     const result = await getElectronAPISafe()?.chooseBackupFolder?.();
+    if (pickerGeneration !== folderPickerGenerationRef.current || saveInFlightRef.current) return;
     if (!result || result.canceled) return;
     if (!result.success || !result.token || !result.label) {
       toast({ variant: "destructive", title: "Folder unavailable", description: result.error || "Could not use that folder." });
@@ -57,6 +60,7 @@ export function BackupScheduleSection() {
   const save = async () => {
     if (saveInFlightRef.current) return;
     saveInFlightRef.current = true;
+    folderPickerGenerationRef.current += 1;
     setSaving(true);
     try {
       const normalized = normalizeBackupSchedule(schedule);

@@ -8,11 +8,14 @@ const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
   mutateSettings: vi.fn(),
   cancelActiveScheduledBackup: vi.fn(),
+  chooseBackupFolder: vi.fn(),
   toast: vi.fn(),
 }));
 
 vi.mock("@/lib/electron", () => ({
-  getElectronAPISafe: () => undefined,
+  getElectronAPISafe: () => ({
+    chooseBackupFolder: mocks.chooseBackupFolder,
+  }),
   isElectron: () => true,
 }));
 
@@ -63,6 +66,7 @@ beforeEach(() => {
   });
   mocks.mutateSettings.mockReset();
   mocks.cancelActiveScheduledBackup.mockReset();
+  mocks.chooseBackupFolder.mockReset();
   mocks.toast.mockReset();
 });
 
@@ -99,6 +103,56 @@ function rapidlyActivateSaveTwice() {
 }
 
 describe("backup destination cancellation", () => {
+  it("ignores a folder picker opened before Save when it resolves during or just after persistence", async () => {
+    let finishPicker!: (value: {
+      canceled: false;
+      success: true;
+      token: string;
+      label: string;
+      path: string;
+    }) => void;
+    let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
+    mocks.chooseBackupFolder.mockImplementation(() => new Promise((resolve) => {
+      finishPicker = resolve;
+    }));
+    const oneDestinationSchedule = {
+      ...configuredSchedule,
+      destinations: [DESTINATION],
+    };
+    mocks.getSettings.mockResolvedValue({
+      id: "default",
+      backupSchedule: oneDestinationSchedule,
+    });
+    mocks.mutateSettings.mockImplementation(() => new Promise((resolve) => {
+      finishSave = resolve;
+    }));
+
+    await renderConfiguredSchedule();
+    fireEvent.click(screen.getByTestId("button-add-backup-folder"));
+    expect(mocks.chooseBackupFolder).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByTestId("input-backup-retention"), { target: { value: "12" } });
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+    await waitFor(() => expectScheduleControlsDisabled(true));
+
+    const savedSchedule = { ...oneDestinationSchedule, retentionCount: 12 };
+    finishSave({ backupSchedule: savedSchedule });
+    await waitFor(() => expectScheduleControlsDisabled(false));
+
+    finishPicker({
+      canceled: false,
+      success: true,
+      token: "c".repeat(32),
+      label: "Late drive",
+      path: "/backups/late",
+    });
+    await act(async () => {});
+
+    expect(screen.queryByText("/backups/late")).toBeNull();
+    expect(screen.getByText(DESTINATION.path)).toBeTruthy();
+    expect((screen.getByTestId("input-backup-retention") as HTMLInputElement).value).toBe("12");
+  });
+
   it("prevents schedule edits while a successful write is pending and shows the persisted result", async () => {
     let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
     const changedSchedule = { ...configuredSchedule, retentionCount: 12 };
