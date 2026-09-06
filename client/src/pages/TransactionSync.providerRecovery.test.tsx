@@ -350,18 +350,32 @@ describe("Transaction Sync first-sync confirmation recovery", () => {
 
     await waitFor(() => expect(mocks.toast).toHaveBeenCalledTimes(1));
     const payload = mocks.toast.mock.calls[0][0];
-    expect(payload.title).toBe("Could Not Save Privacy Confirmation");
-    expect(payload.description).toContain("syncing did not start");
-    expect(payload.action).toBeTruthy();
-    expect(mocks.updateProvider).not.toHaveBeenCalled();
-    expect(mocks.resumeSync).not.toHaveBeenCalled();
-    expect(screen.getByTestId("dialog-first-sync-disclosure")).toBeTruthy();
 
-    fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
+    const unhandledRejection = vi.fn();
 
-    await waitFor(() => expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(mocks.updateProvider).toHaveBeenCalledTimes(1));
-    expect(mocks.resumeSync).toHaveBeenCalledTimes(1);
+    const unhandledRejection = vi.fn();
+      await waitFor(() => expect(syncButton.disabled).toBe(false));
+      fireEvent.click(syncButton);
+      fireEvent.click(await screen.findByTestId("button-confirm-first-sync"));
+
+      await waitFor(() => expect(mocks.toast).toHaveBeenCalledTimes(1));
+      expect(mocks.toast.mock.calls[0][0].title).toBe("Could Not Save Privacy Confirmation");
+      expect(mocks.updateProvider).not.toHaveBeenCalled();
+      expect(mocks.syncWithDepth).not.toHaveBeenCalled();
+      expect(screen.getByTestId("dialog-first-sync-disclosure")).toBeTruthy();
+
+      await waitFor(() => {
+        expect((screen.getByTestId("button-confirm-first-sync") as HTMLButtonElement).disabled).toBe(false);
+      });
+      fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
+
+      await waitFor(() => expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(mocks.syncWithDepth).toHaveBeenCalledTimes(1));
+      expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("unhandledrejection", unhandledRejection);
+    }
   });
 
   it("shows a failure toast when the report-targeted address lookup rejects", async () => {
@@ -382,3 +396,5 @@ describe("Transaction Sync first-sync confirmation recovery", () => {
     expect(mocks.syncWithDepth).not.toHaveBeenCalled();
   });
 });
+
+      const syncButton = await screen.findByTestId("button-sync") as HTMLButtonElement;
