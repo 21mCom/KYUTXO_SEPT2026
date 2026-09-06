@@ -116,6 +116,7 @@ export default function TransactionSync() {
   const [connectedOnly, setConnectedOnly] = useState(false);
   const [firstSyncDisclosureCount, setFirstSyncDisclosureCount] = useState<number | null>(null);
   const pendingFirstSyncAction = useRef<(() => Promise<void>) | null>(null);
+  const firstSyncApprovedRef = useRef(false);
 
   const networkSettingsAction = (message: string) =>
     isNetworkPolicyBlockedMessage(message) ? (
@@ -151,7 +152,7 @@ export default function TransactionSync() {
   }, [selectedSources, includeNoSource]);
 
   const requestFirstSyncApproval = useCallback((addressCount: number, action: () => Promise<void>) => {
-    if (!isFirstSyncConfirmationRequired(nodeSettings)) {
+    if (firstSyncApprovedRef.current || !isFirstSyncConfirmationRequired(nodeSettings)) {
       void action();
       return;
     }
@@ -163,6 +164,7 @@ export default function TransactionSync() {
     const action = pendingFirstSyncAction.current;
     pendingFirstSyncAction.current = null;
     await markFirstSyncConfirmed();
+    firstSyncApprovedRef.current = true;
     setFirstSyncDisclosureCount(null);
     if (action) await action();
   };
@@ -416,7 +418,7 @@ export default function TransactionSync() {
       maxDepth: 1,
       specificRecordIds: recordIds,
     };
-    if (isFirstSyncConfirmationRequired(nodeSettings)) {
+    if (!firstSyncApprovedRef.current && isFirstSyncConfirmationRequired(nodeSettings)) {
       requestFirstSyncApproval(recordIds.length, async () => {
         await handleSyncTargetedAddresses(addresses);
       });
@@ -474,7 +476,7 @@ export default function TransactionSync() {
   };
   
   const handleResumeSync = async () => {
-    if (isFirstSyncConfirmationRequired(nodeSettings)) {
+    if (!firstSyncApprovedRef.current && isFirstSyncConfirmationRequired(nodeSettings)) {
       requestFirstSyncApproval(pausedState?.remainingRecordIds.length ?? 0, handleResumeSync);
       return;
     }
@@ -560,7 +562,7 @@ export default function TransactionSync() {
 
   const handleSingleAddressSync = async () => {
     if (!singleAddress.trim()) return;
-    if (isFirstSyncConfirmationRequired(nodeSettings)) {
+    if (!firstSyncApprovedRef.current && isFirstSyncConfirmationRequired(nodeSettings)) {
       requestFirstSyncApproval(1, handleSingleAddressSync);
       return;
     }

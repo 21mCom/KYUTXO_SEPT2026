@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => {
     networkAccessEnabled: false,
     networkPrivacyMode: "standard",
     networkOnboardingStage: "complete",
-    firstSyncConfirmedAt: 1,
+    firstSyncConfirmedAt: undefined as number | undefined,
   };
 
   return {
@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
     syncSingleAddress: vi.fn(),
     getPausedState: vi.fn(),
     toast: vi.fn(),
+    markFirstSyncConfirmed: vi.fn(),
   };
 });
 
@@ -42,6 +43,11 @@ vi.mock("@/hooks/use-toast", () => ({
 
 vi.mock("@/hooks/use-node-settings", () => ({
   useNodeSettings: () => ({ nodeSettings: mocks.nodeSettings }),
+}));
+
+vi.mock("@/lib/network-privacy", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/network-privacy")>()),
+  markFirstSyncConfirmed: (...args: unknown[]) => mocks.markFirstSyncConfirmed(...args),
 }));
 
 vi.mock("@/lib/transaction-sync", async (importOriginal) => ({
@@ -107,6 +113,8 @@ describe.each([
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState({}, "", "/transaction-sync");
+    mocks.nodeSettings.firstSyncConfirmedAt = undefined;
+    mocks.markFirstSyncConfirmed.mockResolvedValue(undefined);
     mocks.getPausedState.mockResolvedValue(PAUSED_STATE);
     mocks.updateProvider.mockImplementation(() => {
       throw new Error(message);
@@ -115,17 +123,22 @@ describe.each([
 
   afterEach(cleanup);
 
-  it("offers Node Settings when resume provider construction is blocked", async () => {
+  it("offers Node Settings when deferred resume provider construction is blocked after approval", async () => {
     const settingsBefore = JSON.stringify(mocks.nodeSettings);
     renderWithProviders(<TransactionSync />);
 
     fireEvent.click(await screen.findByTestId("button-resume-sync"));
+    expect(await screen.findByTestId("dialog-first-sync-disclosure")).toBeTruthy();
+    expect(mocks.updateProvider).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
 
     await expectSettingsActionWithoutMutation(settingsBefore, "Resume Failed", message);
+    expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(1);
+    expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
     expect(mocks.resumeSync).not.toHaveBeenCalled();
   });
 
-  it("offers Node Settings when single-address provider construction is blocked", async () => {
+  it("offers Node Settings when deferred single-address provider construction is blocked after approval", async () => {
     const settingsBefore = JSON.stringify(mocks.nodeSettings);
     renderWithProviders(<TransactionSync />);
 
@@ -133,8 +146,13 @@ describe.each([
       target: { value: ADDRESS },
     });
     fireEvent.click(screen.getByTestId("button-single-sync"));
+    expect(await screen.findByTestId("dialog-first-sync-disclosure")).toBeTruthy();
+    expect(mocks.updateProvider).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("button-confirm-first-sync"));
 
     await expectSettingsActionWithoutMutation(settingsBefore, "Sync Failed", message);
+    expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(1);
+    expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
     expect(mocks.syncSingleAddress).not.toHaveBeenCalled();
     await waitFor(() => {
       expect((screen.getByTestId("button-single-sync") as HTMLButtonElement).disabled).toBe(false);
