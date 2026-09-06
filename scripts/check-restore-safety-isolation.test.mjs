@@ -260,6 +260,97 @@ test('rejects an imported but unused focused helper behind a local barrel re-exp
   assert.match(result.stderr, /missing its required restore selector button-open-restore/);
 });
 
+test('accepts required focused proof fragments reached through multiple local barrels', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { runRestoreProof } from './public.mjs';\n",
+      'scripts/restore-helpers/public.mjs':
+        "export { runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('export-star barrel chains preserve reached focused helpers', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs': [
+        "export * from './unrelated.mjs';",
+        "export * from './public.mjs';",
+      ].join('\n'),
+      'scripts/restore-helpers/unrelated.mjs': 'export function unrelated() {}\n',
+      'scripts/restore-helpers/public.mjs': "export * from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('export-star barrel chains preserve unused focused helpers', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { deadRestoreProof } from './restore-helpers/index.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs': "export * from './public.mjs';\n",
+      'scripts/restore-helpers/public.mjs': "export * from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function deadRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('cyclic export-star barrel chains terminate and resolve a reached focused helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/first.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/first.mjs': "export * from './second.mjs';\n",
+      'scripts/restore-helpers/second.mjs': [
+        "export * from './first.mjs';",
+        "export * from './restore-proof.mjs';",
+      ].join('\n'),
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test('accepts required focused proof fragments reached through a namespace-imported helper', () => {
   const focused = validFocusedProof();
   const fragment = "page.getByTestId('button-open-restore');";

@@ -96,6 +96,7 @@ function reachedFocusedSyntax(source) {
       localFunctions: new Map(),
       imports: new Map(),
       exports: new Map(),
+      starExports: [],
       dependencies: [],
     };
     modules.set(relative, module);
@@ -156,7 +157,7 @@ function reachedFocusedSyntax(source) {
               });
             }
           } else {
-            module.exports.set('*', { target, star: true });
+            module.starExports.push(target);
           }
         } else if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
           for (const element of statement.exportClause.elements) {
@@ -191,11 +192,9 @@ function reachedFocusedSyntax(source) {
       }
       return resolveExport(parseModule(direct.target), direct.imported, seen);
     }
-    for (const entry of module.exports.values()) {
-      if (entry.star) {
-        const resolved = resolveExport(parseModule(entry.target), name, seen);
-        if (resolved) return resolved;
-      }
+    for (const target of module.starExports) {
+      const resolved = resolveExport(parseModule(target), name, seen);
+      if (resolved) return resolved;
     }
     return null;
   }
