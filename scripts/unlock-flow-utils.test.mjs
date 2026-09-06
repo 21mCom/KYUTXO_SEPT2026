@@ -68,6 +68,9 @@ describe('browser-check unlock guard', () => {
            "page.getByTestId(onboardingImport());",
            "const onboardingFinish = function () { const prefix = ['button', 'onboarding'].join('-'); return `${prefix}-finish`; };",
            "page.getByTestId(onboardingFinish());",
+           "const buildAliasedChoice = (kind) => `choice-network-${kind}`;",
+           "const aliasedChoice = buildAliasedChoice;",
+           "page.getByTestId(aliasedChoice('offline'));",
           "function dynamicChoice() { let suffix = 'network-'; return 'choice-' + suffix + runtimeChoice(); }",
           "page.getByTestId(dynamicChoice());",
           "function statefulFinish() { const selector = ['button', 'onboarding'].join('-'); recordSelector(selector); return selector + '-finish'; }",
@@ -76,6 +79,11 @@ describe('browser-check unlock guard', () => {
            "page.getByTestId(mutableOfflineChoice());",
            "const sideEffectingSource = function () { const selector = ['network', 'onboarding'].join('-'); recordSelector(selector); return selector + '-source'; };",
            "page.getByTestId(sideEffectingSource());",
+           "let reassignedChoiceAlias = buildAliasedChoice;",
+           "reassignedChoiceAlias = runtimeChoiceBuilder();",
+           "page.getByTestId(reassignedChoiceAlias('offline'));",
+           "const sideEffectingChoiceAlias = (recordSelectorUse(), buildAliasedChoice);",
+           "page.getByTestId(sideEffectingChoiceAlias('offline'));",
           '',
         ].join('\n'),
       );
@@ -129,10 +137,13 @@ describe('browser-check unlock guard', () => {
       assert.match(result.stderr, /check-generic-browser\.mjs:17\s+\[network-onboarding-source\]/);
        assert.match(result.stderr, /check-generic-browser\.mjs:19\s+\[network-onboarding-import\]/);
        assert.match(result.stderr, /check-generic-browser\.mjs:21\s+\[button-onboarding-finish\]/);
-       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:23\s+/);
-       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:25\s+/);
-       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:27\s+/);
-       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:29\s+/);
+       assert.match(result.stderr, /check-generic-browser\.mjs:24\s+\[choice-network-offline\]/);
+       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:26\s+/);
+       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:28\s+/);
+       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:30\s+/);
+       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:32\s+/);
+       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:35\s+/);
+       assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:37\s+/);
       assert.doesNotMatch(result.stderr, /check-first-run-network-privacy-browser\.mjs:/);
       assert.doesNotMatch(result.stderr, /check-packaged-vault-lock-native\.mjs:/);
       assert.match(result.stderr, /completeFreshVaultOnboardingIfPresent/);

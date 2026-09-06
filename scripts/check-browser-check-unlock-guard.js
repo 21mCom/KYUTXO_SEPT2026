@@ -182,7 +182,13 @@ function evaluateStaticString(node, bindings, functions, seen = new Set()) {
   if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
     const functionName = node.expression.text;
     if (seen.has(functionName)) return undefined;
-    const callable = functions.get(functionName) ?? bindings.get(functionName);
+    let callable = functions.get(functionName) ?? bindings.get(functionName);
+    const callableAliases = new Set([functionName]);
+    while (callable && ts.isIdentifier(callable)) {
+      if (callableAliases.has(callable.text) || seen.has(callable.text)) return undefined;
+      callableAliases.add(callable.text);
+      callable = functions.get(callable.text) ?? bindings.get(callable.text);
+    }
     if (
       !callable ||
       (!ts.isFunctionDeclaration(callable) &&
