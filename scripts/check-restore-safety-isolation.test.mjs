@@ -219,6 +219,84 @@ test('accepts required focused proof fragments reached through a default-importe
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('accepts required focused proof fragments reached through a local barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects an imported but unused focused helper behind a local barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { deadRestoreProof } from './restore-helpers/index.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { deadRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function deadRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('accepts required focused proof fragments reached through a namespace-imported helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import * as restoreHelpers from './restore-helper.mjs';\nrestoreHelpers.runRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects an imported but unused focused helper behind a namespace import', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import * as restoreHelpers from './restore-helper.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export function deadRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
 test('rejects backup imports and restore selectors in the inbox check', () => {
   const result = runFixture({
     inbox: [
