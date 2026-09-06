@@ -23,6 +23,14 @@ const repositoryCall = (collection, operation, payload = {}) => {
     repository, collection, operation, ...payload,
   });
 };
+// A release verifier can opt into this process-local counter to establish
+// whether a disabled test control crossed the actual preload IPC boundary.
+// It is not exposed in ordinary desktop builds.
+const providerTestProbeEnabled = process.env.KYUTXO_PROVIDER_TEST_PROBE === '1';
+const providerTestInvocations = [];
+const noteProviderTestInvocation = (name) => {
+  if (providerTestProbeEnabled) providerTestInvocations.push(name);
+};
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -31,6 +39,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     protectedVaultTest: {
       runScenario: ({ scenario, fixtureTokens }) =>
         ipcRenderer.invoke('protected-vault-test:run-scenario', { scenario, fixtureTokens }),
+    },
+  } : {}),
+  ...(providerTestProbeEnabled ? {
+    providerTestProbe: {
+      count: () => providerTestInvocations.length,
+      calls: () => [...providerTestInvocations],
     },
   } : {}),
   protectedStore: {
@@ -161,10 +175,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   isPortableMode: () => ipcRenderer.invoke('is-portable-mode'),
   
   // Tor proxy operations
-  torTest: () => 
-    ipcRenderer.invoke('tor-test'),
-  torRequest: (params) => 
-    ipcRenderer.invoke('tor-request', params),
+  torTest: () => {
+    noteProviderTestInvocation('tor-test');
+    return ipcRenderer.invoke('tor-test');
+  },
+  torRequest: (params) => {
+    noteProviderTestInvocation('tor-request');
+    return ipcRenderer.invoke('tor-request', params);
+  },
   torStatus: () => 
     ipcRenderer.invoke('tor-status'),
   torUpdateSettings: (settings) =>
@@ -183,8 +201,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('set-vault-lock-settings', settings),
   
   // Electrum protocol operations
-  electrumTest: (params) =>
-    ipcRenderer.invoke('electrum-test', params),
+  electrumTest: (params) => {
+    noteProviderTestInvocation('electrum-test');
+    return ipcRenderer.invoke('electrum-test', params);
+  },
   electrumGetHistory: (params) =>
     ipcRenderer.invoke('electrum-get-history', params),
   electrumGetUtxos: (params) =>

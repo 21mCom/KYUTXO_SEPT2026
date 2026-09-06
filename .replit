@@ -131,6 +131,10 @@ args = "forgotten-network-source-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "packaged-forgotten-network-source-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "electrum-cert-trust-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -2355,6 +2359,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-forgotten-network-source-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-forgotten-network-source-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-forgotten-network-source-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

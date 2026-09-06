@@ -127,7 +127,7 @@ async function runSelfTest(workerPath = process.argv[1]) {
     await send({ type: "seedBatch", table: "transactionParticipants", rows: parts });
     const finish = await send({
       type: "seedFinish",
-      sourceCounts: { records: 3, blockchainTransactions: 2, transactionParticipants: 4 }
+      sourceCounts: { records: 3, blockchainTransactions: 2, transactionParticipants: 4, transactionMetadata: 0 }
     });
     check("seedFinish \u2192 READY", finish.state === "READY", finish.state);
     check("seedFinish reports ready", finish.ready === true);
@@ -240,6 +240,9 @@ function openEngineDb(filename, opts = {}) {
   return wrapBetterSqlite3(raw);
 }
 
+// client/src/lib/owner-constants.ts
+var UNASSIGNED_OWNER_VALUE = "__unassigned__";
+
 // client/src/lib/coin-origins-core.ts
 var UNKNOWN_ORIGIN_ID = "unknown";
 var OWNED_TIERS = /* @__PURE__ */ new Set(["verified", "manual", "wallet-import", "xpub-derived"]);
@@ -310,12 +313,22 @@ function boundaryFor(map, lotBoundaries) {
 function cloneMap(map) {
   return new Map(map);
 }
-function eventKind(inputCount, outputCount, ownedOutputSats, inputSats, boundary) {
+function eventKind(inputCount, outputCount, ownedOutputSats, inputSats, boundary, coinjoin) {
+  if (coinjoin) return "coinjoin";
   if (boundary !== "deterministic") return "mixed";
   if (inputCount === 0) return "acquisition";
   if (inputCount > 1 && outputCount < inputCount) return "consolidation";
   if (ownedOutputSats > 0 && ownedOutputSats < inputSats) return "partial-spend";
   return "transfer";
+}
+function isCoinjoin(inputs, outputs, knownInputSats, unknownInputSats) {
+  if (inputs.length < 3 || outputs.length < 3 || knownInputSats <= 0 || unknownInputSats <= 0) return false;
+  const amounts = /* @__PURE__ */ new Map();
+  for (const output of outputs) {
+    const amount = int(output.amount);
+    if (amount > 0) amounts.set(amount, (amounts.get(amount) ?? 0) + 1);
+  }
+  return [...amounts.values()].some((count) => count >= 3);
 }
 function flattenAncestry(node, txOrder) {
   const seen = /* @__PURE__ */ new Set();
@@ -373,6 +386,7 @@ function calculateCoinOrigins(input) {
     const alreadyConsumed = /* @__PURE__ */ new Set();
     const ancestryParents = [];
     const ancestrySeen = /* @__PURE__ */ new Set();
+    let coinjoin = false;
     for (const p of group.inputs) {
       const amount = int(p.amount);
       const key = p.prevTxid && p.prevVout != null ? outpointKey(p.prevTxid, p.prevVout) : null;
@@ -403,6 +417,7 @@ function calculateCoinOrigins(input) {
         unknownInputSats += amount;
       }
     }
+    coinjoin = isCoinjoin(group.inputs, txOutputs, knownInputSats, unknownInputSats);
     const declaredFee = int(tx2.fee);
     const feeSats2 = txInputSats >= txOutputSats ? txInputSats - txOutputSats : 0;
     const feeAllocation = take(pool, feeSats2);
@@ -439,13 +454,17 @@ function calculateCoinOrigins(input) {
           address,
           walletName: record?.walletName ?? null,
           owner: record?.owner ?? null,
-          label: record?.label ?? null
+          label: record?.label ?? null,
+          acquisitionMethod: tx2.acquisitionMethod ?? null,
+          costBasisUsd: Number.isFinite(tx2.costBasisUsd) ? tx2.costBasisUsd : null,
+          costProvenance: Number.isFinite(tx2.costBasisUsd) ? "provided" : "unknown"
         };
         lots.push(lot);
         lotBoundaries.set(id, acquisitionBoundary);
         acquisitionSats += amount;
       } else {
         composition = take(pool, amount);
+        if (coinjoin && owned) composition = /* @__PURE__ */ new Map([[UNKNOWN_ORIGIN_ID, amount]]);
       }
       const boundary = acquisitionBoundary ?? boundaryFor(composition, lotBoundaries);
       const allocations = mapToAllocations(composition);
@@ -464,7 +483,8 @@ function calculateCoinOrigins(input) {
             hopTxids: flattenAncestry(ancestryNode, txOrder),
             boundary,
             walletName: record?.walletName ?? null,
-            owner: record?.owner ?? null
+            owner: record?.owner ?? null,
+            preMixTxids: coinjoin ? flattenAncestry(ancestryNode, txOrder).filter((id) => id !== tx2.txid) : void 0
           });
         }
       } else if (amount > 0 && knownInputSats > 0) {
@@ -491,8 +511,8 @@ function calculateCoinOrigins(input) {
       feeSats: feeSats2 >= 0 ? feeSats2 : declaredFee,
       inputCount: group.inputs.length,
       outputCount: txOutputs.length,
-      kind: eventKind(group.inputs.length, txOutputs.length, ownedOutputSats, txInputSats, txBoundary),
-      boundary: txBoundary,
+      kind: eventKind(group.inputs.length, txOutputs.length, ownedOutputSats, txInputSats, txBoundary, coinjoin),
+      boundary: coinjoin ? "unknown" : txBoundary,
       unknownInputSats,
       ownedOutputSats,
       reconciled: residualSats === 0,
@@ -503,11 +523,13 @@ function calculateCoinOrigins(input) {
   const holdingMap = /* @__PURE__ */ new Map();
   for (const output of outpoints) {
     for (const allocation of output.allocations) {
-      const row = holdingMap.get(allocation.lotId) ?? { sats: 0, outpoints: 0, boundary: "deterministic" };
+      const row = holdingMap.get(allocation.lotId) ?? { sats: 0, outpoints: 0, boundary: "deterministic", wallets: /* @__PURE__ */ new Set(), owners: /* @__PURE__ */ new Set() };
       row.sats += allocation.sats;
       row.outpoints += 1;
       if (output.boundary === "mixed" || row.boundary === "mixed") row.boundary = "mixed";
       else if (output.boundary === "unknown" || row.boundary === "unknown") row.boundary = "unknown";
+      if (output.walletName) row.wallets.add(output.walletName);
+      if (output.owner?.trim()) row.owners.add(output.owner.trim());
       holdingMap.set(allocation.lotId, row);
     }
   }
@@ -522,7 +544,11 @@ function calculateCoinOrigins(input) {
       acquiredAt: lot?.acquiredAt,
       sats: row.sats,
       outpointCount: row.outpoints,
-      boundary: row.boundary
+      boundary: row.boundary,
+      walletName: row.wallets.size === 1 ? [...row.wallets][0] : null,
+      owner: row.owners.size === 1 ? [...row.owners][0] : null,
+      ownerMixed: row.owners.size > 1,
+      costProvenance: id === UNKNOWN_ORIGIN_ID ? "unknown" : lot?.costProvenance ?? "unknown"
     };
   });
   const currentSats = outpoints.reduce((sum, row) => sum + row.amountSats, 0);
@@ -557,9 +583,12 @@ function calculateCoinOrigins(input) {
     }
   };
 }
-function filterCoinOriginsByWallet(ledger, walletName) {
-  if (!walletName) return ledger;
-  const keep = new Set(ledger.outpoints.filter((o) => o.walletName === walletName).map((o) => outpointKey(o.txid, o.vout)));
+function filterCoinOrigins(ledger, scope = {}) {
+  if (!scope.walletName && scope.owner === void 0) return ledger;
+  const owner = scope.owner?.trim() ?? void 0;
+  const keep = new Set(ledger.outpoints.filter(
+    (o) => (!scope.walletName || o.walletName === scope.walletName) && (owner === void 0 || (owner === "" ? !o.owner?.trim() : o.owner?.trim() === owner))
+  ).map((o) => outpointKey(o.txid, o.vout)));
   const outpoints = ledger.outpoints.filter((o) => keep.has(outpointKey(o.txid, o.vout)));
   const scopedLotIds = new Set(
     outpoints.flatMap((output) => output.allocations.map((allocation) => allocation.lotId)).filter((id) => id !== UNKNOWN_ORIGIN_ID)
@@ -604,12 +633,25 @@ function filterCoinOriginsByWallet(ledger, walletName) {
     }
   };
 }
+function filterCoinOriginsByWallet(ledger, walletName) {
+  return filterCoinOrigins(ledger, { walletName });
+}
+function filterCoinOriginsByOwner(ledger, owners) {
+  if (!owners?.length) return ledger;
+  const keep = new Set(ledger.outpoints.filter((outpoint) => owners.includes(outpoint.owner?.trim() || UNASSIGNED_OWNER_VALUE)).map((outpoint) => outpointKey(outpoint.txid, outpoint.vout)));
+  const token = "__owner_scope__";
+  return filterCoinOriginsByWallet({
+    ...ledger,
+    outpoints: ledger.outpoints.map((outpoint) => keep.has(outpointKey(outpoint.txid, outpoint.vout)) ? { ...outpoint, walletName: token } : outpoint)
+  }, token);
+}
 
 // client/src/lib/engine/engine-core.ts
 var MIRROR_TABLES = [
   "records",
   "blockchainTransactions",
-  "transactionParticipants"
+  "transactionParticipants",
+  "transactionMetadata"
 ];
 var OWNED_TIERS2 = ["verified", "manual", "wallet-import", "xpub-derived"];
 var CURATED_ADDRESS_SQL = `(addressImportance IS NULL OR addressImportance IN (${OWNED_TIERS2.map((t) => `'${t}'`).join(", ")}))`;
@@ -689,6 +731,14 @@ function createTablesOnly(db2) {
       scriptType TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS transactionMetadata (
+      id                INTEGER PRIMARY KEY,
+      txid              TEXT NOT NULL,
+      acquisitionMethod TEXT,
+      costBasisUsd      REAL,
+      updatedAt         INTEGER
+    );
+
     CREATE TABLE IF NOT EXISTS seedMeta (
       tableName    TEXT PRIMARY KEY,
       highWaterId  INTEGER NOT NULL DEFAULT 0,
@@ -723,6 +773,7 @@ var INDEX_BUILD_STEPS = [
   // An EXPRESSION index on the exact ORDER BY key lets the page scan newest-first
   // and seek past prior pages by (blockTime,id) instead of re-sorting every page.
   { label: "transactions by time + id (keyset)", sql: "CREATE INDEX IF NOT EXISTS idx_bt_time_id ON blockchainTransactions(COALESCE(blockTime,0), id);" },
+  { label: "transaction metadata by txid", sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_tm_txid ON transactionMetadata(txid);" },
   { label: "participants by txid + role", sql: "CREATE INDEX IF NOT EXISTS idx_tp_txid_role ON transactionParticipants(txid, role);" },
   { label: "participants by txid", sql: "CREATE INDEX IF NOT EXISTS idx_tp_txid ON transactionParticipants(txid);" },
   { label: "participants by address", sql: "CREATE INDEX IF NOT EXISTS idx_tp_address ON transactionParticipants(address);" },
@@ -749,6 +800,7 @@ function dropMirrorTables(db2) {
     DROP TABLE IF EXISTS records;
     DROP TABLE IF EXISTS blockchainTransactions;
     DROP TABLE IF EXISTS transactionParticipants;
+    DROP TABLE IF EXISTS transactionMetadata;
     DROP TABLE IF EXISTS ownedUtxos;
     DROP TABLE IF EXISTS heuristicOwnedUtxos;
   `);
@@ -773,7 +825,7 @@ function setEngineMeta(db2, key, value) {
     [key, value]
   );
 }
-var ENGINE_SCHEMA_VERSION = 5;
+var ENGINE_SCHEMA_VERSION = 6;
 var SCHEMA_VERSION_KEY = "schemaVersion";
 function getEngineSchemaVersion(db2) {
   const v = getEngineMeta(db2, SCHEMA_VERSION_KEY);
@@ -894,11 +946,19 @@ function getParticipantsFingerprint(db2) {
     resolvedPrevoutCount: Number(resolved ?? 0)
   };
 }
+function getTransactionMetadataFingerprint(db2) {
+  const row = selectRows(
+    db2,
+    "SELECT COUNT(*) AS count, COALESCE(MAX(id),0) AS maxId, COALESCE(MAX(updatedAt),0) AS maxUpdatedAt FROM transactionMetadata"
+  )[0];
+  return { count: Number(row?.count ?? 0), maxId: Number(row?.maxId ?? 0), maxUpdatedAt: Number(row?.maxUpdatedAt ?? 0) };
+}
 function getCoinOriginsFingerprint(db2) {
   return {
     records: getRecordsFingerprint(db2),
     transactions: getTransactionsFingerprint(db2),
-    participants: getParticipantsFingerprint(db2)
+    participants: getParticipantsFingerprint(db2),
+    metadata: getTransactionMetadataFingerprint(db2)
   };
 }
 function coinOriginsFingerprintKey(fingerprint) {
@@ -984,6 +1044,14 @@ function insertParticipants(db2, rows) {
       r.recordId ?? null,
       r.scriptType ?? null
     ])
+  );
+}
+function insertTransactionMetadata(db2, rows) {
+  if (rows.length === 0) return;
+  db2.insertMany(
+    `INSERT INTO transactionMetadata (id, txid, acquisitionMethod, costBasisUsd, updatedAt)
+     VALUES (?,?,?,?,?)`,
+    rows.map((r) => [r.id, r.txid, r.acquisitionMethod ?? null, r.costBasisUsd ?? null, r.updatedAt ?? null])
   );
 }
 function escapeLikeTerm(term) {
@@ -1176,8 +1244,16 @@ function buildTransactionMatchSubquery(opts) {
   }
   const owner = toValueArray(opts.owner);
   if (owner) {
-    selects.push(participantRecordTxidSelect(`r.owner IN (${inPlaceholders(owner)})`));
-    bind.push(...owner);
+    const namedOwners = owner.filter((value) => value !== UNASSIGNED_OWNER_VALUE);
+    const ownerParts = [];
+    if (namedOwners.length) {
+      ownerParts.push(`r.owner IN (${inPlaceholders(namedOwners)})`);
+      bind.push(...namedOwners);
+    }
+    if (owner.includes(UNASSIGNED_OWNER_VALUE)) {
+      ownerParts.push(`r.owner IS NULL OR trim(r.owner) = ''`);
+    }
+    selects.push(participantRecordTxidSelect(`(${ownerParts.join(" OR ")})`));
   }
   const tag = toValueArray(opts.tag);
   if (tag) {
@@ -1471,7 +1547,7 @@ function getVaultSummaries(db2, opts = {}) {
 }
 function getCoinOrigins(db2, opts = {}) {
   const ledger = getCoinOriginsCheckpoint(db2).ledger;
-  return filterCoinOriginsByWallet(ledger, opts.walletName);
+  return filterCoinOriginsByOwner(filterCoinOrigins(ledger, { walletName: opts.walletName }), opts.owners);
 }
 var coinOriginsCheckpoints = /* @__PURE__ */ new WeakMap();
 function getCoinOriginsCheckpoint(db2) {
@@ -1487,7 +1563,10 @@ function getCoinOriginsCheckpoint(db2) {
   );
   const transactions = selectRows(
     db2,
-    "SELECT txid, blockHeight, blockTime, fee FROM blockchainTransactions"
+    `SELECT t.txid, t.blockHeight, t.blockTime, t.fee,
+            m.acquisitionMethod, m.costBasisUsd
+       FROM blockchainTransactions t
+       LEFT JOIN transactionMetadata m ON m.txid = t.txid`
   );
   const participants = selectRows(
     db2,
@@ -1513,7 +1592,7 @@ function getCoinOriginsPage(db2, opts = {}) {
   if (opts.expectedCheckpointKey && opts.expectedCheckpointKey !== checkpoint.key) {
     throw new Error("Coin Origins checkpoint changed; reload the active window");
   }
-  const ledger = filterCoinOriginsByWallet(checkpoint.ledger, opts.walletName);
+  const ledger = filterCoinOriginsByOwner(filterCoinOrigins(checkpoint.ledger, { walletName: opts.walletName }), opts.owners);
   const limit = pageLimit(opts.limit);
   const holdingsOffset = Math.max(0, Math.trunc(opts.holdingsOffset ?? 0));
   const outpointsOffset = Math.max(0, Math.trunc(opts.outpointsOffset ?? 0));
@@ -2148,7 +2227,8 @@ var errorMessage = null;
 var copied = {
   records: 0,
   blockchainTransactions: 0,
-  transactionParticipants: 0
+  transactionParticipants: 0,
+  transactionMetadata: 0
 };
 function requireDb() {
   if (!db) throw new Error('Engine worker not initialized \u2014 send "init" first');
@@ -2159,7 +2239,8 @@ function counts() {
   return {
     records: countTable(d, "records"),
     blockchainTransactions: countTable(d, "blockchainTransactions"),
-    transactionParticipants: countTable(d, "transactionParticipants")
+    transactionParticipants: countTable(d, "transactionParticipants"),
+    transactionMetadata: countTable(d, "transactionMetadata")
   };
 }
 function snapshot() {
@@ -2197,6 +2278,7 @@ function handleSeedBegin() {
   copied.records = 0;
   copied.blockchainTransactions = 0;
   copied.transactionParticipants = 0;
+  copied.transactionMetadata = 0;
   return snapshot();
 }
 function insertBatch(table, rows) {
@@ -2210,6 +2292,9 @@ function insertBatch(table, rows) {
       break;
     case "transactionParticipants":
       insertParticipants(d, rows);
+      break;
+    case "transactionMetadata":
+      insertTransactionMetadata(d, rows);
       break;
     default: {
       const _exhaustive = table;
@@ -2348,6 +2433,7 @@ async function handleGenerateSynthetic(spec) {
     markSeedCompleteIfDone(d, "records", result.records);
     markSeedCompleteIfDone(d, "blockchainTransactions", result.transactions);
     markSeedCompleteIfDone(d, "transactionParticipants", result.participants);
+    markSeedCompleteIfDone(d, "transactionMetadata", 0);
     if (integrity !== "ok") {
       state = "ERROR";
       errorMessage = `integrity_check failed: ${integrity}`;
@@ -2384,6 +2470,8 @@ function handleQuery(name, args) {
       return getTransactionsFingerprint(d);
     case "getParticipantsFingerprint":
       return getParticipantsFingerprint(d);
+    case "getTransactionMetadataFingerprint":
+      return getTransactionMetadataFingerprint(d);
     case "getAddressAggregates":
       return Array.from(getAddressAggregates(d, args).values());
     case "getOwnedUtxos":
