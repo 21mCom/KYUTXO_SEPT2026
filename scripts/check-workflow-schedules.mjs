@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
-const GITHUB_ACTIONS_CRON_FIELD_RANGES = [
+export const GITHUB_ACTIONS_CRON_FIELD_RANGES = [
   [0, 59],
   [0, 23],
   [1, 31],
@@ -90,11 +90,87 @@ export function checkWorkflowSchedules(workflowsDirectory) {
   return { files, schedules, errors };
 }
 
+const LOCAL_CRON_VALIDATOR_DECLARATION =
+  /\bfunction\s+((?:assert|validate|isValid)\w*Cron\w*)\s*\([^)]*\)\s*\{/g;
+const LOCAL_CRON_VALIDATOR_ARROW =
+  /\b(?:const|let|var)\s+((?:assert|validate|isValid)\w*Cron\w*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g;
+
+function lineNumberAt(source, index) {
+  return source.slice(0, index).split('\n').length;
+}
+
+function functionBody(source, openBraceIndex) {
+  let depth = 0;
+  for (let index = openBraceIndex; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(openBraceIndex + 1, index);
+    }
+  }
+  return '';
+}
+
+export function checkReleaseCronValidatorSharing(scriptsDirectory) {
+  const files = fs
+    .readdirSync(scriptsDirectory)
+    .filter((name) => /release-runner.*\.test\.(?:js|mjs|cjs)$/i.test(name))
+    .sort();
+  const errors = [];
+
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(scriptsDirectory, name), 'utf8');
+    const reportedLines = new Set();
+    const reportedRanges = [];
+    let match;
+    LOCAL_CRON_VALIDATOR_DECLARATION.lastIndex = 0;
+    while ((match = LOCAL_CRON_VALIDATOR_DECLARATION.exec(source)) !== null) {
+      const openBraceIndex = match.index + match[0].lastIndexOf('{');
+      const body = functionBody(source, openBraceIndex);
+      if (!/\bvalidateGitHubActionsCron\s*\(/.test(body)) {
+        reportedLines.add(lineNumberAt(source, match.index));
+        reportedRanges.push([match.index, openBraceIndex + body.length + 2]);
+        errors.push(
+          `${name}:${lineNumberAt(source, match.index)}: ${match[1]} implements cron validation locally; call validateGitHubActionsCron from check-workflow-schedules.mjs instead`,
+        );
+      }
+    }
+
+    LOCAL_CRON_VALIDATOR_ARROW.lastIndex = 0;
+    while ((match = LOCAL_CRON_VALIDATOR_ARROW.exec(source)) !== null) {
+      const statement = source.slice(match.index, source.indexOf(';', match.index) + 1 || source.length);
+      if (!/\bvalidateGitHubActionsCron\s*\(/.test(statement)) {
+        reportedLines.add(lineNumberAt(source, match.index));
+        errors.push(
+          `${name}:${lineNumberAt(source, match.index)}: ${match[1]} implements cron validation locally; call validateGitHubActionsCron from check-workflow-schedules.mjs instead`,
+        );
+      }
+    }
+
+    const fiveFieldParser =
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;\n]*\.trim\(\)\.split\(\/\\s\+\/\)[\s\S]{0,500}?\b\1\.length\s*(?:===|!==|==|!=)\s*5\b/g;
+    while ((match = fiveFieldParser.exec(source)) !== null) {
+      const line = lineNumberAt(source, match.index);
+      if (
+        reportedLines.has(line) ||
+        reportedRanges.some(([start, end]) => match.index >= start && match.index < end)
+      ) continue;
+      errors.push(
+        `${name}:${line}: five-field cron parsing is implemented locally; call validateGitHubActionsCron from check-workflow-schedules.mjs instead`,
+      );
+    }
+  }
+
+  return { files, errors };
+}
+
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const workflowsDirectory = path.join(root, '.github', 'workflows');
   const result = checkWorkflowSchedules(workflowsDirectory);
+  const sharingResult = checkReleaseCronValidatorSharing(path.join(root, 'scripts'));
+  result.errors.push(...sharingResult.errors);
 
   if (result.errors.length > 0) {
     for (const error of result.errors) console.error(`[workflow-schedules] FAIL: ${error}`);
@@ -102,6 +178,6 @@ if (isMain) {
   }
 
   console.log(
-    `[workflow-schedules] PASS: validated ${result.schedules.length} schedule(s) across ${result.files.length} workflow file(s)`,
+    `[workflow-schedules] PASS: validated ${result.schedules.length} schedule(s) across ${result.files.length} workflow file(s); ${sharingResult.files.length} release-runner test file(s) share the cron validator`,
   );
 }

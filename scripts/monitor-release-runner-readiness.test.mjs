@@ -3,7 +3,10 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 
-import { validateGitHubActionsCron } from './check-workflow-schedules.mjs';
+import {
+  GITHUB_ACTIONS_CRON_FIELD_RANGES,
+  validateGitHubActionsCron,
+} from './check-workflow-schedules.mjs';
 
 const require = createRequire(import.meta.url);
 const {

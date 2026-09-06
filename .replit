@@ -35,6 +35,10 @@ args = "Start application"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "workflow-schedules-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "dormant-coins-node-check"
 
 [[workflows.workflow.tasks]]
@@ -3915,6 +3919,18 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-report-triggered-sync-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+
+[[workflows.workflow]]
+name = "workflow-schedules-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-workflow-schedules.mjs && node --test scripts/check-workflow-schedules.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

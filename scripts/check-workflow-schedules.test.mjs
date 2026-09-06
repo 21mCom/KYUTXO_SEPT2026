@@ -6,6 +6,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  checkReleaseCronValidatorSharing,
   checkWorkflowSchedules,
   validateGitHubActionsCron,
 } from './check-workflow-schedules.mjs';
@@ -14,6 +15,18 @@ const REPOSITORY_WORKFLOWS = fileURLToPath(new URL('../.github/workflows', impor
 
 function withWorkflowFiles(files, callback) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-schedules-'));
+  try {
+    for (const [name, contents] of Object.entries(files)) {
+      fs.writeFileSync(path.join(directory, name), contents);
+    }
+    callback(directory);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function withScriptFiles(files, callback) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-schedule-scripts-'));
   try {
     for (const [name, contents] of Object.entries(files)) {
       fs.writeFileSync(path.join(directory, name), contents);
@@ -90,4 +103,65 @@ test('guard fails closed for malformed schedule shapes and non-string cron value
       assert.match(result.errors[1], /not a valid GitHub Actions five-field schedule/);
     },
   );
+});
+
+test('release checks may wrap the shared cron validator', () => {
+  withScriptFiles(
+    {
+      'check-release-runner-readiness.test.mjs': `
+        import { validateGitHubActionsCron } from './check-workflow-schedules.mjs';
+        function assertGithubActionsCron(expression) {
+          if (!validateGitHubActionsCron(expression)) throw new Error('invalid cron');
+        }
+      `,
+      'monitor-release-runner-readiness.test.mjs': `
+        const validateMonitorCron = (expression) => validateGitHubActionsCron(expression);
+      `,
+    },
+    (directory) => {
+      const result = checkReleaseCronValidatorSharing(directory);
+      assert.equal(result.files.length, 2);
+      assert.deepEqual(result.errors, []);
+    },
+  );
+});
+
+test('release checks cannot add local cron validator implementations', () => {
+  withScriptFiles(
+    {
+      'check-release-runner-readiness.test.mjs': `
+        function validateGithubCron(expression) {
+          const fields = expression.trim().split(/\\s+/);
+          return fields.length === 5;
+        }
+      `,
+      'monitor-release-runner-readiness.test.mjs': `
+        const isValidMonitorCron = (expression) => expression.split(' ').length === 5;
+      `,
+      'release-runner-parser.test.mjs': `
+        function parseSchedule(expression) {
+          const pieces = expression.trim().split(/\\s+/);
+          return pieces.length === 5;
+        }
+      `,
+      'unrelated.test.mjs': `
+        function validateGithubCron() { return true; }
+      `,
+    },
+    (directory) => {
+      const result = checkReleaseCronValidatorSharing(directory);
+      assert.equal(result.files.length, 3);
+      assert.equal(result.errors.length, 3);
+      assert.match(result.errors[0], /check-release-runner-readiness\.test\.mjs:2.*validateGithubCron/);
+      assert.match(result.errors[1], /monitor-release-runner-readiness\.test\.mjs:2.*isValidMonitorCron/);
+      assert.match(result.errors[2], /release-runner-parser\.test\.mjs:3.*five-field cron parsing/);
+    },
+  );
+});
+
+test('checked-in release-runner tests share the cron validator', () => {
+  const scriptsDirectory = fileURLToPath(new URL('.', import.meta.url));
+  const result = checkReleaseCronValidatorSharing(scriptsDirectory);
+  assert.ok(result.files.length >= 2, 'guard must discover the release-runner test suites');
+  assert.equal(result.errors.length, 0, result.errors.join('\n'));
 });
