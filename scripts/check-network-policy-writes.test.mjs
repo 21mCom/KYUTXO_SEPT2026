@@ -10,11 +10,16 @@ const GUARD = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   'check-network-policy-writes.js',
 );
+const DB_TYPES = fs.readFileSync(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client/src/lib/db-types.ts'),
+  'utf8',
+);
 
 function runGuard(files) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'network-policy-write-guard-'));
   try {
-    for (const [relativePath, source] of Object.entries(files)) {
+    const fixtureFiles = { 'lib/db-types.ts': DB_TYPES, ...files };
+    for (const [relativePath, source] of Object.entries(fixtureFiles)) {
       const file = path.join(directory, relativePath);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, source);
@@ -38,6 +43,34 @@ test('passes unrelated writes and policy changes routed through the hook', () =>
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /OK/);
+});
+
+test('fails closed when a new NodeSettings field has no classification', () => {
+  const result = runGuard({
+    'lib/db-types.ts': DB_TYPES.replace(
+      'export interface NodeSettings {',
+      'export interface NodeSettings {\n  privateRelayEnabled?: boolean;',
+    ),
+    'components/Unclassified.tsx': `
+      import { updateNodeSettings } from '@/lib/data/node-settings-crud';
+      updateNodeSettings('default', { privateRelayEnabled: true });
+    `,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /NodeSettings field "privateRelayEnabled" is unclassified/);
+  assert.match(result.stderr, /NODE_SETTINGS_POLICY_FIELDS/);
+  assert.match(result.stderr, /NODE_SETTINGS_ORDINARY_FIELDS/);
+});
+
+test('permits direct CRUD writes to explicitly ordinary NodeSettings fields', () => {
+  const result = runGuard({
+    'components/Ordinary.tsx': `
+      import { putNodeSettings, updateNodeSettings } from '@/lib/data/node-settings-crud';
+      updateNodeSettings('default', { requestTimeout: 10_000 });
+      putNodeSettings({ id: 'default', providerType: 'blockstream' });
+    `,
+  });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('fails a direct named-import policy write', () => {

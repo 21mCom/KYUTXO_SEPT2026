@@ -1053,6 +1053,38 @@ export interface NodeSettings {
   firstSyncConfirmedAt?: number;
 }
 
+/**
+ * Every NodeSettings field must be classified here. The network-policy write
+ * guard fails closed when a field is added to NodeSettings without an explicit
+ * decision about whether it belongs behind the serialized policy boundary.
+ */
+export const NODE_SETTINGS_POLICY_FIELDS = [
+  'networkAccessEnabled',
+  'networkOnboardingStage',
+  'networkPrivacyMode',
+  'networkPrivacyChosenAt',
+  'firstSyncConfirmedAt',
+] as const satisfies readonly (keyof NodeSettings)[];
+
+export const NODE_SETTINGS_ORDINARY_FIELDS = [
+  'id',
+  'providerType',
+  'customUrl',
+  'useTor',
+  'torProxyUrl',
+  'requestTimeout',
+  'network',
+  'allowLocalNetwork',
+  'trustedLocalHosts',
+  'useElectrum',
+  'electrumHost',
+  'electrumPort',
+  'electrumSSL',
+  'electrumServerType',
+  'lastConnectedAt',
+  'lastConnectionStatus',
+] as const satisfies readonly (keyof NodeSettings)[];
+
 // === Paused Sync State ===
 // Stores paused sync state for resume functionality
 export interface PausedSyncState {

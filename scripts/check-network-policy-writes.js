@@ -21,13 +21,9 @@ const APPROVED_RELATIVE_FILES = new Set([
   'hooks/use-node-settings.ts',
   'lib/network-privacy.ts',
 ]);
-const POLICY_FIELDS = new Set([
-  'networkAccessEnabled',
-  'networkOnboardingStage',
-  'networkPrivacyMode',
-  'networkPrivacyChosenAt',
-  'firstSyncConfirmedAt',
-]);
+const DB_TYPES_FILE = path.join(SOURCE_DIR, 'lib/db-types.ts');
+const POLICY_FIELDS_EXPORT = 'NODE_SETTINGS_POLICY_FIELDS';
+const ORDINARY_FIELDS_EXPORT = 'NODE_SETTINGS_ORDINARY_FIELDS';
 const WRITE_EXPORTS = new Set([
   'addNodeSettings',
   'putNodeSettings',
@@ -60,6 +56,94 @@ function propertyNameText(name) {
   return undefined;
 }
 
+function unwrapExpression(expression) {
+  while (
+    ts.isAsExpression(expression) ||
+    ts.isSatisfiesExpression(expression) ||
+    ts.isParenthesizedExpression(expression)
+  ) {
+    expression = expression.expression;
+  }
+  return expression;
+}
+
+function readNodeSettingsClassification() {
+  if (!fs.existsSync(DB_TYPES_FILE)) {
+    return {
+      failures: [`missing NodeSettings classification source: ${path.relative(SOURCE_DIR, DB_TYPES_FILE)}`],
+      policyFields: new Set(),
+    };
+  }
+
+  const source = fs.readFileSync(DB_TYPES_FILE, 'utf8');
+  const sourceFile = ts.createSourceFile(
+    DB_TYPES_FILE,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  let nodeSettings;
+  const classifications = new Map();
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isInterfaceDeclaration(statement) && statement.name.text === 'NodeSettings') {
+      nodeSettings = statement;
+    }
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        !ts.isIdentifier(declaration.name) ||
+        ![POLICY_FIELDS_EXPORT, ORDINARY_FIELDS_EXPORT].includes(declaration.name.text) ||
+        !declaration.initializer
+      ) {
+        continue;
+      }
+      const initializer = unwrapExpression(declaration.initializer);
+      if (!ts.isArrayLiteralExpression(initializer)) continue;
+      classifications.set(
+        declaration.name.text,
+        initializer.elements
+          .filter(ts.isStringLiteral)
+          .map(element => element.text),
+      );
+    }
+  }
+
+  const failures = [];
+  if (!nodeSettings) failures.push('lib/db-types.ts does not declare NodeSettings');
+  for (const exportName of [POLICY_FIELDS_EXPORT, ORDINARY_FIELDS_EXPORT]) {
+    if (!classifications.has(exportName)) {
+      failures.push(`lib/db-types.ts does not declare ${exportName} as a string-literal array`);
+    }
+  }
+  if (failures.length > 0) return { failures, policyFields: new Set() };
+
+  const interfaceFields = new Set(
+    nodeSettings.members
+      .filter(ts.isPropertySignature)
+      .map(member => propertyNameText(member.name))
+      .filter(Boolean),
+  );
+  const policyFields = new Set(classifications.get(POLICY_FIELDS_EXPORT));
+  const ordinaryFields = new Set(classifications.get(ORDINARY_FIELDS_EXPORT));
+
+  for (const field of policyFields) {
+    if (ordinaryFields.has(field)) failures.push(`NodeSettings field "${field}" has multiple classifications`);
+    if (!interfaceFields.has(field)) failures.push(`classified policy field "${field}" is not in NodeSettings`);
+  }
+  for (const field of ordinaryFields) {
+    if (!interfaceFields.has(field)) failures.push(`classified ordinary field "${field}" is not in NodeSettings`);
+  }
+  for (const field of interfaceFields) {
+    if (!policyFields.has(field) && !ordinaryFields.has(field)) {
+      failures.push(`NodeSettings field "${field}" is unclassified`);
+    }
+  }
+
+  return { failures, policyFields };
+}
+
 function findPolicyFields(node, localInitializers, found = new Set(), visited = new Set()) {
   if (ts.isIdentifier(node) && localInitializers.has(node.text) && !visited.has(node.text)) {
     visited.add(node.text);
@@ -79,6 +163,17 @@ function lineAndColumn(sourceFile, node) {
   const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
   return `${position.line + 1}:${position.character + 1}`;
 }
+
+const classification = readNodeSettingsClassification();
+if (classification.failures.length > 0) {
+  console.error('check-network-policy-writes: NodeSettings field classification is incomplete:\n');
+  for (const failure of classification.failures) console.error(` - ${failure}`);
+  console.error(
+    `\nClassify every NodeSettings field in ${POLICY_FIELDS_EXPORT} or ${ORDINARY_FIELDS_EXPORT}.`,
+  );
+  process.exit(1);
+}
+const POLICY_FIELDS = classification.policyFields;
 
 const files = [...walk(SOURCE_DIR)];
 if (files.length === 0) {
