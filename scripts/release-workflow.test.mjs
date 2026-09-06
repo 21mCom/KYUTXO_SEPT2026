@@ -21,7 +21,7 @@ function run(command, args, cwd) {
   });
 }
 
-function assertSampleMutationIsRejected(t, publicScript, checkoutPrefix) {
+function assertMixedSampleDamageIsRejected(t, publicScript, checkoutPrefix) {
   const checkout = fs.mkdtempSync(path.join(os.tmpdir(), checkoutPrefix));
   t.after(() => fs.rmSync(checkout, { recursive: true, force: true }));
 
@@ -41,12 +41,11 @@ function assertSampleMutationIsRejected(t, publicScript, checkoutPrefix) {
     fs.writeFileSync(path.join(checkout, sampleName), `original bytes for ${sampleName}`);
   }
   fs.writeFileSync(
-    path.join(checkout, 'scripts/rewrite-sample.mjs'),
+    path.join(checkout, 'scripts/damage-samples.mjs'),
     [
       `import fs from 'node:fs';`,
-      ...sampleNames.map(
-        (sampleName) => `fs.writeFileSync(${JSON.stringify(sampleName)}, 'rewritten');`,
-      ),
+      `fs.rmSync(${JSON.stringify(sampleNames[0])});`,
+      `fs.writeFileSync(${JSON.stringify(sampleNames[1])}, 'rewritten');`,
       '',
     ].join('\n'),
   );
@@ -57,7 +56,7 @@ function assertSampleMutationIsRejected(t, publicScript, checkoutPrefix) {
       type: 'module',
       scripts: {
         [publicScript]: packageJson.scripts[publicScript],
-        [unguardedScript]: 'node scripts/rewrite-sample.mjs',
+        [unguardedScript]: 'node scripts/damage-samples.mjs',
       },
     }),
   );
@@ -89,8 +88,8 @@ test('pull requests and all packages are gated by typecheck and the documented f
   assert.equal(packageJson.scripts['test:scripts'], 'node scripts/run-node-tests.mjs');
 });
 
-test('the pull-request fast-tier entry point rejects a test that rewrites a tracked sample', (t) => {
-  assertSampleMutationIsRejected(t, 'test:fast', 'fast-tier-fixture-checkout-');
+test('the pull-request fast-tier entry point names deleted and rewritten tracked samples', (t) => {
+  assertMixedSampleDamageIsRejected(t, 'test:fast', 'fast-tier-fixture-checkout-');
 });
 
 test('tagged and explicitly requested releases run the full suite before packaging', () => {
@@ -111,8 +110,8 @@ test('tagged and explicitly requested releases run the full suite before packagi
   assert.doesNotMatch(packageJson.scripts['test:full:unguarded'], /check-release-fixtures/);
 });
 
-test('the release full-suite entry point rejects a test that rewrites a tracked sample', (t) => {
-  assertSampleMutationIsRejected(t, 'test:full', 'full-tier-fixture-checkout-');
+test('the release full-suite entry point names deleted and rewritten tracked samples', (t) => {
+  assertMixedSampleDamageIsRejected(t, 'test:full', 'full-tier-fixture-checkout-');
 });
 
 test('manual releases are bound to an existing version tag at the validated commit', () => {
