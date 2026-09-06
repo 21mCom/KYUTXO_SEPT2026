@@ -167,12 +167,31 @@ export async function countAttachments(): Promise<number> {
 // so the restore pre-flight can estimate required disk space precisely instead
 // of falling back to the (compression-inflated) backup file size. Iterates with
 // a cursor so the whole table is never materialised at once.
-export async function sumAttachmentSizes(): Promise<number> {
-  let total = 0;
-  for (const a of await listVaultRows('attachments')) {
-    if (typeof a.size === 'number' && Number.isFinite(a.size) && a.size > 0) {
-      total += a.size;
-    }
+export async function sumAttachmentSizes(pageSize = 1000): Promise<number> {
+  if (!Number.isInteger(pageSize) || pageSize <= 0) {
+    throw new Error('Attachment size page size must be a positive integer');
   }
+
+  let total = 0;
+  let afterId = 0;
+  for (;;) {
+    const page = await getAttachmentsAfterId(afterId, pageSize);
+    if (page.length === 0) break;
+
+    for (const attachment of page) {
+      if (
+        typeof attachment.size === 'number'
+        && Number.isFinite(attachment.size)
+        && attachment.size > 0
+      ) {
+        total += attachment.size;
+      }
+    }
+
+    const lastId = page[page.length - 1].id;
+    if (lastId == null) break;
+    afterId = lastId;
+  }
+
   return total;
 }

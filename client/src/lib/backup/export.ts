@@ -306,7 +306,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
   if (typeof ioTotal === "number" && Number.isFinite(ioTotal) && ioTotal >= 0) {
     totalAttachmentBytes = ioTotal;
   } else {
-    totalAttachmentBytes = await sumAttachmentSizes();
+    totalAttachmentBytes = await sumAttachmentSizes(batchSize);
   }
 
   // Manifest counts: with a compact plan, the six filtered tables use the
