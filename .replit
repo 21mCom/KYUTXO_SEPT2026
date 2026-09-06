@@ -1061,6 +1061,10 @@ args = "backup-schedule-concurrency-node-check"
 task = "workflow.run"
 args = "backup-schedule-save-lock-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "provider-test-probe-node-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3885,6 +3889,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-packaged-network-privacy-activity-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "provider-test-probe-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/provider-test-probe.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
