@@ -98,7 +98,7 @@ import type {
   RecordModelMigrationState,
 } from "@/lib/database";
 import { db } from "@/lib/database";
-import { runRecordModelMigration } from "@/lib/data/record-model-crud";
+import { runRecordModelMigration, sanitizeOwnerCostBasisImport } from "@/lib/data/record-model-crud";
 import {
   clearInlineTables,
   restoreInlineTables,
@@ -1244,10 +1244,11 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     }
     for (const raw of arr("transactionMetadata")) {
       throwIfAborted();
-      if (!raw || typeof raw.txid !== "string" || !raw.txid) continue;
-      const incoming = { ...raw, counterpartyEntityId: await remapCounterparty(raw.counterpartyEntityId) };
-      const existing = await db.transactionMetadata.where("txid").equals(raw.txid).first();
-      const fields = ["flowType", "acquisitionMethod", "dispositionType", "costBasisUsd", "categories", "tags", "notes", "counterpartyEntityId"];
+      const sanitized = raw && sanitizeOwnerCostBasisImport(raw);
+      if (!sanitized || typeof sanitized.txid !== "string") continue;
+      const incoming = { ...sanitized, counterpartyEntityId: await remapCounterparty(raw.counterpartyEntityId) };
+      const existing = await db.transactionMetadata.where("txid").equals(sanitized.txid).first();
+       const fields = ["flowType", "acquisitionMethod", "dispositionType", "costBasisUsd", "estimatedCostBasisUsd", "proceedsUsd", "estimatedProceedsUsd", "categories", "tags", "notes", "counterpartyEntityId"];
       if (existing) await enrich(db.transactionMetadata, existing, incoming, fields);
       else {
         const { id: old, ...row } = incoming;
@@ -1257,13 +1258,14 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     }
     for (const raw of arr("transactionLegMetadata")) {
       throwIfAborted();
-      if (!raw || typeof raw.txid !== "string" || !raw.txid || typeof raw.legKey !== "string" || !raw.legKey ||
-          !["incoming", "outgoing", "owner-transfer"].includes(raw.direction)) continue;
+      const sanitized = raw && sanitizeOwnerCostBasisImport(raw);
+      if (!sanitized || typeof sanitized.txid !== "string" || typeof sanitized.legKey !== "string" ||
+          !["incoming", "outgoing", "owner-transfer"].includes(sanitized.direction)) continue;
       const entityId = remap(entityMap, raw.entityId);
       const walletId = remap(walletMap, raw.walletId);
-      const incoming = { ...raw, entityId, walletId };
-      const existing = await db.transactionLegMetadata.where("[txid+legKey]").equals([raw.txid, raw.legKey]).first();
-      const fields = ["direction", "entityId", "walletId", "flowType", "acquisitionMethod", "dispositionType", "costBasisUsd", "categories", "tags", "notes", "hasFlowOverride"];
+      const incoming = { ...sanitized, entityId, walletId };
+      const existing = await db.transactionLegMetadata.where("[txid+legKey]").equals([sanitized.txid, sanitized.legKey]).first();
+       const fields = ["direction", "entityId", "walletId", "flowType", "acquisitionMethod", "dispositionType", "costBasisUsd", "estimatedCostBasisUsd", "proceedsUsd", "estimatedProceedsUsd", "transferBasisRule", "marketValueUsd", "estimatedMarketValueUsd", "specificLotIds", "categories", "tags", "notes", "hasFlowOverride"];
       if (existing) await enrich(db.transactionLegMetadata, existing, incoming, fields);
       else {
         const { id: old, ...row } = incoming;

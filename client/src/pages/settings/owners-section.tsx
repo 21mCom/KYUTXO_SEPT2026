@@ -20,14 +20,14 @@ import * as ownerPolicyCrud from "@/lib/data/owner-policy-crud";
  */
 type OwnerKind = "person" | "company";
 type MatchingMethod = "fifo" | "lifo" | "hifo" | "specific-identification" | "proportional";
-interface Owner { id: number; name: string; kind: OwnerKind; archivedAt?: string | null; isDefault?: boolean }
+interface Owner { id: number; name: string; kind: OwnerKind; defaultMatchingMethod?: MatchingMethod; archivedAt?: string | null; isDefault?: boolean }
 interface Residency { id: number; ownerId: number; jurisdiction: string; region?: string | null; notes?: string | null; startsOn: string; endsOn?: string | null; matchingMethod: MatchingMethod }
 interface OwnerSummary { ownerId: number; currentHoldings?: number; unassignedBatches?: number; disposalsOutsideResidency?: number }
 type OwnerApi = {
   listOwnerPolicies: () => Promise<Owner[]>;
   ensureDefaultOwner: () => Promise<unknown>;
-  createOwnerPolicy: (input: Pick<Owner, "name" | "kind">) => Promise<unknown>;
-  updateOwnerPolicy: (id: number, input: Pick<Owner, "name" | "kind">) => Promise<unknown>;
+  createOwnerPolicy: (input: Pick<Owner, "name" | "kind" | "defaultMatchingMethod">) => Promise<unknown>;
+  updateOwnerPolicy: (id: number, input: Pick<Owner, "name" | "kind" | "defaultMatchingMethod">) => Promise<unknown>;
   archiveOwnerPolicy: (id: number) => Promise<unknown>;
   listResidencies: (ownerId: number) => Promise<Residency[]>;
   createResidency: (input: Omit<Residency, "id">) => Promise<unknown>;
@@ -44,7 +44,7 @@ const methods: { value: MatchingMethod; label: string }[] = [
   { value: "specific-identification", label: "Specific identification" },
   { value: "proportional", label: "Proportional" },
 ];
-const emptyOwner = { name: "", kind: "person" as OwnerKind };
+const emptyOwner = { name: "", kind: "person" as OwnerKind, defaultMatchingMethod: "fifo" as MatchingMethod };
 const emptyResidency = { jurisdiction: "", region: "", notes: "", startsOn: "", endsOn: "", matchingMethod: "fifo" as MatchingMethod };
 
 function message(error: unknown) {
@@ -90,8 +90,8 @@ export function OwnersSection() {
     if (!name) return;
     setSaving(true); setError("");
     try {
-      if (ownerDialog === "new") await api.createOwnerPolicy({ name, kind: ownerForm.kind });
-      else if (ownerDialog) await api.updateOwnerPolicy(ownerDialog.id, { name, kind: ownerForm.kind });
+       if (ownerDialog === "new") await api.createOwnerPolicy({ name, kind: ownerForm.kind, defaultMatchingMethod: ownerForm.defaultMatchingMethod });
+       else if (ownerDialog) await api.updateOwnerPolicy(ownerDialog.id, { name, kind: ownerForm.kind, defaultMatchingMethod: ownerForm.defaultMatchingMethod });
       setOwnerDialog(null); await load();
       toast({ title: ownerDialog === "new" ? "Owner added" : "Owner updated" });
     } catch (cause) { setError(message(cause)); } finally { setSaving(false); }
@@ -122,7 +122,7 @@ export function OwnersSection() {
   };
   const openOwner = (owner: Owner | "new") => {
     setError(""); setOwnerDialog(owner);
-    setOwnerForm(owner === "new" ? emptyOwner : { name: owner.name, kind: owner.kind });
+    setOwnerForm(owner === "new" ? emptyOwner : { name: owner.name, kind: owner.kind, defaultMatchingMethod: owner.defaultMatchingMethod ?? "fifo" });
   };
   const openResidency = (ownerId: number, residency?: Residency) => {
     setError(""); setResidencyDialog({ ownerId, residency });
@@ -166,7 +166,7 @@ export function OwnersSection() {
       </div>
       {loading ? <div className="flex gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading owners…</div> :
         owners.map(owner => <section key={owner.id} className="rounded-md border p-4" data-testid={`owner-card-${owner.id}`}>
-          <div className="flex items-start justify-between gap-2"><div className="flex items-center gap-2"><>{owner.kind === "company" ? <Building2 className="h-4 w-4" /> : <UserRound className="h-4 w-4" />}</><span className="font-medium">{owner.name}</span>{owner.isDefault && <Badge variant="secondary">Default</Badge>}</div>
+          <div className="flex items-start justify-between gap-2"><div><div className="flex items-center gap-2"><>{owner.kind === "company" ? <Building2 className="h-4 w-4" /> : <UserRound className="h-4 w-4" />}</><span className="font-medium">{owner.name}</span>{owner.isDefault && <Badge variant="secondary">Default</Badge>}</div><p className="mt-1 text-xs text-muted-foreground">Gap default: {methods.find(method => method.value === (owner.defaultMatchingMethod ?? "fifo"))?.label}</p></div>
             <div className="flex gap-1"><Button variant="ghost" size="icon" aria-label={`Edit ${owner.name}`} onClick={() => openOwner(owner)} data-testid={`button-edit-owner-${owner.id}`}><Pencil className="h-4 w-4" /></Button><Button variant="ghost" size="icon" aria-label={`Archive ${owner.name}`} disabled={saving} onClick={() => void archive(owner)} data-testid={`button-archive-owner-${owner.id}`}><Trash2 className="h-4 w-4" /></Button></div></div>
           <div className="mt-4 space-y-2"><div className="flex items-center justify-between"><p className="text-sm font-medium">Residency history</p><Button size="sm" variant="outline" onClick={() => openResidency(owner.id)} data-testid={`button-add-residency-${owner.id}`}><Plus className="mr-1 h-3.5 w-3.5" />Add residency</Button></div>
             {(residencies[owner.id] ?? []).length === 0 ? <p className="text-sm text-amber-700 dark:text-amber-400" data-testid={`residency-gap-warning-${owner.id}`}>No residency is set. Disposals for this owner will need review.</p> :
@@ -175,7 +175,7 @@ export function OwnersSection() {
           </div>
         </section>)}
     </CardContent>
-    <Dialog open={ownerDialog !== null} onOpenChange={open => !open && setOwnerDialog(null)}><DialogContent><DialogHeader><DialogTitle>{ownerDialog === "new" ? "Add owner" : "Edit owner"}</DialogTitle></DialogHeader><div className="space-y-3 py-2"><div><Label htmlFor="owner-name">Name</Label><Input id="owner-name" value={ownerForm.name} onChange={event => setOwnerForm({ ...ownerForm, name: event.target.value })} data-testid="input-owner-name" /></div><div><Label>Type</Label><Select value={ownerForm.kind} onValueChange={kind => setOwnerForm({ ...ownerForm, kind: kind as OwnerKind })}><SelectTrigger data-testid="select-owner-kind"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="person">Person</SelectItem><SelectItem value="company">Company</SelectItem></SelectContent></Select></div></div><DialogFooter><Button variant="outline" onClick={() => setOwnerDialog(null)}>Cancel</Button><Button disabled={saving || !ownerForm.name.trim()} onClick={() => void saveOwner()} data-testid="button-save-owner">Save owner</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={ownerDialog !== null} onOpenChange={open => !open && setOwnerDialog(null)}><DialogContent><DialogHeader><DialogTitle>{ownerDialog === "new" ? "Add owner" : "Edit owner"}</DialogTitle></DialogHeader><div className="space-y-3 py-2"><div><Label htmlFor="owner-name">Name</Label><Input id="owner-name" value={ownerForm.name} onChange={event => setOwnerForm({ ...ownerForm, name: event.target.value })} data-testid="input-owner-name" /></div><div><Label>Type</Label><Select value={ownerForm.kind} onValueChange={kind => setOwnerForm({ ...ownerForm, kind: kind as OwnerKind })}><SelectTrigger data-testid="select-owner-kind"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="person">Person</SelectItem><SelectItem value="company">Company</SelectItem></SelectContent></Select></div><div><Label>Default matching method for residency gaps</Label><Select value={ownerForm.defaultMatchingMethod} onValueChange={defaultMatchingMethod => setOwnerForm({ ...ownerForm, defaultMatchingMethod: defaultMatchingMethod as MatchingMethod })}><SelectTrigger data-testid="select-owner-default-matching"><SelectValue /></SelectTrigger><SelectContent>{methods.map(method => <SelectItem key={method.value} value={method.value}>{method.label}</SelectItem>)}</SelectContent></Select></div></div><DialogFooter><Button variant="outline" onClick={() => setOwnerDialog(null)}>Cancel</Button><Button disabled={saving || !ownerForm.name.trim()} onClick={() => void saveOwner()} data-testid="button-save-owner">Save owner</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={residencyDialog !== null} onOpenChange={open => !open && setResidencyDialog(null)}><DialogContent><DialogHeader><DialogTitle>{residencyDialog?.residency ? "Edit residency" : "Add residency"}</DialogTitle></DialogHeader><div className="grid gap-3 py-2"><div><Label htmlFor="residency-jurisdiction">Jurisdiction</Label><Input id="residency-jurisdiction" value={residencyForm.jurisdiction} onChange={event => setResidencyForm({ ...residencyForm, jurisdiction: event.target.value })} placeholder="e.g. United Kingdom" data-testid="input-residency-jurisdiction" /></div><div><Label htmlFor="residency-region">Region (optional)</Label><Input id="residency-region" value={residencyForm.region} onChange={event => setResidencyForm({ ...residencyForm, region: event.target.value })} data-testid="input-residency-region" /></div><div className="grid grid-cols-2 gap-3"><div><Label htmlFor="residency-start">Starts</Label><Input id="residency-start" type="date" value={residencyForm.startsOn} onChange={event => setResidencyForm({ ...residencyForm, startsOn: event.target.value })} data-testid="input-residency-start" /></div><div><Label htmlFor="residency-end">Ends (optional)</Label><Input id="residency-end" type="date" value={residencyForm.endsOn} onChange={event => setResidencyForm({ ...residencyForm, endsOn: event.target.value })} data-testid="input-residency-end" /></div></div><div><Label>Matching method</Label><Select value={residencyForm.matchingMethod} onValueChange={matchingMethod => setResidencyForm({ ...residencyForm, matchingMethod: matchingMethod as MatchingMethod })}><SelectTrigger data-testid="select-residency-matching"><SelectValue /></SelectTrigger><SelectContent>{methods.map(method => <SelectItem key={method.value} value={method.value}>{method.label}</SelectItem>)}</SelectContent></Select></div><div><Label htmlFor="residency-notes">Notes (optional)</Label><Input id="residency-notes" value={residencyForm.notes} onChange={event => setResidencyForm({ ...residencyForm, notes: event.target.value })} data-testid="input-residency-notes" /></div></div><DialogFooter><Button variant="outline" onClick={() => setResidencyDialog(null)}>Cancel</Button><Button disabled={saving || !residencyForm.jurisdiction.trim() || !residencyForm.startsOn} onClick={() => void saveResidency()} data-testid="button-save-residency">Save residency</Button></DialogFooter></DialogContent></Dialog>
   </Card>;
 }

@@ -42,8 +42,12 @@ export async function listOwnerPolicies(): Promise<Array<Owner & { id: number; i
     isDefault: owner.isDefault === true,
   }));
 }
-export const createOwnerPolicy = (input: { name: string; kind: OwnerKind }) => createPolicyOwner(input.name, input.kind);
-export const updateOwnerPolicy = (id: number, input: { name: string; kind: OwnerKind }) => updatePolicyOwner(id, input);
+export const createOwnerPolicy = (input: { name: string; kind: OwnerKind; defaultMatchingMethod?: OwnerMatchingMethod }) =>
+  createPolicyOwner(input.name, input.kind, input.defaultMatchingMethod);
+export const updateOwnerPolicy = (
+  id: number,
+  input: { name: string; kind: OwnerKind; defaultMatchingMethod?: OwnerMatchingMethod },
+) => updatePolicyOwner(id, input);
 export const archiveOwnerPolicy = archivePolicyOwner;
 export async function listResidencies(ownerId: number) {
   return (await getOwnerResidencies(ownerId)).map((row) => ({

@@ -1,6 +1,6 @@
 import {
   db, notifyDbChange, isUserCuratedImportance,
-  type AddressOwnership, type AddressOwnershipState, type EntityKind,
+  type AddressOwnership, type AddressOwnershipState, type EntityKind, type OwnerMatchingMethod,
   type RecordEntity, type RecordWallet, type TransactionLegDirection,
   type TransactionLegMetadata, type TransactionMetadata,
 } from '../database';
@@ -15,6 +15,9 @@ const LEG_DIRECTIONS = new Set<TransactionLegDirection>([
   'incoming', 'outgoing', 'owner-transfer',
 ]);
 
+export const OWNER_MATCHING_METHODS = new Set<OwnerMatchingMethod>([
+  'fifo', 'lifo', 'hifo', 'specific-identification', 'proportional',
+]);
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
@@ -37,6 +40,11 @@ function meaningfulMetadata(value: unknown): boolean {
     (!Array.isArray(value) || value.length > 0);
 }
 
+function optionalNonNegativeFinite(value: unknown, field: string): void {
+  if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+    throw new Error(`${field} must be a finite nonnegative number`);
+  }
+}
 /**
  * Single-owner inference is deliberately stricter than historical browse
  * visibility. Only a recognized, user-curated tier is affirmative evidence;
@@ -126,23 +134,33 @@ export async function putAddressOwnership(input: Omit<AddressOwnership, 'id' | '
 
 export async function putTransactionMetadata(input: Omit<TransactionMetadata, 'id' | 'createdAt' | 'updatedAt'>): Promise<void> {
   if (!text(input.txid)) throw new Error('Transaction id is required');
+  validateCostBasisValues(input);
   if (input.counterpartyEntityId !== undefined) {
     const counterparty = await db.entities.get(input.counterpartyEntityId);
     if (!counterparty || counterparty.kind !== 'counterparty') throw new Error('Transaction counterparty must be a counterparty entity');
   }
   const existing = await db.transactionMetadata.where('txid').equals(input.txid).first();
   const now = Date.now();
-  await db.transactionMetadata.put({ ...existing, ...input, id: existing?.id, createdAt: existing?.createdAt ?? now, updatedAt: now });
+  const normalized = { ...sanitizeOwnerCostBasisImport(input), txid: text(input.txid)! };
+  await db.transactionMetadata.put({ ...existing, ...normalized, id: existing?.id, createdAt: existing?.createdAt ?? now, updatedAt: now });
   notifyDbChange('transactionMetadata');
 }
 
 export async function putTransactionLegMetadata(input: Omit<TransactionLegMetadata, 'id' | 'createdAt' | 'updatedAt'>): Promise<void> {
   if (!text(input.txid) || !text(input.legKey)) throw new Error('Transaction id and leg key are required');
   if (!LEG_DIRECTIONS.has(input.direction)) throw new Error('Invalid transaction leg direction');
+  if (input.transferBasisRule !== undefined && !TRANSFER_BASIS_RULES.has(input.transferBasisRule)) throw new Error('Invalid transfer basis rule');
+  validateCostBasisValues(input);
   const existing = await db.transactionLegMetadata.where('[txid+legKey]').equals([input.txid, input.legKey]).first();
   const now = Date.now();
-  await db.transactionLegMetadata.put({ ...existing, ...input, id: existing?.id, createdAt: existing?.createdAt ?? now, updatedAt: now });
+  const normalized = { ...sanitizeOwnerCostBasisImport(input), txid: text(input.txid)!, legKey: text(input.legKey)! };
+  await db.transactionLegMetadata.put({ ...existing, ...normalized, id: existing?.id, createdAt: existing?.createdAt ?? now, updatedAt: now });
   notifyDbChange('transactionLegMetadata');
+}
+
+/** Normalized metadata reads for curation surfaces; callers must not reach into tables. */
+export async function getTransactionMetadataByTxid(txid: string): Promise<TransactionMetadata | undefined> {
+  return db.transactionMetadata.where('txid').equals(txid).first();
 }
 
 export async function clearTransactionLegMetadata(txid: string, legKey: string): Promise<void> {
@@ -268,4 +286,65 @@ export async function runRecordModelMigration(options: RunRecordModelMigrationOp
     if (options.shouldContinue && !options.shouldContinue()) break;
   }
   return { phase: state.phase, processed };
+}
+
+/** Backup/import sanitizer. Invalid optional accounting values are omitted; IDs
+ * are normalized once so restore and user writes share the same constraints. */
+export function sanitizeOwnerCostBasisImport<T extends Record<string, unknown>>(input: T): T {
+  const output: Record<string, unknown> = { ...input };
+  for (const field of ['txid', 'legKey']) {
+    if (field in output) {
+      const normalized = text(output[field]);
+      if (normalized) output[field] = normalized;
+      else delete output[field];
+    }
+  }
+  for (const field of ['costBasisUsd', 'estimatedCostBasisUsd', 'proceedsUsd', 'estimatedProceedsUsd', 'marketValueUsd', 'estimatedMarketValueUsd']) {
+    if (field in output && (typeof output[field] !== 'number' || !Number.isFinite(output[field]) || output[field] < 0)) delete output[field];
+  }
+  if ('transferBasisRule' in output && !TRANSFER_BASIS_RULES.has(output.transferBasisRule as NonNullable<TransactionLegMetadata['transferBasisRule']>)) delete output.transferBasisRule;
+  if ('specificLotIds' in output) {
+    if (!Array.isArray(output.specificLotIds)) delete output.specificLotIds;
+    else output.specificLotIds = [...new Set(output.specificLotIds.map(text).filter((id): id is string => !!id))];
+  }
+  return output as T;
+}
+
+function validateCostBasisValues(input: Pick<TransactionMetadata, 'costBasisUsd' | 'estimatedCostBasisUsd' | 'proceedsUsd' | 'estimatedProceedsUsd'> | Pick<TransactionLegMetadata, 'costBasisUsd' | 'estimatedCostBasisUsd' | 'proceedsUsd' | 'estimatedProceedsUsd' | 'marketValueUsd' | 'estimatedMarketValueUsd' | 'specificLotIds'>): void {
+  optionalNonNegativeFinite(input.costBasisUsd, 'Cost basis');
+  optionalNonNegativeFinite(input.estimatedCostBasisUsd, 'Estimated cost basis');
+  optionalNonNegativeFinite(input.proceedsUsd, 'Proceeds');
+  optionalNonNegativeFinite(input.estimatedProceedsUsd, 'Estimated proceeds');
+  if ('marketValueUsd' in input) {
+    optionalNonNegativeFinite(input.marketValueUsd, 'Market value');
+    optionalNonNegativeFinite(input.estimatedMarketValueUsd, 'Estimated market value');
+    if (input.specificLotIds && (!Array.isArray(input.specificLotIds) || input.specificLotIds.some(id => !text(id)))) throw new Error('Specific lot ids must not be blank');
+  }
+}
+
+/** Full normalized-model snapshot reads. Callers may invoke these inside a
+ * Dexie transaction spanning the source tables to obtain one atomic report
+ * revision without bypassing the guarded CRUD boundary. */
+export async function getAllTransactionMetadata(): Promise<TransactionMetadata[]> {
+  return db.transactionMetadata.toArray();
+}
+
+export async function getTransactionLegMetadataByTxid(txid: string): Promise<TransactionLegMetadata[]> {
+  return db.transactionLegMetadata.where('txid').equals(txid).toArray();
+}
+
+export async function getAllRecordEntities(): Promise<RecordEntity[]> {
+  return db.entities.toArray();
+}
+
+export const TRANSFER_BASIS_RULES = new Set<NonNullable<TransactionLegMetadata['transferBasisRule']>>([
+  'carry-over', 'market-value-step-up',
+]);
+
+export async function getAllTransactionLegMetadata(): Promise<TransactionLegMetadata[]> {
+  return db.transactionLegMetadata.toArray();
+}
+
+export async function getAllAddressOwnership(): Promise<AddressOwnership[]> {
+  return db.addressOwnership.toArray();
 }

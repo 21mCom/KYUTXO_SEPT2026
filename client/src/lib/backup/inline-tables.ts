@@ -1,3 +1,5 @@
+/*
+// hint: Logic changed on both sides. Requires understanding intent of each change.
 // Read / clear / restore for the SMALL tables that ride inline inside the v3
 // manifest (everything except the five streamed big tables and the records
 // table). Behaviour deliberately MIRRORS the legacy restore so v3 introduces no
@@ -105,6 +107,122 @@ import {
 import { sanitizeSavedInboxViews } from "@/lib/data/transaction-crud";
 import type { SavedInboxView } from "@/lib/db-types";
 import { getOwnerResidencies, validateResidencyRanges } from "@/lib/data/owner-policy";
+import {
+  getAllOwnershipReviewDecisions,
+  clearOwnershipReviewDecisions,
+} from "@/lib/data/ownership-review-decisions-crud";
+
+// Recognized Fund Trail layout values + their human-readable labels, derived
+// from the single source of truth so this allow-list never drifts from the UI.
+*/
+// Read / clear / restore for the SMALL tables that ride inline inside the v3
+// manifest (everything except the five streamed big tables and the records
+// table). Behaviour deliberately MIRRORS the legacy restore so v3 introduces no
+// regression for these tables:
+//   - `settings` is not cleared and not wholesale restored (current app
+//     settings survive), but a small allow-list of portable preferences (e.g.
+//     `disableOrphanCheck`) plus the user's custom Privacy Audit entity-list
+//     snapshot (`entityListSnapshot`) is merged from the backup on restore.
+//   - `recordOrigins` is cleared here but re-added by the ORCHESTRATOR
+//     (restore.ts): its rows reference records by id, so they can only be
+//     remapped once the records stream has built the old→new id map. This
+//     module just hands the raw rows back via `pendingRecordOrigins`.
+// Records and the four record-dependent big tables are handled by the streaming
+// orchestrator (restore.ts), not here.
+//
+// Every guarded table is touched only through its CRUD module; the vocabulary
+// tables (tags/categories/owners/walletNames/seedNames/walletSoftware) are not
+// guarded and are read/cleared directly.
+
+import { getVaultRepository, type VaultRows, type VaultTableName } from "@/lib/repository";
+import { isCategoryMappingClassification } from "@/lib/db-types";
+import {
+  getTags,
+  getCategories,
+  getOwners,
+  getWalletNames,
+  getSeedNames,
+  getWalletSoftware,
+  restoreTag,
+  restoreCategory,
+  restoreOwner,
+  restoreWalletName,
+  restoreSeedName,
+  restoreWalletSoftware,
+} from "@/lib/data/vocabulary-crud";
+import { getAllRecordOrigins, clearRecordOrigins } from "@/lib/data/record-origins-crud";
+import {
+  getAllCustomFields,
+  addCustomField,
+  clearCustomFields,
+  deleteCustomField,
+} from "@/lib/data/custom-fields-crud";
+import {
+  getAllDerivationTemplates,
+  addDerivationTemplate,
+  clearDerivationTemplates,
+  deleteDerivationTemplate,
+} from "@/lib/data/derivation-templates-crud";
+import {
+  getAllEvidence,
+  getAllEvidenceAttachments,
+  restoreEvidenceRows,
+  clearEvidence,
+  clearEvidenceAttachments,
+  deleteEvidence,
+  deleteEvidenceAttachment,
+} from "@/lib/data/evidence-crud";
+import {
+  getAllPriceData,
+  restorePriceDataRows,
+  clearPriceData,
+  bulkDeletePriceData,
+} from "@/lib/data/price-data-crud";
+import { getAllSettings, getSettings, updateSettings } from "@/lib/data/settings-crud";
+import { stripDesktopLockSettingsFromBackupRows } from "@/lib/desktop-lock-settings";
+import {
+  getAllDustFlags,
+  clearDustFlags,
+  restoreDustFlagRows,
+  unmarkDustOutpoints,
+} from "@/lib/data/dust-flags-crud";
+import {
+  getAllSavedPsbts,
+  clearSavedPsbts,
+  restoreSavedPsbtRows,
+  deleteSavedPsbt,
+} from "@/lib/data/saved-psbts-crud";
+import {
+  getAllAdversaryScenarios,
+  clearAdversaryScenarios,
+  restoreAdversaryScenarioRows,
+  deleteAdversaryScenario,
+} from "@/lib/data/adversary-scenarios-crud";
+import {
+  getAllNodeSettings,
+  putNodeSettings,
+  clearNodeSettings,
+} from "@/lib/data/node-settings-crud";
+import {
+  bulkAddUtxoLineage,
+  bulkAddCustodySegments,
+  bulkAddLineageSnapshots,
+  getAllUtxoLineage,
+  getExistingSegmentIds,
+  getExistingSnapshotIds,
+} from "@/lib/data/lineage-crud";
+import { lineageIdentity, type RestoreMode } from "./legacy-restore-misc";
+import { derivationTemplateIdentity } from "./merge-keys";
+import { FUND_TRAIL_LAYOUT_OPTIONS } from "@/components/fund-trail/view-data";
+import {
+  formatQuantumTagLevels,
+  sanitizeQuantumTagLevels,
+  type QuantumRiskLevel,
+} from "@/lib/quantum-risk";
+import { sanitizeSavedInboxViews } from "@/lib/data/transaction-crud";
+import type { SavedInboxView } from "@/lib/db-types";
+import { getOwnerResidencies, validateResidencyRanges } from "@/lib/data/owner-policy";
+import { OWNER_MATCHING_METHODS } from "@/lib/data/record-model-crud";
 import {
   getAllOwnershipReviewDecisions,
   clearOwnershipReviewDecisions,
@@ -638,6 +756,7 @@ export async function restoreInlineTables(
       kind: owner.kind === "company" ? "company" : "person",
       archivedAt: typeof owner.archivedAt === "number" ? owner.archivedAt : undefined,
       isDefault: restoreDefault,
+      defaultMatchingMethod: OWNER_MATCHING_METHODS.has(owner.defaultMatchingMethod) ? owner.defaultMatchingMethod : undefined,
       createdAt: owner.createdAt || now,
     });
     if (restoreDefault) { hasDefault = true; acceptedIncomingDefault = true; }

@@ -83,6 +83,7 @@ import {
   type CreateLineageSnapshotData,
 } from "@/lib/data/lineage-crud";
 import type { OwnerMatchingMethod } from "@/lib/database";
+import { OWNER_MATCHING_METHODS } from "@/lib/data/record-model-crud";
 import { getOwnerResidencies, validateResidencyRanges } from "@/lib/data/owner-policy";
 import { getVaultRepository } from "@/lib/repository";
 
@@ -194,6 +195,7 @@ export async function restoreLegacyVocabulary(
       kind: ownerData.kind === "company" ? "company" : "person",
       archivedAt: typeof ownerData.archivedAt === "number" ? ownerData.archivedAt : undefined,
       isDefault: restoreDefault,
+      defaultMatchingMethod: OWNER_MATCHING_METHODS.has(ownerData.defaultMatchingMethod) ? ownerData.defaultMatchingMethod : undefined,
       createdAt: ownerData.createdAt || now,
     });
     if (restoreDefault) { hasDefault = true; acceptedIncomingDefault = true; }

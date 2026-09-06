@@ -446,6 +446,7 @@ export function mapTransactionMetadata(o: Record<string, unknown>): TransactionM
     txid: toText(o.txid) ?? '',
     acquisitionMethod: toText(o.acquisitionMethod),
     costBasisUsd: typeof o.costBasisUsd === 'number' && Number.isFinite(o.costBasisUsd) ? o.costBasisUsd : null,
+    estimatedCostBasisUsd: typeof o.estimatedCostBasisUsd === 'number' && Number.isFinite(o.estimatedCostBasisUsd) ? o.estimatedCostBasisUsd : null,
     updatedAt: toInt(o.updatedAt),
   };
 }
@@ -862,7 +863,7 @@ export async function engineGetVaultSummaries(
 
 /** Compositional origin ledger calculated in the native worker. */
 export async function engineGetCoinOrigins(
-  opts: { walletName?: string; owners?: string[] } = {},
+  opts: { walletName?: string; owners?: string[]; expectedCheckpointKey?: string } = {},
 ): Promise<CoinOriginsLedger> {
   await ensureEngineInit();
   return unwrap<CoinOriginsLedger>(getEngine().query('getCoinOrigins', opts));

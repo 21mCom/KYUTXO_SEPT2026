@@ -5,8 +5,8 @@ import { clearInlineTables, readInlineTables, restoreInlineTables } from '../bac
 import { restoreLegacyVocabulary } from '../backup/legacy-restore-misc';
 import { clearAllRecords, createRecord, updateRecord } from './record-crud';
 import { addTransaction, bulkAddParticipants, bulkDeleteParticipants, clearParticipants, clearTransactions } from './transaction-crud';
+import { UNASSIGNED_OWNER_VALUE } from '../owner-constants';
 import {
-  UNASSIGNED_OWNER_VALUE,
   createOwnerResidency,
   createPolicyOwner,
   ensureDefaultOwner,

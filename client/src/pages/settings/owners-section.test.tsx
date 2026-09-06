@@ -43,7 +43,11 @@ describe("OwnersSection", () => {
     fireEvent.change(screen.getByTestId("input-owner-name"), { target: { value: "Vault Co" } });
     fireEvent.click(screen.getByTestId("button-save-owner"));
     await screen.findByTestId("owner-card-2");
-    expect(api.createOwnerPolicy).toHaveBeenCalledWith({ name: "Vault Co", kind: "person" });
+    expect(api.createOwnerPolicy).toHaveBeenCalledWith({
+      name: "Vault Co",
+      kind: "person",
+      defaultMatchingMethod: "fifo",
+    });
 
     fireEvent.click(screen.getByTestId("button-add-residency-2"));
     fireEvent.change(screen.getByTestId("input-residency-jurisdiction"), { target: { value: "Canada" } });

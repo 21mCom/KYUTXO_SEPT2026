@@ -31,6 +31,9 @@ let mockAddressRecords: any[] = [];
 
 // Price row returned by getLatestPriceOnOrBefore; null disables the lookup.
 let mockPriceRow: { close: number; date: string; source?: string } | null = null;
+// The PDF asks the owner-book loader for a declaration-scoped projection, not
+// the unbounded report. Each fixture row is an open current outpoint batch.
+let mockOwnerBatches: any[] = [];
 
 // Captures every jspdf-autotable invocation so the test can find the
 // provenance table by its header row and read a specific body cell.
@@ -104,6 +107,18 @@ vi.mock("@/lib/data/attachments-crud", () => ({
 
 vi.mock("@/lib/data/price-data-crud", () => ({
   getLatestPriceOnOrBefore: vi.fn(async () => mockPriceRow),
+}));
+
+vi.mock("@/lib/coin-origins", () => ({
+  UNASSIGNED_COST_BASIS_OWNER: "__unassigned__",
+  loadOwnerCostBasisForAddresses: vi.fn(async () => ({
+    checkpointKey: "test-owner-projection",
+    declaredAddresses: [ADDR],
+    batches: mockOwnerBatches,
+    perAddressLimit: 250,
+    globalLimit: 1000,
+  })),
+  assertOwnerCostBasisDeclarationProjection: vi.fn(async () => {}),
 }));
 
 // Returns the body of the provenance table (header contains
@@ -189,6 +204,7 @@ describe("ProofOfFundsDeclaration — provenance appendix cost basis & totals", 
     textCalls.length = 0;
     mockAddressRecords = [];
     mockPriceRow = null;
+    mockOwnerBatches = [];
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn(async () => {}) },
     });
@@ -203,7 +219,7 @@ describe("ProofOfFundsDeclaration — provenance appendix cost basis & totals", 
     cleanup();
   });
 
-  it("uses a user-supplied costBasisUsd for the cell and the summary total", async () => {
+  it("preserves legacy record cost-basis numbers when no owner-book outpoint exists", async () => {
     mockAddressRecords = [
       {
         id: 1,
@@ -250,7 +266,7 @@ describe("ProofOfFundsDeclaration — provenance appendix cost basis & totals", 
     const body = findProvenanceBody()!;
     expect(body).toHaveLength(1);
     // 0.005 BTC * 50,000 = 250.00
-    expect(body[0][5]).toBe("USD 250.00");
+    expect(body[0][5]).toBe("USD 250.00 (estimated)");
 
     // The summary total reflects the computed basis.
     expect(
@@ -286,10 +302,44 @@ describe("ProofOfFundsDeclaration — provenance appendix cost basis & totals", 
 
     const body = findProvenanceBody()!;
     expect(body).toHaveLength(1);
-    expect(body[0][5]).toBe("Not recorded");
+    expect(body[0][5]).toBe("Unknown (no recorded cost or historical price)");
 
     // With no cost basis at all, the summary must NOT print a Total Cost Basis.
     expect(textCalls.some((t) => t.startsWith("Total Cost Basis:"))).toBe(false);
+  });
+
+  it("retains mixed estimated and unknown open owner-book batches, including Unassigned", async () => {
+    mockAddressRecords = [
+      {
+        id: 1, type: "address", inputString: ADDR, label: "", date: "2021-03-15",
+        costBasisUsd: 999999, tags: [], categories: [],
+      },
+    ];
+    mockOwnerBatches = [
+      {
+        address: ADDR,
+        batch: {
+          owner: "Alice", remainingSats: 300_000, costUsd: 120,
+          costProvenance: "estimated",
+        },
+      },
+      {
+        address: ADDR,
+        batch: {
+          owner: "__unassigned__", remainingSats: 200_000,
+          costProvenance: "unknown",
+        },
+      },
+    ];
+
+    await renderAndGeneratePdf();
+
+    const body = findProvenanceBody()!;
+    // The owner book is authoritative when it has current outpoints: the old
+    // record-level number must not conceal its unknown portion.
+    expect(body[0][5]).toBe("USD 120.00 (mixed: estimated; unknown cost for 0.00200000 BTC)");
+    expect(body[0][6]).toBe("Owner: Alice, Unassigned");
+    expect(textCalls.some((t) => t === "Total Cost Basis: USD 120.00")).toBe(true);
   });
 
   // ---------------------------------------------------------------------------

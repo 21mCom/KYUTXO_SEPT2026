@@ -128,16 +128,23 @@ export async function ensureDefaultOwner(): Promise<Owner> {
   return (await repository.get('owners', id))!;
 }
 
-export async function createPolicyOwner(name: string, kind: OwnerKind = 'person'): Promise<number> {
+export async function createPolicyOwner(
+  name: string,
+  kind: OwnerKind = 'person',
+  defaultMatchingMethod: OwnerMatchingMethod = 'fifo',
+): Promise<number> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error('Owner name cannot be empty');
   const repository = getVaultRepository();
   const existing = (await listAll('owners')).find((owner) => owner.name.toLowerCase() === trimmed.toLowerCase());
   if (existing) throw new Error('Owner already exists');
-  return await repository.add('owners', { name: trimmed, kind, createdAt: Date.now() }) as number;
+  return await repository.add('owners', { name: trimmed, kind, defaultMatchingMethod, createdAt: Date.now() }) as number;
 }
 
-export async function updatePolicyOwner(id: number, changes: Pick<Partial<Owner>, 'name' | 'kind'>): Promise<void> {
+export async function updatePolicyOwner(
+  id: number,
+  changes: Pick<Partial<Owner>, 'name' | 'kind' | 'defaultMatchingMethod'>,
+): Promise<void> {
   const repository = getVaultRepository();
   const owner = await repository.get('owners', id);
   if (!owner) throw new Error('Owner not found');
@@ -159,6 +166,18 @@ export async function getPolicyOwners(includeArchived = false): Promise<Owner[]>
   return owners.filter((owner) => includeArchived || !owner.archivedAt).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Atomic-report snapshot read; unlike getPolicyOwners this never creates a
+ * default owner while participating in a read-only transaction. */
+export async function getOwnerPolicySnapshot(): Promise<{
+  owners: Owner[];
+  residencies: OwnerResidency[];
+}> {
+  const [owners, residencies] = await Promise.all([
+    listAll('owners'),
+    listAll('ownerResidencies'),
+  ]);
+  return { owners, residencies };
+}
 export async function getActiveOwnerSelectorOptions(): Promise<OwnerSelectorOption[]> {
   const owners = await getPolicyOwners();
   return [UNASSIGNED_OWNER_OPTION, ...owners.map((owner) => ({ value: owner.name, label: owner.name, ownerId: owner.id }))];

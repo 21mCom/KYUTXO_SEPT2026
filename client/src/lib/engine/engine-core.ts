@@ -172,6 +172,7 @@ export interface TransactionMetadataRow {
   txid: string;
   acquisitionMethod: string | null;
   costBasisUsd: number | null;
+  estimatedCostBasisUsd?: number | null;
   updatedAt: number | null;
 }
 
@@ -270,6 +271,7 @@ export function createTablesOnly(db: EngineDb): void {
       txid              TEXT NOT NULL,
       acquisitionMethod TEXT,
       costBasisUsd      REAL,
+      estimatedCostBasisUsd REAL,
       updatedAt         INTEGER
     );
 
@@ -460,11 +462,13 @@ function setEngineMeta(db: EngineDb, key: string, value: string): void {
 //       bump forces a reseed that builds the index.
 // ---------------------------------------------------------------------------
 
+//   v7: transactionMetadata.estimatedCostBasisUsd preserves provenance on the
+//       native Coin Origins path.
 //   v5: heuristic owned-UTXO computation became outpoint-first (inputs with
 //       prevTxid/prevVout spend that exact output; FIFO amount-matching only for
 //       outpoint-less inputs). The materialized heuristicOwnedUtxos table built
 //       by a pre-v5 build would keep serving inflated totals, so force a reseed.
-export const ENGINE_SCHEMA_VERSION = 6;
+export const ENGINE_SCHEMA_VERSION = 7;
 const SCHEMA_VERSION_KEY = 'schemaVersion';
 
 /** Schema version stamped by the last successful finalize; 0 if never written. */
@@ -810,9 +814,9 @@ export function insertParticipants(db: EngineDb, rows: ParticipantRow[]): void {
 export function insertTransactionMetadata(db: EngineDb, rows: TransactionMetadataRow[]): void {
   if (rows.length === 0) return;
   db.insertMany(
-    `INSERT INTO transactionMetadata (id, txid, acquisitionMethod, costBasisUsd, updatedAt)
-     VALUES (?,?,?,?,?)`,
-    rows.map((r) => [r.id, r.txid, r.acquisitionMethod ?? null, r.costBasisUsd ?? null, r.updatedAt ?? null]),
+    `INSERT INTO transactionMetadata (id, txid, acquisitionMethod, costBasisUsd, estimatedCostBasisUsd, updatedAt)
+     VALUES (?,?,?,?,?,?)`,
+    rows.map((r) => [r.id, r.txid, r.acquisitionMethod ?? null, r.costBasisUsd ?? null, r.estimatedCostBasisUsd ?? null, r.updatedAt ?? null]),
   );
 }
 
@@ -1697,10 +1701,17 @@ export function getVaultSummaries(db: EngineDb, opts: { search?: string } = {}):
  */
 export function getCoinOrigins(
   db: EngineDb,
-  opts: { walletName?: string; owners?: string[] } = {},
+  opts: { walletName?: string; owners?: string[]; expectedCheckpointKey?: string } = {},
 ): CoinOriginsLedger {
-  const ledger = getCoinOriginsCheckpoint(db).ledger;
-  return filterCoinOriginsByOwner(filterCoinOrigins(ledger, { walletName: opts.walletName }), opts.owners);
+  const checkpoint = getCoinOriginsCheckpoint(db);
+  if (opts.expectedCheckpointKey && opts.expectedCheckpointKey !== checkpoint.key) {
+    throw new Error('Coin Origins checkpoint changed; reload the active window');
+  }
+  const ledger = checkpoint.ledger;
+  return filterCoinOriginsByOwner(
+    filterCoinOrigins(ledger, { walletName: opts.walletName }),
+    opts.owners,
+  );
 }
 
 interface CoinOriginsCheckpoint {
@@ -1737,7 +1748,7 @@ function getCoinOriginsCheckpoint(db: EngineDb): CoinOriginsCheckpoint {
   const transactions = selectRows<CoinOriginTransaction>(
     db,
     `SELECT t.txid, t.blockHeight, t.blockTime, t.fee,
-            m.acquisitionMethod, m.costBasisUsd
+            m.acquisitionMethod, m.costBasisUsd, m.estimatedCostBasisUsd
        FROM blockchainTransactions t
        LEFT JOIN transactionMetadata m ON m.txid = t.txid`,
   );

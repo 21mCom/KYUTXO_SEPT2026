@@ -13,6 +13,8 @@ export interface CoinOriginTransaction {
   acquisitionMethod?: string | null;
   /** User-entered transaction cost, never an inferred tax basis. */
   costBasisUsd?: number | null;
+  /** A price-derived value remains visibly estimated, not user-provided. */
+  estimatedCostBasisUsd?: number | null;
 }
 
 export interface CoinOriginParticipant {
@@ -55,7 +57,7 @@ export interface CoinOriginLot {
   label?: string | null;
   acquisitionMethod?: string | null;
   costBasisUsd?: number | null;
-  costProvenance: "provided" | "unknown";
+  costProvenance: "provided" | "estimated" | "unknown";
 }
 
 export interface CoinOriginOutpoint {
@@ -112,7 +114,7 @@ export interface CoinOriginHolding {
   walletName?: string | null;
   owner?: string | null;
   ownerMixed?: boolean;
-  costProvenance?: "provided" | "unknown" | "mixed";
+  costProvenance?: "provided" | "estimated" | "unknown" | "mixed";
 }
 
 export interface CoinOriginsSummary {
@@ -443,8 +445,8 @@ export function calculateCoinOrigins(input: CoinOriginsInput): CoinOriginsLedger
           owner: record?.owner ?? null,
           label: record?.label ?? null,
           acquisitionMethod: tx.acquisitionMethod ?? null,
-          costBasisUsd: Number.isFinite(tx.costBasisUsd) ? tx.costBasisUsd! : null,
-          costProvenance: Number.isFinite(tx.costBasisUsd) ? "provided" : "unknown",
+          costBasisUsd: Number.isFinite(tx.costBasisUsd) ? tx.costBasisUsd! : Number.isFinite(tx.estimatedCostBasisUsd) ? tx.estimatedCostBasisUsd! : null,
+          costProvenance: Number.isFinite(tx.costBasisUsd) ? "provided" : Number.isFinite(tx.estimatedCostBasisUsd) ? "estimated" : "unknown",
         };
         lots.push(lot);
         lotBoundaries.set(id, acquisitionBoundary);

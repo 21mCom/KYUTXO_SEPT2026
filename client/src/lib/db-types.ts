@@ -256,6 +256,10 @@ export interface TransactionMetadata {
   acquisitionMethod?: AcquisitionMethod;
   dispositionType?: DispositionType;
   costBasisUsd?: number;
+  /** Explicit realization value, distinct from the acquisition cost field. */
+  proceedsUsd?: number;
+  estimatedCostBasisUsd?: number;
+  estimatedProceedsUsd?: number;
   counterpartyEntityId?: number;
   categories?: string[];
   tags?: string[];
@@ -276,6 +280,17 @@ export interface TransactionLegMetadata {
   acquisitionMethod?: AcquisitionMethod;
   dispositionType?: DispositionType;
   costBasisUsd?: number;
+  /** Explicit disposal value; kept apart from acquisition cost basis. */
+  proceedsUsd?: number;
+  /** Values sourced from a price estimate, never silently promoted to provided. */
+  estimatedCostBasisUsd?: number;
+  estimatedProceedsUsd?: number;
+  /** Owner-book transfer rule. The physical coin-origin recipe is unaffected. */
+  transferBasisRule?: 'carry-over' | 'market-value-step-up';
+  marketValueUsd?: number;
+  estimatedMarketValueUsd?: number;
+  /** Stable owner-book lot ids for specific-identification. */
+  specificLotIds?: string[];
   categories?: string[];
   tags?: string[];
   notes?: string;
@@ -455,6 +470,8 @@ export interface Owner {
   kind?: OwnerKind;
   /** Immutable policy identity; the display name may be changed. */
   isDefault?: boolean;
+  /** Matching method used when a disposal date is outside every residency block. */
+  defaultMatchingMethod?: OwnerMatchingMethod;
   /** Set instead of deleting so historic policy and record labels remain auditable. */
   archivedAt?: number;
   createdAt: number;

@@ -6,8 +6,57 @@ import { getRecordsByType } from "@/lib/data/record-crud";
 import { getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
 import { getAttachmentsByRecordId } from "@/lib/data/attachments-crud";
 import { ACQUISITION_METHOD_OPTIONS, COUNTERPARTY_TYPE_OPTIONS } from "@/lib/db-types";
+import {
+  loadOwnerCostBasisForAddresses,
+  assertOwnerCostBasisDeclarationProjection,
+  UNASSIGNED_COST_BASIS_OWNER,
+  type OwnerCostBasisAddressBatch,
+} from "@/lib/coin-origins";
 import type { PdfLayout, PofPdfData } from "./pof-pdf-context";
 import { PROVENANCE_APPENDIX_HEADING } from "./pof-pdf-strings";
+
+export function summarizeOwnerBookCost(
+  rows: readonly OwnerCostBasisAddressBatch[],
+): { text: string; knownCost: number; hasKnownCost: boolean; ownerInfo: string } {
+  const provenance = new Set(rows.map(({ batch }) => batch.costProvenance));
+  const unknownSats = rows
+    .filter(({ batch }) => batch.costProvenance === "unknown")
+    .reduce((total, { batch }) => total + batch.remainingSats, 0);
+  const knownCost = rows.reduce((total, { batch }) => total + (batch.costUsd ?? 0), 0);
+  const hasKnownCost = rows.some(({ batch }) => batch.costProvenance !== "unknown" && batch.costUsd !== undefined);
+  const labels = [
+    provenance.has("provided") ? "user-supplied" : "",
+    provenance.has("estimated") ? "estimated" : "",
+  ].filter(Boolean);
+  const owners = [...new Set(rows.map(({ batch }) =>
+    batch.owner === UNASSIGNED_COST_BASIS_OWNER ? "Unassigned" : batch.owner,
+  ))].join(", ");
+  const ownerInfo = `Owner: ${owners || "Unassigned"}`;
+
+  if (!hasKnownCost) {
+    return {
+      text: `Unknown (owner-book cost for ${formatBTC(unknownSats)} BTC)`,
+      knownCost,
+      hasKnownCost,
+      ownerInfo,
+    };
+  }
+  const value = `USD ${knownCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (provenance.has("unknown")) {
+    return {
+      text: `${value} (mixed: ${labels.join(" + ")}; unknown cost for ${formatBTC(unknownSats)} BTC)`,
+      knownCost,
+      hasKnownCost,
+      ownerInfo,
+    };
+  }
+  return {
+    text: `${value} (${labels.length > 1 ? `mixed: ${labels.join(" + ")}` : labels[0]})`,
+    knownCost,
+    hasKnownCost,
+    ownerInfo,
+  };
+}
 
 export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
   const { doc, autoTable, margin, contentW } = L;
@@ -37,6 +86,7 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
     priceInfo: string;
     hasRecord: boolean;
     attachmentNames: string[];
+    ownerInfo: string;
   }
 
   let provenanceEntries: ProvenanceEntry[];
@@ -58,6 +108,7 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
         priceInfo: "",
         hasRecord: true,
         attachmentNames: ["sample-purchase-receipt.pdf"],
+        ownerInfo: "Owner: Sample Declarant",
       },
       {
         address: sampleEffRows[1].raw,
@@ -70,6 +121,7 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
         priceInfo: "",
         hasRecord: true,
         attachmentNames: ["sample-mining-record.csv"],
+        ownerInfo: "Owner: Sample Declarant",
       },
     ];
     allSupportingDocs = ["sample-purchase-receipt.pdf", "sample-mining-record.csv"];
@@ -81,6 +133,17 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
     allSupportingDocs = [];
     totalCostBasis = 0;
     hasCostBasis = false;
+    // Keep the owner book bounded at the document boundary: only open batches
+    // for the declared addresses are retained, never the complete vault report.
+    const ownerProjection = await loadOwnerCostBasisForAddresses(doneRows.map((row) => row.raw));
+    // A declaration must not incorporate a stale or silently partial owner-book
+    // view. Revalidate the atomic projection immediately before reading it.
+    await assertOwnerCostBasisDeclarationProjection(ownerProjection);
+    const ownerBatches = ownerProjection.batches;
+    const ownerBatchesByAddress = new Map<string, OwnerCostBasisAddressBatch[]>();
+    for (const row of ownerBatches) {
+      ownerBatchesByAddress.set(row.address, [...(ownerBatchesByAddress.get(row.address) ?? []), row]);
+    }
 
     const allAddrRecords = await getRecordsByType("address");
     const recordByAddress = new Map<string, (typeof allAddrRecords)[0]>();
@@ -91,8 +154,14 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
     for (const row of doneRows) {
       const rec = recordByAddress.get(row.raw);
       const balanceSats = row.balanceSats ?? 0;
+      const addressBatches = ownerBatchesByAddress.get(row.raw) ?? [];
 
       if (!rec) {
+        const ownerCost = addressBatches.length ? summarizeOwnerBookCost(addressBatches) : undefined;
+        if (ownerCost?.hasKnownCost) {
+          totalCostBasis += ownerCost.knownCost;
+          hasCostBasis = true;
+        }
         provenanceEntries.push({
           address: row.raw,
           label: "",
@@ -100,10 +169,11 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
           acquisitionMethod: "No vault record",
           counterpartyName: "No vault record",
           btcAmountSats: balanceSats,
-          costBasisFiat: "Not recorded",
+          costBasisFiat: ownerCost?.text ?? "Not recorded",
           priceInfo: "",
           hasRecord: false,
           attachmentNames: [],
+          ownerInfo: ownerCost?.ownerInfo ?? "Owner: Not recorded",
         });
         continue;
       }
@@ -132,7 +202,14 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
       let costBasisFiat = "Not recorded";
       let priceInfo = "";
 
-      if (rec.costBasisUsd !== undefined && rec.costBasisUsd > 0) {
+      if (addressBatches.length) {
+        const ownerCost = summarizeOwnerBookCost(addressBatches);
+        costBasisFiat = ownerCost.text;
+        if (ownerCost.hasKnownCost) {
+          totalCostBasis += ownerCost.knownCost;
+          hasCostBasis = true;
+        }
+      } else if (rec.costBasisUsd !== undefined && rec.costBasisUsd > 0) {
         const formatted = rec.costBasisUsd.toLocaleString(undefined, {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
@@ -148,13 +225,16 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           });
-          costBasisFiat = `${provenanceFiatCurrency} ${formatted}`;
+          // A historical price lookup is evidence of an estimate, not a
+          // declarant-provided acquisition cost. Preserve that distinction in
+          // the declaration rather than making the aggregate look confirmed.
+          costBasisFiat = `${provenanceFiatCurrency} ${formatted} (estimated)`;
           const rateSource = priceRow.source ? priceRow.source : "vault price store";
           priceInfo = `Rate: ${provenanceFiatCurrency} ${priceRow.close.toLocaleString()} on ${priceRow.date} (source: ${rateSource})`;
           totalCostBasis += computedBasis;
           hasCostBasis = true;
         } else {
-          costBasisFiat = "Not recorded";
+          costBasisFiat = "Unknown (no recorded cost or historical price)";
           priceInfo = `No ${provenanceFiatCurrency} price data for ${rec.date} (source: vault price store)`;
         }
       }
@@ -175,6 +255,9 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
         priceInfo,
         hasRecord: true,
         attachmentNames,
+        ownerInfo: addressBatches.length
+          ? summarizeOwnerBookCost(addressBatches).ownerInfo
+          : `Owner: ${rec.owner?.trim() || "Unassigned"}`,
       });
     }
   } // end if (isSample) else
@@ -214,6 +297,7 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
     "Counterparty / Source",
     `BTC Amount`,
     `Cost Basis (${provenanceFiatCurrency})`,
+    "Owner / Cost Provenance",
   ]];
   const provTableBody = provenanceEntries.map((e) => [
     sanitizePdfText(truncateAddress(e.address, 8, 8)),
@@ -222,6 +306,7 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
     sanitizePdfText(e.counterpartyName),
     sanitizePdfText(`${formatBTC(e.btcAmountSats)} BTC`),
     sanitizePdfText(e.costBasisFiat),
+    sanitizePdfText(e.ownerInfo),
   ]);
 
   autoTable(doc, {
@@ -232,12 +317,13 @@ export async function renderProvenanceSection(L: PdfLayout, d: PofPdfData) {
     styles: { fontSize: 7, font: "helvetica", cellPadding: 2, overflow: "linebreak" },
     headStyles: { fillColor: [40, 40, 40], textColor: [255, 255, 255], fontStyle: "bold" },
     columnStyles: {
-      0: { cellWidth: contentW * 0.19, font: "courier" },
-      1: { cellWidth: contentW * 0.13 },
-      2: { cellWidth: contentW * 0.17 },
-      3: { cellWidth: contentW * 0.19 },
-      4: { cellWidth: contentW * 0.14, halign: "right" },
-      5: { cellWidth: contentW * 0.18, halign: "right" },
+      0: { cellWidth: contentW * 0.15, font: "courier" },
+      1: { cellWidth: contentW * 0.11 },
+      2: { cellWidth: contentW * 0.14 },
+      3: { cellWidth: contentW * 0.15 },
+      4: { cellWidth: contentW * 0.12, halign: "right" },
+      5: { cellWidth: contentW * 0.13, halign: "right" },
+      6: { cellWidth: contentW * 0.20, halign: "right" },
     },
     didDrawPage: () => {},
   });

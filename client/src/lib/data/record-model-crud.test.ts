@@ -43,7 +43,7 @@ vi.mock('./transaction-crud', () => ({
   getParticipantsByTxids: (txids: string[]) =>
     testDb.transactionParticipants.where('txid').anyOf(txids).toArray(),
 }));
-const { runRecordModelMigration } = await import('./record-model-crud');
+const { putTransactionLegMetadata, putTransactionMetadata, runRecordModelMigration } = await import('./record-model-crud');
 
 function record(inputString: string, overrides: Partial<Record> = {}): Record {
   return { type: 'address', inputString, label: '', tags: [], categories: [], createdAt: 1, updatedAt: 1, ...overrides };
@@ -121,5 +121,16 @@ describe('v44 record-model migration', () => {
       'undetermined', 'undetermined', 'undetermined', 'ours-owner-unknown',
     ]);
     expect(await testDb.entities.where('naturalKey').equals('self:me').first()).toBeUndefined();
+  });
+});
+
+describe('cost-basis metadata CRUD validation', () => {
+  it('rejects non-finite and negative monetary metadata before persistence', async () => {
+    await expect(putTransactionMetadata({ txid: 'tx', proceedsUsd: -1 })).rejects.toThrow('finite nonnegative');
+    await expect(putTransactionLegMetadata({
+      txid: 'tx', legKey: 'input:0', direction: 'outgoing', marketValueUsd: Number.NaN,
+    })).rejects.toThrow('finite nonnegative');
+    expect(await testDb.transactionMetadata.count()).toBe(0);
+    expect(await testDb.transactionLegMetadata.count()).toBe(0);
   });
 });
