@@ -8,9 +8,11 @@ description: How to launch and drive the electron-builder asar in this environme
 - Do NOT use the nix `xvfb-run` wrapper: its bundled xorg-server **1.20** Xvfb segfaults the whole session instantly (even `electron --version` under it exits 139, with zero output). Launch a modern nix xorg-server **21.x** `Xvfb :99` directly and set `DISPLAY` on the electron process. The segfault also appears on normal SIGTERM teardown, so judge success by CDP coming up, not by exit code.
 - Do not enumerate and sort all of `/nix/store` with Node `fs.readdirSync` to locate Electron/Xvfb; the store mount can block for minutes. Prefer explicit env overrides, then a narrow shell glob with a timeout.
 - A repeatable guard exists: `scripts/check-packaged-electron-browser.mjs` (release gate, Step 4 of `scripts/electron-build.sh`; `KYUTXO_PACKAGED_SKIP_BUILD=1` reuses release/linux-unpacked). Package the asar for it via `electron-builder --dir --linux -c.npmRebuild=false` (npmRebuild would target electron 39 ABI and needs network).
+- The nix Electron 29 asar recipe is renderer-only. Any flow that creates or unlocks the protected native vault must launch the shipping packaged executable on its target runner; its native store is rebuilt for the shipping Electron ABI and fails under Electron 29.
 - Background processes die at the tool-call boundary: launch + drive in ONE shell command.
 - A `pkill -f 'pattern'` whose pattern appears in the same command line kills the shell itself (exit -1 with no output). Keep pkill in a separate command or bracket the pattern.
 - Replit sets `XDG_CONFIG_HOME` etc. to the workspace — export HOME **and** the XDG vars in the launch script or vault state persists across "fresh" runs in `workspace/.config/<app>`.
+- On Windows also strip inherited `PORTABLE_EXECUTABLE_DIR` and isolate `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, and `TMP`; otherwise portable mode can bypass the disposable profile.
 
 ## Custom-scheme renderer gotchas (durable)
 - Packaged assets must use the privileged standard+secure `kyutxo-app://bundle` scheme and resolve only beneath `dist/public`; never restore a `file://` handler or OS-path fallback.

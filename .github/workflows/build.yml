@@ -259,6 +259,14 @@ jobs:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
         run: node scripts/check-packaged-electron-browser.mjs
 
+      # RELEASE GATE: create and lock a vault inside one isolated packaged
+      # session, then prove a wrong password remains visibly rejected. Avoiding
+      # a relaunch removes the single-instance/profile-flush race.
+      - name: Verify packaged wrong-password lock handling
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-wrong-password-browser.mjs
+
       # RELEASE GATE: seed an oversized consolidation through the real
       # preload/main/native-worker path and prove all four Coin Passport windows
       # are independent, bounded, and tied to the displayed mirror checkpoint.

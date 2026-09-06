@@ -9,9 +9,9 @@
 // this check proves the fix end-to-end in the real electron-builder asar.
 //
 // Flow (same Xvfb + CDP recipe as scripts/check-packaged-electron-browser.mjs),
-// all in ONE app session (a kill/relaunch cycle is flaky here: the packaged
-// app's single-instance lock + unflushed profile state make the second launch
-// unreliable):
+// all in ONE app session. A kill/relaunch cycle is deliberately avoided:
+// packaged single-instance locks and profile flushing make a second launch an
+// unreliable way to reach the initialized-vault LoginScreen path.
 //   1. Fresh profile → Create Vault form → set password → vault unlocks.
 //   2. Click the in-app lock button (button-logout) → Unlock form appears
 //      (isInitialized=true — the exact LoginScreen + App.tsx loading-gate
@@ -35,14 +35,20 @@ import {
   assertPackagedAsarFresh,
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
-import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
+import {
+  findPackagedBinary,
+  PACKAGED_BINARY_SPECS,
+} from './packaged-electron-binaries.mjs';
 
 await acquireBrowserCheckLock();
 
 // Windows-safe (fileURLToPath): `new URL(...).pathname` is `/D:/...` on win32
 // and path.resolve mangles it — see repoRootFromModuleUrl.
 const ROOT = repoRootFromModuleUrl(import.meta.url);
-const ASAR = path.join(ROOT, 'release', 'linux-unpacked', 'resources', 'app.asar');
+const IS_WINDOWS = process.platform === 'win32';
+const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
+const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
+const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
 const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9224);
 const TAG = '[wrong-password-packaged]';
 const GOOD_PASSWORD = 'correct-horse-battery';
@@ -77,9 +83,15 @@ function buildAsar() {
   // (task 1925) — verify the bundle is actually newer than the source.
   assertPackagedBundleFresh({ tag: TAG });
   run('node', ['scripts/build-native-engine.mjs']);
-  run('npx', ['electron-builder', '--config', 'electron-builder.json', '--dir', '--linux', '-c.npmRebuild=false']);
-  if (!fs.existsSync(ASAR)) {
-    throw new Error(`${TAG} electron-builder finished but ${ASAR} was not produced.`);
+  run('npx', [
+    'electron-builder',
+    '--config',
+    'electron-builder.json',
+    '--dir',
+    IS_WINDOWS ? '--win' : '--linux',
+  ]);
+  if (!fs.existsSync(ASAR) || !fs.existsSync(PACKAGED_EXECUTABLE)) {
+    throw new Error(`${TAG} electron-builder finished but the packaged Linux app was not produced.`);
   }
 }
 
@@ -97,11 +109,26 @@ async function waitForCdp(timeoutMs) {
   return false;
 }
 
-function launchApp(electronBin, env, DISPLAY, cwd) {
+async function waitForCdpDown(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let consecutiveFailures = 0;
+  while (Date.now() < deadline) {
+    try {
+      await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
+      consecutiveFailures = 0;
+    } catch {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= 3) return true;
+    }
+    await sleep(500);
+  }
+  return false;
+}
+
+function launchApp(env, DISPLAY, cwd) {
   const child = spawn(
-    electronBin,
+    PACKAGED_EXECUTABLE,
     [
-      ASAR,
       '--no-sandbox',
       '--disable-gpu',
       // Longer sessions than the blank-window gate: without these, Chromium
@@ -112,7 +139,13 @@ function launchApp(electronBin, env, DISPLAY, cwd) {
       '--disable-software-rasterizer',
       `--remote-debugging-port=${CDP_PORT}`,
     ],
-    { cwd, env: { ...env, DISPLAY }, stdio: ['ignore', 'pipe', 'pipe'], detached: true },
+    {
+      cwd,
+      env: IS_WINDOWS ? env : { ...env, DISPLAY },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: !IS_WINDOWS,
+      windowsHide: true,
+    },
   );
   child.stdout.on('data', (d) => process.stdout.write(`${TAG}[app] ${d}`));
   child.stderr.on('data', (d) => process.stdout.write(`${TAG}[app-err] ${d}`));
@@ -120,15 +153,27 @@ function launchApp(electronBin, env, DISPLAY, cwd) {
   return child;
 }
 
-function killTree(child) {
-  try {
-    process.kill(-child.pid, 'SIGTERM');
-  } catch {
+async function stopApp(child) {
+  if (IS_WINDOWS) {
+    const result = spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+      cwd: ROOT,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (result.error) throw result.error;
+  } else {
     try {
-      child.kill('SIGTERM');
+      process.kill(-child.pid, 'SIGTERM');
     } catch {
-      /* gone */
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* gone */
+      }
     }
+  }
+  if (!(await waitForCdpDown(30_000))) {
+    throw new Error(`${TAG} packaged process still owns CDP port ${CDP_PORT} after shutdown.`);
   }
 }
 
@@ -162,32 +207,52 @@ async function connectAndFindPage() {
 async function main() {
   buildAsar();
 
-  const { electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG });
-  console.log(`${TAG} electron: ${electronBin}`);
-  console.log(`${TAG} Xvfb: ${xvfbBin}`);
+  if (!fs.existsSync(PACKAGED_EXECUTABLE)) {
+    throw new Error(`${TAG} packaged executable is missing: ${PACKAGED_EXECUTABLE}`);
+  }
+  const xvfbBin = IS_WINDOWS
+    ? null
+    : findPackagedBinary({
+      ...PACKAGED_BINARY_SPECS.xvfb,
+      tag: TAG,
+    });
+  console.log(`${TAG} packaged executable: ${PACKAGED_EXECUTABLE}`);
+  if (xvfbBin) console.log(`${TAG} Xvfb: ${xvfbBin}`);
 
-  // One persistent profile shared across BOTH launches: run 1 creates the
-  // vault, run 2 must see it as initialized and reject the wrong password.
+  // A disposable profile keeps the check independent from both the runner's
+  // real vault and any state left by another packaged check.
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-wrongpw-check-'));
+  const { PORTABLE_EXECUTABLE_DIR: _portableExecutableDir, ...inheritedEnv } = process.env;
   const env = {
-    ...process.env,
+    ...inheritedEnv,
     HOME: tmpHome,
+    USERPROFILE: tmpHome,
     XDG_CONFIG_HOME: path.join(tmpHome, '.config'),
     XDG_CACHE_HOME: path.join(tmpHome, '.cache'),
     XDG_DATA_HOME: path.join(tmpHome, '.local', 'share'),
     XDG_STATE_HOME: path.join(tmpHome, '.local', 'state'),
+    APPDATA: path.join(tmpHome, 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join(tmpHome, 'AppData', 'Local'),
+    TEMP: path.join(tmpHome, 'temp'),
+    TMP: path.join(tmpHome, 'temp'),
     NODE_ENV: 'production',
   };
+  fs.mkdirSync(env.APPDATA, { recursive: true });
+  fs.mkdirSync(env.LOCALAPPDATA, { recursive: true });
+  fs.mkdirSync(env.TEMP, { recursive: true });
 
   const DISPLAY = process.env.KYUTXO_PACKAGED_DISPLAY || ':98';
-  console.log(`${TAG} starting Xvfb on ${DISPLAY}...`);
-  const xvfb = spawn(xvfbBin, [DISPLAY, '-screen', '0', '1280x800x24'], {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
-  });
-  xvfb.stderr.on('data', (d) => process.stdout.write(`${TAG}[xvfb] ${d}`));
-  await sleep(2000);
+  let xvfb = null;
+  if (!IS_WINDOWS) {
+    console.log(`${TAG} starting Xvfb on ${DISPLAY}...`);
+    xvfb = spawn(xvfbBin, [DISPLAY, '-screen', '0', '1280x800x24'], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    });
+    xvfb.stderr.on('data', (d) => process.stdout.write(`${TAG}[xvfb] ${d}`));
+    await sleep(2000);
+  }
 
   const steps = [];
   let browser = null;
@@ -195,7 +260,7 @@ async function main() {
   try {
     // ── Run 1: create the vault ──────────────────────────────────────────
     console.log(`${TAG} run 1: launching packaged app (create vault)...`);
-    child = launchApp(electronBin, env, DISPLAY, tmpHome);
+    child = launchApp(env, DISPLAY, tmpHome);
     let page;
     ({ browser, page } = await connectAndFindPage());
 
@@ -222,38 +287,23 @@ async function main() {
       detail: 'input-password detached after Create Vault',
     });
 
-    // ── Relaunch the app → Unlock form ────────────────────────────────────
-    // Quit gracefully (SIGTERM → clean Electron shutdown, exit code 0) so the
-    // Chromium profile (IndexedDB kybtc-vault) flushes, then relaunch with the
-    // same profile. This is the real user journey from the bug report:
-    // restart the packaged app, get the Unlock form, type a wrong password.
-    console.log(`${TAG} quitting gracefully and relaunching...`);
-    await sleep(3000); // let post-create writes settle
-    await browser.close().catch(() => {});
-    browser = null;
-    const exited = new Promise((resolve) => child.once('exit', resolve));
-    killTree(child);
-    await Promise.race([exited, sleep(20_000)]);
-    await sleep(2000);
-    try {
-      process.kill(-child.pid, 'SIGKILL');
-    } catch {
-      /* already gone */
-    }
-
-    child = launchApp(electronBin, env, DISPLAY, tmpHome);
-    ({ browser, page } = await connectAndFindPage());
+    // ── Lock in-process → initialized-vault Unlock form ──────────────────
+    // This reaches the exact LoginScreen path involved in the regression
+    // without racing Chromium profile flushing or Electron's single-instance
+    // lock during a second process launch.
+    await page.getByTestId('button-logout').waitFor({ state: 'visible', timeout: 60_000 });
+    await page.getByTestId('button-logout').click();
     await page.getByTestId('input-password').waitFor({ state: 'visible', timeout: 120_000 });
     const confirmOnUnlock = await page
       .getByTestId('input-confirm-password')
       .isVisible()
       .catch(() => false);
     steps.push({
-      name: 'relaunch shows the Unlock form (vault persisted; no confirm field)',
+      name: 'in-app lock shows the initialized-vault Unlock form (no confirm field)',
       passed: !confirmOnUnlock,
       detail: `confirm-password visible=${confirmOnUnlock} (must be false)`,
     });
-    if (confirmOnUnlock) throw new Error(`${TAG} unlock form not shown after relaunch; aborting.`);
+    if (confirmOnUnlock) throw new Error(`${TAG} unlock form not shown after in-app lock; aborting.`);
 
     // ── Wrong password must surface the error and stay locked ────────────
     // Startup churn (vault check / eager migrations) can remount LoginScreen
@@ -313,19 +363,13 @@ async function main() {
   } finally {
     if (browser) await browser.close().catch(() => {});
     if (child) {
-      killTree(child);
-      await sleep(2000);
-      try {
-        process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        /* gone */
-      }
+      await stopApp(child);
     }
     try {
-      process.kill(-xvfb.pid, 'SIGTERM');
+      if (xvfb) process.kill(-xvfb.pid, 'SIGTERM');
     } catch {
       try {
-        xvfb.kill('SIGTERM');
+        xvfb?.kill('SIGTERM');
       } catch {
         /* gone */
       }

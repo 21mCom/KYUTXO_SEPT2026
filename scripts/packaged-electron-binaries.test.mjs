@@ -25,12 +25,7 @@ const PACKAGED_NON_BROWSER_CHECKS = new Set([
   'check-packaged-vault-lock-native.mjs',
 ]);
 const PACKAGED_BROWSER_CHECK_PATTERN = /^check-packaged-.+-browser\.mjs$/;
-const MANUAL_PACKAGED_BROWSER_CHECKS = new Map([
-  [
-    'check-packaged-wrong-password-browser.mjs',
-    'Manual regression reproduction: its single-session lock/unlock flow is intentionally excluded from release automation because packaged relaunch state is unreliable.',
-  ],
-]);
+const MANUAL_PACKAGED_BROWSER_CHECKS = new Map();
 
 function discoverPackagedBrowserChecks(filenames) {
   return filenames
@@ -128,14 +123,22 @@ function assertPackagedBrowserCheckRegistrationPolicy({
 function assertUsesSharedBinaryDiscovery(filename, source) {
   assert.match(
     source,
-    /import\s*\{\s*findPackagedBinaries\s*\}\s*from\s*['"]\.\/packaged-electron-binaries\.mjs['"]/,
+    /import\s*\{[\s\S]*\bfindPackagedBinar(?:y|ies)\b[\s\S]*\}\s*from\s*['"]\.\/packaged-electron-binaries\.mjs['"]/,
     `${filename} must import the shared discovery helper`,
   );
-  assert.match(
-    source,
-    /findPackagedBinaries\s*\(\s*\{\s*tag\s*:\s*TAG\s*\}\s*\)/,
-    `${filename} must resolve both binaries through the shared helper`,
-  );
+  if (filename === 'check-packaged-wrong-password-browser.mjs') {
+    assert.match(
+      source,
+      /findPackagedBinary\s*\(\s*\{[\s\S]*\.\.\.PACKAGED_BINARY_SPECS\.xvfb,[\s\S]*tag:\s*TAG,[\s\S]*\}\s*\)/,
+      `${filename} must resolve Xvfb through the shared helper`,
+    );
+  } else {
+    assert.match(
+      source,
+      /findPackagedBinaries\s*\(\s*\{\s*tag\s*:\s*TAG\s*\}\s*\)/,
+      `${filename} must resolve both binaries through the shared helper`,
+    );
+  }
   assert.doesNotMatch(
     source,
     /function findNixBinary|\/nix\/store\/\*-electron-|\/nix\/store\/\*-xorg-server-/,
@@ -526,6 +529,35 @@ test('the packaged browser gate launches the generated Windows portable renderer
     /- name: Verify packaged Windows renderer and portable restart persistence\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-electron-browser\.mjs/,
   );
   assert.match(workflow, /generated Portable\.exe release asset/);
+});
+
+test('the packaged wrong-password gate avoids relaunch and blocks desktop releases', () => {
+  const source = fs.readFileSync(
+    path.join(SCRIPTS_DIR, 'check-packaged-wrong-password-browser.mjs'),
+    'utf8',
+  );
+  const releaseWorkflow = fs.readFileSync(
+    path.join(ROOT, '.github', 'workflows', 'build.yml'),
+    'utf8',
+  );
+
+  assert.match(source, /process\.platform === 'win32'/);
+  assert.match(source, /IS_WINDOWS \? 'win-unpacked' : 'linux-unpacked'/);
+  assert.match(source, /IS_WINDOWS \? 'KYUTXO\.exe' : 'kyutxo'/);
+  assert.match(source, /APPDATA: path\.join\(tmpHome, 'AppData', 'Roaming'\)/);
+  assert.match(source, /LOCALAPPDATA: path\.join\(tmpHome, 'AppData', 'Local'\)/);
+  assert.match(source, /PORTABLE_EXECUTABLE_DIR:\s*_portableExecutableDir/);
+  assert.match(source, /USERPROFILE:\s*tmpHome/);
+  assert.match(source, /taskkill', \['\/PID', String\(child\.pid\), '\/T', '\/F'\]/);
+  assert.match(source, /waitForCdpDown\(30_000\)/);
+  assert.match(source, /getByTestId\('button-logout'\)\.click\(\)/);
+  assert.match(source, /getByTestId\('text-error'\)/);
+  assert.match(source, /errorText === 'Incorrect password'/);
+  assert.doesNotMatch(source, /child = launchApp[\s\S]*child = launchApp/);
+  assert.match(
+    releaseWorkflow,
+    /- name: Verify packaged wrong-password lock handling\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-wrong-password-browser\.mjs/,
+  );
 });
 
 test('the packaged network activity forced shutdown cannot become graceful', () => {
