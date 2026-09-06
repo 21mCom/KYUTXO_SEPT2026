@@ -87,6 +87,19 @@ const PAUSED_STATE = {
   newAddressRecords: 0,
   currentDepth: 1,
 };
+const failedSyncResult = (message: string) => ({
+  success: false,
+  addressesSynced: 0,
+  transactionsImported: 0,
+  transactionsUpdated: 0,
+  newlyQueuedTransactions: 0,
+  newAddressRecords: 0,
+  addressesSkipped: 0,
+  addressesFiltered: 0,
+  transactionsAlreadySynced: 0,
+  depthsProcessed: [],
+  errors: [message],
+});
 
 async function expectSettingsActionWithoutMutation(
   settingsBefore: string,
@@ -138,6 +151,24 @@ describe.each([
     expect(mocks.resumeSync).not.toHaveBeenCalled();
   });
 
+  it("offers Node Settings when resume returns a policy error", async () => {
+    mocks.nodeSettings.firstSyncConfirmedAt = 1;
+    mocks.updateProvider.mockReset();
+    mocks.resumeSync.mockResolvedValue(failedSyncResult(message));
+    const settingsBefore = JSON.stringify(mocks.nodeSettings);
+    renderWithProviders(<TransactionSync />);
+
+    fireEvent.click(await screen.findByTestId("button-resume-sync"));
+
+    await expectSettingsActionWithoutMutation(
+      settingsBefore,
+      "Sync Completed with Errors",
+      message,
+    );
+    expect(mocks.updateProvider).toHaveBeenCalledWith(mocks.nodeSettings);
+    expect(mocks.resumeSync).toHaveBeenCalledTimes(1);
+  });
+
   it("offers Node Settings when deferred single-address provider construction is blocked after approval", async () => {
     const settingsBefore = JSON.stringify(mocks.nodeSettings);
     renderWithProviders(<TransactionSync />);
@@ -154,6 +185,30 @@ describe.each([
     expect(mocks.markFirstSyncConfirmed).toHaveBeenCalledTimes(1);
     expect(mocks.updateProvider).toHaveBeenCalledTimes(1);
     expect(mocks.syncSingleAddress).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect((screen.getByTestId("button-single-sync") as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
+
+  it("offers Node Settings when single-address sync returns a policy error", async () => {
+    mocks.nodeSettings.firstSyncConfirmedAt = 1;
+    mocks.updateProvider.mockReset();
+    mocks.syncSingleAddress.mockResolvedValue(failedSyncResult(message));
+    const settingsBefore = JSON.stringify(mocks.nodeSettings);
+    renderWithProviders(<TransactionSync />);
+
+    fireEvent.change(await screen.findByTestId("input-single-address"), {
+      target: { value: ADDRESS },
+    });
+    fireEvent.click(screen.getByTestId("button-single-sync"));
+
+    await expectSettingsActionWithoutMutation(
+      settingsBefore,
+      "Single Address Sync Failed",
+      message,
+    );
+    expect(mocks.updateProvider).toHaveBeenCalledWith(mocks.nodeSettings);
+    expect(mocks.syncSingleAddress).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       expect((screen.getByTestId("button-single-sync") as HTMLButtonElement).disabled).toBe(false);
     });
