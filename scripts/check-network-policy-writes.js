@@ -148,6 +148,7 @@ function findPolicyFields(
   node,
   localInitializers,
   localAssignedFields,
+  localAliases,
   found = new Set(),
   visited = new Set(),
 ) {
@@ -157,13 +158,24 @@ function findPolicyFields(
       localInitializers.get(node.text),
       localInitializers,
       localAssignedFields,
+      localAliases,
       found,
       visited,
     );
   }
   if (ts.isIdentifier(node)) {
-    for (const field of localAssignedFields.get(node.text) ?? []) {
-      found.add(field);
+    const pending = [node.text];
+    const visitedAliases = new Set();
+    while (pending.length > 0) {
+      const localName = pending.pop();
+      if (visitedAliases.has(localName)) continue;
+      visitedAliases.add(localName);
+      for (const field of localAssignedFields.get(localName) ?? []) {
+        found.add(field);
+      }
+      for (const alias of localAliases.get(localName) ?? []) {
+        pending.push(alias);
+      }
     }
   }
   if (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) {
@@ -171,7 +183,7 @@ function findPolicyFields(
     if (field && POLICY_FIELDS.has(field)) found.add(field);
   }
   ts.forEachChild(node, child => {
-    findPolicyFields(child, localInitializers, localAssignedFields, found, visited);
+    findPolicyFields(child, localInitializers, localAssignedFields, localAliases, found, visited);
   });
   return found;
 }
@@ -238,6 +250,7 @@ for (const file of files) {
   const namespaceImports = new Set();
   const localInitializers = new Map();
   const localAssignedFields = new Map();
+  const localAliases = new Map();
 
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
@@ -264,6 +277,15 @@ for (const file of files) {
       node.initializer
     ) {
       localInitializers.set(node.name.text, node.initializer);
+      const initializer = unwrapExpression(node.initializer);
+      if (ts.isIdentifier(initializer)) {
+        const aliasesForLocal = localAliases.get(node.name.text) ?? new Set();
+        aliasesForLocal.add(initializer.text);
+        localAliases.set(node.name.text, aliasesForLocal);
+        const aliasesForInitializer = localAliases.get(initializer.text) ?? new Set();
+        aliasesForInitializer.add(node.name.text);
+        localAliases.set(initializer.text, aliasesForInitializer);
+      }
     }
     ts.forEachChild(node, collectLocalInitializers);
   }
@@ -291,7 +313,7 @@ for (const file of files) {
       if (writeName) {
         const fields = new Set();
         for (const argument of node.arguments) {
-          findPolicyFields(argument, localInitializers, localAssignedFields, fields);
+          findPolicyFields(argument, localInitializers, localAssignedFields, localAliases, fields);
         }
         if (fields.size > 0) {
           failures.push(

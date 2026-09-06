@@ -144,19 +144,37 @@ test('fails a direct write whose payload is populated through later property ass
   assert.match(result.stderr, /firstSyncConfirmedAt/);
 });
 
-test('permits unrelated mutations and mutations made after a CRUD write', () => {
+test('fails a direct write whose payload is mutated through a local alias', () => {
+  const result = runGuard({
+    'bad-mutated-alias.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      const policyUpdates = {};
+      const alias = policyUpdates;
+      alias.networkAccessEnabled = false;
+      alias['firstSyncConfirmedAt'] = undefined;
+      updateNodeSettings('default', policyUpdates);
+    `,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /networkAccessEnabled/);
+  assert.match(result.stderr, /firstSyncConfirmedAt/);
+});
+
+test('permits unrelated aliases and alias mutations made after a CRUD write', () => {
   const result = runGuard({
     'good-mutated-variable.ts': `
       import { updateNodeSettings } from './lib/data/node-settings-crud';
       const ordinaryUpdates = {};
       ordinaryUpdates.requestTimeout = 10_000;
       const unrelated = {};
-      unrelated.networkAccessEnabled = false;
+      const unrelatedAlias = unrelated;
+      unrelatedAlias.networkAccessEnabled = false;
       updateNodeSettings('default', ordinaryUpdates);
 
       const laterMutated = {};
+      const laterAlias = laterMutated;
       updateNodeSettings('default', laterMutated);
-      laterMutated.networkAccessEnabled = false;
+      laterAlias.networkAccessEnabled = false;
     `,
   });
   assert.equal(result.status, 0, result.stderr);
