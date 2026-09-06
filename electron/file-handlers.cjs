@@ -373,9 +373,14 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
   });
 
   // List ALL attachments recursively (for backup)
-  ipcMain.handle('list-all-attachments', async () => {
+  ipcMain.handle('list-all-attachments', async (_event, page = {}) => {
     try {
+      const offset = Number.isSafeInteger(page?.offset) && page.offset >= 0 ? page.offset : 0;
+      const limit = Number.isSafeInteger(page?.limit) && page.limit > 0
+        ? Math.min(page.limit, 10_000)
+        : Number.MAX_SAFE_INTEGER;
       const result = [];
+      let total = 0;
       // Exact total bytes of every attachment FILE on disk. Stored uncompressed
       // in the backup ZIP, so this is the true number of bytes a restore writes —
       // the backup export records it in the manifest for an exact restore
@@ -384,27 +389,27 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       let totalBytes = 0;
       
       if (!fs.existsSync(attachmentsDir)) {
-        return { success: true, files: [], totalBytes: 0 };
+        return { success: true, files: [], total: 0, totalBytes: 0 };
       }
       
-      // Get all subdirectories (record identifiers)
-      const entries = fs.readdirSync(attachmentsDir, { withFileTypes: true });
-      
-      for (const entry of entries) {
+      // Stream directory entries so even one record directory containing a very
+      // large number of files never creates a second full filename array.
+      const entries = await fs.promises.opendir(attachmentsDir);
+      for await (const entry of entries) {
         if (entry.isDirectory()) {
           const subDir = path.join(attachmentsDir, entry.name);
           // withFileTypes so SYMLINKS inside the directory are visible as
           // links: a planted link to an outside file must be skipped, not
           // followed (statSync would follow it and leak the target's bytes
           // into the backup listing and size total).
-          const files = fs.readdirSync(subDir, { withFileTypes: true });
-          
-          for (const file of files) {
+          const files = await fs.promises.opendir(subDir);
+          for await (const file of files) {
             if (!file.isFile()) continue; // skips symlinks, sockets, subdirs
             // Return relative paths like "identifier/filename.ext"
-            result.push(path.join(entry.name, file.name));
+            if (total >= offset && result.length < limit) result.push(path.join(entry.name, file.name));
+            total += 1;
             try {
-              totalBytes += fs.statSync(path.join(subDir, file.name)).size;
+              totalBytes += (await fs.promises.stat(path.join(subDir, file.name))).size;
             } catch {
               // File vanished between readdir and stat — skip its bytes.
             }
@@ -413,16 +418,17 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
           // Root-level (single-segment) legacy files. Without this branch they
           // are invisible to backups and the attachment audit, which makes them
           // look "missing" even though they are still on disk.
-          result.push(entry.name);
+          if (total >= offset && result.length < limit) result.push(entry.name);
+          total += 1;
           try {
-            totalBytes += fs.statSync(path.join(attachmentsDir, entry.name)).size;
+            totalBytes += (await fs.promises.stat(path.join(attachmentsDir, entry.name))).size;
           } catch {
             // File vanished between readdir and stat — skip its bytes.
           }
         }
       }
       
-      return { success: true, files: result, totalBytes };
+      return { success: true, files: result, total, totalBytes };
     } catch (error) {
       logMainError('[KYUTXO] list-all-attachments failed', error);
       return { success: false, error: sanitizeIpcError(error, 'Failed to list attachments') };

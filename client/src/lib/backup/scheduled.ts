@@ -545,17 +545,17 @@ export async function runDueScheduledBackup(options: {
         password,
         compactPlan,
         attachmentIO: {
-          listAll: async () => {
-            const result = await api.listAllAttachments();
+          listPage: async (offset, limit) => {
+            const result = await api.listAllAttachments(offset, limit);
             if (!result.success) throw new Error(result.error || "Could not list attachments");
-            return result.files ?? [];
+            return { files: result.files ?? [], total: result.total ?? result.files?.length ?? 0 };
           },
           read: async (path) => {
             const result = await api.readAttachment(path);
             return result.success ? result.data ?? null : null;
           },
           totalBytes: async () => {
-            const result = await api.listAllAttachments();
+            const result = await api.listAllAttachments(0, 1);
             return result.success && typeof result.totalBytes === "number" ? result.totalBytes : null;
           },
         },

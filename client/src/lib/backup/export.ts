@@ -54,7 +54,13 @@ import { readInlineTables } from "./inline-tables";
 import { compactRowFilters, type CompactPlan, type CompactRowFilters } from "./compact";
 
 export interface AttachmentFileIO {
-  listAll(): Promise<string[]>;
+  // Preferred bounded enumeration contract. `offset` is the number of file
+  // names already consumed; implementations return at most `limit` names plus
+  // the exact total count. Export never retains more than one page.
+  listPage?(offset: number, limit: number): Promise<{ files: string[]; total: number }>;
+  // Legacy compatibility for injected/runtime implementations. Production
+  // browser and Electron exporters use listPage.
+  listAll?(): Promise<string[]>;
   read(relPath: string): Promise<ArrayBuffer | null>;
   // Optional: the exact total bytes of every attachment FILE on disk — i.e. the
   // bytes that will be stored UNCOMPRESSED in the ZIP. Preferred over the DB
@@ -291,7 +297,11 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
   ]);
 
   opts.onProgress?.({ percent: 2, phase: "Listing attachment files..." });
-  const attachmentPaths = await opts.attachmentIO.listAll();
+  const firstAttachmentPage = opts.attachmentIO.listPage
+    ? await opts.attachmentIO.listPage(0, batchSize)
+    : { files: await opts.attachmentIO.listAll?.() ?? [], total: 0 };
+  if (!opts.attachmentIO.listPage) firstAttachmentPage.total = firstAttachmentPage.files.length;
+  const attachmentFileCount = firstAttachmentPage.total;
 
   // Exact total bytes of the attachment FILES written into the ZIP (stored
   // uncompressed), recorded in the manifest so the restore pre-flight can size
@@ -328,7 +338,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     utxoLineage: plan ? plan.counts.utxoLineage : utxoLineageCount,
     custodySegments: plan ? plan.counts.custodySegments : custodySegmentsCount,
     lineageSnapshots: lineageSnapshotsCount,
-    attachmentFiles: attachmentPaths.length,
+    attachmentFiles: attachmentFileCount,
   };
 
   // Progress denominator uses the RAW table sizes: a compact export still
@@ -342,7 +352,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     utxoLineageCount +
     custodySegmentsCount +
     lineageSnapshotsCount +
-    attachmentPaths.length || 1;
+    attachmentFileCount || 1;
   let processedUnits = 0;
   const reportUnits = (phase: string) => {
     // Reserve 5% head (counts/inline) and 5% tail (finalize).
@@ -416,18 +426,25 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
       await writer.addFile(ndjsonPath(table), lines);
     }
 
-    // 3) Attachment files, one at a time (stored, not re-compressed).
-    for (let i = 0; i < attachmentPaths.length; i++) {
-      throwIfAborted(signal);
-      const relPath = attachmentPaths[i];
-      const data = await opts.attachmentIO.read(relPath);
-      if (data) {
-        await writer.addBytes(`${ATTACHMENTS_DIR}/${relPath}`, new Uint8Array(data), {
-          compress: false,
-        });
+    // 3) Attachment files, one bounded filename page at a time. Each file's
+    // bytes are still read and written individually.
+    let attachmentOffset = 0;
+    let attachmentPage = firstAttachmentPage.files;
+    while (attachmentPage.length > 0) {
+      for (const relPath of attachmentPage) {
+        throwIfAborted(signal);
+        const data = await opts.attachmentIO.read(relPath);
+        if (data) {
+          await writer.addBytes(`${ATTACHMENTS_DIR}/${relPath}`, new Uint8Array(data), {
+            compress: false,
+          });
+        }
+        attachmentOffset += 1;
+        processedUnits += 1;
+        reportUnits(`Exporting attachment ${attachmentOffset} of ${attachmentFileCount}...`);
       }
-      processedUnits += 1;
-      reportUnits(`Exporting attachment ${i + 1} of ${attachmentPaths.length}...`);
+      if (!opts.attachmentIO.listPage || attachmentOffset >= attachmentFileCount) break;
+      attachmentPage = (await opts.attachmentIO.listPage(attachmentOffset, batchSize)).files;
     }
 
     throwIfAborted(signal);

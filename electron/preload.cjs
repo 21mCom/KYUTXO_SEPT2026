@@ -114,8 +114,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('list-attachments', identifier),
   
   // Backup/restore operations for attachments
-  listAllAttachments: () =>
-    ipcRenderer.invoke('list-all-attachments'),
+  listAllAttachments: (offset, limit) =>
+    ipcRenderer.invoke('list-all-attachments', { offset, limit }),
   writeAttachment: (relativePath, data) =>
     ipcRenderer.invoke('write-attachment', { relativePath, data }),
   renameAttachment: (oldPath, newPath) =>

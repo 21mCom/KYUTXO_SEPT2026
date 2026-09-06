@@ -84,19 +84,20 @@ const MEMORY_EXPORT_ROW_LIMIT = 50000;
 const MEMORY_EXPORT_ATTACHMENT_LIMIT = 5000;
 type ExportKindOption = "all" | "address" | "transaction" | "other";
 
-// Helper to list all attachment files
-async function listAllAttachmentFiles(): Promise<string[]> {
+async function listAttachmentFilesPage(offset: number, limit: number): Promise<{ files: string[]; total: number }> {
   if (isElectron()) {
     const api = getElectronAPI();
-    const result = await api.listAllAttachments();
-    return result.success ? (result.files || []) : [];
+    const result = await api.listAllAttachments(offset, limit);
+    if (!result.success) throw new Error(result.error || "Could not list attachments");
+    return { files: result.files || [], total: result.total ?? result.files?.length ?? 0 };
   } else {
-    const response = await fetch('/api/attachments/list-all');
+    const response = await fetch(`/api/attachments/list-all?offset=${offset}&limit=${limit}`);
     if (response.ok) {
       const data = await response.json();
-      return data.success ? (data.files || []) : [];
+      if (!data.success) throw new Error(data.error || "Could not list attachments");
+      return { files: data.files || [], total: data.total ?? data.files?.length ?? 0 };
     }
-    return [];
+    throw new Error(`Could not list attachments: ${response.status}`);
   }
 }
 
@@ -107,10 +108,10 @@ async function listAllAttachmentFiles(): Promise<string[]> {
 async function totalAttachmentFileBytes(): Promise<number | null> {
   if (isElectron()) {
     const api = getElectronAPI();
-    const result = await api.listAllAttachments();
+    const result = await api.listAllAttachments(0, 1);
     return result.success && typeof result.totalBytes === "number" ? result.totalBytes : null;
   } else {
-    const response = await fetch('/api/attachments/list-all');
+    const response = await fetch('/api/attachments/list-all?offset=0&limit=1');
     if (response.ok) {
       const data = await response.json();
       return data.success && typeof data.totalBytes === "number" ? data.totalBytes : null;
@@ -588,7 +589,7 @@ export default function ExportPage() {
         encrypted,
         password,
         compactPlan,
-        attachmentIO: { listAll: listAllAttachmentFiles, read: readAttachmentFile, totalBytes: totalAttachmentFileBytes },
+        attachmentIO: { listPage: listAttachmentFilesPage, read: readAttachmentFile, totalBytes: totalAttachmentFileBytes },
         onProgress: (p) => {
           // With a compact plan, the analysis pass already used 0–20%.
           setProgress(compactPlan ? 20 + Math.round(p.percent * 0.8) : p.percent);

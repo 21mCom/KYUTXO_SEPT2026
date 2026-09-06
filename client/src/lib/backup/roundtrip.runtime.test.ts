@@ -334,6 +334,45 @@ describe("v3 backup export stays bounded", () => {
     expect(maxToArray).toBeLessThanOrEqual(BATCH);
     expect(maxToArray).toBeLessThan(N_REC);
   });
+
+  it("enumerates attachment filenames in bounded pages with exact progress/counts", async () => {
+    const fileCount = BATCH * 3 + 7;
+    let largestPageRequested = 0;
+    let pageCalls = 0;
+    const phases: string[] = [];
+    const sink = new MemorySink();
+
+    await exportBackup({
+      sink,
+      encrypted: false,
+      batchSize: BATCH,
+      attachmentIO: {
+        async listPage(offset, limit) {
+          largestPageRequested = Math.max(largestPageRequested, limit);
+          pageCalls += 1;
+          const length = Math.max(0, Math.min(limit, fileCount - offset));
+          return {
+            files: Array.from({ length }, (_, index) => `paged/file-${offset + index}.bin`),
+            total: fileCount,
+          };
+        },
+        async read() {
+          return null;
+        },
+      },
+      onProgress: ({ phase }) => phases.push(phase),
+    });
+
+    expect(largestPageRequested).toBe(BATCH);
+    expect(pageCalls).toBe(4);
+    expect(phases).toContain(`Exporting attachment ${fileCount} of ${fileCount}...`);
+
+    const restored = await restoreV3Backup({
+      source: blobChunks(sink.blob as Blob),
+      attachmentWriter: { async write() {} },
+    });
+    expect(restored.manifest.counts.attachmentFiles).toBe(fileCount);
+  });
 });
 
 describe("v3 backup restore stays bounded and round-trips", () => {

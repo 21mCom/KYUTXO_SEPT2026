@@ -433,8 +433,14 @@ router.post('/upload', singleFileUpload, async (req: Request, res) => {
 router.get('/list-all', async (req, res) => {
   try {
     await ensureDir(ATTACHMENTS_DIR);
-    
+    const parsedOffset = Number(req.query.offset);
+    const parsedLimit = Number(req.query.limit);
+    const offset = Number.isSafeInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+    const limit = Number.isSafeInteger(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 10_000)
+      : Number.MAX_SAFE_INTEGER;
     const result: string[] = [];
+    let total = 0;
     // Exact total bytes of every attachment FILE on disk. Stored uncompressed in
     // the backup ZIP, so this is the true number of bytes a restore writes — the
     // backup export records it in the manifest for an exact restore disk-space
@@ -443,21 +449,20 @@ router.get('/list-all', async (req, res) => {
     let totalBytes = 0;
     
     try {
-      const entries = await fs.readdir(ATTACHMENTS_DIR, { withFileTypes: true });
-      
-      for (const entry of entries) {
+      const entries = await fs.opendir(ATTACHMENTS_DIR);
+      for await (const entry of entries) {
         if (entry.isDirectory()) {
           const subDir = path.join(ATTACHMENTS_DIR, entry.name);
           // withFileTypes so SYMLINKS inside the directory are visible as
           // links: a planted link to an outside file must be skipped, not
           // followed (stat() would follow it and leak the target's bytes
           // into the backup listing and size total).
-          const files = await fs.readdir(subDir, { withFileTypes: true });
-          
-          for (const file of files) {
+          const files = await fs.opendir(subDir);
+          for await (const file of files) {
             if (!file.isFile()) continue; // skips symlinks, sockets, subdirs
             // Return relative paths like "identifier/filename.ext"
-            result.push(path.join(entry.name, file.name));
+            if (total >= offset && result.length < limit) result.push(path.join(entry.name, file.name));
+            total += 1;
             try {
               totalBytes += (await fs.stat(path.join(subDir, file.name))).size;
             } catch {
@@ -468,7 +473,8 @@ router.get('/list-all', async (req, res) => {
           // Root-level (single-segment) legacy files. Without this branch they
           // are invisible to backups and the attachment audit, which makes them
           // look "missing" even though they are still on disk.
-          result.push(entry.name);
+          if (total >= offset && result.length < limit) result.push(entry.name);
+          total += 1;
           try {
             totalBytes += (await fs.stat(path.join(ATTACHMENTS_DIR, entry.name))).size;
           } catch {
@@ -479,12 +485,12 @@ router.get('/list-all', async (req, res) => {
     } catch (error) {
       // Directory doesn't exist yet - return empty
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return res.json({ success: true, files: [], totalBytes: 0 });
+        return res.json({ success: true, files: [], total: 0, totalBytes: 0 });
       }
       throw error;
     }
     
-    res.json({ success: true, files: result, totalBytes });
+    res.json({ success: true, files: result, total, totalBytes });
   } catch (error) {
     logServerError('List all attachments error', error);
     res.status(500).json({ error: 'List failed' });
