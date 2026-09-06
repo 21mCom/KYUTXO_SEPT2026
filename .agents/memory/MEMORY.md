@@ -1,3 +1,4 @@
+// hint: Logic changed on both sides. Requires understanding intent of each change.
 - [Scope-value single→multi conversion](scope-value-multiselect-conversion.md) — converting a scope Select to a multi-select changes a lib function's matching from `.includes` to `.some(...includes)`; find every direct-call test site and Playwright `select-scope-value` role=option click.
 - [Large-vault startup migrations](large-vault-startup-migrations.md) — batched once-only startup repairs run in background; fresh-vault skip only when empty; file-decrypt resume freezes-not-breaks.
 - [Shared report date/address filters](shared-report-filter-components.md) — DateRangeFilter (native from/to+exact, no Calendar) and SearchableEntityPicker (single/multi) are the reusable report-scoping controls; reuse, don't reinvent.
@@ -154,3 +155,4 @@
 - [CoinJoin recipe boundaries](coinjoin-recipe-boundaries.md) — equal outputs alone never prove CoinJoin; require a useful anonymity set plus controlled and unresolved inputs before stopping attribution.
 - [Forgotten-source browser checks](forgotten-source-browser-checks.md) — reopen lands on source onboarding; finish “stay offline” before reviewing retained details; inject Electron only after browser DB opens.
 - [Ownership evidence identity](ownership-evidence-identity.md) — review fingerprints use canonical addresses, txids, and entity natural keys; never local ids, or backup restore revives rejected evidence.
+- [Deferred actions need loaded policy](deferred-actions-loaded-policy.md) — cross-page queued network actions must wait for persisted node settings; unresolved hook defaults can bypass first-sync disclosure.

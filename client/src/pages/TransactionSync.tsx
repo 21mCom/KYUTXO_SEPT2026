@@ -70,7 +70,7 @@ import {
 export default function TransactionSync() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
-  const { nodeSettings } = useNodeSettings();
+  const { nodeSettings, isLoading: isNodeSettingsLoading } = useNodeSettings();
   
   const privacyInfo = getProviderPrivacyInfo(nodeSettings.providerType, nodeSettings.useTor);
   
@@ -465,6 +465,7 @@ export default function TransactionSync() {
   // kick off the sync once on mount. The ref guards against StrictMode's
   // double-invoke and avoids re-triggering on later re-renders.
   useEffect(() => {
+    if (isNodeSettingsLoading) return;
     if (targetedConsumedRef.current) return;
     const pending = consumePendingSyncAddresses();
     if (!pending || pending.length === 0) return;
@@ -473,7 +474,7 @@ export default function TransactionSync() {
     // only once it confirms at least one flagged address matched a record, so we
     // don't set it here (avoids a "Syncing 0 of N" flash when nothing matches).
     void handleSyncTargetedAddresses(pending);
-  }, [handleSyncTargetedAddresses]);
+  }, [handleSyncTargetedAddresses, isNodeSettingsLoading]);
 
   const handlePauseSync = () => {
     setIsStopping(true);

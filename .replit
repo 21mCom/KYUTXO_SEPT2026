@@ -1065,6 +1065,10 @@ args = "backup-schedule-save-lock-browser-check"
 task = "workflow.run"
 args = "provider-test-probe-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "report-triggered-sync-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -3900,6 +3904,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node --test scripts/provider-test-probe.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "report-triggered-sync-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-report-triggered-sync-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
