@@ -6,6 +6,7 @@ import {
   getCoinOriginsPage,
   getEngineMeta,
   insertParticipants,
+  insertTransactionMetadata,
   insertRecords,
   insertTransactions,
   type ParticipantRow,
@@ -69,6 +70,22 @@ describe("native engine coin origins query", () => {
     expect(hot.holdings[0]).toMatchObject({ lotId: "lot:a:0", sats: 990 });
     expect(hot.lots.map((lot) => lot.lotId)).toEqual(["lot:a:0"]);
     expect(getCoinOriginsPage(db, { walletName: "Hot" }).lotsTotal).toBe(1);
+    db.close();
+  });
+
+  it("applies mirrored acquisition metadata and bounded owner scope", () => {
+    const db = createInMemoryEngineDb();
+    createSchema(db);
+    insertRecords(db, [{ ...record(1, "alice", "Shared"), owner: "Alice" }, { ...record(2, "blank", "Shared"), owner: "" }]);
+    insertTransactions(db, [transaction(1, "arrival"), transaction(2, "other")]);
+    insertTransactionMetadata(db, [{ id: 1, txid: "arrival", acquisitionMethod: "purchase", costBasisUsd: 50, updatedAt: 1 }]);
+    insertParticipants(db, [output(1, "arrival", "alice", 100), output(2, "other", "blank", 200)]);
+    // The legacy owner text remains the current scope identity; empty is a
+    // deliberate unassigned scope, not a guessed default owner.
+    expect(getCoinOrigins(db, { owner: "Alice" }).lots[0]).toMatchObject({
+      acquisitionMethod: "purchase", costBasisUsd: 50, costProvenance: "provided",
+    });
+    expect(getCoinOriginsPage(db, { owner: "", limit: 10 }).summary.currentSats).toBe(200);
     db.close();
   });
 

@@ -21,12 +21,14 @@ import {
   engineGetRecordsFingerprint,
   engineGetTransactionsFingerprint,
   engineGetParticipantsFingerprint,
+  engineGetTransactionMetadataFingerprint,
   engineGetSchemaVersion,
 } from './engine-client';
 import { ENGINE_SCHEMA_VERSION } from './engine-core';
 import { withEngineTimeout, EngineProbeTimeoutError } from './engine-timeout';
 import { getRecordsFingerprint } from '@/lib/data/record-crud';
 import { getTransactionsFingerprint, getParticipantsFingerprint } from '@/lib/data/transaction-crud';
+import { db } from '@/lib/database';
 
 /**
  * Which mirror tables a read depends on:
@@ -39,7 +41,7 @@ import { getTransactionsFingerprint, getParticipantsFingerprint } from '@/lib/da
  *                    current, since a sync/prevout backfill can change tx/participants
  *                    without touching records.
  */
-export type EngineFreshnessScope = 'records' | 'transactions' | 'allMirrors';
+export type EngineFreshnessScope = 'records' | 'transactions' | 'allMirrors' | 'coinOrigins';
 
 export type EngineGateReason =
   | 'ready-fresh'
@@ -57,6 +59,18 @@ export interface EngineGateDecision {
   /** True only when the engine is ready and the mirror is an exact match. */
   useEngine: boolean;
   reason: EngineGateReason;
+}
+
+async function getTransactionMetadataFingerprint(): Promise<{ count: number; maxId: number; maxUpdatedAt: number }> {
+  const rows = await db.transactionMetadata.toArray();
+  return rows.reduce(
+    (fingerprint, row) => ({
+      count: fingerprint.count + 1,
+      maxId: Math.max(fingerprint.maxId, row.id ?? 0),
+      maxUpdatedAt: Math.max(fingerprint.maxUpdatedAt, row.updatedAt ?? 0),
+    }),
+    { count: 0, maxId: 0, maxUpdatedAt: 0 },
+  );
 }
 
 /**
@@ -150,6 +164,18 @@ export async function evaluateEngineFreshness(
       engPart.count === dexPart.count &&
       engPart.maxId === dexPart.maxId &&
       engPart.resolvedPrevoutCount === dexPart.resolvedPrevoutCount;
+    if (scope === 'coinOrigins') {
+      const [engMetadata, dexMetadata] = await withEngineTimeout(Promise.all([
+        engineGetTransactionMetadataFingerprint(),
+        getTransactionMetadataFingerprint(),
+      ]));
+      return fresh &&
+        engMetadata.count === dexMetadata.count &&
+        engMetadata.maxId === dexMetadata.maxId &&
+        engMetadata.maxUpdatedAt === dexMetadata.maxUpdatedAt
+        ? { useEngine: true, reason: 'ready-fresh' }
+        : { useEngine: false, reason: 'stale' };
+    }
     return fresh
       ? { useEngine: true, reason: 'ready-fresh' }
       : { useEngine: false, reason: 'stale' };

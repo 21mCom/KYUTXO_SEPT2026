@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateCoinOrigins, filterCoinOriginsByWallet, UNKNOWN_ORIGIN_ID } from "./coin-origins-core";
+import { calculateCoinOrigins, filterCoinOrigins, filterCoinOriginsByWallet, UNKNOWN_ORIGIN_ID } from "./coin-origins-core";
 
 const owned = [{ inputString: "owned", type: "address", addressImportance: "manual", walletName: "Cold" }];
 
@@ -194,5 +194,64 @@ describe("coin origins ledger", () => {
     expect(scoped.holdings.map((holding) => holding.lotId)).toEqual(["lot:cold-acquisition:0", UNKNOWN_ORIGIN_ID]);
     expect(scoped.holdings).toHaveLength(2);
     expect(scoped.summary.currentSats).toBe(150);
+  });
+
+  it("keeps acquisition metadata descriptive and scopes blank owners without inventing an owner", () => {
+    const ledger = calculateCoinOrigins({
+      addresses: [
+        { inputString: "alice", addressImportance: "manual", walletName: "Shared", owner: "Alice" },
+        { inputString: "blank", addressImportance: "manual", walletName: "Shared", owner: "  " },
+      ],
+      transactions: [
+        { txid: "alice-in", blockTime: 100, acquisitionMethod: "purchase", costBasisUsd: 125.5 },
+        { txid: "blank-in", blockTime: 200 },
+      ],
+      participants: [
+        { txid: "alice-in", role: "output", address: "alice", amount: 100, vout: 0 },
+        { txid: "blank-in", role: "output", address: "blank", amount: 200, vout: 0 },
+      ],
+    });
+    expect(ledger.lots.find((lot) => lot.lotId === "lot:alice-in:0")).toMatchObject({
+      acquisitionMethod: "purchase", costBasisUsd: 125.5, costProvenance: "provided",
+    });
+    expect(filterCoinOrigins(ledger, { owner: "Alice" }).summary.currentSats).toBe(100);
+    expect(filterCoinOrigins(ledger, { owner: "" }).summary.currentSats).toBe(200);
+  });
+
+  it("stops attribution at a conservative equal-output CoinJoin boundary", () => {
+    const ledger = calculateCoinOrigins({
+      addresses: owned,
+      transactions: [{ txid: "in", blockTime: 1 }, { txid: "mix", blockTime: 2 }],
+      participants: [
+        { txid: "in", role: "output", address: "owned", amount: 1_000, vout: 0 },
+        { txid: "mix", role: "input", address: "owned", amount: 1_000, prevTxid: "in", prevVout: 0 },
+        { txid: "mix", role: "input", address: "peer", amount: 1_000, prevTxid: "peer-in", prevVout: 0 },
+        { txid: "mix", role: "input", address: "peer-2", amount: 1_000, prevTxid: "peer-2-in", prevVout: 0 },
+        { txid: "mix", role: "output", address: "owned", amount: 900, vout: 0 },
+        { txid: "mix", role: "output", address: "peer", amount: 900, vout: 1 },
+        { txid: "mix", role: "output", address: "peer-2", amount: 900, vout: 2 },
+      ],
+    });
+    expect(ledger.hops.find((hop) => hop.txid === "mix")).toMatchObject({ kind: "coinjoin", boundary: "unknown" });
+    expect(ledger.outpoints[0]).toMatchObject({ boundary: "unknown", preMixTxids: ["in"] });
+    expect(ledger.outpoints[0].allocations).toEqual([{ lotId: UNKNOWN_ORIGIN_ID, sats: 900 }]);
+    expect(ledger.summary.currentSats).toBe(ledger.summary.allocatedSats);
+  });
+
+  it("does not mistake an ordinary equal payment and change for a CoinJoin", () => {
+    const ledger = calculateCoinOrigins({
+      addresses: owned,
+      transactions: [{ txid: "a" }, { txid: "b" }, { txid: "spend" }],
+      participants: [
+        { txid: "a", role: "output", address: "owned", amount: 500, vout: 0 },
+        { txid: "b", role: "output", address: "owned", amount: 500, vout: 0 },
+        { txid: "spend", role: "input", address: "owned", amount: 500, prevTxid: "a", prevVout: 0 },
+        { txid: "spend", role: "input", address: "owned", amount: 500, prevTxid: "b", prevVout: 0 },
+        { txid: "spend", role: "output", address: "owned", amount: 500, vout: 0 },
+        { txid: "spend", role: "output", address: "merchant", amount: 500, vout: 1 },
+      ],
+    });
+    expect(ledger.hops.find((hop) => hop.txid === "spend")?.kind).not.toBe("coinjoin");
+    expect(ledger.outpoints[0].allocations).toEqual([{ lotId: "lot:a:0", sats: 500 }]);
   });
 });

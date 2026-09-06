@@ -238,8 +238,8 @@ async function captureVisibleLedger(page, expected) {
       const cells = Array.from(row.querySelectorAll('td'));
       return {
         lotId: row.getAttribute('data-testid')?.slice('origin-holding-'.length) ?? '',
-        outpointCount: parseInteger(cells[3]?.textContent ?? ''),
-        sats: parseInteger(cells[4]?.textContent ?? ''),
+        outpointCount: parseInteger(cells[4]?.textContent ?? ''),
+        sats: parseInteger(cells[5]?.textContent ?? ''),
       };
     });
     const outpoints = Array.from(document.querySelectorAll('tr[data-testid^="origin-outpoint-"]')).map((row) => {

@@ -10,13 +10,16 @@
 export const UNKNOWN_ORIGIN_ID = "unknown";
 
 export type OriginBoundary = "deterministic" | "unknown" | "mixed";
-export type OriginEventKind = "acquisition" | "transfer" | "consolidation" | "partial-spend" | "mixed";
+export type OriginEventKind = "acquisition" | "transfer" | "consolidation" | "partial-spend" | "coinjoin" | "mixed";
 
 export interface CoinOriginTransaction {
   txid: string;
   blockHeight?: number | null;
   blockTime?: number | null;
   fee?: number | null;
+  acquisitionMethod?: string | null;
+  /** User-entered transaction cost, never an inferred tax basis. */
+  costBasisUsd?: number | null;
 }
 
 export interface CoinOriginParticipant {
@@ -57,6 +60,9 @@ export interface CoinOriginLot {
   walletName?: string | null;
   owner?: string | null;
   label?: string | null;
+  acquisitionMethod?: string | null;
+  costBasisUsd?: number | null;
+  costProvenance: "provided" | "unknown";
 }
 
 export interface CoinOriginOutpoint {
@@ -70,6 +76,8 @@ export interface CoinOriginOutpoint {
   boundary: OriginBoundary;
   walletName?: string | null;
   owner?: string | null;
+  /** A CoinJoin intentionally terminates recipe attribution at this output. */
+  preMixTxids?: string[];
 }
 
 export interface CoinOriginDisposal {
@@ -108,6 +116,10 @@ export interface CoinOriginHolding {
   sats: number;
   outpointCount: number;
   boundary: OriginBoundary;
+  walletName?: string | null;
+  owner?: string | null;
+  ownerMixed?: boolean;
+  costProvenance?: "provided" | "unknown" | "mixed";
 }
 
 export interface CoinOriginsSummary {
@@ -257,12 +269,34 @@ function cloneMap(map: Map<string, number>): Map<string, number> {
   return new Map(map);
 }
 
-function eventKind(inputCount: number, outputCount: number, ownedOutputSats: number, inputSats: number, boundary: OriginBoundary): OriginEventKind {
+function eventKind(inputCount: number, outputCount: number, ownedOutputSats: number, inputSats: number, boundary: OriginBoundary, coinjoin: boolean): OriginEventKind {
+  if (coinjoin) return "coinjoin";
   if (boundary !== "deterministic") return "mixed";
   if (inputCount === 0) return "acquisition";
   if (inputCount > 1 && outputCount < inputCount) return "consolidation";
   if (ownedOutputSats > 0 && ownedOutputSats < inputSats) return "partial-spend";
   return "transfer";
+}
+
+/**
+ * Conservative CoinJoin detection.
+ *
+ * Equal outputs alone are not enough: an ordinary payment can equal its change.
+ * Require a useful anonymity set and both a controlled and unresolved input.
+ */
+function isCoinjoin(
+  inputs: CoinOriginParticipant[],
+  outputs: CoinOriginParticipant[],
+  knownInputSats: number,
+  unknownInputSats: number,
+): boolean {
+  if (inputs.length < 3 || outputs.length < 3 || knownInputSats <= 0 || unknownInputSats <= 0) return false;
+  const amounts = new Map<number, number>();
+  for (const output of outputs) {
+    const amount = int(output.amount);
+    if (amount > 0) amounts.set(amount, (amounts.get(amount) ?? 0) + 1);
+  }
+  return [...amounts.values()].some((count) => count >= 3);
 }
 
 interface AncestryNode {
@@ -338,6 +372,7 @@ export function calculateCoinOrigins(input: CoinOriginsInput): CoinOriginsLedger
     const alreadyConsumed = new Set<string>();
     const ancestryParents: AncestryNode[] = [];
     const ancestrySeen = new Set<AncestryNode>();
+    let coinjoin = false;
 
     for (const p of group.inputs) {
       const amount = int(p.amount);
@@ -369,6 +404,7 @@ export function calculateCoinOrigins(input: CoinOriginsInput): CoinOriginsLedger
         unknownInputSats += amount;
       }
     }
+    coinjoin = isCoinjoin(group.inputs, txOutputs, knownInputSats, unknownInputSats);
 
     const declaredFee = int(tx.fee);
     // The transaction's actual conservation identity wins over an absent or
@@ -413,12 +449,19 @@ export function calculateCoinOrigins(input: CoinOriginsInput): CoinOriginsLedger
           walletName: record?.walletName ?? null,
           owner: record?.owner ?? null,
           label: record?.label ?? null,
+          acquisitionMethod: tx.acquisitionMethod ?? null,
+          costBasisUsd: Number.isFinite(tx.costBasisUsd) ? tx.costBasisUsd! : null,
+          costProvenance: Number.isFinite(tx.costBasisUsd) ? "provided" : "unknown",
         };
         lots.push(lot);
         lotBoundaries.set(id, acquisitionBoundary);
         acquisitionSats += amount;
       } else {
         composition = take(pool, amount);
+        // Equal-denomination collaborative transactions cannot honestly map an
+        // owned output to one of the contributed recipes. Preserve the earlier
+        // history on the hop, but put a visible UNKNOWN boundary at the mix.
+        if (coinjoin && owned) composition = new Map([[UNKNOWN_ORIGIN_ID, amount]]);
       }
       const boundary = acquisitionBoundary ?? boundaryFor(composition, lotBoundaries);
       const allocations = mapToAllocations(composition);
@@ -438,6 +481,7 @@ export function calculateCoinOrigins(input: CoinOriginsInput): CoinOriginsLedger
             boundary,
             walletName: record?.walletName ?? null,
             owner: record?.owner ?? null,
+            preMixTxids: coinjoin ? flattenAncestry(ancestryNode, txOrder).filter((id) => id !== tx.txid) : undefined,
           });
         }
       } else if (amount > 0 && knownInputSats > 0) {
@@ -467,8 +511,8 @@ export function calculateCoinOrigins(input: CoinOriginsInput): CoinOriginsLedger
       feeSats: feeSats >= 0 ? feeSats : declaredFee,
       inputCount: group.inputs.length,
       outputCount: txOutputs.length,
-      kind: eventKind(group.inputs.length, txOutputs.length, ownedOutputSats, txInputSats, txBoundary),
-      boundary: txBoundary,
+       kind: eventKind(group.inputs.length, txOutputs.length, ownedOutputSats, txInputSats, txBoundary, coinjoin),
+       boundary: coinjoin ? "unknown" : txBoundary,
       unknownInputSats,
       ownedOutputSats,
       reconciled: residualSats === 0,
@@ -477,14 +521,16 @@ export function calculateCoinOrigins(input: CoinOriginsInput): CoinOriginsLedger
   }
 
   outpoints.sort((a, b) => a.txid.localeCompare(b.txid) || a.vout - b.vout);
-  const holdingMap = new Map<string, { sats: number; outpoints: number; boundary: OriginBoundary }>();
+  const holdingMap = new Map<string, { sats: number; outpoints: number; boundary: OriginBoundary; wallets: Set<string>; owners: Set<string> }>();
   for (const output of outpoints) {
     for (const allocation of output.allocations) {
-      const row = holdingMap.get(allocation.lotId) ?? { sats: 0, outpoints: 0, boundary: "deterministic" as OriginBoundary };
+      const row = holdingMap.get(allocation.lotId) ?? { sats: 0, outpoints: 0, boundary: "deterministic" as OriginBoundary, wallets: new Set(), owners: new Set() };
       row.sats += allocation.sats;
       row.outpoints += 1;
       if (output.boundary === "mixed" || row.boundary === "mixed") row.boundary = "mixed";
       else if (output.boundary === "unknown" || row.boundary === "unknown") row.boundary = "unknown";
+      if (output.walletName) row.wallets.add(output.walletName);
+      if (output.owner?.trim()) row.owners.add(output.owner.trim());
       holdingMap.set(allocation.lotId, row);
     }
   }
@@ -500,6 +546,10 @@ export function calculateCoinOrigins(input: CoinOriginsInput): CoinOriginsLedger
       sats: row.sats,
       outpointCount: row.outpoints,
       boundary: row.boundary,
+      walletName: row.wallets.size === 1 ? [...row.wallets][0] : null,
+      owner: row.owners.size === 1 ? [...row.owners][0] : null,
+      ownerMixed: row.owners.size > 1,
+      costProvenance: id === UNKNOWN_ORIGIN_ID ? "unknown" : lot?.costProvenance ?? "unknown",
     };
   });
   const currentSats = outpoints.reduce((sum, row) => sum + row.amountSats, 0);
@@ -544,9 +594,28 @@ export function calculateCoinOrigins(input: CoinOriginsInput): CoinOriginsLedger
   };
 }
 
-export function filterCoinOriginsByWallet(ledger: CoinOriginsLedger, walletName?: string): CoinOriginsLedger {
-  if (!walletName) return ledger;
-  const keep = new Set(ledger.outpoints.filter((o) => o.walletName === walletName).map((o) => outpointKey(o.txid, o.vout)));
+export interface CoinOriginsScope {
+  walletName?: string;
+  /** Empty string selects records with no assigned owner. */
+  owner?: string;
+}
+
+export interface CoinOriginsPageOptions extends CoinOriginsScope {
+  holdingsOffset?: number;
+  outpointsOffset?: number;
+  allocationsOffset?: number;
+  hopsOffset?: number;
+  limit?: number;
+  outpoint?: string;
+}
+
+export function filterCoinOrigins(ledger: CoinOriginsLedger, scope: CoinOriginsScope = {}): CoinOriginsLedger {
+  if (!scope.walletName && scope.owner === undefined) return ledger;
+  const owner = scope.owner?.trim() ?? undefined;
+  const keep = new Set(ledger.outpoints.filter((o) =>
+    (!scope.walletName || o.walletName === scope.walletName) &&
+    (owner === undefined || (owner === "" ? !o.owner?.trim() : o.owner?.trim() === owner)),
+  ).map((o) => outpointKey(o.txid, o.vout)));
   const outpoints = ledger.outpoints.filter((o) => keep.has(outpointKey(o.txid, o.vout)));
   const scopedLotIds = new Set(
     outpoints.flatMap((output) => output.allocations.map((allocation) => allocation.lotId))
@@ -599,4 +668,68 @@ export function filterCoinOriginsByWallet(ledger: CoinOriginsLedger, walletName?
         outpoints.every((o) => o.amountSats === o.allocations.reduce((s, a) => s + a.sats, 0)),
     },
   };
+}
+
+/** Backward-compatible wallet-only facade for existing callers. */
+export function filterCoinOriginsByWallet(ledger: CoinOriginsLedger, walletName?: string): CoinOriginsLedger {
+  return filterCoinOrigins(ledger, { walletName });
+}
+
+/** Build the same bounded renderer payload used by the native worker. */
+export function pageCoinOriginsLedger(
+  source: CoinOriginsLedger,
+  checkpointKey: string,
+  opts: CoinOriginsPageOptions = {},
+): CoinOriginsPage {
+  const ledger = filterCoinOrigins(source, opts);
+  const limit = Math.min(250, Math.max(1, Math.trunc(opts.limit ?? 100)));
+  const holdingsOffset = Math.max(0, Math.trunc(opts.holdingsOffset ?? 0));
+  const outpointsOffset = Math.max(0, Math.trunc(opts.outpointsOffset ?? 0));
+  const allocationsOffset = Math.max(0, Math.trunc(opts.allocationsOffset ?? 0));
+  const hopsOffset = Math.max(0, Math.trunc(opts.hopsOffset ?? 0));
+  const detailOutpoint = opts.outpoint
+    ? ledger.outpoints.find((row) => `${row.txid}:${row.vout}` === opts.outpoint)
+    : undefined;
+  const detailAllocations = detailOutpoint?.allocations.slice(allocationsOffset, allocationsOffset + limit);
+  const detailHopTxids = detailOutpoint?.hopTxids.slice(hopsOffset, hopsOffset + limit);
+  const outpoints = detailOutpoint
+    ? [{ ...detailOutpoint, allocations: detailAllocations!, hopTxids: detailHopTxids! }]
+    : ledger.outpoints
+      .slice(outpointsOffset, outpointsOffset + limit)
+      .map((row) => ({ ...row, allocations: [], hopTxids: [] }));
+  const detailLotIds = detailOutpoint
+    ? new Set(detailAllocations!.map((allocation) => allocation.lotId))
+    : undefined;
+  const holdings = detailLotIds
+    ? ledger.holdings.filter((holding) => detailLotIds.has(holding.lotId))
+    : ledger.holdings.slice(holdingsOffset, holdingsOffset + limit);
+  const result: CoinOriginsPage = {
+    version: 1,
+    fingerprint: checkpointKey,
+    checkpointKey,
+    holdings,
+    outpoints,
+    summary: ledger.summary,
+    holdingsOffset,
+    outpointsOffset,
+    holdingsTotal: ledger.holdings.length,
+    outpointsTotal: ledger.outpoints.length,
+    lotsTotal: ledger.lots.length,
+    holdingsHasMore: holdingsOffset + holdings.length < ledger.holdings.length,
+    outpointsHasMore: outpointsOffset + outpoints.length < ledger.outpoints.length,
+  };
+  if (detailOutpoint) {
+    const hopIds = new Set(detailHopTxids);
+    result.detail = {
+      lots: ledger.lots.filter((lot) => detailLotIds!.has(lot.lotId)),
+      hops: ledger.hops.filter((hop) => hopIds.has(hop.txid)),
+      allocationsOffset,
+      allocationsTotal: detailOutpoint.allocations.length,
+      allocationsHasMore: allocationsOffset + detailAllocations!.length < detailOutpoint.allocations.length,
+      hopsOffset,
+      hopsTotal: detailOutpoint.hopTxids.length,
+      hopsHasMore: hopsOffset + detailHopTxids!.length < detailOutpoint.hopTxids.length,
+    };
+  }
+  return result;
 }

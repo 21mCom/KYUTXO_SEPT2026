@@ -156,3 +156,4 @@
 - [Normalized model restore identity](normalized-model-restore-identity.md) — portable natural keys never include surrogate IDs; old-backup merges project missing normalized rows without overwriting live choices.
 - [GitHub Actions dispatch input safety](github-actions-dispatch-input-safety.md) — choice inputs constrain the UI, not API callers; env-pass and allowlist before shell use.
 - [Runtime network policy writes](runtime-network-policy-writes.md) — serialize policy-related settings writes centrally; optimistic runtime updates merge into current memory, never a render snapshot.
+- [CoinJoin recipe boundaries](coinjoin-recipe-boundaries.md) — equal outputs alone never prove CoinJoin; require a useful anonymity set plus controlled and unresolved inputs before stopping attribution.

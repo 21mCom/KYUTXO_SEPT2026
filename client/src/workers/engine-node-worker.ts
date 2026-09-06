@@ -42,6 +42,7 @@ import {
   insertRecords,
   insertTransactions,
   insertParticipants,
+  insertTransactionMetadata,
   upsertSeedProgress,
   getAllSeedMeta,
   markSeedCompleteIfDone,
@@ -56,6 +57,7 @@ import {
   getRecordsFingerprint,
   getTransactionsFingerprint,
   getParticipantsFingerprint,
+  getTransactionMetadataFingerprint,
   getAddressAggregates,
   getOwnedUtxos,
   countOwnedUtxos,
@@ -79,6 +81,7 @@ import {
   type RecordRow,
   type TransactionRow,
   type ParticipantRow,
+  type TransactionMetadataRow,
   type RecordPageOptions,
   type RecordPageByUpdatedAtOptions,
   type RecordQueryOptions,
@@ -174,6 +177,7 @@ const copied: Record<MirrorTable, number> = {
   records: 0,
   blockchainTransactions: 0,
   transactionParticipants: 0,
+  transactionMetadata: 0,
 };
 
 function requireDb(): BetterSqlite3EngineDb {
@@ -187,6 +191,7 @@ function counts(): Record<MirrorTable, number> {
     records: countTable(d, 'records'),
     blockchainTransactions: countTable(d, 'blockchainTransactions'),
     transactionParticipants: countTable(d, 'transactionParticipants'),
+    transactionMetadata: countTable(d, 'transactionMetadata'),
   };
 }
 
@@ -235,6 +240,7 @@ function handleSeedBegin(): EngineSnapshot {
   copied.records = 0;
   copied.blockchainTransactions = 0;
   copied.transactionParticipants = 0;
+  copied.transactionMetadata = 0;
   return snapshot();
 }
 
@@ -249,6 +255,9 @@ function insertBatch(table: MirrorTable, rows: unknown[]): void {
       break;
     case 'transactionParticipants':
       insertParticipants(d, rows as ParticipantRow[]);
+      break;
+    case 'transactionMetadata':
+      insertTransactionMetadata(d, rows as TransactionMetadataRow[]);
       break;
     default: {
       const _exhaustive: never = table;
@@ -452,6 +461,7 @@ async function handleGenerateSynthetic(
     markSeedCompleteIfDone(d, 'records', result.records);
     markSeedCompleteIfDone(d, 'blockchainTransactions', result.transactions);
     markSeedCompleteIfDone(d, 'transactionParticipants', result.participants);
+    markSeedCompleteIfDone(d, 'transactionMetadata', 0);
     if (integrity !== 'ok') {
       state = 'ERROR';
       errorMessage = `integrity_check failed: ${integrity}`;
@@ -495,6 +505,8 @@ function handleQuery(name: string, args: unknown): unknown {
       return getTransactionsFingerprint(d);
     case 'getParticipantsFingerprint':
       return getParticipantsFingerprint(d);
+    case 'getTransactionMetadataFingerprint':
+      return getTransactionMetadataFingerprint(d);
     case 'getAddressAggregates':
       return Array.from(getAddressAggregates(d, args as string[]).values());
     case 'getOwnedUtxos':

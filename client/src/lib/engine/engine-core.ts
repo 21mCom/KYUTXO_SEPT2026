@@ -23,7 +23,7 @@
  */
 import {
   calculateCoinOrigins,
-  filterCoinOriginsByWallet,
+  filterCoinOrigins,
   type CoinOriginAddress,
   type CoinOriginParticipant,
   type CoinOriginTransaction,
@@ -61,12 +61,14 @@ export interface EngineDb {
 export type MirrorTable =
   | 'records'
   | 'blockchainTransactions'
-  | 'transactionParticipants';
+  | 'transactionParticipants'
+  | 'transactionMetadata';
 
 export const MIRROR_TABLES: MirrorTable[] = [
   'records',
   'blockchainTransactions',
   'transactionParticipants',
+  'transactionMetadata',
 ];
 
 // The importance tiers that represent user-curated ("owned") addresses. Kept in
@@ -165,6 +167,14 @@ export interface ParticipantRow {
   scriptType: string | null;
 }
 
+export interface TransactionMetadataRow {
+  id: number;
+  txid: string;
+  acquisitionMethod: string | null;
+  costBasisUsd: number | null;
+  updatedAt: number | null;
+}
+
 // ---------------------------------------------------------------------------
 // Low-level helpers
 // ---------------------------------------------------------------------------
@@ -255,6 +265,14 @@ export function createTablesOnly(db: EngineDb): void {
       scriptType TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS transactionMetadata (
+      id                INTEGER PRIMARY KEY,
+      txid              TEXT NOT NULL,
+      acquisitionMethod TEXT,
+      costBasisUsd      REAL,
+      updatedAt         INTEGER
+    );
+
     CREATE TABLE IF NOT EXISTS seedMeta (
       tableName    TEXT PRIMARY KEY,
       highWaterId  INTEGER NOT NULL DEFAULT 0,
@@ -306,6 +324,7 @@ export const INDEX_BUILD_STEPS: readonly IndexBuildStep[] = [
   // An EXPRESSION index on the exact ORDER BY key lets the page scan newest-first
   // and seek past prior pages by (blockTime,id) instead of re-sorting every page.
   { label: 'transactions by time + id (keyset)', sql: 'CREATE INDEX IF NOT EXISTS idx_bt_time_id ON blockchainTransactions(COALESCE(blockTime,0), id);' },
+  { label: 'transaction metadata by txid', sql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_tm_txid ON transactionMetadata(txid);' },
   { label: 'participants by txid + role', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_txid_role ON transactionParticipants(txid, role);' },
   { label: 'participants by txid', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_txid ON transactionParticipants(txid);' },
   { label: 'participants by address', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_address ON transactionParticipants(address);' },
@@ -374,7 +393,7 @@ export function createSchema(db: EngineDb): void {
 
 /**
  * Drop the mirror DATA tables (records / blockchainTransactions /
- * transactionParticipants). Used by the full-rebuild seed path on (re)start so
+ * transactionParticipants / transactionMetadata). Used by the full-rebuild seed path on (re)start so
  * an interrupted seed never leaves half-mirrored rows — we always start clean.
  * seedMeta is preserved (callers reset it explicitly via `resetSeedMeta`).
  */
@@ -383,6 +402,7 @@ export function dropMirrorTables(db: EngineDb): void {
     DROP TABLE IF EXISTS records;
     DROP TABLE IF EXISTS blockchainTransactions;
     DROP TABLE IF EXISTS transactionParticipants;
+    DROP TABLE IF EXISTS transactionMetadata;
     DROP TABLE IF EXISTS ownedUtxos;
     DROP TABLE IF EXISTS heuristicOwnedUtxos;
   `);
@@ -444,7 +464,7 @@ function setEngineMeta(db: EngineDb, key: string, value: string): void {
 //       prevTxid/prevVout spend that exact output; FIFO amount-matching only for
 //       outpoint-less inputs). The materialized heuristicOwnedUtxos table built
 //       by a pre-v5 build would keep serving inflated totals, so force a reseed.
-export const ENGINE_SCHEMA_VERSION = 5;
+export const ENGINE_SCHEMA_VERSION = 6;
 const SCHEMA_VERSION_KEY = 'schemaVersion';
 
 /** Schema version stamped by the last successful finalize; 0 if never written. */
@@ -668,14 +688,29 @@ export interface CoinOriginsFingerprint {
   records: RecordsFingerprint;
   transactions: TransactionsFingerprint;
   participants: ParticipantsFingerprint;
+  metadata: { count: number; maxId: number; maxUpdatedAt: number };
 }
 
-/** The same three-table freshness inputs used by the allMirrors read gate. */
+export interface TransactionMetadataFingerprint {
+  count: number;
+  maxId: number;
+  maxUpdatedAt: number;
+}
+
+export function getTransactionMetadataFingerprint(db: EngineDb): TransactionMetadataFingerprint {
+  const row = selectRows<TransactionMetadataFingerprint>(
+    db, 'SELECT COUNT(*) AS count, COALESCE(MAX(id),0) AS maxId, COALESCE(MAX(updatedAt),0) AS maxUpdatedAt FROM transactionMetadata',
+  )[0];
+  return { count: Number(row?.count ?? 0), maxId: Number(row?.maxId ?? 0), maxUpdatedAt: Number(row?.maxUpdatedAt ?? 0) };
+}
+
+/** The same source tables and transaction metadata used by Coin Origins. */
 export function getCoinOriginsFingerprint(db: EngineDb): CoinOriginsFingerprint {
   return {
     records: getRecordsFingerprint(db),
     transactions: getTransactionsFingerprint(db),
     participants: getParticipantsFingerprint(db),
+    metadata: getTransactionMetadataFingerprint(db),
   };
 }
 
@@ -769,6 +804,15 @@ export function insertParticipants(db: EngineDb, rows: ParticipantRow[]): void {
       r.recordId ?? null,
       r.scriptType ?? null,
     ]),
+  );
+}
+
+export function insertTransactionMetadata(db: EngineDb, rows: TransactionMetadataRow[]): void {
+  if (rows.length === 0) return;
+  db.insertMany(
+    `INSERT INTO transactionMetadata (id, txid, acquisitionMethod, costBasisUsd, updatedAt)
+     VALUES (?,?,?,?,?)`,
+    rows.map((r) => [r.id, r.txid, r.acquisitionMethod ?? null, r.costBasisUsd ?? null, r.updatedAt ?? null]),
   );
 }
 
@@ -1641,10 +1685,10 @@ export function getVaultSummaries(db: EngineDb, opts: { search?: string } = {}):
  */
 export function getCoinOrigins(
   db: EngineDb,
-  opts: { walletName?: string } = {},
+  opts: { walletName?: string; owner?: string } = {},
 ): CoinOriginsLedger {
   const ledger = getCoinOriginsCheckpoint(db).ledger;
-  return filterCoinOriginsByWallet(ledger, opts.walletName);
+  return filterCoinOrigins(ledger, opts);
 }
 
 interface CoinOriginsCheckpoint {
@@ -1680,7 +1724,10 @@ function getCoinOriginsCheckpoint(db: EngineDb): CoinOriginsCheckpoint {
   );
   const transactions = selectRows<CoinOriginTransaction>(
     db,
-    'SELECT txid, blockHeight, blockTime, fee FROM blockchainTransactions',
+    `SELECT t.txid, t.blockHeight, t.blockTime, t.fee,
+            m.acquisitionMethod, m.costBasisUsd
+       FROM blockchainTransactions t
+       LEFT JOIN transactionMetadata m ON m.txid = t.txid`,
   );
   const participants = selectRows<CoinOriginParticipant>(
     db,
@@ -1702,6 +1749,8 @@ function getCoinOriginsCheckpoint(db: EngineDb): CoinOriginsCheckpoint {
 
 export interface CoinOriginsPageOptions {
   walletName?: string;
+  /** Empty string selects unassigned current outpoints. */
+  owner?: string;
   holdingsOffset?: number;
   outpointsOffset?: number;
   allocationsOffset?: number;
@@ -1729,7 +1778,7 @@ export function getCoinOriginsPage(db: EngineDb, opts: CoinOriginsPageOptions = 
   if (opts.expectedCheckpointKey && opts.expectedCheckpointKey !== checkpoint.key) {
     throw new Error('Coin Origins checkpoint changed; reload the active window');
   }
-  const ledger = filterCoinOriginsByWallet(checkpoint.ledger, opts.walletName);
+  const ledger = filterCoinOrigins(checkpoint.ledger, { walletName: opts.walletName, owner: opts.owner });
   const limit = pageLimit(opts.limit);
   const holdingsOffset = Math.max(0, Math.trunc(opts.holdingsOffset ?? 0));
   const outpointsOffset = Math.max(0, Math.trunc(opts.outpointsOffset ?? 0));

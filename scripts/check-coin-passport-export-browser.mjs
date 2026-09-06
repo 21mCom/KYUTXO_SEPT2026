@@ -22,7 +22,10 @@
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { unlockIfNeeded } from './browser-check-utils.mjs';
+import {
+  completeFreshVaultOnboardingIfPresent,
+  unlockIfNeeded,
+} from './browser-check-utils.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -209,6 +212,10 @@ async function main() {
 
     await page.goto(UTXOS_URL, { waitUntil: 'load', timeout: 60_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
+    if (await completeFreshVaultOnboardingIfPresent(page)) {
+      await page.goto(UTXOS_URL, { waitUntil: 'load', timeout: 60_000 });
+      await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
+    }
 
     const seeded = await page.evaluate(
       async ({ knownAddress, unknownAddress, mixedAddress, externalAddress, knownTx, unknownTx, mixOriginTx, mixTx, now, day }) => {

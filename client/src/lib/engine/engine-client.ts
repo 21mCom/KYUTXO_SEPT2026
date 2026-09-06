@@ -26,10 +26,12 @@ import type {
   RecordsFingerprint,
   TransactionsFingerprint,
   ParticipantsFingerprint,
+  TransactionMetadataFingerprint,
   AddressAggregate,
   OwnedUtxo,
   OutpointCoverage,
   ParticipantRow,
+  TransactionMetadataRow,
   TransactionQueryOptions,
   TransactionPageOptions,
   TransactionPageRow,
@@ -66,10 +68,12 @@ export type {
   RecordsFingerprint,
   TransactionsFingerprint,
   ParticipantsFingerprint,
+  TransactionMetadataFingerprint,
   AddressAggregate,
   OwnedUtxo,
   OutpointCoverage,
   ParticipantRow,
+  TransactionMetadataRow,
   TransactionQueryOptions,
   TransactionPageOptions,
   TransactionPageRow,
@@ -145,7 +149,7 @@ export const ENGINE_UNAVAILABLE_MESSAGE =
 // Source IndexedDB (Dexie) database + the stores we mirror.
 const IDB_NAME = 'KYUTXODatabase';
 let seedChunkSize = 10000;
-const MIRROR_TABLES: MirrorTable[] = ['records', 'blockchainTransactions', 'transactionParticipants'];
+const MIRROR_TABLES: MirrorTable[] = ['records', 'blockchainTransactions', 'transactionParticipants', 'transactionMetadata'];
 
 /**
  * Test-only seam: override the keyset batch size so unit tests can exercise the
@@ -436,10 +440,21 @@ export function mapParticipant(o: Record<string, unknown>): ParticipantRow {
   };
 }
 
+export function mapTransactionMetadata(o: Record<string, unknown>): TransactionMetadataRow {
+  return {
+    id: Number(o.id),
+    txid: toText(o.txid) ?? '',
+    acquisitionMethod: toText(o.acquisitionMethod),
+    costBasisUsd: typeof o.costBasisUsd === 'number' && Number.isFinite(o.costBasisUsd) ? o.costBasisUsd : null,
+    updatedAt: toInt(o.updatedAt),
+  };
+}
+
 const TABLE_MAPPERS: Record<MirrorTable, (o: Record<string, unknown>) => unknown> = {
   records: mapRecord,
   blockchainTransactions: mapTransaction,
   transactionParticipants: mapParticipant,
+  transactionMetadata: mapTransactionMetadata,
 };
 
 // ---------------------------------------------------------------------------
@@ -586,6 +601,7 @@ async function seedAllInner(onProgress?: (p: SeedProgress) => void): Promise<See
     records: 0,
     blockchainTransactions: 0,
     transactionParticipants: 0,
+    transactionMetadata: 0,
   };
   const results: SeedResult[] = [];
   let cancelled = false;
@@ -728,6 +744,12 @@ export async function engineGetParticipantsFingerprint(): Promise<ParticipantsFi
   return unwrap<ParticipantsFingerprint>(getEngine().query('getParticipantsFingerprint', null));
 }
 
+/** Freshness fingerprint for acquisition/cost metadata used by Coin Origins. */
+export async function engineGetTransactionMetadataFingerprint(): Promise<TransactionMetadataFingerprint> {
+  await ensureEngineInit();
+  return unwrap<TransactionMetadataFingerprint>(getEngine().query('getTransactionMetadataFingerprint', null));
+}
+
 export async function engineGetAddressAggregates(addresses: string[]): Promise<AddressAggregate[]> {
   await ensureEngineInit();
   return unwrap<AddressAggregate[]>(getEngine().query('getAddressAggregates', addresses));
@@ -840,7 +862,7 @@ export async function engineGetVaultSummaries(
 
 /** Compositional origin ledger calculated in the native worker. */
 export async function engineGetCoinOrigins(
-  opts: { walletName?: string } = {},
+  opts: { walletName?: string; owner?: string } = {},
 ): Promise<CoinOriginsLedger> {
   await ensureEngineInit();
   return unwrap<CoinOriginsLedger>(getEngine().query('getCoinOrigins', opts));

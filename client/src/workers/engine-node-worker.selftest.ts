@@ -133,7 +133,7 @@ export async function runSelfTest(workerPath = process.argv[1]): Promise<void> {
 
     const finish = await send<EngineSnapshot>({
       type: 'seedFinish',
-      sourceCounts: { records: 3, blockchainTransactions: 2, transactionParticipants: 4 },
+      sourceCounts: { records: 3, blockchainTransactions: 2, transactionParticipants: 4, transactionMetadata: 0 },
     });
     check('seedFinish → READY', finish.state === 'READY', finish.state);
     check('seedFinish reports ready', finish.ready === true);
