@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   SUPPORTED_PACKAGED_TARGETS,
@@ -313,6 +314,43 @@ test('removes the AppImage extraction directory after an extraction timeout', ()
     error.killed = true;
     throw error;
   }), /linux artifact KYUTXO-1\.2\.3-x64\.AppImage during AppImage desktop metadata extraction/);
+  assert.ok(extractDir);
+  assert.equal(fs.existsSync(extractDir), false);
+}));
+
+test('real metadata command timeout terminates its child and removes the extraction directory', () => withTempDir((tempDir) => {
+  const artifactPath = path.join(tempDir, 'KYUTXO-1.2.3-x64.AppImage');
+  const childPath = path.join(tempDir, 'hanging-metadata-child.cjs');
+  const pidPath = path.join(tempDir, 'metadata-child.pid');
+  fs.writeFileSync(childPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+setInterval(() => {}, 1_000);
+`);
+  fs.chmodSync(childPath, 0o755);
+  fs.symlinkSync(childPath, artifactPath);
+
+  let extractDir;
+  const startedAt = Date.now();
+  assert.throws(
+    () => inspectInternalVersion('linux', artifactPath, (command, args, options) => {
+      extractDir = options.cwd;
+      return execFileSync(command, args, options);
+    }, 250),
+    (error) => {
+      assert.match(
+        error.message,
+        /linux artifact KYUTXO-1\.2\.3-x64\.AppImage during AppImage desktop metadata extraction after 250ms/,
+      );
+      assert.doesNotMatch(error.message, new RegExp(tempDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      return true;
+    },
+  );
+
+  assert.ok(Date.now() - startedAt < 3_000, 'metadata timeout should return promptly');
+  assert.ok(fs.existsSync(pidPath), 'hanging child should start before the timeout');
+  const childPid = Number(fs.readFileSync(pidPath, 'utf8'));
+  assert.throws(() => process.kill(childPid, 0), { code: 'ESRCH' });
   assert.ok(extractDir);
   assert.equal(fs.existsSync(extractDir), false);
 }));
