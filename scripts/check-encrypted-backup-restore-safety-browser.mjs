@@ -105,6 +105,16 @@ async function buildLegacyBackup(data, password) {
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
+async function buildMalformedPlaintextBackup() {
+  const zip = new JSZip();
+  zip.file('backup.json', JSON.stringify({
+    encrypted: false,
+    exportDate: new Date('2024-01-01T00:00:00.000Z').toISOString(),
+    data: 'not-a-vault-payload',
+  }));
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
 async function corruptLegacyCiphertext(backupBytes) {
   const zip = await JSZip.loadAsync(backupBytes);
   const backupFile = zip.file('backup.json');
@@ -307,6 +317,31 @@ async function main() {
         curationState: 'new',
       }]);
     }, TX_BACKED_UP);
+
+    const beforeMalformed = await snapshot(page);
+    await page.getByTestId('button-open-restore').click();
+    await page.getByTestId('input-restore-file').setInputFiles({
+      name: 'malformed-legacy-backup.zip',
+      mimeType: 'application/zip',
+      buffer: await buildMalformedPlaintextBackup(),
+    });
+    await page.getByTestId('button-continue-restore').click();
+    await page.getByText('Malformed backup data').first().waitFor({
+      state: 'visible',
+      timeout: 20_000,
+    });
+    const afterMalformed = await snapshot(page);
+    const malformedConfirmVisible = await page.getByTestId('button-confirm-restore')
+      .isVisible()
+      .catch(() => false);
+    record(
+      'malformed-plaintext-non-destructive',
+      !malformedConfirmVisible &&
+        JSON.stringify(afterMalformed) === JSON.stringify(beforeMalformed),
+      `confirm=${malformedConfirmVisible} vaultUnchanged=${
+        JSON.stringify(afterMalformed) === JSON.stringify(beforeMalformed)
+      }`,
+    );
 
     const v3B64 = await page.evaluate(async (password) => {
       const { exportBackup } = await import('/src/lib/backup/export.ts');

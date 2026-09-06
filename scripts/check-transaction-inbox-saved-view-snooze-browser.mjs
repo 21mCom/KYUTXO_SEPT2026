@@ -20,7 +20,6 @@
 
 import { chromium } from 'playwright-core';
 import { execSync, spawn } from 'node:child_process';
-import JSZip from 'jszip';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 import {
   completeFreshVaultOnboardingIfPresent,
@@ -47,16 +46,6 @@ const PRESET_SATS = 50_000_000; // 0.5 BTC
 const CUSTOM_SATS = 75_000_000; // 0.75 BTC
 const SNOOZE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const CUSTOM_DATE = '2099-12-31';
-
-async function makeMalformedLegacyBackup() {
-  const zip = new JSZip();
-  zip.file('backup.json', JSON.stringify({
-    encrypted: false,
-    exportDate: new Date('2024-01-01T00:00:00.000Z').toISOString(),
-    data: 'not-a-vault-payload',
-  }));
-  return zip.generateAsync({ type: 'nodebuffer' });
-}
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -527,64 +516,6 @@ async function main() {
         reloadedAmountMax === '0.8',
       `selected=${reloadedSavedId} tab=${reloadedTab} search=${JSON.stringify(reloadedSearch)} date=${JSON.stringify(reloadedDateButton)} amount=${reloadedAmountMin}-${reloadedAmountMax}`,
     );
-
-    // A malformed plaintext legacy archive must be rejected in Settings before
-    // the destructive confirmation stage. Snapshot all three protected
-    // surfaces, drive the real replace-restore UI, then prove they are intact.
-    const beforeMalformedRestore = await page.evaluate(async () => {
-      const recordCrud = await import('/src/lib/data/record-crud.ts');
-      const txCrud = await import('/src/lib/data/transaction-crud.ts');
-      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
-      const settings = await settingsCrud.getSettings('default');
-      return {
-        records: await recordCrud.countRecords(),
-        transactions: await txCrud.countTransactions(),
-        savedInboxViews: settings?.savedInboxViews,
-      };
-    });
-    await page.goto(`${BASE_URL}settings`, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
-    await clickEl(page, 'button-open-restore');
-    await page.getByTestId('input-restore-file').setInputFiles({
-      name: 'malformed-legacy-backup.zip',
-      mimeType: 'application/zip',
-      buffer: await makeMalformedLegacyBackup(),
-    });
-    await clickEl(page, 'button-continue-restore');
-    await page.getByText('Malformed backup data').first().waitFor({
-      state: 'visible',
-      timeout: 15_000,
-    });
-    const malformedRestoreState = await page.evaluate(async () => {
-      const recordCrud = await import('/src/lib/data/record-crud.ts');
-      const txCrud = await import('/src/lib/data/transaction-crud.ts');
-      const settingsCrud = await import('/src/lib/data/settings-crud.ts');
-      const settings = await settingsCrud.getSettings('default');
-      return {
-        records: await recordCrud.countRecords(),
-        transactions: await txCrud.countTransactions(),
-        savedInboxViews: settings?.savedInboxViews,
-        confirmVisible: !!document.querySelector('[data-testid="button-confirm-restore"]'),
-        configureVisible: !!document.querySelector('[data-testid="radio-replace"]'),
-      };
-    });
-    record(
-      'malformed-plaintext-restore-preserves-live-vault',
-      malformedRestoreState.records === beforeMalformedRestore.records &&
-        malformedRestoreState.transactions === beforeMalformedRestore.transactions &&
-        JSON.stringify(malformedRestoreState.savedInboxViews) ===
-          JSON.stringify(beforeMalformedRestore.savedInboxViews) &&
-        malformedRestoreState.configureVisible &&
-        !malformedRestoreState.confirmVisible,
-      `records=${malformedRestoreState.records}/${beforeMalformedRestore.records} transactions=${malformedRestoreState.transactions}/${beforeMalformedRestore.transactions} settingsUnchanged=${JSON.stringify(malformedRestoreState.savedInboxViews) === JSON.stringify(beforeMalformedRestore.savedInboxViews)} configure=${malformedRestoreState.configureVisible} confirm=${malformedRestoreState.confirmVisible}`,
-    );
-    await page.goto(PAGE_URL, { waitUntil: 'load', timeout: 60_000 });
-    await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
-    await page.getByTestId('select-inbox-saved-view').selectOption({ label: VIEW_NAME });
-    await page.getByTestId(`button-inbox-snooze-${TX_PRESET}`).waitFor({
-      state: 'visible',
-      timeout: 30_000,
-    });
 
     const beforeDelete = await page.evaluate(async ({ txPreset, txCustom }) => {
       const txCrud = await import('/src/lib/data/transaction-crud.ts');
