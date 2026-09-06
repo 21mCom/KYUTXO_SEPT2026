@@ -117,6 +117,52 @@ test('accepts an isolated inbox check and complete validation wiring', () => {
   assert.match(result.stdout, /OK/);
 });
 
+test('rejects required focused proof fragments that exist only in comments', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: focused.replace(fragment, `// ${fragment}`),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('rejects required focused proof fragments in a statically unreachable branch', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: focused.replace(fragment, `if (false) {\n  ${fragment}\n}`),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('rejects required focused proof fragments in an unused helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: focused.replace(
+      fragment,
+      `function deadRestoreProof() {\n  ${fragment}\n}`,
+    ),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('rejects required focused proof fragments in an unused arrow helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: focused.replace(
+      fragment,
+      `const deadRestoreProof = () => {\n  ${fragment}\n};`,
+    ),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
 test('rejects backup imports and restore selectors in the inbox check', () => {
   const result = runFixture({
     inbox: [

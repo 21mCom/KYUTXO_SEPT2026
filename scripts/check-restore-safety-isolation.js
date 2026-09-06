@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const root = process.env.CHECK_RESTORE_SAFETY_ROOT
@@ -70,9 +71,115 @@ const focusedRequirements = [
   {
     description: 'failed-step enforcement',
     pattern:
-      /const failed = steps\.filter\(\(step\) => !step\.passed\);[\s\S]*?if \(failed\.length\)\s*\{[\s\S]*?throw new Error\(/,
+      /failed = steps\.filter\(\(step\) => !step\.passed\)[\s\S]*?failed\.length[\s\S]*?throw new Error\(/,
   },
 ];
+
+function reachedFocusedSyntax(source) {
+  const sourceFile = ts.createSourceFile(
+    focusedRelative,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  if (sourceFile.parseDiagnostics.length > 0) {
+    for (const diagnostic of sourceFile.parseDiagnostics) {
+      failures.push(
+        `${focusedRelative} could not be parsed: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`,
+      );
+    }
+    return '';
+  }
+
+  const localFunctions = new Map();
+  function collectLocalFunctions(node) {
+    if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+      localFunctions.set(node.name.text, node);
+    } else if (ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer &&
+        (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+      localFunctions.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, collectLocalFunctions);
+  }
+  collectLocalFunctions(sourceFile);
+
+  const reached = [];
+  const visitedFunctions = new Set();
+
+  function visitExpression(node) {
+    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return;
+    reached.push(node.getText(sourceFile));
+    if (ts.isCallExpression(node)) {
+      let callee = node.expression;
+      while (ts.isPropertyAccessExpression(callee)) callee = callee.expression;
+      if (ts.isIdentifier(callee)) {
+        const declaration = localFunctions.get(callee.text);
+        if (declaration && !visitedFunctions.has(declaration)) {
+          visitedFunctions.add(declaration);
+          if (ts.isBlock(declaration.body)) {
+            visitStatements(declaration.body.statements);
+          } else {
+            visitExpression(declaration.body);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visitExpression);
+  }
+
+  function visitStatement(statement) {
+    if (ts.isFunctionDeclaration(statement)) return true;
+    if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) {
+      reached.push(statement.getText(sourceFile));
+      if (statement.expression) visitExpression(statement.expression);
+      return false;
+    }
+    if (ts.isIfStatement(statement)) {
+      reached.push(statement.expression.getText(sourceFile));
+      visitExpression(statement.expression);
+      if (statement.expression.kind === ts.SyntaxKind.FalseKeyword) {
+        if (statement.elseStatement) visitStatement(statement.elseStatement);
+      } else if (statement.expression.kind === ts.SyntaxKind.TrueKeyword) {
+        visitStatement(statement.thenStatement);
+      } else {
+        visitStatement(statement.thenStatement);
+        if (statement.elseStatement) visitStatement(statement.elseStatement);
+      }
+      return true;
+    }
+    if (ts.isBlock(statement)) {
+      visitStatements(statement.statements);
+      return true;
+    }
+    if (ts.isVariableStatement(statement)) {
+      const executableDeclarations = statement.declarationList.declarations.filter(
+        (declaration) => !declaration.initializer ||
+          (!ts.isArrowFunction(declaration.initializer) &&
+            !ts.isFunctionExpression(declaration.initializer)),
+      );
+      for (const declaration of executableDeclarations) {
+        reached.push(declaration.getText(sourceFile));
+        if (declaration.initializer) visitExpression(declaration.initializer);
+      }
+      return true;
+    }
+    reached.push(statement.getText(sourceFile));
+    ts.forEachChild(statement, visitExpression);
+    return true;
+  }
+
+  function visitStatements(statements) {
+    for (const statement of statements) {
+      if (!visitStatement(statement)) break;
+    }
+  }
+
+  visitStatements(sourceFile.statements);
+  return reached.join('\n');
+}
 
 function readRequired(relative) {
   const absolute = path.join(root, relative);
@@ -148,9 +255,10 @@ function inboxJourneyFiles(entryRelative) {
 const inboxFiles = inboxJourneyFiles(inboxRelative);
 const focusedSource = readRequired(focusedRelative);
 const dotReplit = readRequired(dotReplitRelative);
+const focusedExecutableSyntax = reachedFocusedSyntax(focusedSource);
 
 for (const requirement of focusedRequirements) {
-  if (!requirement.pattern.test(focusedSource)) {
+  if (!requirement.pattern.test(focusedExecutableSyntax)) {
     failures.push(
       `${focusedRelative} is missing its required ${requirement.description}.`,
     );
