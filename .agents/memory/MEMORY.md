@@ -157,3 +157,4 @@
 - [GitHub Actions dispatch input safety](github-actions-dispatch-input-safety.md) — choice inputs constrain the UI, not API callers; env-pass and allowlist before shell use.
 - [Runtime network policy writes](runtime-network-policy-writes.md) — serialize policy-related settings writes centrally; optimistic runtime updates merge into current memory, never a render snapshot.
 - [CoinJoin recipe boundaries](coinjoin-recipe-boundaries.md) — equal outputs alone never prove CoinJoin; require a useful anonymity set plus controlled and unresolved inputs before stopping attribution.
+- [Forgotten-source browser checks](forgotten-source-browser-checks.md) — reopen lands on source onboarding; finish “stay offline” before reviewing retained details; inject Electron only after browser DB opens.
