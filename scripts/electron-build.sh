@@ -82,4 +82,10 @@ KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-vault-migration-browser
 echo "Step 8: Verifying packaged network activity restart persistence..."
 KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-network-privacy-activity-browser.mjs
 
+# RELEASE GATE: launch a copied Windows portable artifact from an isolated
+# profile and prove a forgotten source remains offline after a full restart.
+# This check uses the unpacked app on non-Windows developer machines.
+echo "Step 9: Verifying forgotten source stays offline after packaged restart..."
+KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts/check-packaged-forgotten-network-source-browser.mjs
+
 echo "Build complete! Check the 'release' folder for distributable packages."

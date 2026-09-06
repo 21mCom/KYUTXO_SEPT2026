@@ -280,6 +280,14 @@ jobs:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
         run: node scripts/check-packaged-network-privacy-activity-browser.mjs
 
+      # RELEASE GATE: forgetting a configured source must remain offline across
+      # a restart of the exact Portable.exe asset while preserving the source
+      # details for later re-enable and issuing no provider-test IPC.
+      - name: Verify forgotten source stays offline in Windows portable app
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-forgotten-network-source-browser.mjs
+
       - name: Generate SHA-256 checksums
         run: npm run release:checksums
 

@@ -48,14 +48,38 @@ function buildPackage() {
     if (!fs.existsSync(ASAR)) throw new Error(`${TAG} KYUTXO_PACKAGED_SKIP_BUILD=1 but ${ASAR} is missing`);
     assertPackagedBundleFresh({ root: ROOT, tag: TAG });
     assertPackagedAsarFresh({ root: ROOT, asarPath: ASAR, tag: TAG });
+    if (IS_WINDOWS) findPortableArtifact();
     return;
   }
   run('npm', ['run', 'build']);
   assertPackagedBundleFresh({ root: ROOT, tag: TAG });
   run('node', ['scripts/build-native-engine.mjs']);
-  run('npx', ['electron-builder', '--config', 'electron-builder.json', '--dir',
-    IS_WINDOWS ? '--win' : '--linux', '-c.npmRebuild=false']);
+  run('npx', [
+    'electron-builder',
+    '--config',
+    'electron-builder.json',
+    ...(IS_WINDOWS ? ['--win'] : ['--dir', '--linux', '-c.npmRebuild=false']),
+  ]);
   if (!fs.existsSync(ASAR)) throw new Error(`${TAG} packaging produced no ${ASAR}`);
+  if (IS_WINDOWS) findPortableArtifact();
+}
+
+function findPortableArtifact() {
+  const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+  const expected = path.join(RELEASE_DIR, `KYUTXO-${version}-Portable.exe`);
+  if (fs.existsSync(expected) && fs.statSync(expected).size > 0) {
+    if (fs.statSync(expected).mtimeMs + 1_000 < fs.statSync(ASAR).mtimeMs) {
+      throw new Error(`${TAG} portable artifact predates the validated app.asar: ${expected}`);
+    }
+    return expected;
+  }
+  const candidates = fs.existsSync(RELEASE_DIR)
+    ? fs.readdirSync(RELEASE_DIR).filter((name) => /^KYUTXO-.+-Portable\.exe$/i.test(name))
+    : [];
+  throw new Error(
+    `${TAG} generated portable artifact is missing or empty: ${expected}; ` +
+      `portable candidates found: ${candidates.join(', ') || 'none'}`,
+  );
 }
 
 async function cdpIsUp() {
@@ -109,7 +133,9 @@ async function main() {
   let xvfbBin;
   if (!IS_WINDOWS) ({ electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG }));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-forgotten-source-'));
+  const portableLaunchDir = path.join(home, 'portable-launch');
   const tempDir = path.join(home, 'temp');
+  fs.mkdirSync(portableLaunchDir, { recursive: true });
   fs.mkdirSync(tempDir, { recursive: true });
   const { PORTABLE_EXECUTABLE_DIR: _portable, ...inheritedEnv } = process.env;
   const env = {
@@ -126,13 +152,17 @@ async function main() {
   let xvfb;
   let child;
   let browser;
+  const executable = IS_WINDOWS
+    ? path.join(portableLaunchDir, path.basename(findPortableArtifact()))
+    : electronBin;
+  if (IS_WINDOWS) fs.copyFileSync(findPortableArtifact(), executable);
   const launch = () => {
-    const executable = IS_WINDOWS ? path.join(UNPACKED_DIR, 'KYUTXO.exe') : electronBin;
     const args = IS_WINDOWS
       ? ['--disable-gpu', `--remote-debugging-port=${CDP_PORT}`]
       : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`];
     child = spawn(executable, args, {
-      cwd: home, env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
+      cwd: IS_WINDOWS ? portableLaunchDir : home,
+      env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
       detached: !IS_WINDOWS, stdio: ['ignore', 'pipe', 'pipe'],
     });
     child.stderr.on('data', (data) => process.stdout.write(`${TAG}[app] ${data}`));

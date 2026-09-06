@@ -441,6 +441,34 @@ test('the packaged Coin Passport gate is release-wired after the native worker c
   );
 });
 
+test('the forgotten-source gate launches the copied Windows portable artifact and is release-wired', () => {
+  const script = fs.readFileSync(
+    path.join(SCRIPTS_DIR, 'check-packaged-forgotten-network-source-browser.mjs'),
+    'utf8',
+  );
+  const workflow = fs.readFileSync(
+    path.join(ROOT, '.github', 'workflows', 'build.yml'),
+    'utf8',
+  );
+  const buildScript = fs.readFileSync(path.join(SCRIPTS_DIR, 'electron-build.sh'), 'utf8');
+
+  assert.match(script, /function findPortableArtifact\(\)/);
+  assert.match(script, /KYUTXO-\$\{version\}-Portable\.exe/);
+  assert.match(script, /portable artifact predates the validated app\.asar/);
+  assert.match(script, /fs\.copyFileSync\(findPortableArtifact\(\), executable\)/);
+  assert.match(script, /cwd: IS_WINDOWS \? portableLaunchDir : home/);
+  assert.doesNotMatch(script, /path\.join\(UNPACKED_DIR, 'KYUTXO\.exe'\)/);
+  assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
+  assert.match(
+    workflow,
+    /- name: Verify forgotten source stays offline in Windows portable app\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-forgotten-network-source-browser\.mjs/,
+  );
+  assert.match(
+    buildScript,
+    /KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts\/check-packaged-forgotten-network-source-browser\.mjs/,
+  );
+});
+
 test('the packaged Coin Origins gate is release-wired after the native worker check', () => {
   const script = fs.readFileSync(
     path.join(SCRIPTS_DIR, 'check-packaged-coin-origins-browser.mjs'),
