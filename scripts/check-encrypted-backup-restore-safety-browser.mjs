@@ -5,26 +5,114 @@
 // succeed. Everything runs offline against local IndexedDB.
 
 import { chromium } from 'playwright-core';
-import { execSync, spawn } from 'node:child_process';
+import { execSync, spawn, spawnSync } from 'node:child_process';
 import { webcrypto } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import JSZip from 'jszip';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 import {
   completeFreshVaultOnboardingIfPresent,
   unlockIfNeeded,
 } from './browser-check-utils.mjs';
+import {
+  assertPackagedAsarFresh,
+  assertPackagedBundleFresh,
+  repoRootFromModuleUrl,
+} from './packaged-bundle-freshness.mjs';
+import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 
 await acquireBrowserCheckLock();
 
 const PORT = Number(process.env.KYUTXO_DEV_PORT || 5000);
+const PACKAGED = process.env.KYUTXO_PACKAGED_RESTORE_SAFETY === '1';
+const ROOT = repoRootFromModuleUrl(import.meta.url);
+const ASAR = path.join(ROOT, 'release', 'linux-unpacked', 'resources', 'app.asar');
+const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_RESTORE_CDP_PORT || 9233);
 const BASE_URL = `http://localhost:${PORT}/`;
-const SETTINGS_URL = `${BASE_URL}settings`;
-const SETUP_PASSWORD = 'backup-restore-safety-vault';
+const SETTINGS_URL = PACKAGED ? 'kyutxo-app://bundle/#/settings' : `${BASE_URL}settings`;
+const SETUP_PASSWORD = PACKAGED
+  ? 'PackagedRestoreSafety#2026'
+  : 'backup-restore-safety-vault';
 const V3_PASSWORD = 'backup-restore-safety-v3';
 const LEGACY_PASSWORD = 'backup-restore-safety-legacy';
 const TX_BACKED_UP = '31'.repeat(32);
 const TX_STALE = 'ff'.repeat(32);
 const PBKDF2_ITERATIONS = 100_000;
+const ATTACHMENT_PATH = 'restore-safety/original.bin';
+const ATTACHMENT_BYTES = new TextEncoder().encode('packaged restore safety attachment');
+const TAG = PACKAGED ? '[packaged-encrypted-backup-restore-safety]' : '[encrypted-backup-restore-safety]';
+
+function run(command, args) {
+  console.log(`${TAG} $ ${command} ${args.join(' ')}`);
+  if (spawnSync(command, args, { cwd: ROOT, stdio: 'inherit' }).status !== 0) {
+    throw new Error(`${TAG} command failed: ${command}`);
+  }
+}
+
+function buildPackage() {
+  if (!PACKAGED) return;
+  if (process.env.KYUTXO_PACKAGED_SKIP_BUILD === '1') {
+    if (!fs.existsSync(ASAR)) throw new Error(`${TAG} skip-build requested but ${ASAR} is missing`);
+    assertPackagedBundleFresh({ root: ROOT, tag: TAG });
+    assertPackagedAsarFresh({ root: ROOT, asarPath: ASAR, tag: TAG });
+    return;
+  }
+  run('npm', ['run', 'build']);
+  assertPackagedBundleFresh({ root: ROOT, tag: TAG });
+  run('node', ['scripts/build-native-engine.mjs']);
+  run('npx', ['electron-builder', '--config', 'electron-builder.json', '--dir', '--linux', '-c.npmRebuild=false']);
+  if (!fs.existsSync(ASAR)) throw new Error(`${TAG} packaging produced no app.asar`);
+}
+
+async function waitForCdp(timeoutMs = 90_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if ((await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).ok) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`${TAG} packaged Electron CDP endpoint did not start`);
+}
+
+async function cdpIsUp() {
+  try {
+    return (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).ok;
+  } catch {
+    return false;
+  }
+}
+
+async function packagedPage(browser) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const page = browser.contexts().flatMap((context) => context.pages())
+      .find((candidate) => candidate.url().startsWith('kyutxo-app://bundle/'));
+    if (page) return page;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`${TAG} packaged renderer did not appear`);
+}
+
+function killTree(child) {
+  if (!child?.pid) return;
+  try { process.kill(-child.pid, 'SIGTERM'); } catch { try { child.kill('SIGTERM'); } catch {} }
+}
+
+async function stopChild(child) {
+  if (!child?.pid) return;
+  killTree(child);
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await Promise.race([
+    new Promise((resolve) => child.once('exit', resolve)),
+    new Promise((resolve) => setTimeout(resolve, 5_000)),
+  ]);
+  if (child.exitCode === null && child.signalCode === null) {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
+  }
+}
 
 function chromiumPath() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -130,8 +218,24 @@ async function corruptLegacyCiphertext(backupBytes) {
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
+async function corruptV3Ciphertext(backupBytes) {
+  const zip = await JSZip.loadAsync(backupBytes);
+  const backupFile = zip.file('backup.json');
+  if (!backupFile) throw new Error('V3 backup is missing backup.json');
+  const manifest = JSON.parse(await backupFile.async('text'));
+  const encrypted = Buffer.from(manifest.inlineEnc ?? '', 'base64');
+  if (encrypted.length <= 12) throw new Error('V3 encrypted inline payload is too short');
+  // Preserve the valid ZIP, manifest, salt, and password-check sentinel. The
+  // correct password therefore passes the early check, then AES-GCM rejects
+  // the independently authenticated inline payload before destructive clear.
+  encrypted[12] ^= 0x01;
+  manifest.inlineEnc = encrypted.toString('base64');
+  zip.file('backup.json', JSON.stringify(manifest));
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
 async function snapshot(page) {
-  return page.evaluate(async () => {
+  return page.evaluate(async (packaged) => {
     const { db } = await import('/src/lib/database.ts');
     const { STREAMED_TABLES } = await import('/src/lib/backup/format.ts');
     const { readInlineTables } = await import('/src/lib/backup/inline-tables.ts');
@@ -144,19 +248,36 @@ async function snapshot(page) {
       portableTables[tableName] = rows;
     }
 
-    const listResponse = await fetch('/api/attachments/list-all');
-    if (!listResponse.ok) {
-      throw new Error(`Could not snapshot attachment files: ${listResponse.status}`);
+    let attachmentPaths;
+    if (packaged) {
+      const result = await window.electronAPI.listAllAttachments();
+      if (!result.success) throw new Error(result.error || 'Could not list desktop attachments');
+      attachmentPaths = (result.files ?? []).sort();
+    } else {
+      const listResponse = await fetch('/api/attachments/list-all');
+      if (!listResponse.ok) {
+        throw new Error(`Could not snapshot attachment files: ${listResponse.status}`);
+      }
+      attachmentPaths = ((await listResponse.json()).files ?? []).sort();
     }
-    const attachmentPaths = ((await listResponse.json()).files ?? []).sort();
     const attachmentFiles = [];
     for (const relativePath of attachmentPaths) {
-      const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/');
-      const response = await fetch(`/api/attachments/download/${encodedPath}`);
-      if (!response.ok) {
-        throw new Error(`Could not snapshot attachment ${relativePath}: ${response.status}`);
+      let bytes;
+      if (packaged) {
+        const result = await window.electronAPI.readAttachment(relativePath);
+        if (!result.success || !result.data) {
+          throw new Error(result.error || `Could not read desktop attachment ${relativePath}`);
+        }
+        bytes = result.data;
+      } else {
+        const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/');
+        const response = await fetch(`/api/attachments/download/${encodedPath}`);
+        if (!response.ok) {
+          throw new Error(`Could not snapshot attachment ${relativePath}: ${response.status}`);
+        }
+        bytes = await response.arrayBuffer();
       }
-      const digest = await crypto.subtle.digest('SHA-256', await response.arrayBuffer());
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
       const sha256 = Array.from(new Uint8Array(digest), (byte) =>
         byte.toString(16).padStart(2, '0')).join('');
       attachmentFiles.push({ relativePath, sha256 });
@@ -166,7 +287,7 @@ async function snapshot(page) {
       portableTables,
       attachmentFiles,
     };
-  });
+  }, PACKAGED);
 }
 
 async function openRestore(page, name, buffer) {
@@ -285,36 +406,94 @@ async function proveWrongThenCorrect(page, {
 }
 
 async function main() {
+  buildPackage();
   let devProc;
-  if (!(await serverUp())) {
-    devProc = spawn('npm', ['run', 'dev'], {
-      stdio: ['ignore', 'inherit', 'inherit'],
-      env: process.env,
-      detached: true,
-    });
-    await waitForServer();
-  }
-
-  const browser = await launchBrowser(chromiumPath());
+  let appProc;
+  let xvfb;
+  let tempHome;
+  let browser;
+  let context;
+  let page;
   const steps = [];
   const record = (name, passed, detail) => {
     steps.push({ name, passed, detail });
-    console.log(`[encrypted-backup-restore-safety] ${passed ? 'PASS' : 'FAIL'} ${name}: ${detail}`);
+    console.log(`${TAG} ${passed ? 'PASS' : 'FAIL'} ${name}: ${detail}`);
   };
 
   try {
-    const context = await browser.newContext({
-      serviceWorkers: 'block',
-      viewport: { width: 1440, height: 1600 },
-    });
-    const page = await context.newPage();
+    if (!PACKAGED && !(await serverUp())) {
+      devProc = spawn('npm', ['run', 'dev'], {
+        stdio: ['ignore', 'inherit', 'inherit'],
+        env: process.env,
+        detached: true,
+      });
+      await waitForServer();
+    }
+
+    if (PACKAGED) {
+      if (await cdpIsUp()) {
+        throw new Error(`${TAG} CDP port ${CDP_PORT} is already in use; refusing to attach to an unrelated process`);
+      }
+      const { electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG });
+      tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-restore-safety-'));
+      const display = process.env.KYUTXO_PACKAGED_DISPLAY || ':104';
+      const env = {
+        ...process.env,
+        HOME: tempHome,
+        XDG_CONFIG_HOME: path.join(tempHome, '.config'),
+        XDG_CACHE_HOME: path.join(tempHome, '.cache'),
+        XDG_DATA_HOME: path.join(tempHome, '.local', 'share'),
+        XDG_STATE_HOME: path.join(tempHome, '.local', 'state'),
+        NODE_ENV: 'production',
+        DISPLAY: display,
+      };
+      xvfb = spawn(xvfbBin, [display, '-screen', '0', '1440x1600x24'], {
+        env, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      appProc = spawn(electronBin, [
+        ASAR, '--no-sandbox', '--disable-gpu', '--in-process-gpu',
+        '--disable-gpu-compositing', '--disable-software-rasterizer',
+        `--remote-debugging-port=${CDP_PORT}`,
+      ], { cwd: tempHome, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      appProc.stdout.on('data', (chunk) => process.stdout.write(`${TAG}[app] ${chunk}`));
+      appProc.stderr.on('data', (chunk) => process.stdout.write(`${TAG}[app-err] ${chunk}`));
+      await waitForCdp();
+      browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+      page = await packagedPage(browser);
+    } else {
+      browser = await launchBrowser(chromiumPath());
+      context = await browser.newContext({
+        serviceWorkers: 'block',
+        viewport: { width: 1440, height: 1600 },
+      });
+      page = await context.newPage();
+    }
     page.on('console', (message) => {
       if (message.type() === 'error') {
         console.log(`[encrypted-backup-restore-safety][page-console] ${message.text()}`);
       }
     });
 
-    await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
+    if (PACKAGED) {
+      await page.waitForFunction(
+        () => document.readyState === 'interactive' || document.readyState === 'complete',
+        null,
+        { timeout: 60_000 },
+      );
+      await page.locator('body').waitFor({ state: 'visible', timeout: 60_000 });
+    } else {
+      await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
+    }
+    if (PACKAGED && await page.getByTestId('input-confirm-password').isVisible().catch(() => false)) {
+      const created = await page.evaluate(async (password) => {
+        return window.electronAPI.protectedStore.create(password);
+      }, SETUP_PASSWORD);
+      if (!created.ok || created.result?.unlocked !== true || created.result?.verified !== true) {
+        throw new Error(created.error || 'Could not create packaged protected vault');
+      }
+      await page.reload({ waitUntil: 'load', timeout: 60_000 });
+    }
     await unlockIfNeeded(page, SETUP_PASSWORD, {
       appearTimeoutMs: 30_000,
       dismissMigration: false,
@@ -325,6 +504,16 @@ async function main() {
     })) {
       await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
       await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 30_000 });
+    }
+    if (PACKAGED) {
+      await page.goto(SETTINGS_URL, { waitUntil: 'load', timeout: 60_000 });
+    }
+
+    if (PACKAGED) {
+      const seeded = await page.evaluate(async ({ relativePath, bytes }) => {
+        return window.electronAPI.writeAttachment(relativePath, new Uint8Array(bytes).buffer);
+      }, { relativePath: ATTACHMENT_PATH, bytes: Array.from(ATTACHMENT_BYTES) });
+      if (!seeded.success) throw new Error(seeded.error || 'Could not seed desktop attachment');
     }
 
     await page.evaluate(async (txid) => {
@@ -369,22 +558,35 @@ async function main() {
       }`,
     );
 
-    const v3B64 = await page.evaluate(async (password) => {
+    const v3B64 = await page.evaluate(async ({ password, packaged }) => {
       const { exportBackup } = await import('/src/lib/backup/export.ts');
       const { MemorySink } = await import('/src/lib/backup/sink.ts');
       const sink = new MemorySink();
+      const attachmentIO = packaged ? {
+        async listAll() {
+          const result = await window.electronAPI.listAllAttachments();
+          if (!result.success) throw new Error(result.error || 'Could not list attachments');
+          return result.files ?? [];
+        },
+        async read(relativePath) {
+          const result = await window.electronAPI.readAttachment(relativePath);
+          if (!result.success) throw new Error(result.error || `Could not read ${relativePath}`);
+          return result.data ?? null;
+        },
+      } : { async listAll() { return []; }, async read() { return null; } };
       await exportBackup({
         sink,
         encrypted: true,
         password,
         batchSize: 25,
-        attachmentIO: { async listAll() { return []; }, async read() { return null; } },
+        attachmentIO,
       });
       const bytes = new Uint8Array(await sink.blob.arrayBuffer());
       let binary = '';
       for (const byte of bytes) binary += String.fromCharCode(byte);
       return btoa(binary);
-    }, V3_PASSWORD);
+    }, { password: V3_PASSWORD, packaged: PACKAGED });
+    const corruptV3Backup = await corruptV3Ciphertext(Buffer.from(v3B64, 'base64'));
 
     await page.evaluate(async (staleTxid) => {
       const settingsCrud = await import('/src/lib/data/settings-crud.ts');
@@ -413,14 +615,18 @@ async function main() {
       beforeWrong: beforeV3Wrong,
       record,
       label: 'v3',
-      verifyCorrect: ({ portableTables }) => {
+      corruptBackupBuffer: corruptV3Backup,
+       verifyCorrect: ({ portableTables, attachmentFiles }) => {
         const settings = portableTables.settings?.find((row) => row.id === 'default');
         const transactions = portableTables.blockchainTransactions ?? [];
+         const packagedAttachmentRestored = !PACKAGED ||
+           JSON.stringify(attachmentFiles) === JSON.stringify(beforeMalformed.attachmentFiles);
         return {
-          passed: settings?.disableOrphanCheck === true &&
+           passed: settings?.disableOrphanCheck === true &&
             transactions.length === 1 &&
-            transactions[0]?.txid === TX_BACKED_UP,
-          detail: `disableOrphanCheck=${settings?.disableOrphanCheck} txids=${transactions.map((tx) => tx.txid).join(',')}`,
+             transactions[0]?.txid === TX_BACKED_UP &&
+             packagedAttachmentRestored,
+           detail: `disableOrphanCheck=${settings?.disableOrphanCheck} txids=${transactions.map((tx) => tx.txid).join(',')} attachments=${attachmentFiles.map((file) => file.relativePath).join(',')}`,
         };
       },
     });
@@ -484,27 +690,26 @@ async function main() {
       },
     });
 
-    await context.close();
+    await context?.close();
   } finally {
-    await browser.close();
-    if (devProc) {
-      try {
-        process.kill(-devProc.pid, 'SIGTERM');
-      } catch {
-        devProc.kill('SIGTERM');
-      }
+    await browser?.close().catch(() => {});
+    await stopChild(devProc);
+    await stopChild(appProc);
+    await stopChild(xvfb);
+    if (tempHome) {
+      try { fs.rmSync(tempHome, { recursive: true, force: true }); } catch {}
     }
   }
 
   const failed = steps.filter((step) => !step.passed);
-  console.log(`\n[encrypted-backup-restore-safety] ${steps.length - failed.length}/${steps.length} steps passed`);
+  console.log(`\n${TAG} ${steps.length - failed.length}/${steps.length} steps passed`);
   if (failed.length) {
     throw new Error(`Failed steps: ${failed.map((step) => step.name).join(', ')}`);
   }
-  console.log('[encrypted-backup-restore-safety] PASSED: wrong-password and corrupt-ciphertext restores are non-destructive and intact retries succeed.');
+  console.log(`${TAG} PASSED: malformed, wrong-password, and corrupt-ciphertext restores are non-destructive and intact retries succeed.`);
 }
 
 main().catch((error) => {
-  console.error('[encrypted-backup-restore-safety] fatal:', error?.stack ?? error);
+  console.error(`${TAG} fatal:`, error?.stack ?? error);
   process.exit(1);
 });

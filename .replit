@@ -3963,3 +3963,14 @@ args = "node scripts/check-packaged-backup-schedule-save-lock-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-encrypted-backup-restore-safety-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "KYUTXO_PACKAGED_RESTORE_SAFETY=1 node scripts/check-encrypted-backup-restore-safety-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
