@@ -1061,10 +1061,21 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     try {
       const { dialog, BrowserWindow } = require('electron');
       const win = BrowserWindow.fromWebContents(event.sender);
-      const result = await dialog.showOpenDialog(win, {
-        properties: ['openDirectory', 'createDirectory'],
-        title: 'Choose a scheduled backup folder',
-      });
+      let result;
+      if (process.env.KYUTXO_BACKUP_FOLDER_PICKER_TEST === '1') {
+        const directory = process.env.KYUTXO_BACKUP_FOLDER_PICKER_TEST_DIRECTORY;
+        const releaseMarker = process.env.KYUTXO_BACKUP_FOLDER_PICKER_TEST_RELEASE;
+        if (!directory || !releaseMarker) throw new Error('Backup folder picker test configuration is incomplete');
+        while (!fs.existsSync(releaseMarker)) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        result = { canceled: false, filePaths: [directory] };
+      } else {
+        result = await dialog.showOpenDialog(win, {
+          properties: ['openDirectory', 'createDirectory'],
+          title: 'Choose a scheduled backup folder',
+        });
+      }
       if (result.canceled || !result.filePaths?.[0]) return { success: false, canceled: true };
       const directory = resolveScheduledDirectoryPath(result.filePaths[0]);
       if (!directory) return { success: false, error: 'The selected location is not a usable folder.' };
