@@ -27,6 +27,12 @@ import {
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 import { prepareWindowsPortableLaunch } from './packaged-windows-portable.mjs';
+import {
+  clearPackagedCdpOwnership,
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+  waitForPackagedCdpDown,
+} from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -35,7 +41,6 @@ const IS_WINDOWS = process.platform === 'win32';
 const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
-const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_NETWORK_PRIVACY_CDP_PORT || 9227);
 const TAG = '[packaged-network-privacy-activity]';
 const PASSWORD = 'packaged-network-privacy-activity-check';
 const PROVIDER_URL = 'https://provider.example.test/api';
@@ -79,37 +84,6 @@ function buildPackage() {
   if (!fs.existsSync(ASAR)) {
     throw new Error(`${TAG} packaging produced no ${ASAR}`);
   }
-}
-
-async function waitForCdp(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      if (response.ok) return true;
-    } catch {
-      // The packaged app may need several seconds to start.
-    }
-    await sleep(250);
-  }
-  return false;
-}
-
-async function waitForCdpDown(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      if (response.ok) {
-        await sleep(250);
-        continue;
-      }
-    } catch {
-      return true;
-    }
-    await sleep(250);
-  }
-  return false;
 }
 
 async function waitForRendererPage(browser) {
@@ -303,6 +277,7 @@ async function main() {
   }
 
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-network-privacy-'));
+  const cdpUserDataDir = path.join(tempHome, 'cdp-profile');
   const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
     root: ROOT, asarPath: ASAR, home: tempHome, tag: TAG,
   }) : null;
@@ -334,8 +309,8 @@ async function main() {
   }
 
   const launchArgs = IS_WINDOWS
-    ? ['--disable-gpu', `--remote-debugging-port=${CDP_PORT}`]
-    : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`];
+    ? ['--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)]
+    : [ASAR, '--no-sandbox', '--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)];
   const launchPackagedProcess = () => {
     child = spawn(launchExecutable, launchArgs, {
       cwd: IS_WINDOWS ? portableSetup.launchDir : tempHome,
@@ -352,10 +327,8 @@ async function main() {
 
   try {
     launchPackagedProcess();
-    if (!(await waitForCdp(90_000))) {
-      throw new Error(`${TAG} packaged Electron CDP endpoint did not start`);
-    }
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    let cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     let page = await waitForRendererPage(browser);
     attachPageDiagnostics(page);
     await unlockIfNeeded(page, PASSWORD, {
@@ -410,15 +383,14 @@ async function main() {
     browser = null;
     await stopPackagedProcess(child);
     child = null;
-    if (!(await waitForCdpDown(30_000))) {
+    if (!(await waitForPackagedCdpDown(cdp.port, 30_000))) {
       throw new Error(`${TAG} packaged Electron CDP endpoint stayed up after close`);
     }
+    clearPackagedCdpOwnership(cdpUserDataDir);
 
     launchPackagedProcess();
-    if (!(await waitForCdp(90_000))) {
-      throw new Error(`${TAG} packaged Electron CDP endpoint did not return after reopen`);
-    }
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     page = await waitForRendererPage(browser);
     attachPageDiagnostics(page);
     await unlockIfNeeded(page, PASSWORD, {
@@ -462,15 +434,14 @@ async function main() {
     await forceStopPackagedProcess(child);
     child = null;
     browser = null;
-    if (!(await waitForCdpDown(30_000))) {
+    if (!(await waitForPackagedCdpDown(cdp.port, 30_000))) {
       throw new Error(`${TAG} packaged Electron CDP endpoint stayed up after forced termination`);
     }
+    clearPackagedCdpOwnership(cdpUserDataDir);
 
     launchPackagedProcess();
-    if (!(await waitForCdp(90_000))) {
-      throw new Error(`${TAG} packaged Electron CDP endpoint did not return after forced termination`);
-    }
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     page = await waitForRendererPage(browser);
     attachPageDiagnostics(page);
     await unlockIfNeeded(page, PASSWORD, {

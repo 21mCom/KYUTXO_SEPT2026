@@ -15,6 +15,12 @@ import {
   prepareWindowsPortableLaunch,
   verifyWindowsPortableBundle,
 } from './packaged-windows-portable.mjs';
+import {
+  clearPackagedCdpOwnership,
+  packagedCdpLaunchArgs,
+  readDevToolsActivePort,
+  waitForOwnedPackagedCdp,
+} from './packaged-cdp.mjs';
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(SCRIPTS_DIR);
@@ -27,11 +33,125 @@ const PACKAGED_NON_BROWSER_CHECKS = new Set([
 const PACKAGED_BROWSER_CHECK_PATTERN = /^check-packaged-.+-browser\.mjs$/;
 const MANUAL_PACKAGED_BROWSER_CHECKS = new Map();
 
+test('packaged CDP uses an OS-selected loopback port and isolated absolute profile', () => {
+  const profile = path.join(path.parse(SCRIPTS_DIR).root, 'tmp', 'owned-cdp');
+  assert.deepEqual(packagedCdpLaunchArgs(profile), [
+    '--remote-debugging-address=127.0.0.1',
+    '--remote-debugging-port=0',
+    `--user-data-dir=${profile}`,
+  ]);
+  assert.throws(() => packagedCdpLaunchArgs('relative-profile'), /must be absolute/);
+});
+
+test('packaged CDP ownership binds the endpoint websocket token to the launch profile', async (t) => {
+  const profile = fs.mkdtempSync(path.join(SCRIPTS_DIR, '.cdp-owner-test-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(profile, 'DevToolsActivePort'),
+    '43123\n/devtools/browser/owned-token\n',
+  );
+  assert.deepEqual(readDevToolsActivePort(profile).port, 43123);
+
+  const owned = await waitForOwnedPackagedCdp({
+    userDataDir: profile,
+    timeoutMs: 100,
+    pollMs: 1,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        webSocketDebuggerUrl: 'ws://127.0.0.1:43123/devtools/browser/owned-token',
+      }),
+    }),
+  });
+  assert.equal(owned.browserPath, '/devtools/browser/owned-token');
+  clearPackagedCdpOwnership(profile);
+  assert.equal(fs.existsSync(path.join(profile, 'DevToolsActivePort')), false);
+  fs.writeFileSync(
+    path.join(profile, 'DevToolsActivePort'),
+    '43123\n/devtools/browser/owned-token\n',
+  );
+
+  await assert.rejects(
+    waitForOwnedPackagedCdp({
+      userDataDir: profile,
+      timeoutMs: 20,
+      pollMs: 1,
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          webSocketDebuggerUrl: 'ws://127.0.0.1:43123/devtools/browser/unrelated-token',
+        }),
+      }),
+    }),
+    /could not establish ownership.*CDP ownership mismatch.*unrelated-token/,
+  );
+});
+
 function discoverPackagedBrowserChecks(filenames) {
   return filenames
     .filter((filename) => PACKAGED_BROWSER_CHECK_PATTERN.test(filename))
     .sort();
 }
+
+function discoverPackagedCdpChecks(filenames) {
+  return filenames
+    .filter((filename) =>
+      PACKAGED_BROWSER_CHECK_PATTERN.test(filename) ||
+      filename === 'check-packaged-vault-lock-native.mjs')
+    .sort();
+}
+
+function assertUsesOwnedPackagedCdp(filename, source) {
+  assert.match(
+    source,
+    /import\s*\{[\s\S]*\bpackagedCdpLaunchArgs\b[\s\S]*\bwaitForOwnedPackagedCdp\b[\s\S]*\}\s*from\s*['"]\.\/packaged-cdp\.mjs['"]/,
+    `${filename} must import the shared packaged CDP launch and ownership helpers`,
+  );
+  assert.match(
+    source,
+    /\bpackagedCdpLaunchArgs\s*\(/,
+    `${filename} must launch packaged Electron with packagedCdpLaunchArgs`,
+  );
+  assert.match(
+    source,
+    /\bwaitForOwnedPackagedCdp\s*\(/,
+    `${filename} must establish CDP ownership with waitForOwnedPackagedCdp`,
+  );
+  assert.doesNotMatch(
+    source,
+    /--remote-debugging-port=(?!0(?:['"`\s]|$))/,
+    `${filename} must not select a fixed remote debugging port`,
+  );
+  assert.doesNotMatch(
+    source,
+    /\b(?:async\s+)?function\s+(?:waitForCdp|cdpIsUp)\b/,
+    `${filename} must not implement private CDP ownership polling`,
+  );
+}
+
+test('all packaged CDP launchers use OS-selected ports and ownership handshakes', () => {
+  const filenames = discoverPackagedCdpChecks(fs.readdirSync(SCRIPTS_DIR));
+  assert.ok(filenames.length > 0, 'must discover packaged CDP launchers');
+  for (const filename of filenames) {
+    assertUsesOwnedPackagedCdp(filename, fs.readFileSync(path.join(SCRIPTS_DIR, filename), 'utf8'));
+  }
+});
+
+test('a packaged CDP launcher cannot restore fixed ports or private ownership polling', () => {
+  assert.throws(
+    () => assertUsesOwnedPackagedCdp(
+      'check-packaged-future-feature-browser.mjs',
+      [
+        "import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';",
+        'packagedCdpLaunchArgs("/absolute/profile");',
+        'waitForOwnedPackagedCdp({ userDataDir: "/absolute/profile" });',
+        'const args = ["--remote-debugging-port=9222"];',
+        'async function waitForCdp() {}',
+      ].join('\n'),
+    ),
+    /must not select a fixed remote debugging port/,
+  );
+});
 
 function assertRegisteredPackagedCheckNames(registrationSources) {
   for (const [sourceName, source] of Object.entries(registrationSources)) {
@@ -546,10 +666,12 @@ test('the packaged wrong-password gate avoids relaunch and blocks desktop releas
   assert.match(source, /IS_WINDOWS \? 'KYUTXO\.exe' : 'kyutxo'/);
   assert.match(source, /APPDATA: path\.join\(tmpHome, 'AppData', 'Roaming'\)/);
   assert.match(source, /LOCALAPPDATA: path\.join\(tmpHome, 'AppData', 'Local'\)/);
-  assert.match(source, /PORTABLE_EXECUTABLE_DIR:\s*_portableExecutableDir/);
+  assert.match(source, /delete inheritedEnv\.PORTABLE_EXECUTABLE_DIR/);
   assert.match(source, /USERPROFILE:\s*tmpHome/);
   assert.match(source, /taskkill', \['\/PID', String\(child\.pid\), '\/T', '\/F'\]/);
-  assert.match(source, /waitForCdpDown\(30_000\)/);
+  assert.match(source, /waitForPackagedCdpDown\(cdpPort, 30_000\)/);
+  assert.match(source, /waitForOwnedPackagedCdp/);
+  assert.match(source, /packagedCdpLaunchArgs\(cdpUserDataDir\)/);
   assert.match(source, /getByTestId\('button-logout'\)\.click\(\)/);
   assert.match(source, /getByTestId\('text-error'\)/);
   assert.match(source, /errorText === 'Incorrect password'/);
@@ -592,7 +714,7 @@ test('the packaged network activity forced shutdown cannot become graceful', () 
   );
 
   const forcedScenario = source.match(
-    /\/\/ Do not close CDP first or send SIGTERM:(?<body>[\s\S]*?)if \(!\(await waitForCdpDown/,
+    /\/\/ Do not close CDP first or send SIGTERM:(?<body>[\s\S]*?)if \(!\(await waitForPackagedCdpDown/,
   )?.groups?.body;
   assert.ok(forcedScenario, 'forced termination scenario must retain its explicit ordering guard');
   assert.match(forcedScenario, /await forceStopPackagedProcess\(child\)/);

@@ -42,6 +42,7 @@ import {
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
+import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -51,7 +52,6 @@ const RELEASE_DIR = path.join(ROOT, 'release');
 const UNPACKED_DIR = path.join(RELEASE_DIR, IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
-const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9224);
 const TAG = '[packaged-vault-migration]';
 const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
 const TASKKILL_TIMEOUT_MS = 15_000;
@@ -92,20 +92,6 @@ function buildPackage() {
     IS_WINDOWS ? '--win' : '--linux', '-c.npmRebuild=false',
   ]);
   if (!fs.existsSync(ASAR)) throw new Error(`${TAG} packaging produced no ${ASAR}`);
-}
-
-async function waitForCdp(timeoutMs) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      if (response.ok) return;
-    } catch {
-      // The packaged process may need several seconds to start.
-    }
-    await sleep(250);
-  }
-  throw new Error(`${TAG} packaged Electron CDP endpoint did not start`);
 }
 
 async function waitForPage(browser) {
@@ -198,8 +184,11 @@ function classifyAndAssert(report, scenario) {
 
 async function main() {
   buildPackage();
-  const { electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG });
+  const { electronBin = null, xvfbBin = null } = IS_WINDOWS
+    ? {}
+    : findPackagedBinaries({ tag: TAG });
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-protected-gate-'));
+  const cdpUserDataDir = path.join(tempHome, 'cdp-profile');
   const display = `:${100 + (process.pid % 400)}`;
   let xvfb;
   let child;
@@ -230,8 +219,8 @@ async function main() {
     };
     fs.mkdirSync(env.TMPDIR, { recursive: true });
     const args = IS_WINDOWS
-      ? [`--remote-debugging-port=${CDP_PORT}`]
-      : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`];
+      ? [...packagedCdpLaunchArgs(cdpUserDataDir)]
+      : [ASAR, '--no-sandbox', '--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)];
     const executable = IS_WINDOWS ? PACKAGED_EXECUTABLE : electronBin;
     child = spawn(executable, args, {
       cwd: tempHome,
@@ -242,8 +231,8 @@ async function main() {
     child.stdout.on('data', (chunk) => process.stdout.write(`${TAG}[app] ${chunk}`));
     child.stderr.on('data', (chunk) => process.stdout.write(`${TAG}[app-err] ${chunk}`));
 
-    await waitForCdp(90_000);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    const cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     const page = await waitForPage(browser);
     await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', null, {
       timeout: 60_000,

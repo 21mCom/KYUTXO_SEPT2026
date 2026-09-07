@@ -37,6 +37,7 @@ import {
   waitForLoginScreenVisible,
   unlockIfNeeded,
 } from './browser-check-utils.mjs';
+import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';
 
 export const NATIVE_EVENT_TIMEOUT_MS = 120_000;
 export const STARTUP_TIMEOUT_MS = 90_000;
@@ -249,20 +250,6 @@ function buildPackagedOutput(target) {
   return assertPackagedOutput(target);
 }
 
-async function waitForCdp(port, timeoutMs = STARTUP_TIMEOUT_MS) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
-      if (response.ok) return true;
-    } catch {
-      // Electron is still starting.
-    }
-    await sleep(500);
-  }
-  return false;
-}
-
 async function waitForRendererPage(browser, timeoutMs = STARTUP_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -276,12 +263,12 @@ async function waitForRendererPage(browser, timeoutMs = STARTUP_TIMEOUT_MS) {
   throw new Error(`${TAG} packaged renderer did not appear within ${timeoutMs}ms`);
 }
 
-function launchApp(target, packaged, env, cdpPort) {
+function launchApp(target, packaged, env, cdpUserDataDir) {
   const { executable } = packaged;
   const args =
     target.platform === 'win'
-      ? ['--disable-gpu', `--remote-debugging-port=${cdpPort}`]
-      : [packaged.asar, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${cdpPort}`];
+      ? ['--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)]
+      : [packaged.asar, '--no-sandbox', '--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)];
   const child = spawn(executable, args, {
     cwd: env.HOME,
     env,
@@ -481,8 +468,9 @@ export async function runPolicyCase(
   return result;
 }
 
-async function runCase(target, packaged, policy, actions, cdpPort, display) {
+async function runCase(target, packaged, policy, actions, display) {
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-native-power-smoke-'));
+  const cdpUserDataDir = path.join(tmpHome, 'cdp-profile');
   const {
     PORTABLE_EXECUTABLE_DIR: _portableExecutableDir,
     KYUTXO_LOCK_ON_SUSPEND: _inheritedSuspendPolicy,
@@ -514,9 +502,12 @@ async function runCase(target, packaged, policy, actions, cdpPort, display) {
   let browser = null;
   const results = [];
   try {
-    app = launchApp(target, packaged, env, cdpPort);
-    if (!(await waitForCdp(cdpPort))) throw new Error(`${TAG} CDP did not start`);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
+    app = launchApp(target, packaged, env, cdpUserDataDir);
+    const cdp = await waitForOwnedPackagedCdp({
+      userDataDir: cdpUserDataDir,
+      timeoutMs: STARTUP_TIMEOUT_MS,
+    });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     const page = await waitForRendererPage(browser);
     await waitForLoginScreenVisible(page, { timeoutMs: STARTUP_TIMEOUT_MS });
     await unlockIfNeeded(page, CHECK_PASSWORD, {
@@ -562,7 +553,6 @@ async function main() {
       `${TAG} Linux native power smoke requires the active interactive desktop DISPLAY`,
     );
   }
-  const cdpBase = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9250);
   const steps = [];
   console.log(`${TAG} target=${target.platform}/${target.arch}; package=${packaged.executable}`);
   console.log(
@@ -571,10 +561,10 @@ async function main() {
   );
 
   const enabled = POLICY_CASES[0];
-  steps.push(...(await runCase(target, packaged, enabled, ['screenLock', 'suspend'], cdpBase, display)));
+  steps.push(...(await runCase(target, packaged, enabled, ['screenLock', 'suspend'], display)));
   for (const policy of POLICY_CASES.slice(1)) {
     const action = policy.name.startsWith('screen-') ? 'screenLock' : 'suspend';
-    steps.push(...(await runCase(target, packaged, policy, [action], cdpBase + steps.length + 1, display)));
+    steps.push(...(await runCase(target, packaged, policy, [action], display)));
   }
 
   console.log(`\n${TAG} Results:`);

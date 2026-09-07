@@ -41,6 +41,7 @@ import {
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
+import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -51,7 +52,6 @@ bitcoin.initEccLib(secp);
 
 const ROOT = repoRootFromModuleUrl(import.meta.url);
 const ASAR = path.join(ROOT, 'release', 'linux-unpacked', 'resources', 'app.asar');
-const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_ELECTRUM_CDP_PORT || 9224);
 const TAG = '[packaged-electrum-cancel]';
 const PIPELINE_SIZE = 8;
 const ADDRESS_COUNT = 40;
@@ -183,20 +183,6 @@ function startSlowElectrumFixture() {
   });
 }
 
-async function waitForCdp(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      if (response.ok) return true;
-    } catch {
-      /* not ready */
-    }
-    await sleep(500);
-  }
-  return false;
-}
-
 async function waitUntil(label, predicate, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -218,6 +204,7 @@ async function main() {
   console.log(`${TAG} slow Electrum fixture listening on ${fixture.host}:${fixture.port}`);
 
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-electrum-cancel-'));
+  const cdpUserDataDir = path.join(tmpHome, 'cdp-profile');
   const env = {
     ...process.env,
     HOME: tmpHome,
@@ -239,7 +226,7 @@ async function main() {
   const appOutput = [];
   const child = spawn(
     electronBin,
-    [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`],
+    [ASAR, '--no-sandbox', '--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)],
     {
       cwd: tmpHome,
       env: { ...env, DISPLAY: display },
@@ -271,10 +258,13 @@ async function main() {
   };
 
   try {
-    if (!(await waitForCdp(90_000))) {
-      throw new Error(`${TAG} CDP endpoint never came up${appExited ? ' (app exited)' : ''}`);
+    let cdp;
+    try {
+      cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    } catch (error) {
+      throw new Error(`${TAG} CDP endpoint never came up${appExited ? ' (app exited)' : ''}`, { cause: error });
     }
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     let page = null;
     const pageDeadline = Date.now() + 60_000;
     while (!page && Date.now() < pageDeadline) {

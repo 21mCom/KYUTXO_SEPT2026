@@ -131,3 +131,4 @@
 - [Ownership evidence identity](ownership-evidence-identity.md) — review fingerprints use canonical addresses, txids, and entity natural keys; never local ids, or backup restore revives rejected evidence.
 - [Deferred actions need loaded policy](deferred-actions-loaded-policy.md) — cross-page queued network actions must wait for persisted node settings; unresolved hook defaults can bypass first-sync disclosure.
 - [Owner tax books vs physical provenance](owner-tax-books-vs-provenance.md) — keep tax allocation separate from Coin Origins; only affirmatively controlled addresses enter owner books.
+- [Packaged CDP ownership](packaged-cdp-ownership.md) — use OS-selected loopback ports plus DevToolsActivePort token proof; clear stale ownership only after endpoint shutdown before relaunch.

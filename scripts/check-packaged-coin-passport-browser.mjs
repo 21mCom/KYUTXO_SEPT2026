@@ -25,6 +25,7 @@ import {
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 import { prepareWindowsPortableLaunch } from './packaged-windows-portable.mjs';
+import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -33,7 +34,6 @@ const IS_WINDOWS = process.platform === 'win32';
 const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
-const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_PASSPORT_CDP_PORT || 9226);
 const TAG = '[packaged-coin-passport]';
 const UI_PAGE_SIZE = 100;
 const IPC_PAGE_CAP = 250;
@@ -218,20 +218,6 @@ function buildFixture(includeCheckpointMutation = false) {
   return { records, transactions, transactionParticipants };
 }
 
-async function waitForCdp(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      if (response.ok) return;
-    } catch {
-      // The packaged app can take several seconds to expose CDP.
-    }
-    await sleep(250);
-  }
-  throw new Error(`${TAG} packaged Electron CDP endpoint did not start`);
-}
-
 async function waitForPage(browser) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
@@ -280,6 +266,7 @@ async function main() {
   buildPackage();
   const binaries = IS_WINDOWS ? { electronBin: null, xvfbBin: null } : findPackagedBinaries({ tag: TAG });
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-passport-'));
+  const cdpUserDataDir = path.join(tempHome, 'cdp-profile');
   const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
     root: ROOT, asarPath: ASAR, home: tempHome, tag: TAG,
   }) : null;
@@ -313,7 +300,7 @@ async function main() {
       launchExecutable = portableSetup.executable;
       console.log(`${TAG} portable launch copy: ${launchExecutable}`);
     }
-    child = spawn(launchExecutable, [`--remote-debugging-port=${CDP_PORT}`], {
+    child = spawn(launchExecutable, packagedCdpLaunchArgs(cdpUserDataDir), {
       cwd: IS_WINDOWS ? portableSetup.launchDir : tempHome,
       env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
       detached: !IS_WINDOWS,
@@ -322,8 +309,8 @@ async function main() {
     child.stdout.on('data', (chunk) => process.stdout.write(`${TAG}[app] ${chunk}`));
     child.stderr.on('data', (chunk) => process.stdout.write(`${TAG}[app-err] ${chunk}`));
 
-    await waitForCdp(90_000);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    const cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     const page = await waitForPage(browser);
     await page.waitForFunction(() => Boolean(window.electronAPI?.engine), null, { timeout: 60_000 });
 

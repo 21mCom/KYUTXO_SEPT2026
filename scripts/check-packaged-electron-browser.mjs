@@ -49,6 +49,12 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 import {
+  clearPackagedCdpOwnership,
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+  waitForPackagedCdpDown,
+} from './packaged-cdp.mjs';
+import {
   waitForExistingVaultLoginScreen,
   waitForLoginScreenVisible,
   unlockIfNeeded,
@@ -73,7 +79,6 @@ const IS_WINDOWS = process.platform === 'win32';
 const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
-const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9223);
 const TAG = '[packaged-electron]';
 const PORTABLE_CHECK_PASSWORD = 'portable-check-password';
 const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
@@ -133,37 +138,6 @@ function buildAsar() {
   if (!fs.existsSync(ASAR)) {
     throw new Error(`${TAG} electron-builder finished but ${ASAR} was not produced.`);
   }
-}
-
-async function waitForCdp(timeoutMs) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      if (res.ok) return true;
-    } catch {
-      /* not up yet */
-    }
-    await sleep(1000);
-  }
-  return false;
-}
-
-async function waitForCdpDown(timeoutMs) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      if (res.ok) {
-        await sleep(250);
-        continue;
-      }
-    } catch {
-      return true;
-    }
-    await sleep(250);
-  }
-  return false;
 }
 
 async function waitForRendererPage(browser, timeoutMs = 60_000) {
@@ -380,19 +354,22 @@ async function main() {
 
   console.log(
     `${TAG} launching packaged app${IS_WINDOWS ? '' : ` on ${DISPLAY}`} ` +
-      `(CDP port ${CDP_PORT})...`,
+      '(OS-selected loopback CDP port)...',
   );
+  const cdpUserDataDir = path.join(tmpHome, 'cdp-profile');
+  const cdpArgs = packagedCdpLaunchArgs(cdpUserDataDir);
   const launchArgs = IS_WINDOWS
     ? [
         '--disable-gpu',
-        `--remote-debugging-port=${CDP_PORT}`,
+        ...cdpArgs,
       ]
-    : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`];
+    : [ASAR, '--no-sandbox', '--disable-gpu', ...cdpArgs];
   let child = null;
   let appExited = false;
   let appLaunchError = null;
   const steps = [];
   let browser = null;
+  let cdpPort = null;
   try {
     let launchExecutable = PACKAGED_EXECUTABLE;
     if (IS_WINDOWS) {
@@ -430,14 +407,12 @@ async function main() {
 
     launchPackagedProcess();
 
-    if (!(await waitForCdp(90_000))) {
-      throw new Error(
-        `${TAG} CDP endpoint never came up on port ${CDP_PORT}` +
-          (appExited ? ' (the app process already exited — launch crash?)' : '') +
-          (appLaunchError ? `: ${appLaunchError}` : ''),
-      );
-    }
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    ({ port: cdpPort } = await waitForOwnedPackagedCdp({
+      userDataDir: cdpUserDataDir,
+      timeoutMs: 90_000,
+    }));
+    console.log(`${TAG} established ownership of CDP port ${cdpPort}`);
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
 
     let page = await waitForRendererPage(browser);
     attachPageDiagnostics(page);
@@ -746,9 +721,10 @@ async function main() {
       browser = null;
       await stopPackagedProcess(child);
       child = null;
-      if (!(await waitForCdpDown(30_000))) {
-        throw new Error(`${TAG} first portable app process still owns CDP port ${CDP_PORT}.`);
+      if (!(await waitForPackagedCdpDown(cdpPort, 30_000))) {
+        throw new Error(`${TAG} first portable app process still owns CDP port ${cdpPort}.`);
       }
+      clearPackagedCdpOwnership(cdpUserDataDir);
 
       const portableDataDir = path.join(portableSetup.launchDir, 'KYUTXO_Data');
       const portableDataFiles = countRegularFiles(portableDataDir);
@@ -774,14 +750,12 @@ async function main() {
       // second process resolves the same beside-the-executable data location.
       console.log(`${TAG} relaunching the same portable wrapper: ${launchExecutable}`);
       launchPackagedProcess();
-      if (!(await waitForCdp(90_000))) {
-        throw new Error(
-          `${TAG} CDP endpoint never came up after portable restart on port ${CDP_PORT}` +
-            (appExited ? ' (the app process already exited — launch crash?)' : '') +
-            (appLaunchError ? `: ${appLaunchError}` : ''),
-        );
-      }
-      browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+      ({ port: cdpPort } = await waitForOwnedPackagedCdp({
+        userDataDir: cdpUserDataDir,
+        timeoutMs: 90_000,
+      }));
+      console.log(`${TAG} re-established ownership of CDP port ${cdpPort}`);
+      browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
       page = await waitForRendererPage(browser);
       attachPageDiagnostics(page);
 

@@ -21,6 +21,12 @@ import {
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 import { prepareWindowsPortableLaunch } from './packaged-windows-portable.mjs';
+import {
+  clearPackagedCdpOwnership,
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+  waitForPackagedCdpDown,
+} from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -28,7 +34,6 @@ const ROOT = repoRootFromModuleUrl(import.meta.url);
 const IS_WINDOWS = process.platform === 'win32';
 const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
-const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_FORGOTTEN_SOURCE_CDP_PORT || 9231);
 const TAG = '[packaged-forgotten-network-source]';
 const PASSWORD = 'PackagedForgottenSource#2026';
 const CUSTOM_URL = 'https://node.forgotten-source.test';
@@ -68,23 +73,6 @@ function buildPackage() {
   if (!fs.existsSync(ASAR)) throw new Error(`${TAG} packaging produced no ${ASAR}`);
 }
 
-async function cdpIsUp() {
-  try {
-    return (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).ok;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForCdp(expectedUp, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if ((await cdpIsUp()) === expectedUp) return;
-    await sleep(250);
-  }
-  throw new Error(`${TAG} CDP endpoint did not become ${expectedUp ? 'available' : 'unavailable'}`);
-}
-
 async function rendererPage(browser) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
@@ -121,6 +109,7 @@ async function main() {
   let xvfbBin;
   if (!IS_WINDOWS) ({ electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG }));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-forgotten-source-'));
+  const cdpUserDataDir = path.join(home, 'cdp-profile');
   const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
     root: ROOT, asarPath: ASAR, home, tag: TAG,
   }) : null;
@@ -137,8 +126,8 @@ async function main() {
   const executable = IS_WINDOWS ? portableSetup.executable : electronBin;
   const launch = () => {
     const args = IS_WINDOWS
-      ? ['--disable-gpu', `--remote-debugging-port=${CDP_PORT}`]
-      : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`];
+      ? ['--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)]
+      : [ASAR, '--no-sandbox', '--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)];
     child = spawn(executable, args, {
       cwd: IS_WINDOWS ? portableSetup.launchDir : home,
       env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
@@ -154,8 +143,8 @@ async function main() {
       await sleep(2_000);
     }
     launch();
-    await waitForCdp(true, 90_000);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    let cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     let page = await rendererPage(browser);
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-forgotten-source-setup' });
     await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-forgotten-source-setup' });
@@ -183,10 +172,13 @@ async function main() {
     browser = null;
     await stop(child);
     child = null;
-    await waitForCdp(false, 30_000);
+    if (!(await waitForPackagedCdpDown(cdp.port, 30_000))) {
+      throw new Error(`${TAG} CDP endpoint did not become unavailable`);
+    }
+    clearPackagedCdpOwnership(cdpUserDataDir);
     launch();
-    await waitForCdp(true, 90_000);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     page = await rendererPage(browser);
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-forgotten-source-reopen' });
     await page.getByTestId('network-onboarding-source').waitFor({ state: 'visible' });

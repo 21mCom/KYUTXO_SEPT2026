@@ -31,6 +31,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
 import {
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+  waitForPackagedCdpDown,
+} from './packaged-cdp.mjs';
+import {
   assertPackagedBundleFresh,
   assertPackagedAsarFresh,
   repoRootFromModuleUrl,
@@ -49,7 +54,6 @@ const IS_WINDOWS = process.platform === 'win32';
 const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
 const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 'kyutxo');
-const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9224);
 const TAG = '[wrong-password-packaged]';
 const GOOD_PASSWORD = 'correct-horse-battery';
 const WRONG_PASSWORD = 'definitely-not-it-42';
@@ -95,37 +99,7 @@ function buildAsar() {
   }
 }
 
-async function waitForCdp(timeoutMs) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      if (res.ok) return true;
-    } catch {
-      /* not up yet */
-    }
-    await sleep(1000);
-  }
-  return false;
-}
-
-async function waitForCdpDown(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let consecutiveFailures = 0;
-  while (Date.now() < deadline) {
-    try {
-      await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      consecutiveFailures = 0;
-    } catch {
-      consecutiveFailures += 1;
-      if (consecutiveFailures >= 3) return true;
-    }
-    await sleep(500);
-  }
-  return false;
-}
-
-function launchApp(env, DISPLAY, cwd) {
+function launchApp(env, DISPLAY, cwd, cdpUserDataDir) {
   const child = spawn(
     PACKAGED_EXECUTABLE,
     [
@@ -137,7 +111,7 @@ function launchApp(env, DISPLAY, cwd) {
       '--in-process-gpu',
       '--disable-gpu-compositing',
       '--disable-software-rasterizer',
-      `--remote-debugging-port=${CDP_PORT}`,
+      ...packagedCdpLaunchArgs(cdpUserDataDir),
     ],
     {
       cwd,
@@ -153,7 +127,7 @@ function launchApp(env, DISPLAY, cwd) {
   return child;
 }
 
-async function stopApp(child) {
+async function stopApp(child, cdpPort) {
   if (IS_WINDOWS) {
     const result = spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
       cwd: ROOT,
@@ -172,16 +146,18 @@ async function stopApp(child) {
       }
     }
   }
-  if (!(await waitForCdpDown(30_000))) {
-    throw new Error(`${TAG} packaged process still owns CDP port ${CDP_PORT} after shutdown.`);
+  if (!(await waitForPackagedCdpDown(cdpPort, 30_000))) {
+    throw new Error(`${TAG} packaged process still owns CDP port ${cdpPort} after shutdown.`);
   }
 }
 
-async function connectAndFindPage() {
-  if (!(await waitForCdp(90_000))) {
-    throw new Error(`${TAG} CDP endpoint never came up on port ${CDP_PORT}`);
-  }
-  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+async function connectAndFindPage(cdpUserDataDir) {
+  const { port } = await waitForOwnedPackagedCdp({
+    userDataDir: cdpUserDataDir,
+    timeoutMs: 90_000,
+  });
+  console.log(`${TAG} established ownership of CDP port ${port}`);
+  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   let page = null;
   const deadline = Date.now() + 60_000;
   while (!page && Date.now() < deadline) {
@@ -201,7 +177,7 @@ async function connectAndFindPage() {
   });
   page.on('pageerror', (err) => console.log(`${TAG}[pageerror] ${String(err).slice(0, 300)}`));
   page.on('crash', () => console.log(`${TAG}[page CRASHED]`));
-  return { browser, page };
+  return { browser, page, cdpPort: port };
 }
 
 async function main() {
@@ -222,7 +198,8 @@ async function main() {
   // A disposable profile keeps the check independent from both the runner's
   // real vault and any state left by another packaged check.
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-wrongpw-check-'));
-  const { PORTABLE_EXECUTABLE_DIR: _portableExecutableDir, ...inheritedEnv } = process.env;
+  const inheritedEnv = { ...process.env };
+  delete inheritedEnv.PORTABLE_EXECUTABLE_DIR;
   const env = {
     ...inheritedEnv,
     HOME: tmpHome,
@@ -257,12 +234,14 @@ async function main() {
   const steps = [];
   let browser = null;
   let child = null;
+  let cdpPort = null;
+  const cdpUserDataDir = path.join(tmpHome, 'cdp-profile');
   try {
     // ── Run 1: create the vault ──────────────────────────────────────────
     console.log(`${TAG} run 1: launching packaged app (create vault)...`);
-    child = launchApp(env, DISPLAY, tmpHome);
+    child = launchApp(env, DISPLAY, tmpHome, cdpUserDataDir);
     let page;
-    ({ browser, page } = await connectAndFindPage());
+    ({ browser, page, cdpPort } = await connectAndFindPage(cdpUserDataDir));
 
     await page.getByTestId('input-password').waitFor({ state: 'visible', timeout: 60_000 });
     const confirmVisible = await page
@@ -363,7 +342,7 @@ async function main() {
   } finally {
     if (browser) await browser.close().catch(() => {});
     if (child) {
-      await stopApp(child);
+      await stopApp(child, cdpPort);
     }
     try {
       if (xvfb) process.kill(-xvfb.pid, 'SIGTERM');
