@@ -347,13 +347,19 @@ describe("v3 backup export stays bounded", () => {
       encrypted: false,
       batchSize: BATCH,
       attachmentIO: {
-        async listPage(offset, limit) {
+        async summary() {
+          return { total: fileCount, totalBytes: fileCount };
+        },
+        async listPage(cursor, limit) {
+          const offset = cursor ? Number(cursor) : 0;
           largestPageRequested = Math.max(largestPageRequested, limit);
           pageCalls += 1;
           const length = Math.max(0, Math.min(limit, fileCount - offset));
           return {
             files: Array.from({ length }, (_, index) => `paged/file-${offset + index}.bin`),
             total: fileCount,
+            totalBytes: fileCount,
+            cursor: offset + length < fileCount ? String(offset + length) : null,
           };
         },
         async read() {

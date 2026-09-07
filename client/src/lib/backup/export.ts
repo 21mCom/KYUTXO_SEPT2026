@@ -54,10 +54,16 @@ import { readInlineTables } from "./inline-tables";
 import { compactRowFilters, type CompactPlan, type CompactRowFilters } from "./compact";
 
 export interface AttachmentFileIO {
-  // Preferred bounded enumeration contract. `offset` is the number of file
-  // names already consumed; implementations return at most `limit` names plus
-  // the exact total count. Export never retains more than one page.
-  listPage?(offset: number, limit: number): Promise<{ files: string[]; total: number }>;
+  // Preferred bounded enumeration contract. The opaque cursor resumes one
+  // streaming traversal; the first page also returns exact count and bytes.
+  listPage?(cursor: string | null, limit: number): Promise<{
+    files: string[];
+    cursor: string | null;
+    total?: number;
+    totalBytes?: number;
+  }>;
+  summary?(): Promise<{ total: number; totalBytes: number | null }>;
+  closeListing?(cursor: string): Promise<void>;
   // Legacy compatibility for injected/runtime implementations. Production
   // browser and Electron exporters use listPage.
   listAll?(): Promise<string[]>;
@@ -297,11 +303,13 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
   ]);
 
   opts.onProgress?.({ percent: 2, phase: "Listing attachment files..." });
-  const firstAttachmentPage = opts.attachmentIO.listPage
-    ? await opts.attachmentIO.listPage(0, batchSize)
-    : { files: await opts.attachmentIO.listAll?.() ?? [], total: 0 };
-  if (!opts.attachmentIO.listPage) firstAttachmentPage.total = firstAttachmentPage.files.length;
-  const attachmentFileCount = firstAttachmentPage.total;
+  const attachmentSummary = opts.attachmentIO.summary
+    ? await opts.attachmentIO.summary()
+    : null;
+  const legacyAttachmentFiles = !opts.attachmentIO.listPage
+    ? await opts.attachmentIO.listAll?.() ?? []
+    : null;
+  const attachmentFileCount = attachmentSummary?.total ?? legacyAttachmentFiles?.length ?? 0;
 
   // Exact total bytes of the attachment FILES written into the ZIP (stored
   // uncompressed), recorded in the manifest so the restore pre-flight can size
@@ -310,9 +318,11 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
   // footprint, including legacy root-level files with no DB row); fall back to
   // summing the attachment metadata `size` when the IO can't report it.
   let totalAttachmentBytes: number;
-  const ioTotal = opts.attachmentIO.totalBytes
-    ? await opts.attachmentIO.totalBytes()
-    : null;
+  const ioTotal = typeof attachmentSummary?.totalBytes === "number"
+    ? attachmentSummary.totalBytes
+    : opts.attachmentIO.totalBytes
+      ? await opts.attachmentIO.totalBytes()
+      : null;
   if (typeof ioTotal === "number" && Number.isFinite(ioTotal) && ioTotal >= 0) {
     totalAttachmentBytes = ioTotal;
   } else {
@@ -389,6 +399,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
   };
 
   const writer = new ZipStreamWriter(opts.sink);
+  let attachmentCursor: string | null = null;
   try {
     // 1) Manifest first (so restore can read it + clear before any data rows).
     throwIfAborted(signal);
@@ -429,7 +440,12 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     // 3) Attachment files, one bounded filename page at a time. Each file's
     // bytes are still read and written individually.
     let attachmentOffset = 0;
-    let attachmentPage = firstAttachmentPage.files;
+    let attachmentPage = legacyAttachmentFiles ?? [];
+    if (legacyAttachmentFiles === null && opts.attachmentIO.listPage) {
+      const firstPage = await opts.attachmentIO.listPage(null, batchSize);
+      attachmentPage = firstPage.files;
+      attachmentCursor = firstPage.cursor;
+    }
     while (attachmentPage.length > 0) {
       for (const relPath of attachmentPage) {
         throwIfAborted(signal);
@@ -443,8 +459,10 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
         processedUnits += 1;
         reportUnits(`Exporting attachment ${attachmentOffset} of ${attachmentFileCount}...`);
       }
-      if (!opts.attachmentIO.listPage || attachmentOffset >= attachmentFileCount) break;
-      attachmentPage = (await opts.attachmentIO.listPage(attachmentOffset, batchSize)).files;
+      if (!opts.attachmentIO.listPage || !attachmentCursor) break;
+      const nextPage = await opts.attachmentIO.listPage(attachmentCursor, batchSize);
+      attachmentPage = nextPage.files;
+      attachmentCursor = nextPage.cursor;
     }
 
     throwIfAborted(signal);
@@ -452,6 +470,9 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     await writer.finalize();
     opts.onProgress?.({ percent: 100, phase: "Export complete" });
   } catch (err) {
+    if (typeof attachmentCursor === "string") {
+      await opts.attachmentIO.closeListing?.(attachmentCursor).catch(() => undefined);
+    }
     await opts.sink.abort();
     throw err;
   }

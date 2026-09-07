@@ -372,63 +372,98 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     }
   });
 
+  const attachmentListSessions = new Map();
+  const attachmentListSessionTtlMs = 5 * 60_000;
+  const attachmentListDefaultLimit = 1_000;
+  const attachmentListMaxSessions = 8;
+  async function closeAttachmentListSession(id) {
+    const session = attachmentListSessions.get(id);
+    if (!session) return;
+    attachmentListSessions.delete(id);
+    await session.iterator.return();
+  }
+  const attachmentListSessionReaper = setInterval(() => {
+    const now = Date.now();
+    for (const [id, session] of attachmentListSessions) {
+      if (session.expiresAt <= now) void closeAttachmentListSession(id);
+    }
+  }, 30_000);
+  attachmentListSessionReaper.unref();
+  async function* iterateAttachmentFiles() {
+    const entries = await fs.promises.opendir(attachmentsDir);
+    for await (const entry of entries) {
+      if (entry.isDirectory()) {
+        const subDir = path.join(attachmentsDir, entry.name);
+        const files = await fs.promises.opendir(subDir);
+        for await (const file of files) {
+          if (file.isFile()) yield path.join(entry.name, file.name);
+        }
+      } else if (entry.isFile()) {
+        yield entry.name;
+      }
+    }
+  }
+  async function attachmentSummary() {
+    let total = 0;
+    let totalBytes = 0;
+    for await (const relativePath of iterateAttachmentFiles()) {
+      total += 1;
+      try {
+        totalBytes += (await fs.promises.stat(path.join(attachmentsDir, relativePath))).size;
+      } catch {}
+    }
+    return { total, totalBytes };
+  }
+
   // List ALL attachments recursively (for backup)
   ipcMain.handle('list-all-attachments', async (_event, page = {}) => {
     try {
-      const offset = Number.isSafeInteger(page?.offset) && page.offset >= 0 ? page.offset : 0;
       const limit = Number.isSafeInteger(page?.limit) && page.limit > 0
         ? Math.min(page.limit, 10_000)
-        : Number.MAX_SAFE_INTEGER;
-      const result = [];
-      let total = 0;
-      // Exact total bytes of every attachment FILE on disk. Stored uncompressed
-      // in the backup ZIP, so this is the true number of bytes a restore writes —
-      // the backup export records it in the manifest for an exact restore
-      // disk-space estimate (more reliable than DB metadata, which can miss the
-      // legacy root-level files this walk still includes).
-      let totalBytes = 0;
-      
+        : attachmentListDefaultLimit;
       if (!fs.existsSync(attachmentsDir)) {
-        return { success: true, files: [], total: 0, totalBytes: 0 };
+        return { success: true, files: [], total: 0, totalBytes: 0, cursor: null };
       }
-      
-      // Stream directory entries so even one record directory containing a very
-      // large number of files never creates a second full filename array.
-      const entries = await fs.promises.opendir(attachmentsDir);
-      for await (const entry of entries) {
-        if (entry.isDirectory()) {
-          const subDir = path.join(attachmentsDir, entry.name);
-          // withFileTypes so SYMLINKS inside the directory are visible as
-          // links: a planted link to an outside file must be skipped, not
-          // followed (statSync would follow it and leak the target's bytes
-          // into the backup listing and size total).
-          const files = await fs.promises.opendir(subDir);
-          for await (const file of files) {
-            if (!file.isFile()) continue; // skips symlinks, sockets, subdirs
-            // Return relative paths like "identifier/filename.ext"
-            if (total >= offset && result.length < limit) result.push(path.join(entry.name, file.name));
-            total += 1;
-            try {
-              totalBytes += (await fs.promises.stat(path.join(subDir, file.name))).size;
-            } catch {
-              // File vanished between readdir and stat — skip its bytes.
-            }
-          }
-        } else if (entry.isFile()) {
-          // Root-level (single-segment) legacy files. Without this branch they
-          // are invisible to backups and the attachment audit, which makes them
-          // look "missing" even though they are still on disk.
-          if (total >= offset && result.length < limit) result.push(entry.name);
-          total += 1;
-          try {
-            totalBytes += (await fs.promises.stat(path.join(attachmentsDir, entry.name))).size;
-          } catch {
-            // File vanished between readdir and stat — skip its bytes.
-          }
+      const now = Date.now();
+      for (const [id, stale] of attachmentListSessions) {
+        if (stale.expiresAt <= now) {
+          await closeAttachmentListSession(id);
         }
       }
-      
-      return { success: true, files: result, total, totalBytes };
+      if (typeof page?.closeCursor === 'string') {
+        await closeAttachmentListSession(page.closeCursor);
+        return { success: true };
+      }
+      let cursor = typeof page?.cursor === 'string' ? page.cursor : null;
+      let session = cursor ? attachmentListSessions.get(cursor) : undefined;
+      let summary;
+      if (!session) {
+        if (cursor) return { success: false, error: 'Attachment listing expired' };
+        summary = await attachmentSummary();
+        if (summary.total === 0) return { success: true, files: [], ...summary, cursor: null };
+        if (attachmentListSessions.size >= attachmentListMaxSessions) {
+          return { success: false, error: 'Too many attachment listings' };
+        }
+        cursor = require('crypto').randomUUID();
+        session = { iterator: iterateAttachmentFiles(), expiresAt: now + attachmentListSessionTtlMs };
+        attachmentListSessions.set(cursor, session);
+      }
+      session.expiresAt = now + attachmentListSessionTtlMs;
+      const files = [];
+      let done = false;
+      while (files.length < limit) {
+        const next = await session.iterator.next();
+        if (next.done) {
+          done = true;
+          break;
+        }
+        files.push(next.value);
+      }
+      if (done) {
+        attachmentListSessions.delete(cursor);
+        cursor = null;
+      }
+      return { success: true, files, ...(summary || {}), cursor };
     } catch (error) {
       logMainError('[KYUTXO] list-all-attachments failed', error);
       return { success: false, error: sanitizeIpcError(error, 'Failed to list attachments') };
@@ -532,43 +567,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       if (!fs.existsSync(attachmentsDir)) {
         return { success: true, totalBytes: 0, fileCount: 0 };
       }
-      let totalBytes = 0;
-      let fileCount = 0;
-      const entries = await fs.promises.readdir(attachmentsDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const subDir = path.join(attachmentsDir, entry.name);
-          let dirents;
-          try {
-            // withFileTypes so planted SYMLINKS are skipped, not followed
-            // (statSync would follow a link and count outside bytes).
-            dirents = await fs.promises.readdir(subDir, { withFileTypes: true });
-          } catch {
-            continue;
-          }
-          for (const dirent of dirents) {
-            if (!dirent.isFile()) continue;
-            try {
-              const stat = await fs.promises.stat(path.join(subDir, dirent.name));
-              if (stat.isFile()) {
-                totalBytes += stat.size;
-                fileCount += 1;
-              }
-            } catch {
-              // Skip files that vanished or cannot be stat'd.
-            }
-          }
-        } else if (entry.isFile()) {
-          try {
-            const stat = await fs.promises.stat(path.join(attachmentsDir, entry.name));
-            totalBytes += stat.size;
-            fileCount += 1;
-          } catch {
-            // Skip files that vanished or cannot be stat'd.
-          }
-        }
-      }
-      return { success: true, totalBytes, fileCount };
+      const summary = await attachmentSummary();
+      return { success: true, totalBytes: summary.totalBytes, fileCount: summary.total };
     } catch (error) {
       logMainError('[KYUTXO] get-attachments-size failed', error);
       return { success: false, error: sanitizeIpcError(error, 'Failed to measure attachments size') };

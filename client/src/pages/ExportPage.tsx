@@ -84,18 +84,20 @@ const MEMORY_EXPORT_ROW_LIMIT = 50000;
 const MEMORY_EXPORT_ATTACHMENT_LIMIT = 5000;
 type ExportKindOption = "all" | "address" | "transaction" | "other";
 
-async function listAttachmentFilesPage(offset: number, limit: number): Promise<{ files: string[]; total: number }> {
+async function listAttachmentFilesPage(cursor: string | null, limit: number) {
   if (isElectron()) {
     const api = getElectronAPI();
-    const result = await api.listAllAttachments(offset, limit);
+    const result = await api.listAllAttachments(cursor, limit);
     if (!result.success) throw new Error(result.error || "Could not list attachments");
-    return { files: result.files || [], total: result.total ?? result.files?.length ?? 0 };
+    return { files: result.files || [], total: result.total, totalBytes: result.totalBytes, cursor: result.cursor ?? null };
   } else {
-    const response = await fetch(`/api/attachments/list-all?offset=${offset}&limit=${limit}`);
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (cursor) query.set("cursor", cursor);
+    const response = await fetch(`/api/attachments/list-all?${query}`);
     if (response.ok) {
       const data = await response.json();
       if (!data.success) throw new Error(data.error || "Could not list attachments");
-      return { files: data.files || [], total: data.total ?? data.files?.length ?? 0 };
+      return { files: data.files || [], total: data.total, totalBytes: data.totalBytes, cursor: data.cursor ?? null };
     }
     throw new Error(`Could not list attachments: ${response.status}`);
   }
@@ -108,15 +110,36 @@ async function listAttachmentFilesPage(offset: number, limit: number): Promise<{
 async function totalAttachmentFileBytes(): Promise<number | null> {
   if (isElectron()) {
     const api = getElectronAPI();
-    const result = await api.listAllAttachments(0, 1);
+    const result = await api.getAttachmentsSize();
     return result.success && typeof result.totalBytes === "number" ? result.totalBytes : null;
   } else {
-    const response = await fetch('/api/attachments/list-all?offset=0&limit=1');
+    const response = await fetch('/api/attachments/list-all?summaryOnly=1');
     if (response.ok) {
       const data = await response.json();
       return data.success && typeof data.totalBytes === "number" ? data.totalBytes : null;
     }
     return null;
+  }
+}
+
+async function attachmentFileSummary(): Promise<{ total: number; totalBytes: number | null }> {
+  if (isElectron()) {
+    const result = await getElectronAPI().getAttachmentsSize();
+    if (!result.success) throw new Error(result.error || "Could not measure attachments");
+    return { total: result.fileCount ?? 0, totalBytes: result.totalBytes ?? null };
+  }
+  const response = await fetch('/api/attachments/list-all?summaryOnly=1');
+  if (!response.ok) throw new Error(`Could not measure attachments: ${response.status}`);
+  const data = await response.json();
+  if (!data.success) throw new Error(data.error || "Could not measure attachments");
+  return { total: data.total ?? 0, totalBytes: data.totalBytes ?? null };
+}
+
+async function closeAttachmentListing(cursor: string): Promise<void> {
+  if (isElectron()) {
+    await getElectronAPI().closeAttachmentListing(cursor);
+  } else {
+    await fetch(`/api/attachments/list-all?closeCursor=${encodeURIComponent(cursor)}`);
   }
 }
 
@@ -589,7 +612,13 @@ export default function ExportPage() {
         encrypted,
         password,
         compactPlan,
-        attachmentIO: { listPage: listAttachmentFilesPage, read: readAttachmentFile, totalBytes: totalAttachmentFileBytes },
+        attachmentIO: {
+          listPage: listAttachmentFilesPage,
+          summary: attachmentFileSummary,
+          closeListing: closeAttachmentListing,
+          read: readAttachmentFile,
+          totalBytes: totalAttachmentFileBytes,
+        },
         onProgress: (p) => {
           // With a compact plan, the analysis pass already used 0–20%.
           setProgress(compactPlan ? 20 + Math.round(p.percent * 0.8) : p.percent);

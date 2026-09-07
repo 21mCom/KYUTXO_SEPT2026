@@ -545,17 +545,25 @@ export async function runDueScheduledBackup(options: {
         password,
         compactPlan,
         attachmentIO: {
-          listPage: async (offset, limit) => {
-            const result = await api.listAllAttachments(offset, limit);
+          listPage: async (cursor, limit) => {
+            const result = await api.listAllAttachments(cursor, limit);
             if (!result.success) throw new Error(result.error || "Could not list attachments");
-            return { files: result.files ?? [], total: result.total ?? result.files?.length ?? 0 };
+            return { files: result.files ?? [], total: result.total, totalBytes: result.totalBytes, cursor: result.cursor ?? null };
+          },
+          summary: async () => {
+            const result = await api.getAttachmentsSize();
+            if (!result.success) throw new Error(result.error || "Could not measure attachments");
+            return { total: result.fileCount ?? 0, totalBytes: result.totalBytes ?? null };
+          },
+          closeListing: async (cursor) => {
+            await api.closeAttachmentListing(cursor);
           },
           read: async (path) => {
             const result = await api.readAttachment(path);
             return result.success ? result.data ?? null : null;
           },
           totalBytes: async () => {
-            const result = await api.listAllAttachments(0, 1);
+            const result = await api.listAllAttachments(null, 1);
             return result.success && typeof result.totalBytes === "number" ? result.totalBytes : null;
           },
         },

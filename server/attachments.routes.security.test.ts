@@ -21,6 +21,8 @@ let baseUrl: string;
 let dataDir: string;
 let attachmentsDir: string;
 let outsideDir: string;
+let resetAttachmentTraversalVisits: () => void;
+let getAttachmentTraversalVisits: () => number;
 
 beforeAll(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "kyutxo-attach-routes-"));
@@ -31,7 +33,10 @@ beforeAll(async () => {
   process.env.KYUTXO_MAX_ATTACHMENT_BYTES = String(CAP);
   vi.resetModules();
   const { default: express } = await import("express");
-  const { default: attachmentsRouter } = await import("./attachments");
+  const attachmentsModule = await import("./attachments");
+  const attachmentsRouter = attachmentsModule.default;
+  resetAttachmentTraversalVisits = attachmentsModule.resetAttachmentTraversalVisitsForTest;
+  getAttachmentTraversalVisits = attachmentsModule.getAttachmentTraversalVisitsForTest;
   const app: Express = express();
   app.use(express.json());
   app.use("/api/attachments", attachmentsRouter);
@@ -409,5 +414,64 @@ describe("legitimate round-trip still works", () => {
       await new Promise((r) => setTimeout(r, 50));
     }
     expect(fdsToFile()).toBe(0);
+  });
+});
+
+describe("resumable attachment listing", () => {
+  it("keeps browser traversal linear across many bounded pages", async () => {
+    fs.rmSync(attachmentsDir, { recursive: true, force: true });
+    const manyDir = path.join(attachmentsDir, "many");
+    fs.mkdirSync(manyDir, { recursive: true });
+    const fileCount = 1_005;
+    for (let index = 0; index < fileCount; index++) {
+      fs.writeFileSync(path.join(manyDir, `${index}.bin`), small(index & 0xff));
+    }
+    fs.writeFileSync(path.join(outsideDir, "listing-secret.bin"), new Uint8Array(500));
+    fs.symlinkSync(
+      path.join(outsideDir, "listing-secret.bin"),
+      path.join(manyDir, "outside-link.bin"),
+    );
+
+    resetAttachmentTraversalVisits();
+    {
+      const names: string[] = [];
+      let cursor: string | null = null;
+      let page = 0;
+      do {
+        const query = new URLSearchParams({ limit: "10" });
+        if (cursor) query.set("cursor", cursor);
+        const response = await fetch(`${baseUrl}/api/attachments/list-all?${query}`);
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        names.push(...body.files);
+        cursor = body.cursor ?? null;
+        page += 1;
+        if (page === 1) {
+          expect(body.total).toBe(fileCount);
+          expect(body.totalBytes).toBe(fileCount * small().length);
+        } else {
+          expect(body.total).toBeUndefined();
+          expect(body.totalBytes).toBeUndefined();
+        }
+      } while (cursor);
+
+      expect(page).toBe(Math.ceil(fileCount / 10));
+      expect(new Set(names).size).toBe(fileCount);
+      expect(names.some((name) => name.includes("outside-link"))).toBe(false);
+      expect(getAttachmentTraversalVisits()).toBe(fileCount * 2);
+    }
+
+    const defaultPage = await fetch(`${baseUrl}/api/attachments/list-all`);
+    const defaultBody = await defaultPage.json();
+    expect(defaultBody.files).toHaveLength(1_000);
+    expect(typeof defaultBody.cursor).toBe("string");
+    const close = await fetch(
+      `${baseUrl}/api/attachments/list-all?closeCursor=${encodeURIComponent(defaultBody.cursor)}`,
+    );
+    expect(close.status).toBe(200);
+    const expired = await fetch(
+      `${baseUrl}/api/attachments/list-all?cursor=${encodeURIComponent(defaultBody.cursor)}&limit=10`,
+    );
+    expect(expired.status).toBe(410);
   });
 });

@@ -389,4 +389,42 @@ describe("list-all-attachments", () => {
     // The outside file's 1000 bytes must not leak into the total.
     expect(r.totalBytes).toBe(small().length);
   });
+
+  it("continues an opaque listing session without rescanning prior pages", async () => {
+    const fileCount = 125;
+    fs.mkdirSync(path.join(attachmentsDir, "many"), { recursive: true });
+    for (let index = 0; index < fileCount; index++) {
+      fs.writeFileSync(path.join(attachmentsDir, "many", `${index}.bin`), small(1));
+    }
+
+    const opendir = vi.spyOn(fs.promises, "opendir");
+    try {
+      const names = [];
+      let cursor = null;
+      let pages = 0;
+      do {
+        const result = await ipc.invoke("list-all-attachments", { cursor, limit: 10 });
+        expect(result.success).toBe(true);
+        names.push(...result.files);
+        cursor = result.cursor;
+        pages += 1;
+        if (pages === 1) {
+          expect(result.total).toBe(fileCount);
+          expect(result.totalBytes).toBe(fileCount * small(1).length);
+        } else {
+          expect(result.total).toBeUndefined();
+          expect(result.totalBytes).toBeUndefined();
+        }
+      } while (cursor);
+
+      expect(pages).toBe(Math.ceil(fileCount / 10));
+      expect(new Set(names).size).toBe(fileCount);
+      // Two directory opens per traversal (root + "many"), exactly twice:
+      // one summary pass and one resumable enumeration pass. Page count does
+      // not add any more filesystem traversals.
+      expect(opendir).toHaveBeenCalledTimes(4);
+    } finally {
+      opendir.mockRestore();
+    }
+  });
 });

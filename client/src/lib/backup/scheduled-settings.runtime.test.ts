@@ -39,6 +39,8 @@ const backupApi = vi.hoisted(() => ({
   scheduledBackupPromote: vi.fn(),
   scheduledBackupAbort: vi.fn(),
   listAllAttachments: vi.fn(),
+  closeAttachmentListing: vi.fn(),
+  getAttachmentsSize: vi.fn(),
   readAttachment: vi.fn(),
 }));
 
@@ -123,6 +125,12 @@ beforeEach(async () => {
     success: true,
     files: [],
     totalBytes: 0,
+  });
+  backupApi.closeAttachmentListing.mockReset().mockResolvedValue({ success: true });
+  backupApi.getAttachmentsSize.mockReset().mockResolvedValue({
+    success: true,
+    totalBytes: 0,
+    fileCount: 0,
   });
   backupApi.readAttachment.mockReset().mockResolvedValue({
     success: true,

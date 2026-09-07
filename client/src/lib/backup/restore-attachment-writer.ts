@@ -62,20 +62,25 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
     // so a successful restore can delete prior-vault files the new vault
     // does not reference (relative paths, no `attachments/` prefix).
     async list() {
-      if (isElectron()) {
-        const api = getElectronAPI();
-        const result = await api.listAllAttachments();
-        if (!result.success) {
-          throw new Error(result.error || "Failed to list attachments");
+      const files: string[] = [];
+      let cursor: string | null = null;
+      do {
+        if (isElectron()) {
+          const result = await getElectronAPI().listAllAttachments(cursor, 1_000);
+          if (!result.success) throw new Error(result.error || "Failed to list attachments");
+          files.push(...(result.files ?? []));
+          cursor = result.cursor ?? null;
+        } else {
+          const query = new URLSearchParams({ limit: "1000" });
+          if (cursor) query.set("cursor", cursor);
+          const response = await fetch(`/api/attachments/list-all?${query}`);
+          if (!response.ok) throw new Error(`Failed to list attachments: ${response.status}`);
+          const data = await response.json();
+          files.push(...(data.files ?? []));
+          cursor = data.cursor ?? null;
         }
-        return result.files ?? [];
-      }
-      const response = await fetch("/api/attachments/list-all");
-      if (!response.ok) {
-        throw new Error(`Failed to list attachments: ${response.status}`);
-      }
-      const data = await response.json();
-      return data.files ?? [];
+      } while (cursor);
+      return files;
     },
     // Orphaned files: owning record absent. Route to Needs Review folder
     // under the original filename. Best-effort in Electron; no-op in web.

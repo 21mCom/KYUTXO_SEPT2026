@@ -494,16 +494,25 @@ async function copyAndVerifyAttachmentFile(srcRelPath: string, destRelPath: stri
 }
 
 async function listAllAttachmentFiles(): Promise<string[]> {
-  if (isElectron()) {
-    const api = getElectronAPI();
-    const result = await api.listAllAttachments();
-    if (!result.success) throw new Error(result.error || 'List failed');
-    return result.files ?? [];
-  }
-  const response = await fetch('/api/attachments/list-all');
-  if (!response.ok) throw new Error(`List failed: ${response.status}`);
-  const data = await response.json();
-  return data.files ?? [];
+  const files: string[] = [];
+  let cursor: string | null = null;
+  do {
+    if (isElectron()) {
+      const result = await getElectronAPI().listAllAttachments(cursor, 1_000);
+      if (!result.success) throw new Error(result.error || 'List failed');
+      files.push(...(result.files ?? []));
+      cursor = result.cursor ?? null;
+    } else {
+      const query = new URLSearchParams({ limit: '1000' });
+      if (cursor) query.set('cursor', cursor);
+      const response = await fetch(`/api/attachments/list-all?${query}`);
+      if (!response.ok) throw new Error(`List failed: ${response.status}`);
+      const data = await response.json();
+      files.push(...(data.files ?? []));
+      cursor = data.cursor ?? null;
+    }
+  } while (cursor);
+  return files;
 }
 
 // Normalize a DB-stored path so it can be compared against the on-disk relative

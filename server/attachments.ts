@@ -3,7 +3,7 @@ import multer from 'multer';
 import * as fs from 'fs/promises';
 import { constants as fsConstants } from 'fs';
 import * as path from 'path';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { pipeline } from 'stream/promises';
 
 // O_NOFOLLOW (Linux/macOS) makes the OPEN itself refuse a symlink at the final
@@ -429,68 +429,124 @@ router.post('/upload', singleFileUpload, async (req: Request, res) => {
   }
 });
 
+type AttachmentListSession = {
+  iterator: AsyncGenerator<string>;
+  expiresAt: number;
+};
+const attachmentListSessions = new Map<string, AttachmentListSession>();
+const ATTACHMENT_LIST_SESSION_TTL_MS = 5 * 60_000;
+const ATTACHMENT_LIST_DEFAULT_LIMIT = 1_000;
+const ATTACHMENT_LIST_MAX_SESSIONS = 8;
+
+async function closeAttachmentListSession(id: string): Promise<void> {
+  const session = attachmentListSessions.get(id);
+  if (!session) return;
+  attachmentListSessions.delete(id);
+  await session.iterator.return(undefined);
+}
+
+const attachmentListSessionReaper = setInterval(() => {
+  const now = Date.now();
+  for (const [id, session] of attachmentListSessions) {
+    if (session.expiresAt <= now) void closeAttachmentListSession(id);
+  }
+}, 30_000);
+attachmentListSessionReaper.unref();
+
+let attachmentTraversalVisits = 0;
+export function resetAttachmentTraversalVisitsForTest(): void {
+  attachmentTraversalVisits = 0;
+}
+export function getAttachmentTraversalVisitsForTest(): number {
+  return attachmentTraversalVisits;
+}
+
+async function* iterateAttachmentFiles(): AsyncGenerator<string> {
+  const entries = await fs.opendir(ATTACHMENTS_DIR);
+  for await (const entry of entries) {
+    if (entry.isDirectory()) {
+      const subDir = path.join(ATTACHMENTS_DIR, entry.name);
+      const files = await fs.opendir(subDir);
+      for await (const file of files) {
+        if (file.isFile()) {
+          attachmentTraversalVisits += 1;
+          yield path.join(entry.name, file.name);
+        }
+      }
+    } else if (entry.isFile()) {
+      attachmentTraversalVisits += 1;
+      yield entry.name;
+    }
+  }
+}
+
+async function attachmentSummary(): Promise<{ total: number; totalBytes: number }> {
+  let total = 0;
+  let totalBytes = 0;
+  for await (const relativePath of iterateAttachmentFiles()) {
+    total += 1;
+    try {
+      totalBytes += (await fs.stat(path.join(ATTACHMENTS_DIR, relativePath))).size;
+    } catch {
+      // File vanished between enumeration and stat.
+    }
+  }
+  return { total, totalBytes };
+}
+
 // List ALL attachments recursively (for backup) - MUST be before wildcard routes
 router.get('/list-all', async (req, res) => {
   try {
     await ensureDir(ATTACHMENTS_DIR);
-    const parsedOffset = Number(req.query.offset);
     const parsedLimit = Number(req.query.limit);
-    const offset = Number.isSafeInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
     const limit = Number.isSafeInteger(parsedLimit) && parsedLimit > 0
       ? Math.min(parsedLimit, 10_000)
-      : Number.MAX_SAFE_INTEGER;
-    const result: string[] = [];
-    let total = 0;
-    // Exact total bytes of every attachment FILE on disk. Stored uncompressed in
-    // the backup ZIP, so this is the true number of bytes a restore writes — the
-    // backup export records it in the manifest for an exact restore disk-space
-    // estimate (more reliable than DB metadata, which can miss legacy
-    // root-level files that this walk still includes).
-    let totalBytes = 0;
-    
-    try {
-      const entries = await fs.opendir(ATTACHMENTS_DIR);
-      for await (const entry of entries) {
-        if (entry.isDirectory()) {
-          const subDir = path.join(ATTACHMENTS_DIR, entry.name);
-          // withFileTypes so SYMLINKS inside the directory are visible as
-          // links: a planted link to an outside file must be skipped, not
-          // followed (stat() would follow it and leak the target's bytes
-          // into the backup listing and size total).
-          const files = await fs.opendir(subDir);
-          for await (const file of files) {
-            if (!file.isFile()) continue; // skips symlinks, sockets, subdirs
-            // Return relative paths like "identifier/filename.ext"
-            if (total >= offset && result.length < limit) result.push(path.join(entry.name, file.name));
-            total += 1;
-            try {
-              totalBytes += (await fs.stat(path.join(subDir, file.name))).size;
-            } catch {
-              // File vanished between readdir and stat — skip its bytes.
-            }
-          }
-        } else if (entry.isFile()) {
-          // Root-level (single-segment) legacy files. Without this branch they
-          // are invisible to backups and the attachment audit, which makes them
-          // look "missing" even though they are still on disk.
-          if (total >= offset && result.length < limit) result.push(entry.name);
-          total += 1;
-          try {
-            totalBytes += (await fs.stat(path.join(ATTACHMENTS_DIR, entry.name))).size;
-          } catch {
-            // File vanished between readdir and stat — skip its bytes.
-          }
-        }
+      : ATTACHMENT_LIST_DEFAULT_LIMIT;
+    const now = Date.now();
+    for (const [id, stale] of attachmentListSessions) {
+      if (stale.expiresAt <= now) {
+        await closeAttachmentListSession(id);
       }
-    } catch (error) {
-      // Directory doesn't exist yet - return empty
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return res.json({ success: true, files: [], total: 0, totalBytes: 0 });
-      }
-      throw error;
     }
-    
-    res.json({ success: true, files: result, total, totalBytes });
+    if (req.query.summaryOnly === '1') {
+      return res.json({ success: true, ...(await attachmentSummary()) });
+    }
+    const closeCursor = typeof req.query.closeCursor === 'string' ? req.query.closeCursor : null;
+    if (closeCursor) {
+      await closeAttachmentListSession(closeCursor);
+      return res.json({ success: true });
+    }
+    const requestedCursor = typeof req.query.cursor === 'string' ? req.query.cursor : null;
+    let cursor = requestedCursor;
+    let session = cursor ? attachmentListSessions.get(cursor) : undefined;
+    let summary: { total: number; totalBytes: number } | undefined;
+    if (!session) {
+      if (cursor) return res.status(410).json({ error: 'Attachment listing expired' });
+      summary = await attachmentSummary();
+      if (summary.total === 0) return res.json({ success: true, files: [], ...summary, cursor: null });
+      if (attachmentListSessions.size >= ATTACHMENT_LIST_MAX_SESSIONS) {
+        return res.status(429).json({ error: 'Too many attachment listings' });
+      }
+      cursor = randomUUID();
+      session = { iterator: iterateAttachmentFiles(), expiresAt: now + ATTACHMENT_LIST_SESSION_TTL_MS };
+      attachmentListSessions.set(cursor, session);
+    }
+    session.expiresAt = now + ATTACHMENT_LIST_SESSION_TTL_MS;
+    const files: string[] = [];
+    let done = false;
+    while (files.length < limit) {
+      const next = await session.iterator.next();
+      if (next.done) {
+        done = true;
+        break;
+      }
+      files.push(next.value);
+    }
+    if (done) {
+      attachmentListSessions.delete(cursor!);
+      cursor = null;
+    }
+    res.json({ success: true, files, ...(summary ?? {}), cursor });
   } catch (error) {
     logServerError('List all attachments error', error);
     res.status(500).json({ error: 'List failed' });
