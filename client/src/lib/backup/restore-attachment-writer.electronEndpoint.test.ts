@@ -60,10 +60,14 @@ let ipc: FakeIpcMain;
 // REAL IPC handler registered on the FakeIpcMain.
 vi.mock("@/lib/electron", () => ({
   isElectron: () => true,
+  getElectronAPISafe: () => null,
   getElectronAPI: () => ({
     writeAttachment: (relativePath: string, data: ArrayBuffer) =>
       ipc.invoke("write-attachment", { relativePath, data: new Uint8Array(data) }),
-    listAllAttachments: () => ipc.invoke("list-all-attachments"),
+    listAllAttachments: (cursor?: string | null, limit?: number) =>
+      ipc.invoke("list-all-attachments", { cursor, limit }),
+    closeAttachmentListing: (cursor: string) =>
+      ipc.invoke("list-all-attachments", { closeCursor: cursor }),
     writeNeedsReview: (filename: string, data: ArrayBuffer) =>
       ipc.invoke("write-needs-review", { filename, data: new Uint8Array(data) }),
     deleteNeedsReview: (name: string) => ipc.invoke("delete-needs-review", name),
@@ -103,6 +107,19 @@ beforeEach(async () => {
 });
 
 describe("createRestoreAttachmentWriter against the real Electron write-attachment handler", () => {
+  it("lists attachment filenames through the requested bounded Electron page", async () => {
+    const writer = createRestoreAttachmentWriter();
+    await writer.write("page/a.txt", new Uint8Array([1]).buffer);
+    await writer.write("page/b.txt", new Uint8Array([2]).buffer);
+    await writer.write("page/c.txt", new Uint8Array([3]).buffer);
+
+    const page = await writer.listPage!(null, 1);
+
+    expect(page.files).toHaveLength(1);
+    expect(page.cursor).toEqual(expect.any(String));
+    await writer.closeListing!(page.cursor!);
+  });
+
   it("surfaces the handler's real size-cap rejection as a typed AttachmentTooLargeError", async () => {
     const writer = createRestoreAttachmentWriter();
     const oversized = new Uint8Array(CAP + 1).fill(7);

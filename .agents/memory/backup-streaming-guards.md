@@ -1,6 +1,6 @@
 ---
 name: backup streaming export/restore guards
-description: Non-obvious pitfalls in the v3 streaming backup — fflate sync-vs-async ordering, and the memory-fallback OOM guard.
+description: Non-obvious pitfalls in v3 streaming backup and restore ordering, memory guards, and paged attachment cleanup.
 ---
 
 # fflate onEntry is synchronous; ordering guards must track header order
@@ -77,3 +77,19 @@ a `getExisting*Ids()` index reader, add as you go), mirroring `custodySegments`.
 Otherwise a re-merge either doubles rows or throws on the unique index and
 ABORTS the whole restore mid-way. Replace mode appends as-is (caller cleared
 first), so two backup rows sharing the key still throw — that's intended.
+
+# Restore cleanup must use one resumable filesystem cursor
+
+Successful replace-restore cleanup lists attachment filenames in bounded pages
+after the restore, protects every path the restore wrote, and continues one
+resumable filesystem traversal until its cursor is exhausted.
+
+**Why:** Holding every old filename until restore success recreates a
+filename-sized memory spike. Restarting a filesystem walk for every page is
+quadratic, and offset paging is unstable while the consumer deletes stale files.
+
+**How to apply:** Open the traversal on the first bounded page, pass its opaque
+cursor into each next page, and explicitly close it if cleanup exits early.
+Delete only normalized paths absent from the restore's written-path set. Keep
+the sweep success-only and best-effort; cancel/failure cleanup continues to
+sweep only files written by that attempt.

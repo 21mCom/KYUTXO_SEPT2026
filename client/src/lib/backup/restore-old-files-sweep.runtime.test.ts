@@ -16,7 +16,7 @@
 //   - the REAL web-mode client file layer (uploadFile / getFileBlob),
 //   - the REAL exportBackup (unencrypted), and
 //   - the REAL restoreV3Backup with a production-shaped AttachmentFileWriter that
-//     implements write + delete + list (so the post-restore sweep is active).
+//     implements write + delete + listPage (so the bounded post-restore sweep is active).
 //
 // The contract asserted on disk:
 //   - prior-vault files NOT referenced by the restored DB are gone afterwards,
@@ -135,7 +135,7 @@ const attachmentIO = {
 };
 
 // Production-shaped attachment writer for restore. Crucially this implements
-// write + delete + list, so restoreV3Backup's post-restore old-vault sweep is
+// write + delete + listPage, so restoreV3Backup's post-restore old-vault sweep is
 // active (the same trio the real SettingsPage restore wires up).
 const attachmentWriter = {
   async write(relativePath: string, fileData: ArrayBuffer): Promise<void> {
@@ -162,11 +162,16 @@ const attachmentWriter = {
       throw new Error(err.error || res.statusText);
     }
   },
-  async list(): Promise<string[]> {
-    const res = await fetch("/api/attachments/list-all");
+  async listPage(cursor: string | null, limit: number): Promise<{ files: string[]; cursor: string | null }> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (cursor) query.set("cursor", cursor);
+    const res = await fetch(`/api/attachments/list-all?${query}`);
     if (!res.ok) throw new Error(`list-all failed: ${res.status}`);
     const data = await res.json();
-    return data.files ?? [];
+    return { files: data.files ?? [], cursor: data.cursor ?? null };
+  },
+  async closeListing(cursor: string): Promise<void> {
+    await fetch(`/api/attachments/list-all?closeCursor=${encodeURIComponent(cursor)}`);
   },
 };
 
@@ -266,7 +271,7 @@ describe("v3 restore over a populated data dir sweeps the prior vault's stranded
     for (const p of oldDiskPaths) expect(diskBeforeRestore).toContain(p);
 
     // 3. Restore the NEW vault's backup OVER the populated OLD vault. The writer
-    //    implements write + delete + list, so the post-restore sweep runs.
+    //    implements write + delete + listPage, so the post-restore sweep runs.
     const result = await restoreV3Backup({
       source: blobChunks(backupBlob),
       attachmentWriter,
@@ -335,5 +340,35 @@ describe("v3 restore over a populated data dir sweeps the prior vault's stranded
     expect(await fetchBytesViaPath(collidingPath, "text/plain")).toBe(
       "RESTORED-COLLIDING-BYTES",
     );
+  });
+
+  it("enumerates cleanup through bounded pages instead of one full filename array", async () => {
+    const sink = new MemorySink();
+    await exportBackup({ sink: sink as any, encrypted: false, batchSize: 50, attachmentIO });
+    const backupBlob = sink.blob as Blob;
+
+    const oldCount = 1_205;
+    for (let i = 0; i < oldCount; i += 1) {
+      await attachmentWriter.write(
+        `old/${String(i).padStart(4, "0")}.txt`,
+        new Uint8Array([i % 251]).buffer,
+      );
+    }
+
+    const requestedLimits: number[] = [];
+    const pagedWriter = {
+      ...attachmentWriter,
+      async listPage(cursor: string | null, limit: number) {
+        requestedLimits.push(limit);
+        expect(limit).toBeLessThanOrEqual(500);
+        return attachmentWriter.listPage(cursor, limit);
+      },
+    };
+
+    await restoreV3Backup({ source: blobChunks(backupBlob), attachmentWriter: pagedWriter });
+
+    expect(requestedLimits.length).toBeGreaterThan(2);
+    expect(Math.max(...requestedLimits)).toBeLessThan(oldCount);
+    expect(await listDiskFiles()).toEqual([]);
   });
 });

@@ -17,10 +17,6 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         const api = getElectronAPI();
         const result = await api.writeAttachment(relativePath, fileData);
         if (!result.success) {
-          // Size-cap rejection = this ONE file exceeds the desktop cap. Throw
-          // the typed error so the restore skips the file with a per-file
-          // warning (same contract as the web branch's HTTP 413) instead of
-          // failing the whole restore over it.
           if (result.code === "ATTACHMENT_TOO_LARGE") {
             throw new AttachmentTooLargeError(
               relativePath,
@@ -31,17 +27,14 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         }
       } else {
         const formData = new FormData();
-        formData.append('file', new Blob([fileData]));
-        formData.append('relativePath', relativePath);
-        const response = await fetch('/api/attachments/write', {
-          method: 'POST',
+        formData.append("file", new Blob([fileData]));
+        formData.append("relativePath", relativePath);
+        const response = await fetch("/api/attachments/write", {
+          method: "POST",
           body: formData,
         });
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          // 413 = this ONE file exceeds the server's size cap. Throw the typed
-          // error so the restore skips the file with a per-file warning instead
-          // of failing the whole restore over it.
           if (response.status === 413) {
             throw new AttachmentTooLargeError(
               relativePath,
@@ -52,49 +45,49 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         }
       }
     },
-    // Used to sweep files this restore wrote if it fails/cancels after
-    // the destructive clear, AND to reclaim OLD-vault files a successful
-    // restore left behind, so neither is stranded on disk.
     async delete(relativePath) {
       await deleteFile(`${ATTACHMENTS_DIR}/${relativePath}`);
     },
-    // Snapshot of every attachment file on disk before the write phase,
-    // so a successful restore can delete prior-vault files the new vault
-    // does not reference (relative paths, no `attachments/` prefix).
-    async list() {
-      const files: string[] = [];
-      let cursor: string | null = null;
-      do {
-        if (isElectron()) {
-          const result = await getElectronAPI().listAllAttachments(cursor, 1_000);
-          if (!result.success) throw new Error(result.error || "Failed to list attachments");
-          files.push(...(result.files ?? []));
-          cursor = result.cursor ?? null;
-        } else {
-          const query = new URLSearchParams({ limit: "1000" });
-          if (cursor) query.set("cursor", cursor);
-          const response = await fetch(`/api/attachments/list-all?${query}`);
-          if (!response.ok) throw new Error(`Failed to list attachments: ${response.status}`);
-          const data = await response.json();
-          files.push(...(data.files ?? []));
-          cursor = data.cursor ?? null;
+    // Continue one bounded, resumable filesystem traversal. Restore consumes
+    // this only after a successful replace, so old filenames are never retained
+    // in one pre-clear array.
+    async listPage(cursor, limit) {
+      if (isElectron()) {
+        const result = await getElectronAPI().listAllAttachments(cursor, limit);
+        if (!result.success) {
+          throw new Error(result.error || "Failed to list attachments");
         }
-      } while (cursor);
-      return files;
+        return { files: result.files ?? [], cursor: result.cursor ?? null };
+      }
+      const query = new URLSearchParams({ limit: String(limit) });
+      if (cursor) query.set("cursor", cursor);
+      const response = await fetch(`/api/attachments/list-all?${query}`);
+      if (!response.ok) {
+        throw new Error(`Failed to list attachments: ${response.status}`);
+      }
+      const data = await response.json();
+      return { files: data.files ?? [], cursor: data.cursor ?? null };
     },
-    // Orphaned files: owning record absent. Route to Needs Review folder
-    // under the original filename. Best-effort in Electron; no-op in web.
-    // Returns the FINAL filename written (the folder de-dupes collisions) so
-    // a cancelled merge can undo exactly that file via deleteReview().
+    async closeListing(cursor) {
+      if (isElectron()) {
+        const result = await getElectronAPI().closeAttachmentListing(cursor);
+        if (!result.success) {
+          throw new Error(result.error || "Failed to close attachment listing");
+        }
+        return;
+      }
+      const response = await fetch(
+        `/api/attachments/list-all?closeCursor=${encodeURIComponent(cursor)}`,
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to close attachment listing: ${response.status}`);
+      }
+    },
     async writeReview(originalFilename, fileData) {
       if (isElectron()) {
         const api = getElectronAPI();
         const result = await api.writeNeedsReview(originalFilename, fileData);
         if (!result.success) {
-          // Size-cap rejection = this ONE orphaned file exceeds the desktop
-          // cap. Throw the typed error so the restore records it as an
-          // oversized skip (named in the summary) instead of a generic
-          // best-effort loss — and never as a restore-fatal failure.
           if (result.code === "ATTACHMENT_TOO_LARGE") {
             throw new AttachmentTooLargeError(
               originalFilename,
@@ -108,8 +101,6 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         }
       }
     },
-    // Remove a Needs Review file previously reported by writeReview(); used by
-    // the merge-cancel undo pass. No-op in web (writeReview is too).
     async deleteReview(name) {
       if (isElectron()) {
         const api = getElectronAPI();

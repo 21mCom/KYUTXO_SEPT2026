@@ -92,6 +92,19 @@ beforeEach(async () => {
 });
 
 describe("createRestoreAttachmentWriter against the real /write endpoint", () => {
+  it("lists attachment filenames through the requested bounded browser page", async () => {
+    const writer = createRestoreAttachmentWriter();
+    await writer.write("page/a.txt", new Uint8Array([1]).buffer);
+    await writer.write("page/b.txt", new Uint8Array([2]).buffer);
+    await writer.write("page/c.txt", new Uint8Array([3]).buffer);
+
+    const page = await writer.listPage!(null, 1);
+
+    expect(page.files).toHaveLength(1);
+    expect(page.cursor).toEqual(expect.any(String));
+    await writer.closeListing!(page.cursor!);
+  });
+
   it("surfaces the server's real 413 as a typed AttachmentTooLargeError", async () => {
     const writer = createRestoreAttachmentWriter();
     const oversized = new Uint8Array(CAP + 1).fill(7);
