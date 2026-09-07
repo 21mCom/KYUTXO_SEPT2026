@@ -482,6 +482,8 @@ export interface ProtectedStoreBridge {
     clearVault: () => Promise<EngineEnvelope<{ deleted: number }>>;
     restoreCommit: (replaceExisting: boolean, rows: object) => Promise<EngineEnvelope<{ saved: number }>>;
     commitOwnershipReview: (command: unknown) => Promise<EngineEnvelope<unknown>>;
+    ownerCostBasisPage: (options: { selectedOwner?: string; limit?: number; expectedCheckpointKey?: string }) => Promise<EngineEnvelope<import('./owner-cost-basis-core').OwnerCostBasisPage>>;
+    ownerCostBasisProjection: (addresses: string[]) => Promise<EngineEnvelope<import('./repository/contracts').OwnerCostBasisProjectionResult>>;
   };
   writeAttachment: (bytes: ArrayBuffer, alias?: string) => Promise<EngineEnvelope<{ id: string; name: string; alias?: string; size: number }>>;
   readAttachment: (name: string, id: string) => Promise<EngineEnvelope<ArrayBuffer>>;

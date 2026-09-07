@@ -31,6 +31,82 @@ describe("protected store", () => {
     expect(preload).toContain("repositoryCall('records', 'deleteOrArchiveRecords', command)");
   });
 
+  it("keeps owner-book reports on fixed bounded protected-store vocabulary", () => {
+    const preload = fs.readFileSync(path.join(__dirname, "preload.cjs"), "utf8");
+    const worker = fs.readFileSync(path.join(__dirname, "protected-store-worker.cjs"), "utf8");
+    expect(preload).toContain("ownerCostBasisPage: (options) =>");
+    expect(preload).toContain("repositoryCall('records', 'ownerCostBasisPage', { options })");
+    expect(worker).toContain("'ownerCostBasisPage', 'ownerCostBasisProjection'");
+    expect(worker).toContain("ownerBookCheckpoint = null");
+    expect(worker).toContain("dataRevision++");
+    expect(worker).not.toContain("message.sql");
+  });
+
+  it("materializes bounded owner pages and rejects stale protected checkpoints", async () => {
+    const { client } = makeClient();
+    const call = (collection: string, operation: string, payload: object = {}) =>
+      client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: collection === "blockchainTransactions" || collection === "transactionParticipants"
+          ? "transactions" : "records",
+        collection,
+        operation,
+        ...payload,
+      });
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "owner book test password" });
+      await call("owners", "save", { row: { id: 1, name: "Alice", createdAt: 1 } });
+      await call("records", "save", { row: {
+        id: 1, type: "address", inputString: "owned", label: "", tags: [], categories: [],
+        owner: "Alice", addressImportance: "manual",
+      } });
+      const requested = Number(process.env.KYUTXO_OWNER_BOOK_PROTECTED_SCALE_ROWS ?? 2_000);
+      const count = Math.min(1_000_000, Math.max(2_000, Number.isSafeInteger(requested) ? requested : 2_000));
+      for (let offset = 0; offset < count; offset += 1_000) {
+        const size = Math.min(1_000, count - offset);
+        await call("blockchainTransactions", "saveBatch", { rows: Array.from({ length: size }, (_, j) => {
+          const i = offset + j;
+          return { id: i + 1, txid: `scale-${i}`, blockHeight: i + 1,
+            blockTime: 1_700_000_000 + i, fee: 0, feeRate: 0, syncedAt: 1 };
+        }) });
+        await call("transactionParticipants", "saveBatch", { rows: Array.from({ length: size }, (_, j) => {
+          const i = offset + j;
+          return { id: i + 1, txid: `scale-${i}`, role: "output", address: "owned", amount: 1, vout: 0 };
+        }) });
+      }
+      const started = performance.now();
+      const first = await call("records", "ownerCostBasisPage", { options: { limit: 25 } });
+      const buildMs = performance.now() - started;
+      const cachedStarted = performance.now();
+      const second = await call("records", "ownerCostBasisPage", { options: { limit: 25 } });
+      const cachedMs = performance.now() - cachedStarted;
+      expect(first.openBatchesTotal).toBe(count);
+      expect(first.openBatches).toHaveLength(25);
+      expect(JSON.stringify(first)).not.toContain('"allocations"');
+      expect(second).toEqual(first);
+      expect(cachedMs).toBeLessThan(buildMs);
+      expect(first.checkpointKey).toMatch(/owner-book:protected:v4:owner-cost-basis:v1:.*:[a-f0-9]{64}:[a-f0-9]{64}:/);
+
+      await call("transactionMetadata", "save", { row: { id: 1, txid: "scale-0", costBasisUsd: 2, updatedAt: 2 } });
+      await expect(call("records", "ownerCostBasisPage", {
+        options: { limit: 1, expectedCheckpointKey: first.checkpointKey },
+      })).rejects.toThrow();
+      const metadataCheckpoint = await call("records", "ownerCostBasisPage", { options: { limit: 1 } });
+      // Same primary key and revision still changes the exact source hash.
+      await call("transactionMetadata", "save", { row: { id: 1, txid: "scale-0", costBasisUsd: 3, updatedAt: 2 } });
+      const replacedCheckpoint = await call("records", "ownerCostBasisPage", { options: { limit: 1 } });
+      expect(replacedCheckpoint.checkpointKey).not.toBe(metadataCheckpoint.checkpointKey);
+
+      // Policy-only content participates in both the source and policy hashes.
+      await call("owners", "save", { row: { id: 1, name: "Alice", createdAt: 1, defaultMatchingMethod: "lifo" } });
+      const policyCheckpoint = await call("records", "ownerCostBasisPage", { options: { limit: 1 } });
+      expect(policyCheckpoint.checkpointKey).not.toBe(replacedCheckpoint.checkpointKey);
+      await client.call(MESSAGE_TYPES.LOCK);
+      await expect(call("records", "ownerCostBasisPage", { options: { limit: 1 } })).rejects.toThrow();
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
   it("encrypts rows and attachment chunks, locks closed, and re-wraps the VDK", async () => {
     const { root, client } = makeClient();
     const rowPlaintext = "recognizable-row-plaintext";

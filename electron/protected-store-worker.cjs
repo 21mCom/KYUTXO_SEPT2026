@@ -6,6 +6,12 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 const { PROTECTED_TABLES } = require('./protected-store.cjs');
+const {
+  calculateOwnerCostBasisFromStoredRows,
+  ownerCostBasisEditorRows,
+  pageOwnerCostBasis,
+  selectOwnerCostBasisReport,
+} = require('./owner-cost-basis.bundle.cjs');
 
 const ROOT = workerData && workerData.dataDir;
 if (typeof ROOT !== 'string' || !ROOT) throw new Error('protected store configuration invalid');
@@ -57,6 +63,7 @@ const REPOSITORY_OPERATIONS = new Set([
   // Fixed cross-collection commands.  These are commands, not a renderer
   // transaction callback or a generic multi-table mutation language.
   'deleteOrArchiveRecords', 'saveTransactionWithParticipants', 'saveSettingsWithHistory', 'clearAll', 'restoreCommit', 'commitOwnershipReview',
+  'ownerCostBasisPage', 'ownerCostBasisProjection',
 ]);
 
 let db = null;
@@ -64,6 +71,18 @@ let vdk = null;
 let header = null;
 let keys = null;
 let Database = null;
+let dataRevision = 0;
+let ownerBookCheckpoint = null;
+const OWNER_BOOK_CALCULATOR_VERSION = 'owner-cost-basis:v1';
+const OWNER_BOOK_SOURCE_TABLES = Object.freeze([
+  'records', 'blockchainTransactions', 'transactionParticipants', 'transactionMetadata',
+  'transactionLegMetadata', 'entities', 'addressOwnership', 'recordModelMigrationState',
+  'owners', 'ownerResidencies',
+]);
+const OWNER_BOOK_POLICY_TABLES = Object.freeze([
+  'owners', 'ownerResidencies', 'transactionLegMetadata', 'entities',
+  'addressOwnership', 'recordModelMigrationState',
+]);
 try { Database = require('better-sqlite3-multiple-ciphers'); } catch {}
 
 function fail() { throw new Error('Protected store operation failed'); }
@@ -242,12 +261,103 @@ function loadDatabase() {
   }
 }
 function closeUnlocked() {
+  ownerBookCheckpoint = null;
+  dataRevision++;
   if (db) { try { db.close(); } catch {} }
   db = null;
   if (vdk) vdk.fill(0);
   vdk = null;
   keys = null;
   header = null;
+}
+
+function allRows(collection) {
+  return db.prepare(`SELECT value_json FROM "${collection}" ORDER BY id_sort,id_key`)
+    .all().map((row) => JSON.parse(row.value_json));
+}
+
+/** Hash encrypted-store canonical JSON incrementally; never concatenate the vault. */
+function ownerBookFingerprint(collections) {
+  const hash = crypto.createHash('sha256');
+  hash.update(`${OWNER_BOOK_CALCULATOR_VERSION}\0`);
+  for (const collection of collections) {
+    hash.update(`table:${collection}\0`);
+    const statement = db.prepare(
+      `SELECT id_key,value_json FROM "${collection}" ORDER BY id_sort,id_key`,
+    );
+    for (const row of statement.iterate()) {
+      // Length framing prevents ambiguous concatenations while retaining the
+      // exact stored value_json (including same-id/same-revision replacements).
+      hash.update(`${Buffer.byteLength(row.id_key)}:`);
+      hash.update(row.id_key);
+      hash.update(`${Buffer.byteLength(row.value_json)}:`);
+      hash.update(row.value_json);
+    }
+  }
+  return hash.digest('hex');
+}
+
+function getOwnerBookCheckpoint() {
+  if (ownerBookCheckpoint && ownerBookCheckpoint.revision === dataRevision) return ownerBookCheckpoint;
+  const sourceFingerprint = ownerBookFingerprint(OWNER_BOOK_SOURCE_TABLES);
+  const policyFingerprint = ownerBookFingerprint(OWNER_BOOK_POLICY_TABLES);
+  const migrations = allRows('recordModelMigrationState');
+  const report = calculateOwnerCostBasisFromStoredRows({
+    records: allRows('records'),
+    transactions: allRows('blockchainTransactions'),
+    participants: allRows('transactionParticipants'),
+    metadata: allRows('transactionMetadata'),
+    legMetadata: allRows('transactionLegMetadata'),
+    entities: allRows('entities'),
+    ownership: allRows('addressOwnership'),
+    owners: allRows('owners'),
+    residencies: allRows('ownerResidencies'),
+    migrationComplete: migrations.some((row) => row.id === 'v44' && row.phase === 'complete'),
+  });
+  const keyBase = `owner-book:protected:v4:${OWNER_BOOK_CALCULATOR_VERSION}:${header.vaultId}:${sourceFingerprint}:${policyFingerprint}`;
+  ownerBookCheckpoint = { revision: dataRevision, report, keyBase };
+  return ownerBookCheckpoint;
+}
+
+function ownerCostBasisPage(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) fail();
+  if (options.selectedOwner !== undefined && (typeof options.selectedOwner !== 'string' || options.selectedOwner.length > 512)) fail();
+  const limit = Number.isInteger(options.limit) ? Math.min(250, Math.max(1, options.limit)) : 100;
+  const checkpoint = getOwnerBookCheckpoint();
+  const key = ownerCheckpointKey(checkpoint, options.selectedOwner || '');
+  if (options.expectedCheckpointKey !== undefined && options.expectedCheckpointKey !== key) fail();
+  const report = selectOwnerCostBasisReport(checkpoint.report, options.selectedOwner);
+  return pageOwnerCostBasis(report, key, limit, ownerCostBasisEditorRows(report));
+}
+
+function ownerCheckpointKey(checkpoint, selectedOwner = '') {
+  return `${checkpoint.keyBase}:${crypto.createHash('sha256').update(selectedOwner).digest('hex').slice(0, 12)}`;
+}
+
+function ownerCostBasisProjection(addresses) {
+  if (!Array.isArray(addresses) || addresses.length > 1000 ||
+      addresses.some((address) => typeof address !== 'string' || !address || address.length > 512)) fail();
+  const wanted = new Set(addresses);
+  const checkpoint = getOwnerBookCheckpoint();
+  const addressByOutpoint = new Map();
+  for (const participant of allRows('transactionParticipants')) {
+    if (participant.role === 'output' && Number.isSafeInteger(participant.vout) &&
+        wanted.has(participant.address)) addressByOutpoint.set(`${participant.txid}:${participant.vout}`, participant.address);
+  }
+  const batches = checkpoint.report.batches.flatMap((batch) => {
+    if (batch.remainingSats <= 0) return [];
+    const address = addressByOutpoint.get(`${batch.acquiredTxid}:${batch.lotId.split(':').at(-1)}`);
+    return address ? [{ address, batch }] : [];
+  }).sort((a, b) => a.address.localeCompare(b.address) || a.batch.lotId.localeCompare(b.batch.lotId));
+  for (const address of wanted) if (batches.filter((row) => row.address === address).length > 250) fail();
+  if (batches.length > 1000) fail();
+  return {
+    checkpointKey: ownerCheckpointKey(checkpoint),
+    declaredAddresses: [...wanted].sort(),
+    batches,
+    perAddressLimit: 250,
+    globalLimit: 1000,
+  };
 }
 async function atomicWrite(file, bytes) {
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${random(12).toString('hex')}.tmp`);
@@ -721,11 +831,34 @@ function entityValue(row) {
   return value;
 }
 
+let repositoryDepth = 0;
 function repository(message) {
+  const outer = repositoryDepth++ === 0;
+  try {
+    const result = repositoryImpl(message);
+    if (outer && !['find', 'page', 'count', 'query', 'ownerCostBasisPage', 'ownerCostBasisProjection'].includes(message.operation)) {
+      dataRevision++;
+      ownerBookCheckpoint = null;
+    }
+    return result;
+  } finally {
+    repositoryDepth--;
+  }
+}
+
+function repositoryImpl(message) {
   locked();
   if (!validRepositoryRequest(message)) fail();
   const table = `"${message.collection}"`; // collection is from the fixed allowlist
   const { operation, collection } = message;
+  if (operation === 'ownerCostBasisPage') {
+    if (collection !== 'records') fail();
+    return ownerCostBasisPage(message.options);
+  }
+  if (operation === 'ownerCostBasisProjection') {
+    if (collection !== 'records') fail();
+    return ownerCostBasisProjection(message.addresses);
+  }
   const allocateId = () => {
     const found = db.prepare(`SELECT MAX(id_sort) AS max_id FROM ${table} WHERE id_sort > 0`).get();
     const id = (found && Number.isSafeInteger(found.max_id) ? found.max_id : 0) + 1;

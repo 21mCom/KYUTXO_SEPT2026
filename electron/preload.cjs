@@ -89,6 +89,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         repositoryCall('settings', 'restoreCommit', { replaceExisting, rows }),
       commitOwnershipReview: (command) =>
         repositoryCall('ownershipReviewDecisions', 'commitOwnershipReview', { command }),
+      ownerCostBasisPage: (options) =>
+        repositoryCall('records', 'ownerCostBasisPage', { options }),
+      ownerCostBasisProjection: (addresses) =>
+        repositoryCall('records', 'ownerCostBasisProjection', { addresses }),
     },
     writeAttachment: (bytes, alias) =>
       ipcRenderer.invoke('protected-store:writeAttachment', { bytes, alias }),

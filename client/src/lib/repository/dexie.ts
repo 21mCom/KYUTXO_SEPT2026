@@ -1,7 +1,31 @@
 import type { KYUTXODatabase } from '../database';
 import type { OwnershipReviewCommit, ProtectedRepositoryCommandName, ProtectedRepositoryQueryName, RecordDeleteOrArchiveCommand, RestoreVaultCommit, SettingsHistoryCommit, TransactionParticipantsCommit, VaultKey, VaultListOptions, VaultPage, VaultRepository, VaultRows, VaultTableName } from './contracts';
+import type { OwnerCostBasisPageRequest, OwnerCostBasisProjectionResult } from './contracts';
+import { calculateOwnerCostBasisFromStoredRows } from '../owner-cost-basis-storage';
+import { ownerCostBasisEditorRows, pageOwnerCostBasis, selectOwnerCostBasisReport, type OwnerCostBasisPage } from '../owner-cost-basis-core';
+import { createSHA256 } from 'hash-wasm';
 
 const MAX_PAGE_SIZE = 1000;
+const OWNER_BOOK_CALCULATOR_VERSION = 'owner-cost-basis:v1';
+
+async function fingerprintOwnerBookTables(rows: Record<string, any[]>, tables: readonly string[]): Promise<string> {
+  const hash = await createSHA256();
+  const encoder = new TextEncoder();
+  const update = (value: string) => {
+    const bytes = encoder.encode(value);
+    hash.update(`${bytes.byteLength}:`);
+    hash.update(bytes);
+  };
+  update(`${OWNER_BOOK_CALCULATOR_VERSION}\0`);
+  for (const table of tables) {
+    update(`table:${table}\0`);
+    for (const row of rows[table] ?? []) {
+      const value = JSON.stringify(row);
+      update(value);
+    }
+  }
+  return hash.digest();
+}
 
 /** Browser/development implementation. Dexie is contained in this adapter. */
 export class DexieVaultRepository implements VaultRepository {
@@ -365,6 +389,80 @@ export class DexieVaultRepository implements VaultRepository {
       await this.table('ownershipReviewDecisions').put(decision);
       return decision;
     });
+  }
+
+  private async ownerCostBasisBook() {
+    const names = ['records', 'blockchainTransactions', 'transactionParticipants', 'transactionMetadata',
+      'transactionLegMetadata', 'entities', 'addressOwnership', 'recordModelMigrationState',
+      'owners', 'ownerResidencies'] as const;
+    const rows = await this.database.transaction('r', names.map(name => this.table(name)), async () => {
+      const [records, transactions, participants, metadata, legMetadata, entities, ownership, migrations, owners, residencies] =
+        await Promise.all(names.map(name => this.table(name).toArray()));
+      return {
+        records, transactions, participants, metadata, legMetadata, entities, ownership, owners, residencies,
+        migrations,
+        migrationComplete: migrations.some((row: any) => row.id === 'v44' && row.phase === 'complete'),
+      };
+    });
+    const report = calculateOwnerCostBasisFromStoredRows(rows);
+    // Browser fallback retains neither raw source nor the allocation-heavy report
+    // after this bounded response has been built.
+    const stored = {
+      records: rows.records,
+      blockchainTransactions: rows.transactions,
+      transactionParticipants: rows.participants,
+      transactionMetadata: rows.metadata,
+      transactionLegMetadata: rows.legMetadata,
+      entities: rows.entities,
+      addressOwnership: rows.ownership,
+      recordModelMigrationState: rows.migrations,
+      owners: rows.owners,
+      ownerResidencies: rows.residencies,
+    };
+    const source = await fingerprintOwnerBookTables(stored, [
+      'records', 'blockchainTransactions', 'transactionParticipants', 'transactionMetadata',
+      'transactionLegMetadata', 'entities', 'addressOwnership', 'recordModelMigrationState',
+      'owners', 'ownerResidencies',
+    ]);
+    const policy = await fingerprintOwnerBookTables(stored, [
+      'owners', 'ownerResidencies', 'transactionLegMetadata', 'entities',
+      'addressOwnership', 'recordModelMigrationState',
+    ]);
+    return { rows, report,
+      keyBase: `owner-book:fallback:v4:${OWNER_BOOK_CALCULATOR_VERSION}:${source}:${policy}` };
+  }
+
+  async ownerCostBasisPage(options: OwnerCostBasisPageRequest): Promise<OwnerCostBasisPage> {
+    const { report, keyBase } = await this.ownerCostBasisBook();
+    const checkpointKey = `${keyBase}:${options.selectedOwner ?? ''}`;
+    if (options.expectedCheckpointKey && options.expectedCheckpointKey !== checkpointKey) {
+      throw new Error('Cost-basis data changed. Reload the report before saving or exporting.');
+    }
+    const selected = selectOwnerCostBasisReport(report, options.selectedOwner);
+    return pageOwnerCostBasis(selected, checkpointKey, options.limit, ownerCostBasisEditorRows(selected));
+  }
+
+  async ownerCostBasisProjection(addresses: string[]): Promise<OwnerCostBasisProjectionResult> {
+    const wanted = new Set(addresses.filter(Boolean));
+    const { rows, report, keyBase } = await this.ownerCostBasisBook();
+    const addressByOutpoint = new Map<string, string>();
+    for (const participant of rows.participants) {
+      if (participant.role === 'output' && participant.vout !== undefined &&
+          wanted.has(participant.address)) addressByOutpoint.set(`${participant.txid}:${participant.vout}`, participant.address);
+    }
+    const batches = report.batches.flatMap(batch => {
+      if (batch.remainingSats <= 0) return [];
+      const address = addressByOutpoint.get(`${batch.acquiredTxid}:${batch.lotId.split(':').at(-1)}`);
+      return address ? [{ address, batch }] : [];
+    }).sort((a, b) => a.address.localeCompare(b.address) || a.batch.lotId.localeCompare(b.batch.lotId));
+    for (const address of wanted) {
+      if (batches.filter(row => row.address === address).length > 250) {
+        throw new Error(`Declaration owner-book projection exceeds the 250-batch limit for ${address}`);
+      }
+    }
+    if (batches.length > 1000) throw new Error('Declaration owner-book projection exceeds the 1000-batch global limit');
+    return { checkpointKey: `${keyBase}:`, declaredAddresses: [...wanted].sort(), batches,
+      perAddressLimit: 250, globalLimit: 1000 };
   }
 
   transaction<T>(tables: VaultTableName[], operation: () => Promise<T>): Promise<T> {

@@ -9,6 +9,7 @@ import type {
   RecordEntity, RecordWallet, AddressOwnership, TransactionMetadata,
   TransactionLegMetadata, RecordModelMigrationState, OwnershipReviewDecision,
 } from '../db-types';
+import type { OwnerCostBasisPage, OwnerCostBatch } from '../owner-cost-basis-core';
 
 /**
  * The application-facing storage vocabulary.  It deliberately describes
@@ -162,12 +163,28 @@ export interface VaultRepository {
   restoreCommit(command: RestoreVaultCommit): Promise<{ saved: number }>;
   /** A finite atomic command for confirmed ownership actions and their undo. */
   commitOwnershipReview(command: OwnershipReviewCommit): Promise<OwnershipReviewDecision>;
+  /** Bounded owner-book projection; protected implementations calculate inside the encrypted worker. */
+  ownerCostBasisPage(options: OwnerCostBasisPageRequest): Promise<OwnerCostBasisPage>;
+  ownerCostBasisProjection(addresses: string[]): Promise<OwnerCostBasisProjectionResult>;
   /**
    * A transaction boundary, not a Dexie transaction object.  Protected
    * implementations must be native/atomic; they must never emulate Dexie's
    * fluent API in the renderer.
    */
   transaction<T>(tables: VaultTableName[], operation: () => Promise<T>): Promise<T>;
+}
+
+export interface OwnerCostBasisPageRequest {
+  selectedOwner?: string;
+  limit?: number;
+  expectedCheckpointKey?: string;
+}
+export interface OwnerCostBasisProjectionResult {
+  checkpointKey: string;
+  declaredAddresses: string[];
+  batches: Array<{ address: string; batch: OwnerCostBatch }>;
+  perAddressLimit: number;
+  globalLimit: number;
 }
 
 /**

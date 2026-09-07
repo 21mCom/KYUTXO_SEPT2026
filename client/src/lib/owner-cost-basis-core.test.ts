@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { allocateSatsProportionally, calculateOwnerCostBasis, pageOwnerCostBasis, UNASSIGNED_COST_BASIS_OWNER } from './owner-cost-basis-core';
+import { allocateSatsProportionally, calculateOwnerCostBasis, pageOwnerCostBasis, selectOwnerCostBasisReport, UNASSIGNED_COST_BASIS_OWNER } from './owner-cost-basis-core';
+import { calculateOwnerCostBasisFromStoredRows } from './owner-cost-basis-storage';
 
 const owners = [{ id: 1, name: 'Alice', createdAt: 1 }, { id: 2, name: 'Bob', createdAt: 1 }];
 const base = {
@@ -102,6 +103,57 @@ describe('owner cost-basis book', () => {
     expect(calculateOwnerCostBasis(JSON.parse(JSON.stringify(source)))).toEqual(calculateOwnerCostBasis(source));
   });
 
+  it('uses identical shared semantics for stored native rows and fallback input', () => {
+    const stored = calculateOwnerCostBasisFromStoredRows({
+      records: [{ id: 1, type: 'address', inputString: 'a', label: '', tags: [], categories: [],
+        owner: 'Alice', addressImportance: 'manual' }],
+      transactions: [
+        { txid: 'buy', blockHeight: 1, blockTime: 1_704_067_200, fee: 0, feeRate: 0, syncedAt: 1 },
+        { txid: 'sell', blockHeight: 2, blockTime: 1_706_745_600, fee: 0, feeRate: 0, syncedAt: 1 },
+      ],
+      participants: [
+        { txid: 'buy', role: 'output', address: 'a', amount: 5, vout: 0 },
+        { txid: 'sell', role: 'input', address: 'a', amount: 5 },
+        { txid: 'sell', role: 'output', address: 'outside', amount: 5, vout: 0 },
+      ],
+      metadata: [{ txid: 'buy', costBasisUsd: 10, updatedAt: 1 },
+        { txid: 'sell', proceedsUsd: 12, updatedAt: 1 }],
+      owners: [{ id: 1, name: 'Alice', createdAt: 1 }],
+      residencies: [], legMetadata: [], entities: [], ownership: [], migrationComplete: false,
+    });
+    const fallback = calculateOwnerCostBasis({
+      owners: [{ id: 1, name: 'Alice', createdAt: 1 }], residencies: [],
+      addresses: [{ address: 'a', owner: 'Alice' }],
+      transactions: [{ txid: 'buy', date: '2024-01-01', costBasisUsd: 10 },
+        { txid: 'sell', date: '2024-02-01', proceedsUsd: 12 }],
+      participants: [
+        { txid: 'buy', role: 'output', address: 'a', amount: 5, vout: 0 },
+        { txid: 'sell', role: 'input', address: 'a', amount: 5 },
+        { txid: 'sell', role: 'output', address: 'outside', amount: 5, vout: 0 },
+      ],
+      legacyDefaultOwner: 'Alice',
+    });
+    expect(stored).toEqual(fallback);
+  });
+
+  it('projects a cached complete book exactly like a selected fallback calculation', () => {
+    const source = { ...base, transactions: [
+      { txid: 'buy', date: '2024-01-01', costBasisUsd: 10 },
+      { txid: 'sell', date: '2024-02-01', proceedsUsd: 12 },
+    ], participants: [
+      { txid: 'buy', role: 'output' as const, address: 'a', amount: 10, vout: 0 },
+      { txid: 'sell', role: 'input' as const, address: 'a', amount: 10 },
+      { txid: 'sell', role: 'output' as const, address: 'merchant', amount: 10, vout: 0 },
+    ] };
+    const cached = selectOwnerCostBasisReport(calculateOwnerCostBasis(source), 'Alice');
+    const fallback = calculateOwnerCostBasis(source, 'Alice');
+    expect(cached).toEqual(fallback);
+    // Selection is only a summary projection: detailed disposals, warnings,
+    // assumptions, and every value provenance remain the shared calculation.
+    expect(cached.disposals).toEqual(fallback.disposals);
+    expect(cached.assumptions).toEqual(fallback.assumptions);
+  });
+
   it('orders LIFO by acquisition date and apportions transaction totals without duplication', () => {
     const report = calculateOwnerCostBasis({
       owners: [{ id: 1, name: 'Alice', defaultMatchingMethod: 'lifo', createdAt: 1 }, { id: 2, name: 'Bob', createdAt: 1 }],
@@ -155,6 +207,27 @@ describe('owner cost-basis book', () => {
     expect(page.openBatches).toHaveLength(1);
     expect(page.openBatches[0].remainingSats).toBe(5);
   });
+
+  it('keeps a representative materialized book bounded and faster to page than build', () => {
+    const requested = Number(process.env.KYUTXO_OWNER_BOOK_SCALE_ROWS ?? 20_000);
+    const count = Math.min(1_000_000, Math.max(1_000, Number.isSafeInteger(requested) ? requested : 20_000));
+    const transactions = Array.from({ length: count }, (_, i) => ({
+      txid: `scale-${i}`, date: '2024-01-01', costBasisUsd: 1,
+    }));
+    const participants = Array.from({ length: count }, (_, i) => ({
+      txid: `scale-${i}`, role: 'output' as const, address: 'a', amount: 1, vout: 0,
+    }));
+    const buildStarted = performance.now();
+    const report = calculateOwnerCostBasis({ ...base, transactions, participants });
+    const buildMs = performance.now() - buildStarted;
+    const cachedStarted = performance.now();
+    const pages = Array.from({ length: 10 }, () => pageOwnerCostBasis(report, 'scale', 25));
+    const cachedBurstMs = performance.now() - cachedStarted;
+    expect(pages.every(page => page.openBatches.length === 25)).toBe(true);
+    expect(pages[0].openBatchesTotal).toBe(count);
+    // Relative work on this process, never a machine-specific absolute budget.
+    expect(cachedBurstMs).toBeLessThan(buildMs);
+  }, 120_000);
 
   it('uses exact input/output conservation rather than missing or wrong provider fees', () => {
     const common = { ...base, transactions: [

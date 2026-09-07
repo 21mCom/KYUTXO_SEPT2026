@@ -400,6 +400,42 @@ export function calculateOwnerCostBasis(input: OwnerBookInput, selectedOwner?: s
   return { version: 1, policyRevision, batches: allBatches, disposals, warnings, assumptions, byOwner: selectedOwner === undefined ? byOwner : byOwner.filter(row => row.owner === cleanOwner(selectedOwner)), selectedOwner };
 }
 
+/**
+ * Selecting an owner changes only the display breakdown, never the underlying
+ * accounting book.  Keeping this projection separate lets a materialized book
+ * serve owner switches without re-matching lots or losing warnings/provenance.
+ */
+export function selectOwnerCostBasisReport(report: OwnerCostBasisReport, selectedOwner?: string): OwnerCostBasisReport {
+  return {
+    ...report,
+    byOwner: selectedOwner === undefined
+      ? report.byOwner
+      : report.byOwner.filter(row => row.owner === cleanOwner(selectedOwner)),
+    selectedOwner,
+  };
+}
+
+export function ownerCostBasisEditorRows(report: OwnerCostBasisReport): OwnerCostBasisEditorRow[] {
+  const rows: OwnerCostBasisEditorRow[] = [];
+  for (const disposal of report.disposals) {
+    if (disposal.kind === 'fee') continue;
+    const key = disposal.kind === 'external' ? disposal.sourceLegKey : disposal.recipientLegKey;
+    if (!key) continue;
+    rows.push({
+      txid: disposal.txid,
+      owner: disposal.kind === 'owner-transfer' ? disposal.recipientOwner ?? UNASSIGNED_COST_BASIS_OWNER : disposal.owner,
+      sourceOwner: disposal.kind === 'owner-transfer' ? disposal.owner : undefined,
+      kind: disposal.kind,
+      sats: disposal.sats,
+      legKey: key,
+      direction: disposal.kind === 'external' ? 'outgoing' : 'owner-transfer',
+      sourceLegKey: disposal.sourceLegKey,
+      recipientLegKey: disposal.recipientLegKey,
+    });
+  }
+  return [...new Map(rows.map(row => [`${row.txid}|${row.legKey}`, row])).values()];
+}
+
 function allocateValueProportionally(total: number, weights: readonly number[]): number[] {
   const denominator = weights.reduce((sum, weight) => sum + amount(weight), 0);
   if (!denominator) return weights.map(() => 0);
