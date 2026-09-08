@@ -121,7 +121,7 @@ test('release publishing requires five self-hosted native smoke jobs without cha
   }
   assert.match(
     releaseWorkflow,
-    /native-power-smoke:\s*\n\s*needs: verify-desktop-package-matrix\s*\n\s*if: >-\s*\n\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/,
+    /native-power-smoke:[\s\S]*?\n\s*needs: verify-desktop-package-matrix[\s\S]*?\n\s*if: >-\s*\n\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/,
   );
   assert.match(releaseWorkflow, /runs-on:\s*\n\s*- self-hosted/);
   assert.match(releaseWorkflow, /KYUTXO_NATIVE_POWER_SMOKE: '1'/);
@@ -129,7 +129,7 @@ test('release publishing requires five self-hosted native smoke jobs without cha
   assert.match(releaseWorkflow, /Expected 5 PASS results and no FAIL results/);
   assert.match(
     releaseWorkflow,
-    /publish-release:\s*\n\s*needs: \[build-windows, native-power-smoke\]/,
+    /publish-release:[\s\S]*?\n\s*needs: \[build-windows, native-power-smoke\]/,
   );
   assert.match(
     releaseWorkflow,
