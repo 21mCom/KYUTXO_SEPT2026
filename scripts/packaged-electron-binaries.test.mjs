@@ -820,9 +820,12 @@ test('the forgotten-source gate launches the copied Windows portable artifact an
 
   assert.match(script, /prepareWindowsPortableLaunch/);
   assert.match(script, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
-  assert.match(script, /waitForPackagedCdpDown\(cdpPort, 30_000\)/);
+  assert.match(script, /waitForPackagedCdpDown\(cdp\.port, 30_000\)/);
   assert.match(script, /maxRetries: 10, retryDelay: 250/);
   assert.match(script, /cwd: IS_WINDOWS \? portableSetup\.launchDir : home/);
+  assert.match(script, /window\.location\.hash = '\/node-settings'/);
+  assert.match(script, /getByRole\('heading', \{ name: 'Node Connection' \}\)\.waitFor/);
+  assert.doesNotMatch(script, /page\.goto\('kyutxo-app:\/\/bundle\/#\/node-settings'\)/);
   assert.doesNotMatch(script, /path\.join\(UNPACKED_DIR, 'KYUTXO\.exe'\)/);
   assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
   assert.match(
