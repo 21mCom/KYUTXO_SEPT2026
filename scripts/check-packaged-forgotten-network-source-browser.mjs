@@ -247,6 +247,7 @@ async function main() {
       true,
       'forgotten source onboarding did not appear after desktop restart',
     );
+    await page.waitForFunction(() => window.location.hash === '#/');
     await navigateToNodeSettings(page);
     await page.getByText('No network source configured').first().waitFor();
     await page.getByTestId('text-network-privacy-state').getByText('Offline').waitFor();
