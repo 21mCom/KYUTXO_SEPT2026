@@ -181,7 +181,6 @@ async function main() {
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     page = await rendererPage(browser);
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-forgotten-source-reopen' });
-    await page.getByTestId('network-onboarding-source').waitFor({ state: 'visible' });
     await page.getByText('Choose before KYUTXO connects').waitFor();
 
     const consent = await page.evaluate(async () => {
@@ -190,9 +189,11 @@ async function main() {
       return [settings?.networkPrivacyMode, settings?.networkAccessEnabled, settings?.networkOnboardingStage];
     });
     assert.deepEqual(consent, [undefined, false, 'source'], 'forgotten source consent did not survive desktop restart');
-    await page.getByTestId('choice-network-offline').click();
-    await page.getByTestId('network-onboarding-import').waitFor({ state: 'visible' });
-    await page.getByTestId('button-onboarding-finish').click();
+    assert.equal(
+      await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-forgotten-source-reopen' }),
+      true,
+      'forgotten source onboarding did not appear after desktop restart',
+    );
     await page.goto('kyutxo-app://bundle/#/node-settings');
     await page.getByText('No network source configured').first().waitFor();
     await page.getByTestId('text-network-privacy-state').getByText('Offline').waitFor();
