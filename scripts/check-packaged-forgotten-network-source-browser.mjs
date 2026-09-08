@@ -258,14 +258,14 @@ async function main() {
     ]) assert.equal(await page.getByTestId(id).inputValue(), expected, `${id} was not retained`);
     const retainedSettings = await readProtectedNodeSettings(page);
     const retained = {
-      provider: retainedSettings?.provider,
+      providerType: retainedSettings?.providerType,
       useTor: retainedSettings?.useTor,
       useElectrum: retainedSettings?.useElectrum,
       electrumSSL: retainedSettings?.electrumSSL,
       electrumServerType: retainedSettings?.electrumServerType,
     };
     assert.deepEqual(retained, {
-      provider: 'custom-electrs',
+      providerType: 'custom-electrs',
       useTor: true,
       useElectrum: true,
       electrumSSL: true,
