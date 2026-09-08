@@ -76,6 +76,12 @@ function keyOf(id) {
     ? `n:${(BigInt(id) + 9007199254740991n).toString().padStart(17, '0')}`
     : `s:${id}`;
 }
+function migrationRow(id, row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) throw safe();
+  const { id: embeddedId, ...value } = row;
+  if (embeddedId !== undefined && keyOf(embeddedId) !== keyOf(id)) throw safe();
+  return value;
+}
 function attachmentLine(file) {
   return `${file.id}\0${file.bytes}\0${file.digest}\n`;
 }
@@ -134,15 +140,24 @@ async function availableBytes(root) {
   const stat = await fsp.statfs(root);
   return Number(stat.bavail) * Number(stat.bsize);
 }
-async function durableTree(root) {
+function durableFileOpenMode(platform = process.platform) {
+  return platform === 'win32' ? 'r+' : 'r';
+}
+async function durableTree(root, openFile = fsp.open) {
   const entries = await fsp.readdir(root, { withFileTypes: true });
   for (const entry of entries) {
     const target = path.join(root, entry.name);
-    if (entry.isDirectory()) await durableTree(target);
+    if (entry.isDirectory()) await durableTree(target, openFile);
     else if (entry.isFile()) {
-      const handle = await fsp.open(target, 'r');
-      await handle.sync();
-      await handle.close();
+      // Windows FlushFileBuffers requires write access. r+ is non-truncating
+      // and retains the fail-closed durability guarantee there. Hardened
+      // Unix files can remain read-only because fsync supports such handles.
+      const handle = await openFile(target, durableFileOpenMode());
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
     }
   }
   await syncDirectory(root);
@@ -276,13 +291,14 @@ class ProtectedVaultMigrationController {
         if (!Array.isArray(batch) || batch.length > BATCH) throw safe();
         for (const item of batch) {
           const key = keyOf(item.id);
+          const row = migrationRow(item.id, item.row);
           if (prior !== null && key <= prior) throw safe();
           prior = key;
-          hash.update(`${key}\0${canonical(item.row)}\n`);
+          hash.update(`${key}\0${canonical(row)}\n`);
           count++;
           if (client) {
             await client.call(MESSAGE_TYPES.PUT_ROW, {
-              table, id: item.id, row: item.row,
+              table, id: item.id, row,
             });
           }
         }
@@ -970,4 +986,5 @@ module.exports = {
   canonical,
   runProtectedVaultScenario,
   SOURCE_ROOT,
+  _test: { durableFileOpenMode, durableTree },
 };

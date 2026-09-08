@@ -16,6 +16,7 @@ const require = createRequire(import.meta.url);
 const {
   ProtectedVaultMigrationController,
   runProtectedVaultScenario,
+  _test: { durableFileOpenMode, durableTree },
 } = require('../electron/protected-vault-migration.cjs');
 const { MESSAGE_TYPES } = require('../electron/protected-store.cjs');
 const tokens = [
@@ -31,6 +32,36 @@ async function scenario(name) {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+test('durability flush uses a writable handle and closes it after sync failure', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-durable-tree-'));
+  fs.writeFileSync(path.join(root, 'staged-file'), 'staged');
+  const modes = [];
+  let closes = 0;
+  const rejectSyncOpen = async (_target, mode) => {
+    modes.push(mode);
+    return {
+      sync: async () => {
+        throw new Error('simulated FlushFileBuffers failure');
+      },
+      close: async () => {
+        closes += 1;
+      },
+    };
+  };
+  try {
+    await assert.rejects(
+      () => durableTree(root, rejectSyncOpen),
+      /simulated FlushFileBuffers failure/,
+    );
+    assert.deepEqual(modes, [durableFileOpenMode()]);
+    assert.equal(durableFileOpenMode('win32'), 'r+');
+    assert.equal(durableFileOpenMode('linux'), 'r');
+    assert.equal(closes, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('main-owned migration streams a source fixture into a verified published generation', async () => {
   const report = await scenario('migration-success');
