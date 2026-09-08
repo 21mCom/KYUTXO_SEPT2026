@@ -227,6 +227,20 @@ test('CLI --verify exits successfully for valid checksum pairs', () => {
   }
 });
 
+test('CLI --verify rejects an existing empty release directory without success output', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-checksum-cli-empty-'));
+  try {
+    const result = runChecksumCli(['--verify', dir]);
+
+    assert.notEqual(result.status, 0, 'empty release directory unexpectedly succeeded');
+    assert.equal(result.signal, null);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /FAIL: .*no \.exe release assets found/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('CLI --verify exits non-zero with actionable stderr for invalid sidecars', () => {
   const cases = [
     {
