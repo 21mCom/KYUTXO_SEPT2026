@@ -484,9 +484,10 @@ async function attachmentSummary(): Promise<{ total: number; totalBytes: number 
   let total = 0;
   let totalBytes = 0;
   for await (const relativePath of iterateAttachmentFiles()) {
-    total += 1;
     try {
-      totalBytes += (await fs.stat(path.join(ATTACHMENTS_DIR, relativePath))).size;
+      const stat = await fs.stat(path.join(ATTACHMENTS_DIR, relativePath));
+      total += 1;
+      totalBytes += stat.size;
     } catch {
       // File vanished between enumeration and stat.
     }

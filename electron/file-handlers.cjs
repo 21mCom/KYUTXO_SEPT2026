@@ -407,9 +407,10 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     let total = 0;
     let totalBytes = 0;
     for await (const relativePath of iterateAttachmentFiles()) {
-      total += 1;
       try {
-        totalBytes += (await fs.promises.stat(path.join(attachmentsDir, relativePath))).size;
+        const stat = await fs.promises.stat(path.join(attachmentsDir, relativePath));
+        total += 1;
+        totalBytes += stat.size;
       } catch {}
     }
     return { total, totalBytes };

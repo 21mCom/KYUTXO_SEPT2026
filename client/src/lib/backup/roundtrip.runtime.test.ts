@@ -29,7 +29,7 @@ import { exportBackup } from "./export";
 import { restoreV3Backup, type AttachmentFileWriter } from "./restore";
 import { MemorySink, type BackupSink } from "./sink";
 import { blobChunks } from "./zip-stream";
-import { type AttachmentFileIO } from "./export";
+import { AttachmentSnapshotChangedError, type AttachmentFileIO } from "./export";
 
 import {
   bulkCreateRecords,
@@ -363,7 +363,7 @@ describe("v3 backup export stays bounded", () => {
           };
         },
         async read() {
-          return null;
+          return new Uint8Array([1]).buffer;
         },
       },
       onProgress: ({ phase }) => phases.push(phase),
@@ -378,6 +378,39 @@ describe("v3 backup export stays bounded", () => {
       attachmentWriter: { async write() {} },
     });
     expect(restored.manifest.counts.attachmentFiles).toBe(fileCount);
+  });
+
+  it("aborts when attachment files change between summary and streaming", async () => {
+    const sink = new MemorySink();
+    let files = [
+      { path: "docs/first.bin", bytes: new Uint8Array([1, 2]) },
+      { path: "docs/second.bin", bytes: new Uint8Array([3, 4, 5]) },
+    ];
+
+    await expect(exportBackup({
+      sink,
+      encrypted: false,
+      attachmentIO: {
+        async summary() {
+          const snapshot = {
+            total: files.length,
+            totalBytes: files.reduce((sum, file) => sum + file.bytes.byteLength, 0),
+          };
+          // Simulate another local process replacing a summarized file before
+          // the independent streaming traversal begins.
+          files = [{ path: "docs/first.bin", bytes: new Uint8Array([9]) }];
+          return snapshot;
+        },
+        async listPage() {
+          return { files: files.map((file) => file.path), cursor: null };
+        },
+        async read(relPath) {
+          return files.find((file) => file.path === relPath)?.bytes.buffer ?? null;
+        },
+      },
+    })).rejects.toBeInstanceOf(AttachmentSnapshotChangedError);
+
+    expect(sink.blob).toBeNull();
   });
 });
 

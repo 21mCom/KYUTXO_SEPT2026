@@ -82,6 +82,15 @@ export interface ExportProgress {
   phase: string;
 }
 
+export class AttachmentSnapshotChangedError extends Error {
+  constructor() {
+    super(
+      "Attachment files changed while the backup was being created. No backup was saved; try again.",
+    );
+    this.name = "AttachmentSnapshotChangedError";
+  }
+}
+
 export interface ExportOptions {
   sink: BackupSink;
   encrypted: boolean;
@@ -323,7 +332,9 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     : opts.attachmentIO.totalBytes
       ? await opts.attachmentIO.totalBytes()
       : null;
-  if (typeof ioTotal === "number" && Number.isFinite(ioTotal) && ioTotal >= 0) {
+  const hasExactAttachmentByteTotal =
+    typeof ioTotal === "number" && Number.isFinite(ioTotal) && ioTotal >= 0;
+  if (hasExactAttachmentByteTotal) {
     totalAttachmentBytes = ioTotal;
   } else {
     totalAttachmentBytes = await sumAttachmentSizes(batchSize);
@@ -440,6 +451,8 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     // 3) Attachment files, one bounded filename page at a time. Each file's
     // bytes are still read and written individually.
     let attachmentOffset = 0;
+    let archivedAttachmentFiles = 0;
+    let archivedAttachmentBytes = 0;
     let attachmentPage = legacyAttachmentFiles ?? [];
     if (legacyAttachmentFiles === null && opts.attachmentIO.listPage) {
       const firstPage = await opts.attachmentIO.listPage(null, batchSize);
@@ -451,9 +464,12 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
         throwIfAborted(signal);
         const data = await opts.attachmentIO.read(relPath);
         if (data) {
+          const bytes = new Uint8Array(data);
           await writer.addBytes(`${ATTACHMENTS_DIR}/${relPath}`, new Uint8Array(data), {
             compress: false,
           });
+          archivedAttachmentFiles += 1;
+          archivedAttachmentBytes += bytes.byteLength;
         }
         attachmentOffset += 1;
         processedUnits += 1;
@@ -463,6 +479,18 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
       const nextPage = await opts.attachmentIO.listPage(attachmentCursor, batchSize);
       attachmentPage = nextPage.files;
       attachmentCursor = nextPage.cursor;
+    }
+
+    // The manifest must remain first for restore pre-flight, so it cannot be
+    // rewritten after streaming. Instead, fail closed if the independent
+    // summary and streaming traversals observed different attachment contents.
+    // This catches additions/removals and replacements whose byte size changed;
+    // same-sized replacements preserve the only manifest facts promised here.
+    if (
+      archivedAttachmentFiles !== attachmentFileCount ||
+      (hasExactAttachmentByteTotal && archivedAttachmentBytes !== totalAttachmentBytes)
+    ) {
+      throw new AttachmentSnapshotChangedError();
     }
 
     throwIfAborted(signal);
