@@ -66,6 +66,34 @@ test('labels deleted and rewritten documents together without reverting remainin
   assert.equal(fs.readFileSync(path.join(root, 'nested.docx'), 'utf8'), 'test rewrite');
 });
 
+test(
+  'byte-escapes an invalid UTF-8 tracked document name without making diagnostics ambiguous',
+  { skip: process.platform === 'win32' ? 'Windows paths cannot contain arbitrary byte sequences' : false },
+  (t) => {
+    const root = makeRepo();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const filenameBytes = Buffer.from('invalid-X.pdf', 'ascii');
+    filenameBytes[8] = 0xff;
+    const absoluteFilename = Buffer.concat([Buffer.from(`${root}${path.sep}`), filenameBytes]);
+    fs.writeFileSync(absoluteFilename, 'invalid utf8 original');
+    spawnSync('git', ['add', '--all'], { cwd: root, timeout: 30_000 });
+
+    const result = run(
+      root,
+      [
+        `const fs = require('node:fs')`,
+        `const path = require('node:path')`,
+        `const name = Buffer.from(${JSON.stringify(filenameBytes.toString('hex'))}, 'hex')`,
+        `fs.writeFileSync(Buffer.concat([Buffer.from(process.cwd() + path.sep), name]), 'rewritten')`,
+      ].join(';'),
+    );
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /rewritten: "invalid-\\xff\.pdf"/);
+    assert.doesNotMatch(result.stderr, /\ufffd/);
+  },
+);
+
 test('preserves a failing test command status when fixtures are unchanged', (t) => {
   const root = makeRepo();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

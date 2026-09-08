@@ -29,11 +29,14 @@ function trackedDocuments(root) {
     const detail = result.error?.message ?? result.stderr.toString('utf8').trim();
     throw new Error(`could not list tracked sample documents${detail ? `: ${detail}` : ''}`);
   }
-  return result.stdout
-    .toString('utf8')
-    .split('\0')
-    .filter(Boolean)
-    .sort();
+  const files = [];
+  let start = 0;
+  for (let index = 0; index < result.stdout.length; index += 1) {
+    if (result.stdout[index] !== 0) continue;
+    if (index > start) files.push(result.stdout.subarray(start, index));
+    start = index + 1;
+  }
+  return files.sort(Buffer.compare);
 }
 
 function digest(filePath) {
@@ -42,11 +45,30 @@ function digest(filePath) {
 }
 
 function snapshot(root, files) {
-  return new Map(files.map((file) => [file, digest(path.join(root, file))]));
+  return new Map(files.map((file) => [file, digest(absoluteFilename(root, file))]));
 }
 
 function displayFilename(file) {
-  return /[\u0000-\u001f\u007f-\u009f]/u.test(file) ? JSON.stringify(file) : file;
+  const decoded = file.toString('utf8');
+  if (Buffer.from(decoded, 'utf8').equals(file)) {
+    return /[\u0000-\u001f\u007f-\u009f]/u.test(decoded) ? JSON.stringify(decoded) : decoded;
+  }
+
+  let displayed = '"';
+  for (const byte of file) {
+    if (byte === 0x22) displayed += '\\"';
+    else if (byte === 0x5c) displayed += '\\\\';
+    else if (byte === 0x0a) displayed += '\\n';
+    else if (byte === 0x0d) displayed += '\\r';
+    else if (byte === 0x09) displayed += '\\t';
+    else if (byte >= 0x20 && byte <= 0x7e) displayed += String.fromCharCode(byte);
+    else displayed += `\\x${byte.toString(16).padStart(2, '0')}`;
+  }
+  return `${displayed}"`;
+}
+
+function absoluteFilename(root, file) {
+  return Buffer.concat([Buffer.from(`${root}${path.sep}`), file]);
 }
 
 function main() {
@@ -83,7 +105,7 @@ function main() {
 
   const modified = files
     .map((file) => {
-      const after = digest(path.join(root, file));
+      const after = digest(absoluteFilename(root, file));
       if (before.get(file) === after) return null;
       return {
         file,
