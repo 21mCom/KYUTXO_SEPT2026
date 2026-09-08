@@ -465,15 +465,22 @@ class ProtectedVaultMigrationController {
       if (await this.source.freeze({ sessionId: session.id }) !== true) throw safe();
       await this.checkpoint('stage', session);
       await rm(stage);
-      diagnosticStage = 'protected-copy';
       const client = this.clientFactory(stage);
       try {
+        diagnosticStage = 'protected-create';
         await client.call(MESSAGE_TYPES.CREATE, { password });
+        diagnosticStage = 'protected-copy';
         const copied = await this.scanSource(client);
         if (!equalContent(copied, baseline)) throw safe();
+        diagnosticStage = 'protected-lock';
         await client.call(MESSAGE_TYPES.LOCK);
       } finally {
-        await client.close();
+        try {
+          await client.close();
+        } catch (error) {
+          diagnosticStage = 'protected-close';
+          throw error;
+        }
       }
       diagnosticStage = 'protected-reopen';
       await this.checkpoint('verify', session);

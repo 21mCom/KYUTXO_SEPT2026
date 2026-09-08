@@ -314,7 +314,7 @@ if (process.env.KYUTXO_PROTECTED_VAULT_TEST === '1') {
       const diagnosticStage = error && typeof error.diagnosticStage === 'string'
         ? error.diagnosticStage
         : '';
-      if (/^(preflight|source-scan|source-freeze|protected-copy|protected-reopen|durability-flush|generation-publish|published-reopen|source-cleanup)$/.test(diagnosticStage)) {
+      if (/^(preflight|source-scan|source-freeze|protected-create|protected-copy|protected-lock|protected-close|protected-reopen|durability-flush|generation-publish|published-reopen|source-cleanup)$/.test(diagnosticStage)) {
         console.error(`[KYUTXO][protected-migration-test] failed during ${diagnosticStage}`);
       }
       // Test API callers receive no paths, keys, password, or source data.
