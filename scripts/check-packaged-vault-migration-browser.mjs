@@ -125,6 +125,18 @@ function isWithin(relativePath, relativeRoot) {
   return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
 }
 
+function readFileWithTransientRetries(file, attempts = 20, delayMs = 100) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return fs.readFileSync(file);
+    } catch (error) {
+      const transient = error && ['EBUSY', 'EPERM', 'EACCES'].includes(error.code);
+      if (!transient || attempt >= attempts) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+  }
+}
+
 function scanDisposableProfile(root) {
   const files = [];
   const matches = [];
@@ -139,7 +151,9 @@ function scanDisposableProfile(root) {
         continue;
       }
       if (!entry.isFile()) continue;
-      const bytes = fs.readFileSync(absolutePath);
+      // Chromium can briefly retain a Windows file handle while updating its
+      // profile. Never skip the file: retry the read, then fail closed.
+      const bytes = readFileWithTransientRetries(absolutePath);
       const relativePath = path.relative(root, absolutePath);
       const digest = createHash('sha256').update(bytes).digest('hex');
       files.push({ relativePath, bytes: bytes.length, digest });
