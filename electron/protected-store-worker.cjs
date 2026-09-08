@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 const { PROTECTED_TABLES } = require('./protected-store.cjs');
+const { syncDirectory } = require('./fs-durability.cjs');
 const {
   calculateOwnerCostBasisFromStoredRows,
   ownerCostBasisEditorRows,
@@ -720,13 +721,14 @@ async function finishAttachment({ token }) {
   const state = attachmentWrites.get(token);
   if (!state) fail();
   attachmentWrites.delete(token);
+  const published = path.join(OBJECTS, state.name);
+  let renamed = false;
   try {
     await state.handle.sync();
     await state.handle.close();
-    await fsp.rename(state.tmp, path.join(OBJECTS, state.name));
-    const dir = await fsp.open(OBJECTS, 'r');
-    await dir.sync();
-    await dir.close();
+    await fsp.rename(state.tmp, published);
+    renamed = true;
+    await syncDirectory(OBJECTS);
     const old = db.prepare(
       'SELECT object_name FROM protected_attachment_refs WHERE alias=?',
     ).get(state.alias);
@@ -742,7 +744,7 @@ async function finishAttachment({ token }) {
     return { id: state.objectId, name: state.name, alias: state.alias, size: state.size };
   } catch (error) {
     await state.handle.close().catch(() => {});
-    await fsp.unlink(state.tmp).catch(() => {});
+    await fsp.unlink(renamed ? published : state.tmp).catch(() => {});
     throw error;
   }
 }
