@@ -19,22 +19,6 @@ jobs:
             platform: win
             arch: x64
             builder_flag: --win
-          - os: macos-15-intel
-            platform: darwin
-            arch: x64
-            builder_flag: --mac
-          - os: macos-14
-            platform: darwin
-            arch: arm64
-            builder_flag: --mac
-          - os: ubuntu-22.04
-            platform: linux
-            arch: x64
-            builder_flag: --linux
-          - os: ubuntu-24.04-arm
-            platform: linux
-            arch: arm64
-            builder_flag: --linux
     runs-on: ${{ matrix.os }}
 
     steps:
