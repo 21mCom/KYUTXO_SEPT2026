@@ -17,14 +17,6 @@ function parseIdleLockTimeoutEnv(rawValue) {
   return parsed;
 }
 
-function applyIdleLockTimeoutOverride(settings, rawValue) {
-  if (rawValue === undefined || rawValue === '') return settings;
-  return {
-    ...settings,
-    idleTimeoutSeconds: parseIdleLockTimeoutEnv(rawValue),
-  };
-}
-
 function validateVaultLockSettings(rawSettings) {
   if (!rawSettings || typeof rawSettings !== 'object' || Array.isArray(rawSettings)) {
     return { ok: false, error: 'Vault lock settings must be an object' };
@@ -153,7 +145,6 @@ function createVaultLockLifecycle({
 
 module.exports = {
   DEFAULT_IDLE_LOCK_TIMEOUT_SECONDS,
-  applyIdleLockTimeoutOverride,
   parseIdleLockTimeoutEnv,
   validateVaultLockSettings,
   createVaultLockLifecycle,

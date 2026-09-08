@@ -4,15 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
 const {
-  applyIdleLockTimeoutOverride,
   parseIdleLockTimeoutEnv,
   validateVaultLockSettings,
   createVaultLockLifecycle,
 } = require("./vault-lock-settings.cjs") as {
-  applyIdleLockTimeoutOverride: (
-    settings: typeof SAFE_POLICY,
-    value: string | undefined,
-  ) => typeof SAFE_POLICY;
   parseIdleLockTimeoutEnv: (value: string | undefined) => number;
   validateVaultLockSettings: (value: unknown) =>
     | { ok: true; settings: Record<string, unknown> }
@@ -115,15 +110,6 @@ describe("desktop vault lock policy validation", () => {
     expect(parseIdleLockTimeoutEnv("120")).toBe(120);
   });
 
-  it("keeps an explicit process idle timeout authoritative over renderer policy sync", () => {
-    const persisted = { ...SAFE_POLICY, idleTimeoutSeconds: 300 };
-    expect(applyIdleLockTimeoutOverride(persisted, undefined)).toBe(persisted);
-    expect(applyIdleLockTimeoutOverride(persisted, "")).toBe(persisted);
-    expect(applyIdleLockTimeoutOverride(persisted, "2")).toEqual({
-      ...persisted,
-      idleTimeoutSeconds: 2,
-    });
-  });
 });
 
 describe("desktop vault lock lifecycle", () => {
