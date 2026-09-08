@@ -832,6 +832,8 @@ test('the forgotten-source gate launches the copied Windows portable artifact an
   assert.match(script, /repository\.save\('nodeSettings'/);
   assert.match(script, /protectedStore\.lock\(\)/);
   assert.match(script, /readProtectedNodeSettings\(page\)/);
+  assert.match(script, /providerType: retainedSettings\?\.providerType/);
+  assert.doesNotMatch(script, /provider: retainedSettings\?\.provider/);
   assert.match(script, /waitForFunction\(\(\) => window\.location\.hash === '#\/'\)/);
   assert.doesNotMatch(script, /import\('\/src\/lib\/data\/node-settings-crud\.ts'\)/);
   assert.doesNotMatch(script, /page\.goto\('kyutxo-app:\/\/bundle\/#\/node-settings'\)/);
