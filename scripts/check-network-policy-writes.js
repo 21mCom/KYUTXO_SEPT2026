@@ -53,6 +53,12 @@ function propertyNameText(name) {
   if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
     return name.text;
   }
+  if (ts.isComputedPropertyName(name)) {
+    const expression = unwrapExpression(name.expression);
+    if (ts.isStringLiteral(expression) || ts.isNumericLiteral(expression)) {
+      return expression.text;
+    }
+  }
   return undefined;
 }
 

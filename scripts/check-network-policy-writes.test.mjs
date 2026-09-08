@@ -196,6 +196,53 @@ test('fails a direct write whose payload receives protected fields through objec
   assert.match(result.stderr, /firstSyncConfirmedAt/);
 });
 
+test('fails protected computed string-literal keys in direct payloads and spread merges', () => {
+  const direct = runGuard({
+    'bad-computed-direct.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      updateNodeSettings('default', {
+        ['networkAccessEnabled']: false,
+      });
+    `,
+  });
+  assert.equal(direct.status, 1);
+  assert.match(direct.stderr, /networkAccessEnabled/);
+
+  const spread = runGuard({
+    'bad-computed-spread.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      const policySource = {
+        [('firstSyncConfirmedAt')]: undefined,
+      };
+      let policyUpdates = { requestTimeout: 10_000 };
+      policyUpdates = { ...policyUpdates, ...policySource };
+      updateNodeSettings('default', policyUpdates);
+    `,
+  });
+  assert.equal(spread.status, 1);
+  assert.match(spread.stderr, /firstSyncConfirmedAt/);
+});
+
+test('permits dynamic and ordinary computed keys plus computed changes after a CRUD write', () => {
+  const result = runGuard({
+    'good-computed.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      const dynamicKey = getSettingKey();
+      const updates = {
+        [dynamicKey]: false,
+        ['requestTimeout']: 10_000,
+      };
+      updateNodeSettings('default', updates);
+
+      const laterUpdates = {};
+      updateNodeSettings('default', laterUpdates);
+      Object.assign(laterUpdates, { ['networkAccessEnabled']: false });
+    `,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OK/);
+});
+
 test('fails a direct write whose payload alias is established by a later assignment', () => {
   const result = runGuard({
     'bad-later-assigned-alias.ts': `
