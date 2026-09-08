@@ -178,6 +178,19 @@ test('build is read-only, publishing is isolated, and every action is SHA-pinned
   assert.doesNotMatch(workflow, /softprops\//);
 });
 
+test('every package and release job fails closed outside the September repository', () => {
+  assert.equal(
+    [...workflow.matchAll(/name: Verify September repository destination/g)].length,
+    3,
+  );
+  assert.equal(
+    [...matrixWorkflow.matchAll(/name: Verify September repository destination/g)].length,
+    1,
+  );
+  assert.match(workflow, /run: node scripts\/check-github-destination\.mjs/);
+  assert.match(matrixWorkflow, /run: node scripts\/check-github-destination\.mjs/);
+});
+
 test('the exact packaged executable and checksum are uploaded and released together', () => {
   assert.match(workflow, /run: npm run release:checksums/);
   assert.match(workflow, /release\/\*\.exe\.sha256/);
