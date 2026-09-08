@@ -400,7 +400,7 @@ function ownerCostBasisPage(options) {
   return pageOwnerCostBasis(report, key, limit, ownerCostBasisEditorRows(report));
 }
 
-function testDamageOwnerReportCache() {
+function testDamageOwnerReportCache({ section } = {}) {
   locked();
   if (!TEST_FIXTURES_ENABLED) fail();
   const cached = db.prepare(
@@ -408,13 +408,27 @@ function testDamageOwnerReportCache() {
   ).get(OWNER_BOOK_CACHE_ID);
   if (!cached) fail();
   const report = JSON.parse(cached.value_json);
-  if (!Array.isArray(report.batches) || report.batches.length === 0) fail();
-  report.batches[0] = { ...report.batches[0], remainingSats: 'malformed' };
+  const mutations = {
+    batches: () => { report.batches = [{ remainingSats: 'malformed' }]; },
+    disposals: () => { report.disposals = [{ sats: 'malformed' }]; },
+    allocations: () => {
+      report.disposals = [{
+        txid: 'damaged-allocation', owner: '', kind: 'external', sats: 1,
+        allocations: [null], costProvenance: 'unknown',
+        proceedsProvenance: 'unknown', matchingMethod: 'fifo',
+      }];
+    },
+    warnings: () => { report.warnings = [{ code: 'malformed' }]; },
+    assumptions: () => { report.assumptions = [{ fallback: 'malformed' }]; },
+    byOwner: () => { report.byOwner = [{ openSats: 'malformed' }]; },
+  };
+  if (typeof section !== 'string' || !Object.hasOwn(mutations, section)) fail();
+  mutations[section]();
   db.prepare(
     'UPDATE protected_derived_cache SET value_json=? WHERE cache_id=?',
   ).run(JSON.stringify(report), OWNER_BOOK_CACHE_ID);
   ownerBookCheckpoint = null;
-  return { damaged: true };
+  return { damaged: true, section };
 }
 
 function ownerCheckpointKey(checkpoint, selectedOwner = '') {
@@ -877,7 +891,7 @@ async function handle(type, message) {
   if (type === 'finishAttachment') return finishAttachment(message);
   if (type === 'abortAttachment') return abortAttachment(message);
   if (type === 'verifyAttachments') return verifyAttachments(message);
-  if (type === 'testDamageOwnerReportCache') return testDamageOwnerReportCache();
+  if (type === 'testDamageOwnerReportCache') return testDamageOwnerReportCache(message);
   if (type === 'readAttachment') return readAttachment(message);
   if (type === 'deleteAttachment') {
     locked();

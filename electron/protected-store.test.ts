@@ -145,7 +145,7 @@ describe("protected store", () => {
     }
   }, 30_000);
 
-  it("rebuilds a malformed encrypted owner report cache without changing vault sources or attachments", async () => {
+  it("rebuilds every malformed encrypted owner report section without changing vault sources or attachments", async () => {
     const { client } = makeFixtureClient();
     const password = "damaged owner report test password";
     const call = (collection: string, operation: string, payload: object = {}) =>
@@ -185,12 +185,15 @@ describe("protected store", () => {
 
       const valid = await call("records", "ownerCostBasisPage", { options: { limit: 25 } });
       expect(valid.openBatchesTotal).toBe(1);
-      await client.call("testDamageOwnerReportCache");
-      await client.call(MESSAGE_TYPES.LOCK);
-      await client.call(MESSAGE_TYPES.UNLOCK, { password });
-
-      const rebuilt = await call("records", "ownerCostBasisPage", { options: { limit: 25 } });
-      expect(rebuilt).toEqual(valid);
+      for (const section of [
+        "batches", "disposals", "allocations", "warnings", "assumptions", "byOwner",
+      ]) {
+        await client.call("testDamageOwnerReportCache", { section });
+        await client.call(MESSAGE_TYPES.LOCK);
+        await client.call(MESSAGE_TYPES.UNLOCK, { password });
+        const rebuilt = await call("records", "ownerCostBasisPage", { options: { limit: 25 } });
+        expect(rebuilt, section).toEqual(valid);
+      }
       await expect(call("owners", "find", { id: 1 })).resolves.toEqual(sourceRows.owner);
       await expect(call("records", "find", { id: 1 })).resolves.toEqual(sourceRows.record);
       await expect(call("blockchainTransactions", "find", { id: 1 }))
