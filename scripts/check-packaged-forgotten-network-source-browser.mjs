@@ -104,44 +104,34 @@ async function readProtectedNodeSettings(page) {
   });
 }
 
-async function completeFreshVaultOnboardingWithSource(page) {
-  const sourceStep = page.getByTestId('network-onboarding-source');
-  const appeared = await sourceStep
-    .waitFor({ state: 'visible', timeout: 5_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!appeared) {
-    await page.evaluate(async () => {
-      const repository = window.electronAPI?.protectedStore?.repository;
-      if (!repository) throw new Error('Protected repository bridge is unavailable');
-      const current = await repository.find('nodeSettings', 'default');
-      if (!current?.ok || current.result === undefined) {
-        throw new Error(current?.error || 'Protected repository read failed');
-      }
-      const saved = await repository.save('nodeSettings', {
-        ...current.result,
-        networkPrivacyMode: undefined,
-        networkAccessEnabled: false,
-        networkOnboardingStage: 'source',
-      });
-      if (!saved?.ok || saved.result === undefined) {
-        throw new Error(saved?.error || 'Protected repository write failed');
-      }
-      await window.electronAPI.protectedStore.lock();
+async function seedConfiguredSourcePrecondition(page) {
+  await page.evaluate(async ({ customUrl }) => {
+    const repository = window.electronAPI?.protectedStore?.repository;
+    if (!repository) throw new Error('Protected repository bridge is unavailable');
+    const current = await repository.find('nodeSettings', 'default');
+    if (!current?.ok || current.result === undefined) {
+      throw new Error(current?.error || 'Protected repository read failed');
+    }
+    const saved = await repository.save('nodeSettings', {
+      ...current.result,
+      providerType: 'custom-electrs',
+      customUrl,
+      useElectrum: false,
+      useTor: false,
+      networkPrivacyMode: 'own-node',
+      networkAccessEnabled: true,
+      networkOnboardingStage: 'complete',
     });
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await unlockIfNeeded(page, PASSWORD, {
-      appearTimeoutMs: 60_000,
-      label: 'packaged-forgotten-source-seeded-onboarding',
-    });
-  }
-  await sourceStep.waitFor({ state: 'visible', timeout: 60_000 });
-  await page.getByTestId('choice-network-own-node').click();
-  await page.getByTestId('input-onboarding-node-url').fill(CUSTOM_URL);
-  await page.getByTestId('button-save-network-choice').click();
-  await page.getByTestId('network-onboarding-import').waitFor({ state: 'visible' });
-  await page.getByTestId('button-onboarding-finish').click();
-  await sourceStep.waitFor({ state: 'detached' });
+    if (!saved?.ok || saved.result === undefined) {
+      throw new Error(saved?.error || 'Protected repository write failed');
+    }
+    await window.electronAPI.protectedStore.lock();
+  }, { customUrl: CUSTOM_URL });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await unlockIfNeeded(page, PASSWORD, {
+    appearTimeoutMs: 60_000,
+    label: 'packaged-forgotten-source-configured-precondition',
+  });
 }
 
 async function stop(child) {
@@ -208,7 +198,7 @@ async function main() {
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     let page = await rendererPage(browser);
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-forgotten-source-setup' });
-    await completeFreshVaultOnboardingWithSource(page);
+    await seedConfiguredSourcePrecondition(page);
     await navigateToNodeSettings(page);
     await page.getByTestId('radio-provider-custom-electrs').click();
     await page.getByTestId('input-custom-url').fill(CUSTOM_URL);

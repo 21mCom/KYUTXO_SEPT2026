@@ -825,8 +825,8 @@ test('the forgotten-source gate launches the copied Windows portable artifact an
   assert.match(script, /cwd: IS_WINDOWS \? portableSetup\.launchDir : home/);
   assert.match(script, /window\.location\.hash = '\/node-settings'/);
   assert.match(script, /getByRole\('heading', \{ name: 'Node Connection' \}\)\.waitFor/);
-  assert.match(script, /completeFreshVaultOnboardingWithSource\(page\)/);
-  assert.match(script, /getByTestId\('choice-network-own-node'\)\.click\(\)/);
+  assert.match(script, /seedConfiguredSourcePrecondition\(page\)/);
+  assert.match(script, /networkPrivacyMode: 'own-node'/);
   assert.match(script, /getByTestId\('button-save-settings'\)\.click\(\)/);
   assert.match(script, /repository\.save\('nodeSettings'/);
   assert.match(script, /protectedStore\.lock\(\)/);
