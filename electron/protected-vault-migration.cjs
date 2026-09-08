@@ -452,16 +452,20 @@ class ProtectedVaultMigrationController {
     this.state.session = session.id;
     const stage = this.stagePath(session.generation);
     let baseline;
+    let diagnosticStage = 'preflight';
     try {
       await this.preflight(session);
       // Readability, canonical IDs, attachment lengths, and reference audit
       // are proven before writes are frozen.
+      diagnosticStage = 'source-scan';
       baseline = await this.scanSource();
       session.evidence = contentEvidence(baseline);
+      diagnosticStage = 'source-freeze';
       await this.checkpoint('freeze', session);
       if (await this.source.freeze({ sessionId: session.id }) !== true) throw safe();
       await this.checkpoint('stage', session);
       await rm(stage);
+      diagnosticStage = 'protected-copy';
       const client = this.clientFactory(stage);
       try {
         await client.call(MESSAGE_TYPES.CREATE, { password });
@@ -471,10 +475,13 @@ class ProtectedVaultMigrationController {
       } finally {
         await client.close();
       }
+      diagnosticStage = 'protected-reopen';
       await this.checkpoint('verify', session);
       const staged = await this.protectedSnapshot(stage, session.generation, password);
       if (!equalContent(staged, baseline)) throw safe();
+      diagnosticStage = 'durability-flush';
       await durableTree(stage);
+      diagnosticStage = 'generation-publish';
       await this.checkpoint('commit', session);
       await this.checkpoint('generation-swap.prepare', session);
       await fsp.mkdir(this.generations, { recursive: true, mode: 0o700 });
@@ -484,9 +491,11 @@ class ProtectedVaultMigrationController {
       await this.checkpoint('generation-swap.publish', session);
       await atomicJson(this.pointer, { version: 1, generation: session.generation });
       if (this.fault) await this.fault('generation-swap.publish.after');
+      diagnosticStage = 'published-reopen';
       const active = await this.protectedSnapshot(published, session.generation, password);
       if (!equalContent(active, baseline)) throw safe();
       await this.checkpoint('generation-swap.cleanup', session);
+      diagnosticStage = 'source-cleanup';
       await this.cleanupAndComplete(session, this.source);
       return { baseline, active, generation: session.generation };
     } catch (error) {
@@ -517,7 +526,9 @@ class ProtectedVaultMigrationController {
         // Publication makes cleanup the only safe direction; never thaw.
         this.state.frozen = true;
       }
-      throw safe();
+      const failure = safe();
+      failure.diagnosticStage = diagnosticStage;
+      throw failure;
     }
   }
   async recover({ password, resumeContext } = {}) {
