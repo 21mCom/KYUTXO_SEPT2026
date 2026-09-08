@@ -486,6 +486,13 @@ async function main() {
     await page.getByTestId('button-network-privacy-activity').click();
     const dialog = page.getByTestId('network-privacy-activity-dialog');
     await dialog.waitFor({ state: 'visible' });
+    const activityRows = dialog.locator('[data-testid^="network-privacy-activity-row-"]');
+    await activityRows.nth(activity.length).waitFor({ state: 'visible' });
+    assert.equal(
+      await activityRows.count(),
+      activity.length + 1,
+      'activity dialog rendered an unexpected number of rows',
+    );
     const dialogText = await dialog.innerText();
     for (const expected of [
       'Local network activity',
