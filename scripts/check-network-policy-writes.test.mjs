@@ -178,6 +178,24 @@ test('fails a direct write whose payload receives protected fields through Objec
   assert.match(result.stderr, /firstSyncConfirmedAt/);
 });
 
+test('fails a direct write whose payload receives protected fields through object-spread reassignment', () => {
+  const result = runGuard({
+    'bad-spread-reassignment.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      const policySource = {
+        networkAccessEnabled: false,
+        firstSyncConfirmedAt: undefined,
+      };
+      let policyUpdates = { requestTimeout: 10_000 };
+      policyUpdates = { ...policyUpdates, ...policySource };
+      updateNodeSettings('default', policyUpdates);
+    `,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /networkAccessEnabled/);
+  assert.match(result.stderr, /firstSyncConfirmedAt/);
+});
+
 test('fails a direct write whose payload alias is established by a later assignment', () => {
   const result = runGuard({
     'bad-later-assigned-alias.ts': `
@@ -236,6 +254,25 @@ test('permits ordinary Object.assign merges, unrelated targets, and merges after
       const laterMerged = {};
       updateNodeSettings('default', laterMerged);
       Object.assign(laterMerged, { firstSyncConfirmedAt: undefined });
+    `,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OK/);
+});
+
+test('permits ordinary spread reassignments, unrelated targets, and spread reassignments after a CRUD write', () => {
+  const result = runGuard({
+    'good-spread-reassignment.ts': `
+      import { updateNodeSettings } from './lib/data/node-settings-crud';
+      let ordinaryUpdates = {};
+      ordinaryUpdates = { ...ordinaryUpdates, requestTimeout: 10_000 };
+      let unrelated = {};
+      unrelated = { ...unrelated, networkAccessEnabled: false };
+      updateNodeSettings('default', ordinaryUpdates);
+
+      let laterMerged = {};
+      updateNodeSettings('default', laterMerged);
+      laterMerged = { ...laterMerged, firstSyncConfirmedAt: undefined };
     `,
   });
   assert.equal(result.status, 0, result.stderr);

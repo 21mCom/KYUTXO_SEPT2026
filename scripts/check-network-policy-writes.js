@@ -221,6 +221,22 @@ function assignedAlias(node) {
   return { localName: target.text, aliasName: value.text };
 }
 
+function objectSpreadReassignment(node) {
+  if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) {
+    return undefined;
+  }
+  const target = unwrapExpression(node.left);
+  const value = unwrapExpression(node.right);
+  if (
+    !ts.isIdentifier(target) ||
+    !ts.isObjectLiteralExpression(value) ||
+    !value.properties.some(ts.isSpreadAssignment)
+  ) {
+    return undefined;
+  }
+  return { localName: target.text, value };
+}
+
 function objectAssignTarget(node) {
   if (
     !ts.isCallExpression(node) ||
@@ -332,6 +348,20 @@ for (const file of files) {
       const fields = localAssignedFields.get(assignment.localName) ?? new Set();
       fields.add(assignment.field);
       localAssignedFields.set(assignment.localName, fields);
+    }
+    const spreadReassignment = objectSpreadReassignment(node);
+    if (spreadReassignment) {
+      const mergedPolicyFields = findPolicyFields(
+        spreadReassignment.value,
+        localInitializers,
+        localAssignedFields,
+        localAliases,
+      );
+      if (mergedPolicyFields.size > 0) {
+        const fields = localAssignedFields.get(spreadReassignment.localName) ?? new Set();
+        for (const field of mergedPolicyFields) fields.add(field);
+        localAssignedFields.set(spreadReassignment.localName, fields);
+      }
     }
     const assignTarget = objectAssignTarget(node);
     if (assignTarget) {
