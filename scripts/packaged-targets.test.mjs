@@ -118,7 +118,7 @@ test('host-derived fallback requires an unmistakable local diagnostic mode', () 
 test('release artifact names bind every platform to package.json version', () => {
   assert.equal(expectedArtifactName('win', 'x64', '1.2.3'), 'KYUTXO-1.2.3-Portable.exe');
   assert.equal(expectedArtifactName('darwin', 'arm64', '1.2.3'), 'KYUTXO-1.2.3-arm64.dmg');
-  assert.equal(expectedArtifactName('linux', 'x64', '1.2.3'), 'KYUTXO-1.2.3-x64.AppImage');
+  assert.equal(expectedArtifactName('linux', 'x64', '1.2.3'), 'KYUTXO-1.2.3-x86_64.AppImage');
   assert.deepEqual(expectedArtifactNames('darwin', 'x64', '1.2.3'), [
     'KYUTXO-1.2.3-x64.dmg',
     'KYUTXO-1.2.3-x64.zip',
@@ -128,21 +128,21 @@ test('release artifact names bind every platform to package.json version', () =>
 test('version agreement rejects filename and internal metadata drift independently', () => {
   assert.doesNotThrow(() => assertVersionAgreement({
     packageVersion: '1.2.3',
-    artifactPath: '/release/KYUTXO-1.2.3-x64.AppImage',
+    artifactPath: '/release/KYUTXO-1.2.3-x86_64.AppImage',
     internalVersion: '1.2.3',
     platform: 'linux',
     arch: 'x64',
   }));
   assert.throws(() => assertVersionAgreement({
     packageVersion: '1.2.3',
-    artifactPath: '/release/KYUTXO-1.2.2-x64.AppImage',
+    artifactPath: '/release/KYUTXO-1.2.2-x86_64.AppImage',
     internalVersion: '1.2.3',
     platform: 'linux',
     arch: 'x64',
   }), /filename version mismatch/);
   assert.throws(() => assertVersionAgreement({
     packageVersion: '1.2.3',
-    artifactPath: '/release/KYUTXO-1.2.3-x64.AppImage',
+    artifactPath: '/release/KYUTXO-1.2.3-x86_64.AppImage',
     internalVersion: '1.2.2',
     platform: 'linux',
     arch: 'x64',
@@ -335,7 +335,7 @@ setInterval(() => {}, 1_000);
   assert.throws(
     () => inspectInternalVersion('linux', artifactPath, (command, args, options) => {
       extractDir = options.cwd;
-      return execFileSync(command, args, options);
+      return execFileSync(process.execPath, [command, ...args], options);
     }, 250),
     (error) => {
       assert.match(
