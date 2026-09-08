@@ -2,6 +2,10 @@ name: Verify desktop package matrix
 
 on:
   workflow_call:
+    outputs:
+      windows-artifact-name:
+        description: Artifact containing the verified Windows package and unpacked bundle
+        value: ${{ jobs.packaged-native-boundary.outputs.artifact-name }}
   workflow_dispatch:
 
 permissions:
@@ -20,6 +24,8 @@ jobs:
             arch: x64
             builder_flag: --win
     runs-on: ${{ matrix.os }}
+    outputs:
+      artifact-name: ${{ steps.artifact.outputs.name }}
 
     steps:
       - name: Checkout code
@@ -81,13 +87,24 @@ jobs:
           --platform ${{ matrix.platform }}
           --arch ${{ matrix.arch }}
 
+      - name: Record verified package provenance
+        shell: bash
+        run: node scripts/packaged-build-provenance.mjs
+
+      - name: Name verified package artifact
+        id: artifact
+        shell: bash
+        run: >-
+          echo "name=KYUTXO-${{ steps.version.outputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.run_id }}"
+          >> "$GITHUB_OUTPUT"
+
       - name: Upload verified package
         uses: actions/upload-artifact@v4
         with:
-          name: KYUTXO-${{ steps.version.outputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          name: ${{ steps.artifact.outputs.name }}
           path: |
             release/*.exe
-            release/*.dmg
-            release/*.zip
-            release/*.AppImage
+            release/verified-package-provenance.json
+            release/win-unpacked/**
+            dist/public/**
           if-no-files-found: error

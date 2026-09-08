@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyPackagedBuildProvenance } from './packaged-build-provenance.mjs';
 
 /**
  * Derives the repo root from this module's URL. MUST use fileURLToPath:
@@ -71,6 +72,17 @@ function newestMtimeInTree(dir) {
 export function assertPackagedBundleFresh(opts = {}) {
   const tag = opts.tag || '[bundle-freshness]';
   const root = opts.root || ROOT;
+  const provenancePath = process.env.KYUTXO_PACKAGED_PROVENANCE;
+  if (provenancePath) {
+    const provenance = verifyPackagedBuildProvenance({
+      root,
+      provenancePath: path.resolve(root, provenancePath),
+      expectedRevision: process.env.GITHUB_SHA,
+      scope: 'renderer',
+    });
+    console.log(`${tag} bundle freshness OK: verified provenance for ${provenance.sourceRevision}.`);
+    return { provenance };
+  }
 
   const assetsDir = path.join(root, 'dist', 'public', 'assets');
   let bundleFiles = [];
@@ -152,6 +164,17 @@ export function assertPackagedAsarFresh(opts) {
   const asarPath = opts && opts.asarPath;
   if (!asarPath) {
     throw new Error(`${tag} assertPackagedAsarFresh requires an asarPath.`);
+  }
+  const provenancePath = process.env.KYUTXO_PACKAGED_PROVENANCE;
+  if (provenancePath) {
+    const provenance = verifyPackagedBuildProvenance({
+      root,
+      provenancePath: path.resolve(root, provenancePath),
+      expectedRevision: process.env.GITHUB_SHA,
+      scope: 'asar',
+    });
+    console.log(`${tag} asar freshness OK: verified provenance for ${provenance.sourceRevision}.`);
+    return { provenance };
   }
 
   let asarStat;

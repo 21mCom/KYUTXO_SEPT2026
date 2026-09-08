@@ -264,14 +264,21 @@ jobs:
             exit 1
           fi
 
-      - name: Build application for Electron
-        run: npx vite build --config vite.config.electron.ts
+      # The reusable matrix job is the sole Windows packager. Download its
+      # verified Portable.exe, win-unpacked bundle, and renderer output so every
+      # packaged check, checksum, and release upload consumes the same bytes.
+      - name: Download verified Windows package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.verify-desktop-package-matrix.outputs.windows-artifact-name }}
+          path: .
 
-      - name: Build native read-engine worker bundle
-        run: node scripts/build-native-engine.mjs
-
-      - name: Build Electron app
-        run: npx electron-builder --config electron-builder.json --win
+      - name: Reverify downloaded package filename and installed app version
+        shell: bash
+        run: |
+          node scripts/packaged-build-provenance.mjs --verify
+          node scripts/check-packaged-app-version.mjs --platform win --arch x64
+          echo "KYUTXO_PACKAGED_PROVENANCE=release/verified-package-provenance.json" >> "$GITHUB_ENV"
 
       # RELEASE GATE: prove the native better-sqlite3 read-engine survives real
       # packaging on a full runner. npmRebuild is ON here, so the addon is built
@@ -279,7 +286,7 @@ jobs:
       # packaged KYUTXO.exe itself (ELECTRON_RUN_AS_NODE), never a system-Node
       # stand-in. KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON=1 disables the fallback
       # so an ABI/load regression fails the release instead of being masked.
-      # Reuses the release/win-unpacked output from the electron-builder step.
+      # Reuses the verified release/win-unpacked output downloaded above.
       - name: Verify packaged native read-engine under shipping Electron ABI
         env:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'

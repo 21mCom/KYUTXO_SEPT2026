@@ -21,6 +21,7 @@ import {
   repoRootFromModuleUrl,
   ROOT as FRESHNESS_ROOT,
 } from './packaged-bundle-freshness.mjs';
+import { writePackagedBuildProvenance } from './packaged-build-provenance.mjs';
 
 const HOUR = 60 * 60 * 1000;
 const NOW = Date.now();
@@ -385,5 +386,43 @@ test('the module default ROOT is the real repo root and contains repo landmarks'
       fs.existsSync(path.join(FRESHNESS_ROOT, landmark)),
       `default ROOT must contain ${landmark} (got ROOT=${FRESHNESS_ROOT})`,
     );
+  }
+});
+
+test('verified provenance survives cross-job timestamp changes and rejects changed bytes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'packaged-provenance-test-'));
+  const revision = 'a'.repeat(40);
+  const previousProvenance = process.env.KYUTXO_PACKAGED_PROVENANCE;
+  const previousSha = process.env.GITHUB_SHA;
+  try {
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '1.2.3' }));
+    writeFileAt(root, 'client/src/App.tsx', NEW, '// checkout extracted after package');
+    writeFileAt(root, 'electron/main.cjs', NEW, '// checkout extracted after package');
+    writeFileAt(root, 'dist/public/assets/index-built.js', OLD, '// verified renderer');
+    const asarPath = writeFileAt(
+      root,
+      'release/win-unpacked/resources/app.asar',
+      OLD,
+      'verified asar',
+    );
+    writeFileAt(root, 'release/KYUTXO-1.2.3-Portable.exe', OLD, 'verified executable');
+    const { outputPath } = writePackagedBuildProvenance({ root, revision });
+    process.env.KYUTXO_PACKAGED_PROVENANCE = path.relative(root, outputPath);
+    process.env.GITHUB_SHA = revision;
+
+    assert.doesNotThrow(() => assertPackagedBundleFresh({ root, tag: '[test]' }));
+    assert.doesNotThrow(() => assertPackagedAsarFresh({ root, asarPath, tag: '[test]' }));
+
+    fs.appendFileSync(path.join(root, 'dist/public/assets/index-built.js'), 'tampered');
+    assert.throws(
+      () => assertPackagedBundleFresh({ root, tag: '[test]' }),
+      /renderer bytes do not match verified provenance/,
+    );
+  } finally {
+    if (previousProvenance === undefined) delete process.env.KYUTXO_PACKAGED_PROVENANCE;
+    else process.env.KYUTXO_PACKAGED_PROVENANCE = previousProvenance;
+    if (previousSha === undefined) delete process.env.GITHUB_SHA;
+    else process.env.GITHUB_SHA = previousSha;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -107,8 +107,8 @@ test('tagged and explicitly requested releases run the full suite before packagi
     /name: Run full required suite for releases[\s\S]*if: >-[\s\S]*startsWith\(github\.ref, 'refs\/tags\/v'\)[\s\S]*inputs\.publish_release[\s\S]*run: npm run test:full/,
   );
   const fullSuiteIndex = workflow.indexOf('run: npm run test:full');
-  const packageIndex = workflow.indexOf('run: npx electron-builder');
-  assert.ok(fullSuiteIndex > -1 && fullSuiteIndex < packageIndex);
+  const downloadIndex = workflow.indexOf('name: Download verified Windows package');
+  assert.ok(fullSuiteIndex > -1 && fullSuiteIndex < downloadIndex);
   assert.equal(
     packageJson.scripts['test:full'],
     'node scripts/check-release-fixtures.mjs -- npm run test:full:unguarded',
@@ -206,6 +206,54 @@ test('the exact packaged executable and checksum are uploaded and released toget
   );
 });
 
+test('one verified Windows package supplies packaged checks, checksums, and release upload', () => {
+  const buildWindowsJob = workflow.slice(
+    workflow.indexOf('  build-windows:'),
+    workflow.indexOf('  publish-release:'),
+  );
+  assert.equal(
+    [...matrixWorkflow.matchAll(/\bnpx electron-builder\b/g)].length,
+    1,
+    'the reusable matrix must build Windows exactly once',
+  );
+  assert.doesNotMatch(buildWindowsJob, /\bnpx electron-builder\b/);
+  assert.match(
+    matrixWorkflow,
+    /workflow_call:[\s\S]*windows-artifact-name:[\s\S]*value: \$\{\{ jobs\.packaged-native-boundary\.outputs\.artifact-name \}\}/,
+  );
+  assert.match(
+    matrixWorkflow,
+    /name: Record verified package provenance[\s\S]*node scripts\/packaged-build-provenance\.mjs[\s\S]*name: Upload verified package[\s\S]*release\/\*\.exe[\s\S]*release\/verified-package-provenance\.json[\s\S]*release\/win-unpacked\/\*\*[\s\S]*dist\/public\/\*\*/,
+  );
+  assert.match(
+    workflow,
+    /name: Download verified Windows package[\s\S]*name: \$\{\{ needs\.verify-desktop-package-matrix\.outputs\.windows-artifact-name \}\}[\s\S]*path: \./,
+  );
+  assert.match(
+    workflow,
+    /name: Reverify downloaded package filename and installed app version[\s\S]*node scripts\/packaged-build-provenance\.mjs --verify[\s\S]*KYUTXO_PACKAGED_PROVENANCE=release\/verified-package-provenance\.json[^]*GITHUB_ENV/,
+  );
+  assert.doesNotMatch(
+    buildWindowsJob.slice(0, buildWindowsJob.indexOf('name: Download verified Windows package')),
+    /KYUTXO_PACKAGED_PROVENANCE/,
+  );
+  const downloadIndex = workflow.indexOf('name: Download verified Windows package');
+  const reverifyIndex = workflow.indexOf('name: Reverify downloaded package filename and installed app version');
+  const nativeAbiIndex = workflow.indexOf('name: Verify packaged native read-engine under shipping Electron ABI');
+  const portableIndex = workflow.indexOf('name: Verify packaged Windows renderer and portable restart persistence');
+  const checksumIndex = workflow.indexOf('name: Generate SHA-256 checksums');
+  const uploadIndex = workflow.indexOf('name: Upload executable and checksum');
+  assert.ok(
+    downloadIndex > -1 &&
+      downloadIndex < reverifyIndex &&
+      reverifyIndex < nativeAbiIndex &&
+      nativeAbiIndex < portableIndex &&
+      portableIndex < checksumIndex &&
+      checksumIndex < uploadIndex,
+    'downloaded verified bytes must flow through all gates before checksum and upload',
+  );
+});
+
 test('package filenames and workflow artifacts carry the canonical package version', () => {
   assert.equal(packageJson.version, '1.1.69');
   for (const target of ['win', 'mac', 'linux']) {
@@ -215,6 +263,6 @@ test('package filenames and workflow artifacts carry the canonical package versi
   assert.match(matrixWorkflow, /name: Read package version[\s\S]*require\('\.\/package\.json'\)\.version/);
   assert.match(
     matrixWorkflow,
-    /name: KYUTXO-\$\{\{ steps\.version\.outputs\.version \}\}-\$\{\{ matrix\.platform \}\}-\$\{\{ matrix\.arch \}\}/,
+    /name=KYUTXO-\$\{\{ steps\.version\.outputs\.version \}\}-\$\{\{ matrix\.platform \}\}-\$\{\{ matrix\.arch \}\}-\$\{\{ github\.run_id \}\}/,
   );
 });
