@@ -127,6 +127,7 @@ async function completeFreshVaultOnboardingWithSource(page) {
       if (!saved?.ok || saved.result === undefined) {
         throw new Error(saved?.error || 'Protected repository write failed');
       }
+      await window.electronAPI.protectedStore.lock();
     });
     await page.reload({ waitUntil: 'domcontentloaded' });
     await unlockIfNeeded(page, PASSWORD, {

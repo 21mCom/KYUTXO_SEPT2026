@@ -829,6 +829,7 @@ test('the forgotten-source gate launches the copied Windows portable artifact an
   assert.match(script, /getByTestId\('choice-network-own-node'\)\.click\(\)/);
   assert.match(script, /getByTestId\('button-save-settings'\)\.click\(\)/);
   assert.match(script, /repository\.save\('nodeSettings'/);
+  assert.match(script, /protectedStore\.lock\(\)/);
   assert.match(script, /readProtectedNodeSettings\(page\)/);
   assert.doesNotMatch(script, /import\('\/src\/lib\/data\/node-settings-crud\.ts'\)/);
   assert.doesNotMatch(script, /page\.goto\('kyutxo-app:\/\/bundle\/#\/node-settings'\)/);
