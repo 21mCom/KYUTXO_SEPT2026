@@ -17,6 +17,7 @@ const { resolveDataDirs, ensureDirectories: ensureDataDirectories } = require('.
 const { registerElectrumHandlers, stopKeepalive } = require('./electrum-client.cjs');
 const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.cjs');
 const {
+  applyIdleLockTimeoutOverride,
   parseIdleLockTimeoutEnv,
   validateVaultLockSettings,
   createVaultLockLifecycle,
@@ -421,7 +422,10 @@ ipcMain.handle('set-vault-lock-settings', async (event, rawSettings) => {
       return { success: false, error: parsed.error };
     }
 
-    vaultLockSettings = parsed.settings;
+    vaultLockSettings = applyIdleLockTimeoutOverride(
+      parsed.settings,
+      process.env.KYUTXO_IDLE_LOCK_SECONDS,
+    );
     vaultLockLifecycle.applyPolicy(vaultLockSettings);
     return { success: true };
   } catch (error) {
