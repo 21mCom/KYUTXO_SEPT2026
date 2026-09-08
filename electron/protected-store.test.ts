@@ -661,4 +661,18 @@ describe("protected store", () => {
       32,
     )).toString("hex")).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it("limits native initialization diagnostics to fixed non-sensitive stages", () => {
+    const workerSource = fs.readFileSync(
+      path.join(process.cwd(), "electron", "protected-store-worker.cjs"),
+      "utf8",
+    );
+    expect(workerSource).toContain(
+      "console.error(`[ProtectedStore] database initialization failed during ${stage}`)",
+    );
+    expect(workerSource).toContain(
+      "console.error(`[ProtectedStore] vault creation failed during ${stage}`)",
+    );
+    expect(workerSource).not.toMatch(/console\.error\([^)]*\b(?:error|err)\b/);
+  });
 });
