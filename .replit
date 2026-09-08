@@ -4026,3 +4026,14 @@ args = "node scripts/check-focused-validation-tests.mjs && node --test scripts/c
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-engine-rebuild-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-engine-rebuild-scale-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true

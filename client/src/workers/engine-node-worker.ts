@@ -25,6 +25,7 @@
  * Node against the same better-sqlite3 driver).
  */
 import { isMainThread, parentPort, workerData } from 'node:worker_threads';
+import { createHash } from 'node:crypto';
 
 import { openEngineDb, type BetterSqlite3EngineDb } from '../lib/engine/better-sqlite3-adapter';
 import {
@@ -488,6 +489,31 @@ async function handleGenerateSynthetic(
 // Query dispatch
 // ---------------------------------------------------------------------------
 
+function getMirrorContentDigests(d: BetterSqlite3EngineDb): Record<string, string> {
+  const queries = {
+    records: `SELECT id, type, inputString, inputStringLower, label, notes, owner,
+      walletName, seedName, walletSoftware, addressImportance, chainType, syncDepth,
+      firstSeenBlockTime, cachedBalanceSats, cachedTxCount, cachedUtxoCount,
+      statsComputedAt, createdAt, updatedAt, tags, categories, derivationPath,
+      discoveredInTxid, vaultIsVaultXpub, vaultM, vaultN, vaultName, vaultNotes
+      FROM records ORDER BY id`,
+    blockchainTransactions: `SELECT id, txid, blockHeight, blockTime, fee, feeRate,
+      vsize, hasOpReturn FROM blockchainTransactions ORDER BY id`,
+    transactionParticipants: `SELECT id, txid, role, address, amount, vout, prevTxid,
+      prevVout, recordId, scriptType FROM transactionParticipants ORDER BY id`,
+    transactionMetadata: `SELECT id, txid, acquisitionMethod, costBasisUsd,
+      estimatedCostBasisUsd, updatedAt FROM transactionMetadata ORDER BY id`,
+  } as const;
+  return Object.fromEntries(Object.entries(queries).map(([table, sql]) => {
+    const hash = createHash('sha256');
+    for (const row of d.selectRows<Record<string, unknown>>(sql)) {
+      hash.update(JSON.stringify(row));
+      hash.update('\n');
+    }
+    return [table, hash.digest('hex')];
+  }));
+}
+
 function handleQuery(name: string, args: unknown): unknown {
   const d = requireDb();
   switch (name) {
@@ -507,6 +533,8 @@ function handleQuery(name: string, args: unknown): unknown {
       return getParticipantsFingerprint(d);
     case 'getTransactionMetadataFingerprint':
       return getTransactionMetadataFingerprint(d);
+    case 'getMirrorContentDigests':
+      return getMirrorContentDigests(d);
     case 'getAddressAggregates':
       return Array.from(getAddressAggregates(d, args as string[]).values());
     case 'getOwnedUtxos':

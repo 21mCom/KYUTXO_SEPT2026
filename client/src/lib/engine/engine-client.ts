@@ -148,7 +148,12 @@ export const ENGINE_UNAVAILABLE_MESSAGE =
 
 // Source IndexedDB (Dexie) database + the stores we mirror.
 const IDB_NAME = 'KYUTXODatabase';
-let seedChunkSize = 10000;
+const DEFAULT_SEED_CHUNK_SIZE = 1000;
+let seedChunkSize = DEFAULT_SEED_CHUNK_SIZE;
+let seedYield = (): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 const MIRROR_TABLES: MirrorTable[] = ['records', 'blockchainTransactions', 'transactionParticipants', 'transactionMetadata'];
 
 /**
@@ -157,7 +162,18 @@ const MIRROR_TABLES: MirrorTable[] = ['records', 'blockchainTransactions', 'tran
  * argument to restore the production default. Not used in production code.
  */
 export function __setSeedChunkSizeForTests(size?: number): void {
-  seedChunkSize = size && size > 0 ? size : 10000;
+  seedChunkSize = size && size > 0 ? size : DEFAULT_SEED_CHUNK_SIZE;
+}
+
+/**
+ * Test-only seam for observing the cooperative scheduler boundary without
+ * depending on fake timer behavior. Pass no argument to restore the production
+ * macrotask yield.
+ */
+export function __setSeedYieldForTests(yieldFn?: () => Promise<void>): void {
+  seedYield = yieldFn ?? (() => new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -543,6 +559,11 @@ async function seedTableStream(
     emit(copied, Math.max(sourceCount, copied));
 
     if (batch.length < seedChunkSize) break;
+    // IDB reads and native inserts have both completed here, so no database
+    // transaction is held across this scheduler boundary. Returning to the
+    // macrotask queue lets navigation, controls, painting, and cancellation run
+    // between bounded mapping/structured-clone bursts.
+    await seedYield();
   }
 
   return {
@@ -590,14 +611,13 @@ export function seedAll(onProgress?: (p: SeedProgress) => void): Promise<SeedRes
   return seedInFlight;
 }
 
-async function seedAllInner(onProgress?: (p: SeedProgress) => void): Promise<SeedResult[]> {
-  await ensureEngineInit();
-  const engine = getEngine();
-  cancelRequested = false;
-
+async function seedAllTransfer(
+  engine: EngineBridge,
+  onProgress?: (p: SeedProgress) => void,
+): Promise<SeedResult[]> {
   await unwrap(engine.seedBegin());
 
-  const idb = await openIdb();
+  let idb: IDBDatabase | null = null;
   const sourceCounts: Record<MirrorTable, number> = {
     records: 0,
     blockchainTransactions: 0,
@@ -607,6 +627,7 @@ async function seedAllInner(onProgress?: (p: SeedProgress) => void): Promise<See
   const results: SeedResult[] = [];
   let cancelled = false;
   try {
+    idb = await openIdb();
     // Gather every source count up front so the aggregate total is known
     // before any streaming begins. This lets the UI render one steady
     // percentage across all tables instead of three bars resetting.
@@ -638,7 +659,7 @@ async function seedAllInner(onProgress?: (p: SeedProgress) => void): Promise<See
       }
     }
   } finally {
-    idb.close();
+    idb?.close();
   }
 
   if (cancelled) {
@@ -648,6 +669,26 @@ async function seedAllInner(onProgress?: (p: SeedProgress) => void): Promise<See
     await unwrap(engine.seedFinish(sourceCounts));
   }
   return results;
+}
+
+async function seedAllInner(onProgress?: (p: SeedProgress) => void): Promise<SeedResult[]> {
+  await ensureEngineInit();
+  const engine = getEngine();
+  cancelRequested = false;
+  try {
+    return await seedAllTransfer(engine, onProgress);
+  } catch (error) {
+    // A failed IDB read, mapper, or IPC transfer must never leave a partial
+    // LOADING mirror behind. Clear is best-effort so the original actionable
+    // transfer error remains the rejection observed by the caller.
+    try {
+      await unwrap(engine.clear());
+    } catch {
+      // The worker may itself be unavailable; it still cannot become READY
+      // because seedFinish was never sent.
+    }
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

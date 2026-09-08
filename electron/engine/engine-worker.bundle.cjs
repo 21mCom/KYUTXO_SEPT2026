@@ -188,6 +188,7 @@ var init_engine_node_worker_selftest = __esm({
 var engine_node_worker_exports = {};
 module.exports = __toCommonJS(engine_node_worker_exports);
 var import_node_worker_threads2 = require("node:worker_threads");
+var import_node_crypto = require("node:crypto");
 
 // client/src/lib/engine/better-sqlite3-adapter.ts
 var import_better_sqlite3 = __toESM(require("better-sqlite3"), 1);
@@ -2461,6 +2462,30 @@ async function handleGenerateSynthetic(spec) {
     seeding = false;
   }
 }
+function getMirrorContentDigests(d) {
+  const queries = {
+    records: `SELECT id, type, inputString, inputStringLower, label, notes, owner,
+      walletName, seedName, walletSoftware, addressImportance, chainType, syncDepth,
+      firstSeenBlockTime, cachedBalanceSats, cachedTxCount, cachedUtxoCount,
+      statsComputedAt, createdAt, updatedAt, tags, categories, derivationPath,
+      discoveredInTxid, vaultIsVaultXpub, vaultM, vaultN, vaultName, vaultNotes
+      FROM records ORDER BY id`,
+    blockchainTransactions: `SELECT id, txid, blockHeight, blockTime, fee, feeRate,
+      vsize, hasOpReturn FROM blockchainTransactions ORDER BY id`,
+    transactionParticipants: `SELECT id, txid, role, address, amount, vout, prevTxid,
+      prevVout, recordId, scriptType FROM transactionParticipants ORDER BY id`,
+    transactionMetadata: `SELECT id, txid, acquisitionMethod, costBasisUsd,
+      estimatedCostBasisUsd, updatedAt FROM transactionMetadata ORDER BY id`
+  };
+  return Object.fromEntries(Object.entries(queries).map(([table, sql]) => {
+    const hash = (0, import_node_crypto.createHash)("sha256");
+    for (const row of d.selectRows(sql)) {
+      hash.update(JSON.stringify(row));
+      hash.update("\n");
+    }
+    return [table, hash.digest("hex")];
+  }));
+}
 function handleQuery(name, args) {
   const d = requireDb();
   switch (name) {
@@ -2480,6 +2505,8 @@ function handleQuery(name, args) {
       return getParticipantsFingerprint(d);
     case "getTransactionMetadataFingerprint":
       return getTransactionMetadataFingerprint(d);
+    case "getMirrorContentDigests":
+      return getMirrorContentDigests(d);
     case "getAddressAggregates":
       return Array.from(getAddressAggregates(d, args).values());
     case "getOwnedUtxos":

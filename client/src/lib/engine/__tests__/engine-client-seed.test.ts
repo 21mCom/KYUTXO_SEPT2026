@@ -21,9 +21,11 @@ import {
   mapRecord,
   mapTransaction,
   mapParticipant,
+  mapTransactionMetadata,
   seedAll,
   cancelSeeding,
   __setSeedChunkSizeForTests,
+  __setSeedYieldForTests,
   type SeedProgress,
 } from "../engine-client";
 import type { EngineEnvelope } from "../../electron";
@@ -186,6 +188,34 @@ describe("engine-client mappers", () => {
       expect(p.vout).toBeNull();
     });
   });
+
+  describe("mapTransactionMetadata", () => {
+    it("preserves finite cost-basis values and normalizes absent fields", () => {
+      expect(mapTransactionMetadata({
+        id: 31,
+        txid: "tx31",
+        acquisitionMethod: "purchase",
+        costBasisUsd: 125.75,
+        estimatedCostBasisUsd: 130.25,
+        updatedAt: 1_700_000_031,
+      })).toEqual({
+        id: 31,
+        txid: "tx31",
+        acquisitionMethod: "purchase",
+        costBasisUsd: 125.75,
+        estimatedCostBasisUsd: 130.25,
+        updatedAt: 1_700_000_031,
+      });
+      expect(mapTransactionMetadata({ id: 32, txid: "tx32" })).toEqual({
+        id: 32,
+        txid: "tx32",
+        acquisitionMethod: null,
+        costBasisUsd: null,
+        estimatedCostBasisUsd: null,
+        updatedAt: null,
+      });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -193,7 +223,7 @@ describe("engine-client mappers", () => {
 // ---------------------------------------------------------------------------
 
 const IDB_NAME = "KYUTXODatabase";
-const STORES = ["records", "blockchainTransactions", "transactionParticipants"] as const;
+const STORES = ["records", "blockchainTransactions", "transactionParticipants", "transactionMetadata"] as const;
 type Store = (typeof STORES)[number];
 
 function deleteIdb(): Promise<void> {
@@ -294,6 +324,7 @@ describe("seedAll orchestration", () => {
 
   afterEach(async () => {
     __setSeedChunkSizeForTests(); // restore production default
+    __setSeedYieldForTests();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
     await deleteIdb();
     vi.restoreAllMocks();
@@ -304,8 +335,17 @@ describe("seedAll orchestration", () => {
       records: [1, 2, 3, 4, 5, 6, 7].map((id) => ({ id, inputString: `addr${id}` })),
       blockchainTransactions: [1, 2].map((id) => ({ id, txid: `tx${id}` })),
       transactionParticipants: [1, 2, 3, 4].map((id) => ({ id, txid: "tx1", role: "output", address: "a", amount: id })),
+      transactionMetadata: [1, 2, 3, 4, 5].map((id) => ({ id, txid: `tx${id}`, acquisitionMethod: `method-${id}` })),
     });
     const engine = installMockEngine();
+    const yieldedAfter: Array<{ table: Store; batches: number }> = [];
+    __setSeedYieldForTests(async () => {
+      const latest = engine.seedBatch.mock.calls.at(-1);
+      yieldedAfter.push({
+        table: latest?.[0] as Store,
+        batches: engine.seedBatch.mock.calls.length,
+      });
+    });
 
     const progress: SeedProgress[] = [];
     const results = await seedAll((p) => progress.push(p));
@@ -318,6 +358,7 @@ describe("seedAll orchestration", () => {
       records: 7,
       blockchainTransactions: 2,
       transactionParticipants: 4,
+      transactionMetadata: 5,
     });
 
     // records: chunk size 3 over 7 rows => batches of [3, 3, 1].
@@ -329,6 +370,17 @@ describe("seedAll orchestration", () => {
     expect(batchSizes(engine, "blockchainTransactions")).toEqual([2]);
     // 4 rows over chunk 3 => [3, 1].
     expect(batchSizes(engine, "transactionParticipants")).toEqual([3, 1]);
+    // metadata uses the same bounded cooperative stream, not a one-off path.
+    expect(batchSizes(engine, "transactionMetadata")).toEqual([3, 2]);
+
+    // A full batch always yields before the next source read/transfer. Short
+    // terminal batches do not add an unnecessary delay before the next table.
+    expect(yieldedAfter.map((entry) => entry.table)).toEqual([
+      "records",
+      "records",
+      "transactionParticipants",
+      "transactionMetadata",
+    ]);
 
     // Result summary is correct per table.
     const byTable = Object.fromEntries(results.map((r) => [r.table, r]));
@@ -342,10 +394,10 @@ describe("seedAll orchestration", () => {
     const recProgress = progress.filter((p) => p.table === "records");
     expect(recProgress.at(-1)).toMatchObject({ processed: 7 });
 
-    // Aggregate view: a global total (7 + 2 + 4 = 13) is known from the very
+    // Aggregate view: a global total (7 + 2 + 4 + 5 = 18) is known from the very
     // first progress event, and tableIndex/tableCount frame the position.
-    expect(progress[0]).toMatchObject({ overallTotal: 13, tableCount: 3, tableIndex: 1 });
-    expect(progress.every((p) => p.overallTotal === 13 && p.tableCount === 3)).toBe(true);
+    expect(progress[0]).toMatchObject({ overallTotal: 18, tableCount: 4, tableIndex: 1 });
+    expect(progress.every((p) => p.overallTotal === 18 && p.tableCount === 4)).toBe(true);
 
     // overallProcessed never goes backwards and ends at the global total.
     let prev = -1;
@@ -353,12 +405,13 @@ describe("seedAll orchestration", () => {
       expect(p.overallProcessed).toBeGreaterThanOrEqual(prev);
       prev = p.overallProcessed;
     }
-    expect(progress.at(-1)?.overallProcessed).toBe(13);
+    expect(progress.at(-1)?.overallProcessed).toBe(18);
 
     // Each table reports its own 1-based index in order.
     expect(progress.filter((p) => p.table === "records").every((p) => p.tableIndex === 1)).toBe(true);
     expect(progress.filter((p) => p.table === "blockchainTransactions").every((p) => p.tableIndex === 2)).toBe(true);
     expect(progress.filter((p) => p.table === "transactionParticipants").every((p) => p.tableIndex === 3)).toBe(true);
+    expect(progress.filter((p) => p.table === "transactionMetadata").every((p) => p.tableIndex === 4)).toBe(true);
   });
 
   it("mapped rows are streamed (booleans/arrays normalized), not raw Dexie objects", async () => {
@@ -387,6 +440,7 @@ describe("seedAll orchestration", () => {
       records: 0,
       blockchainTransactions: 0,
       transactionParticipants: 0,
+      transactionMetadata: 0,
     });
     expect(results.every((r) => r.copied === 0 && r.complete && !r.cancelled)).toBe(true);
   });
@@ -427,6 +481,31 @@ describe("seedAll orchestration", () => {
     expect(rec.complete).toBe(false);
     expect(rec.copied).toBe(3);
     expect(rec.sourceCount).toBe(7);
+  });
+
+  it("lets UI cancellation run at the cooperative boundary before reading another batch", async () => {
+    await seedSourceIdb({
+      records: [1, 2, 3, 4, 5, 6, 7].map((id) => ({ id, inputString: `addr${id}` })),
+    });
+    const engine = installMockEngine();
+    const yieldSpy = vi.fn(async () => {
+      cancelSeeding();
+    });
+    __setSeedYieldForTests(yieldSpy);
+
+    const results = await seedAll();
+
+    expect(yieldSpy).toHaveBeenCalledTimes(1);
+    expect(batchSizes(engine, "records")).toEqual([3]);
+    expect(engine.clear).toHaveBeenCalledTimes(1);
+    expect(engine.seedFinish).not.toHaveBeenCalled();
+    expect(results[0]).toMatchObject({
+      table: "records",
+      copied: 3,
+      sourceCount: 7,
+      cancelled: true,
+      complete: false,
+    });
   });
 
   it("cancelling before any batch streams copies nothing and still clears", async () => {
@@ -478,9 +557,9 @@ describe("seedAll orchestration", () => {
     expect(engine.seedBatch).toHaveBeenCalledTimes(2);
     // The engine is NEVER marked READY with partial data...
     expect(engine.seedFinish).not.toHaveBeenCalled();
-    // ...and a hard error is not the cancel path, so clear() is not invoked
-    // either: the seed simply aborts un-finished rather than silently completing.
-    expect(engine.clear).not.toHaveBeenCalled();
+    // ...and the partial mirror is removed before the original transfer error
+    // is rethrown to the caller.
+    expect(engine.clear).toHaveBeenCalledTimes(1);
   });
 
   it("propagates an IndexedDB read failure mid-stream and never marks the mirror complete", async () => {
@@ -507,9 +586,9 @@ describe("seedAll orchestration", () => {
 
     // The first batch was streamed before the read threw...
     expect(engine.seedBatch).toHaveBeenCalledTimes(1);
-    // ...but the partial mirror is never finished (left un-complete), and the
-    // hard error does not trigger the cancel-style clear().
+    // ...but the partial mirror is never finished and is removed before the
+    // original IndexedDB error reaches the caller.
     expect(engine.seedFinish).not.toHaveBeenCalled();
-    expect(engine.clear).not.toHaveBeenCalled();
+    expect(engine.clear).toHaveBeenCalledTimes(1);
   });
 });

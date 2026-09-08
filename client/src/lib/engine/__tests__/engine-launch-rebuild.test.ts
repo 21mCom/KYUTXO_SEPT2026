@@ -195,8 +195,7 @@ function installMockWorker(initial: { state: EngineState; schemaVersion: number 
         worker.seedBatchFailAtCall !== null &&
         worker.bridge.seedBatch.mock.calls.length >= worker.seedBatchFailAtCall
       ) {
-        // Hard rebuild failure mid-stream: the worker rejects this batch. This is
-        // NOT a cancel — seedAllInner must propagate the throw without clear().
+        // Hard rebuild failure mid-stream: the worker rejects this batch.
         return {
           ok: false,
           error: "seedBatch failed (simulated mid-rebuild error)",
@@ -497,7 +496,7 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
     }
   });
 
-  it("when a seedBatch errors mid-rebuild the reseed fails closed: maintenance phase is 'error', seedFinish/clear are NOT called, and every scope stays on Dexie", async () => {
+  it("when a seedBatch errors mid-rebuild the reseed clears the partial mirror and every scope stays on Dexie", async () => {
     // Same stale-schema launch as above: a valid, indexed mirror built by the
     // PREVIOUS schema version. Bootstrap detects the mismatch and starts a reseed
     // — but this time the worker throws a HARD ERROR partway through the stream.
@@ -524,16 +523,12 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
     // and runBootstrap resolves — so awaiting the bootstrap settles everything.
     await __runEngineBootstrapForTests();
 
-    // --- Hard-error contract: fail closed, NOT a cancel -----------------------
-    // The throw propagated out of seedAllInner BEFORE the finish/abort decision, so
-    // neither the success path (seedFinish) nor the cancel path (clear) ran.
+    // --- Hard-error contract: fail closed and remove partial data -------------
     expect(worker.bridge.seedBatch.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
-    expect(worker.bridge.clear).not.toHaveBeenCalled(); // error != cancel
-    // The mirror was never finalized: schema stays at the old version, and the
-    // worker is left in the LOADING state seedBegin put it in (not EMPTY/READY).
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
     expect(worker.schemaVersion).toBe(OLD_SCHEMA);
-    expect(worker.state).toBe("LOADING");
+    expect(worker.state).toBe("EMPTY");
 
     // A failed reseed must NOT claim 'ready' — it surfaces 'error' so the header
     // shows fast mode unavailable and screens keep reading from Dexie.
@@ -542,7 +537,7 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
 
     // --- Every read gate scope stays on Dexie ---------------------------------
     // The seed lock is released (engineSeedInFlight is false), so the gate probes
-    // the worker — which is still LOADING (never finalized) — and falls back.
+    // the worker — which is EMPTY after cleanup — and falls back.
     for (const scope of ["records", "transactions", "allMirrors"] as const) {
       await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
         useEngine: false,
@@ -551,7 +546,7 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
     }
   });
 
-  it("after a hard-error reseed the next launch re-detects the surviving stale-schema mirror, refreshes it to completion, and flips every scope to the engine", async () => {
+  it("after a hard-error reseed the next launch rebuilds the cleared mirror and flips every scope to the engine", async () => {
     // Continuation of the hard-error scenario above: a stale-schema reseed threw
     // mid-stream, so maintenance settled to 'error' and — unlike the cancel path,
     // which clear()s the worker to EMPTY — the worker was left LOADING (never
@@ -577,11 +572,10 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
     worker.seedBatchFailAtCall = 2;
     await __runEngineBootstrapForTests();
 
-    // Sanity: failed closed. The mirror was never finalized (no seedFinish), never
-    // dropped (no clear), and the worker is left LOADING with the OLD schema stamp.
+    // Sanity: failed closed. The mirror was never finalized and was cleared.
     expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
-    expect(worker.bridge.clear).not.toHaveBeenCalled();
-    expect(worker.state).toBe("LOADING");
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
+    expect(worker.state).toBe("EMPTY");
     expect(worker.schemaVersion).toBe(OLD_SCHEMA);
     expect(getEngineMaintenanceState().phase).toBe("error");
 
@@ -596,7 +590,7 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
     // refresh stream straight through this time.
     worker.seedBatchFailAtCall = null;
     worker.hold = null;
-    worker.state = "READY";
+    worker.state = "EMPTY";
     expect(worker.schemaVersion).toBe(OLD_SCHEMA);
 
     __resetEngineMaintenanceForTests();
@@ -608,7 +602,7 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
     // branch (a fresh process never sees LOADING at launch).
     expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(2); // first (failed) + this one
     expect(worker.bridge.seedFinish).toHaveBeenCalledTimes(1); // first reseed never finished
-    expect(worker.bridge.clear).not.toHaveBeenCalled(); // error path never clears
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
     // seedFinish marked the mirror READY and stamped the CURRENT schema version.
     expect(worker.state).toBe("READY");
     expect(worker.schemaVersion).toBe(CURRENT_SCHEMA);
@@ -650,7 +644,7 @@ describe("launch with a never-seeded (EMPTY) vault (end-to-end)", () => {
     vi.restoreAllMocks();
   });
 
-  it("when the FIRST seed of an empty vault errors mid-build the build fails closed: maintenance phase is 'error', seedFinish/clear are NOT called, and every scope stays on Dexie", async () => {
+  it("when the FIRST seed of an empty vault errors mid-build the partial mirror is cleared and every scope stays on Dexie", async () => {
     // A brand-new vault that has NEVER been seeded: the worker starts EMPTY with no
     // stamped schema version. This is a DIFFERENT bootstrap entry point from the
     // stale-schema reseed — runBootstrap takes the `snap.state === 'EMPTY'` branch
@@ -679,18 +673,13 @@ describe("launch with a never-seeded (EMPTY) vault (end-to-end)", () => {
     // and runBootstrap resolves — so awaiting the bootstrap settles everything.
     await __runEngineBootstrapForTests();
 
-    // --- Hard-error contract: fail closed, NOT a cancel -----------------------
-    // The empty-vault branch ran a 'seeding' build (not a 'refreshing' reseed). The
-    // throw propagated out of seedAllInner BEFORE the finish/abort decision, so
-    // neither the success path (seedFinish) nor the cancel path (clear) ran.
+    // --- Hard-error contract: fail closed and remove partial data -------------
     expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(1);
     expect(worker.bridge.seedBatch.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
-    expect(worker.bridge.clear).not.toHaveBeenCalled(); // error != cancel
-    // The mirror was never finalized: it is left in the LOADING state seedBegin put
-    // it in (not EMPTY/READY) and no schema version was ever stamped.
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
     expect(worker.schemaVersion).toBe(0);
-    expect(worker.state).toBe("LOADING");
+    expect(worker.state).toBe("EMPTY");
 
     // A failed first build must NOT claim 'ready' — it surfaces 'error' so the
     // header shows fast mode unavailable and screens keep reading from Dexie.
@@ -699,7 +688,7 @@ describe("launch with a never-seeded (EMPTY) vault (end-to-end)", () => {
 
     // --- Every read gate scope stays on Dexie ---------------------------------
     // The seed lock is released (engineSeedInFlight is false), so the gate probes
-    // the worker — which is still LOADING (never finalized) — and falls back.
+    // the worker — which is EMPTY after cleanup — and falls back.
     for (const scope of ["records", "transactions", "allMirrors"] as const) {
       await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
         useEngine: false,
@@ -868,11 +857,10 @@ describe("launch with a never-seeded (EMPTY) vault (end-to-end)", () => {
     worker.seedBatchFailAtCall = 2;
     await __runEngineBootstrapForTests();
 
-    // Sanity: failed closed. The mirror was never finalized (no seedFinish), never
-    // dropped (no clear), and the worker is left LOADING with no stamped schema.
+    // Sanity: failed closed. The mirror was never finalized and was cleared.
     expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
-    expect(worker.bridge.clear).not.toHaveBeenCalled();
-    expect(worker.state).toBe("LOADING");
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
+    expect(worker.state).toBe("EMPTY");
     expect(worker.schemaVersion).toBe(0);
     expect(getEngineMaintenanceState().phase).toBe("error");
 
@@ -901,7 +889,7 @@ describe("launch with a never-seeded (EMPTY) vault (end-to-end)", () => {
     // first build to completion.
     expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(2); // first (failed) + this one
     expect(worker.bridge.seedFinish).toHaveBeenCalledTimes(1); // first build never finished
-    expect(worker.bridge.clear).not.toHaveBeenCalled(); // error path never clears
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
     // seedFinish marked the mirror READY and stamped the CURRENT schema version.
     expect(worker.state).toBe("READY");
     expect(worker.schemaVersion).toBe(CURRENT_SCHEMA);
