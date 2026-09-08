@@ -92,8 +92,48 @@ async function navigateToNodeSettings(page) {
   await page.getByRole('heading', { name: 'Node Connection' }).waitFor({ state: 'visible' });
 }
 
+async function readProtectedNodeSettings(page) {
+  return page.evaluate(async () => {
+    const repository = window.electronAPI?.protectedStore?.repository;
+    if (!repository) throw new Error('Protected repository bridge is unavailable');
+    const envelope = await repository.find('nodeSettings', 'default');
+    if (!envelope?.ok || envelope.result === undefined) {
+      throw new Error(envelope?.error || 'Protected repository operation failed');
+    }
+    return envelope.result;
+  });
+}
+
 async function completeFreshVaultOnboardingWithSource(page) {
   const sourceStep = page.getByTestId('network-onboarding-source');
+  const appeared = await sourceStep
+    .waitFor({ state: 'visible', timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!appeared) {
+    await page.evaluate(async () => {
+      const repository = window.electronAPI?.protectedStore?.repository;
+      if (!repository) throw new Error('Protected repository bridge is unavailable');
+      const current = await repository.find('nodeSettings', 'default');
+      if (!current?.ok || current.result === undefined) {
+        throw new Error(current?.error || 'Protected repository read failed');
+      }
+      const saved = await repository.save('nodeSettings', {
+        ...current.result,
+        networkPrivacyMode: undefined,
+        networkAccessEnabled: false,
+        networkOnboardingStage: 'source',
+      });
+      if (!saved?.ok || saved.result === undefined) {
+        throw new Error(saved?.error || 'Protected repository write failed');
+      }
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await unlockIfNeeded(page, PASSWORD, {
+      appearTimeoutMs: 60_000,
+      label: 'packaged-forgotten-source-seeded-onboarding',
+    });
+  }
   await sourceStep.waitFor({ state: 'visible', timeout: 60_000 });
   await page.getByTestId('choice-network-own-node').click();
   await page.getByTestId('input-onboarding-node-url').fill(CUSTOM_URL);
@@ -203,11 +243,12 @@ async function main() {
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-forgotten-source-reopen' });
     await page.getByText('Choose before KYUTXO connects').waitFor();
 
-    const consent = await page.evaluate(async () => {
-      const { getNodeSettings } = await import('/src/lib/data/node-settings-crud.ts');
-      const settings = await getNodeSettings('default');
-      return [settings?.networkPrivacyMode, settings?.networkAccessEnabled, settings?.networkOnboardingStage];
-    });
+    const reopenedSettings = await readProtectedNodeSettings(page);
+    const consent = [
+      reopenedSettings?.networkPrivacyMode,
+      reopenedSettings?.networkAccessEnabled,
+      reopenedSettings?.networkOnboardingStage,
+    ];
     assert.deepEqual(consent, [undefined, false, 'source'], 'forgotten source consent did not survive desktop restart');
     assert.equal(
       await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-forgotten-source-reopen' }),
@@ -222,17 +263,14 @@ async function main() {
       ['input-custom-url', CUSTOM_URL], ['input-tor-proxy', TOR_PROXY],
       ['input-electrum-host', ELECTRUM_HOST], ['input-electrum-port', '50002'],
     ]) assert.equal(await page.getByTestId(id).inputValue(), expected, `${id} was not retained`);
-    const retained = await page.evaluate(async () => {
-      const { getNodeSettings } = await import('/src/lib/data/node-settings-crud.ts');
-      const settings = await getNodeSettings('default');
-      return {
-        provider: settings?.provider,
-        useTor: settings?.useTor,
-        useElectrum: settings?.useElectrum,
-        electrumSSL: settings?.electrumSSL,
-        electrumServerType: settings?.electrumServerType,
-      };
-    });
+    const retainedSettings = await readProtectedNodeSettings(page);
+    const retained = {
+      provider: retainedSettings?.provider,
+      useTor: retainedSettings?.useTor,
+      useElectrum: retainedSettings?.useElectrum,
+      electrumSSL: retainedSettings?.electrumSSL,
+      electrumServerType: retainedSettings?.electrumServerType,
+    };
     assert.deepEqual(retained, {
       provider: 'custom-electrs',
       useTor: true,
