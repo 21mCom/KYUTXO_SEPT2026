@@ -198,6 +198,53 @@ jobs:
           KYUTXO_OWNER_BOOK_SCALE_ROWS: '1000000'
         run: npm run test:owner-book-million
 
+      - name: Run million-row encrypted owner report release gate
+        id: protected_owner_book_million
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          KYUTXO_OWNER_BOOK_PROTECTED_MILLION: '1'
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          npm run test:protected-owner-book-million 2>&1 |
+            Tee-Object -FilePath release/protected-owner-book-million.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Summarize encrypted owner report release gate
+        if: >-
+          always() &&
+          (startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release))
+        shell: pwsh
+        env:
+          GATE_OUTCOME: ${{ steps.protected_owner_book_million.outcome }}
+        run: |
+          "## Million-row encrypted owner report" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "**Outcome:** $env:GATE_OUTCOME" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          if (Test-Path release/protected-owner-book-million.log) {
+            '```text' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+            Get-Content release/protected-owner-book-million.log -Tail 40 |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append
+            '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          } else {
+            "The gate produced no log." | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          }
+
+      - name: Upload encrypted owner report evidence
+        if: >-
+          always() &&
+          (startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release))
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: KYUTXO-protected-owner-book-million-${{ github.run_id }}
+          path: release/protected-owner-book-million.log
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Read package version
         id: version
         shell: bash

@@ -116,6 +116,22 @@ test('tagged and explicitly requested releases run the full suite before packagi
     packageJson.scripts['test:owner-book-million'],
     /node --max-old-space-size=4096 .*--maxWorkers=1 .*--testTimeout=180000 .*owner-cost-basis-core\.test\.ts/,
   );
+  assert.match(
+    workflow,
+    /name: Run million-row encrypted owner report release gate[\s\S]*id: protected_owner_book_million[\s\S]*timeout-minutes: 15[\s\S]*KYUTXO_OWNER_BOOK_PROTECTED_MILLION: '1'[\s\S]*npm run test:protected-owner-book-million/,
+  );
+  assert.match(
+    workflow,
+    /name: Summarize encrypted owner report release gate[\s\S]*always\(\)[\s\S]*GITHUB_STEP_SUMMARY[\s\S]*protected-owner-book-million\.log/,
+  );
+  assert.match(
+    workflow,
+    /name: Upload encrypted owner report evidence[\s\S]*always\(\)[\s\S]*KYUTXO-protected-owner-book-million-\$\{\{ github\.run_id \}\}/,
+  );
+  assert.match(
+    packageJson.scripts['test:protected-owner-book-million'],
+    /node --max-old-space-size=4096 .*--maxWorkers=1 .*--testTimeout=720000 .*protected-store-owner-book\.scale\.test\.ts/,
+  );
 });
 
 test('the release full-suite entry point names deleted and rewritten tracked samples', (t) => {

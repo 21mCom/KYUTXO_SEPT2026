@@ -3985,3 +3985,14 @@ args = "KYUTXO_OWNER_BOOK_SCALE_ROWS=1000000 npm run test:owner-book-million"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "protected-owner-book-million-row-release-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "KYUTXO_OWNER_BOOK_PROTECTED_MILLION=1 npm run test:protected-owner-book-million"
+
+[workflows.workflow.metadata]
+isValidation = false

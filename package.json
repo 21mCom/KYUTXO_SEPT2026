@@ -19,6 +19,7 @@
     "test:full": "node scripts/check-release-fixtures.mjs -- npm run test:full:unguarded",
     "test:full:unguarded": "npm run test:unit && npm run test:scripts",
     "test:owner-book-million": "node --max-old-space-size=4096 ./node_modules/vitest/vitest.mjs run --maxWorkers=1 --testTimeout=180000 --testNamePattern=\"keeps a representative materialized book bounded and faster to page than build\" client/src/lib/owner-cost-basis-core.test.ts",
+    "test:protected-owner-book-million": "node --max-old-space-size=4096 ./node_modules/vitest/vitest.mjs run --maxWorkers=1 --testTimeout=720000 electron/protected-store-owner-book.scale.test.ts",
     "release:checksums": "node scripts/generate-sha256.mjs release"
   },
   "dependencies": {
