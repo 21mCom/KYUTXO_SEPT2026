@@ -35,6 +35,10 @@ args = "Start application"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "focused-validation-tests-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "workflow-schedules-guard"
 
 [[workflows.workflow.tasks]]
@@ -4011,3 +4015,14 @@ args = "KYUTXO_OWNER_BOOK_PROTECTED_MILLION=1 npm run test:protected-owner-book-
 
 [workflows.workflow.metadata]
 isValidation = false
+
+[[workflows.workflow]]
+name = "focused-validation-tests-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-focused-validation-tests.mjs && node --test scripts/check-focused-validation-tests.test.mjs scripts/check-packaged-storage-boundary.test.mjs scripts/check-protected-vault-claims.test.mjs scripts/check-release-runner-readiness.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
