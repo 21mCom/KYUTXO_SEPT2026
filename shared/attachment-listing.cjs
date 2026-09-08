@@ -31,22 +31,21 @@ function createAttachmentListing(options) {
     }
   }
 
-  async function* iterateFiles() {
-    const entries = await fs.promises.opendir(attachmentsDir);
+  async function* iterateDirectory(relativeDirectory = '') {
+    const entries = await fs.promises.opendir(path.join(attachmentsDir, relativeDirectory));
     for await (const entry of entries) {
+      const relativePath = path.join(relativeDirectory, entry.name);
       if (entry.isDirectory()) {
-        const files = await fs.promises.opendir(path.join(attachmentsDir, entry.name));
-        for await (const file of files) {
-          if (file.isFile()) {
-            onFileVisited();
-            yield path.join(entry.name, file.name);
-          }
-        }
+        yield* iterateDirectory(relativePath);
       } else if (entry.isFile()) {
         onFileVisited();
-        yield entry.name;
+        yield relativePath;
       }
     }
+  }
+
+  async function* iterateFiles() {
+    yield* iterateDirectory();
   }
 
   async function summary() {

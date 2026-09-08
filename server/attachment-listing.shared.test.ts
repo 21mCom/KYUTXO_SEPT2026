@@ -15,20 +15,43 @@ function fixture() {
   roots.push(root);
   const attachmentsDir = path.join(root, "attachments");
   const outsideDir = path.join(root, "outside");
-  fs.mkdirSync(path.join(attachmentsDir, "nested"), { recursive: true });
+  const deeplyNestedDir = path.join(attachmentsDir, "nested", "deeper", "deepest");
+  fs.mkdirSync(deeplyNestedDir, { recursive: true });
   fs.mkdirSync(outsideDir);
   fs.writeFileSync(path.join(attachmentsDir, "root.bin"), Buffer.alloc(2));
   fs.writeFileSync(path.join(attachmentsDir, "nested", "child.bin"), Buffer.alloc(3));
+  fs.writeFileSync(path.join(deeplyNestedDir, "deep.bin"), Buffer.alloc(5));
   fs.writeFileSync(path.join(outsideDir, "secret.bin"), Buffer.alloc(100));
   fs.symlinkSync(outsideDir, path.join(attachmentsDir, "linked-dir"), "dir");
   fs.symlinkSync(
     path.join(outsideDir, "secret.bin"),
     path.join(attachmentsDir, "nested", "linked-file.bin"),
   );
+  fs.symlinkSync(outsideDir, path.join(attachmentsDir, "nested", "deeper", "linked-dir"), "dir");
+  fs.symlinkSync(
+    path.join(outsideDir, "secret.bin"),
+    path.join(deeplyNestedDir, "linked-file.bin"),
+  );
   return attachmentsDir;
 }
 
 describe("shared attachment listing contract", () => {
+  it("returns regular files at any depth while excluding symlinks at every depth", async () => {
+    const attachmentsDir = fixture();
+    const listing = createAttachmentListing({ attachmentsDir });
+
+    const result = await listing.list({ limit: 10 });
+
+    expect(result).toMatchObject({ success: true, total: 3, totalBytes: 10, cursor: null });
+    expect(result.files).toEqual(expect.arrayContaining([
+      "root.bin",
+      path.join("nested", "child.bin"),
+      path.join("nested", "deeper", "deepest", "deep.bin"),
+    ]));
+    expect(result.files).toHaveLength(3);
+    expect(result.files?.some((name) => name.includes("linked"))).toBe(false);
+  });
+
   it("applies paging, totals, close, expiry, caps, and symlink filtering", async () => {
     const attachmentsDir = fixture();
     let clock = 1_000;
@@ -43,11 +66,11 @@ describe("shared attachment listing contract", () => {
 
     expect(await listing.list({ summaryOnly: true })).toEqual({
       success: true,
-      total: 2,
-      totalBytes: 5,
+      total: 3,
+      totalBytes: 10,
     });
     const first = await listing.list({ limit: 1 });
-    expect(first).toMatchObject({ total: 2, totalBytes: 5, cursor: "cursor-1" });
+    expect(first).toMatchObject({ total: 3, totalBytes: 10, cursor: "cursor-1" });
     expect(first.files).toHaveLength(1);
     expect(first.files?.some((name) => name.includes("linked"))).toBe(false);
 
