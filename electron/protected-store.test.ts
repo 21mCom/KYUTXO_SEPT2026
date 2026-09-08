@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { createRequire } from "node:module";
 
 const requireCjs = createRequire(import.meta.url);
@@ -643,4 +644,21 @@ describe("protected store", () => {
       await client.close();
     }
   }, 30_000);
+
+  it("normalizes HKDF output before formatting the SQLCipher key", () => {
+    const workerSource = fs.readFileSync(
+      path.join(process.cwd(), "electron", "protected-store-worker.cjs"),
+      "utf8",
+    );
+    expect(workerSource).toMatch(
+      /return Buffer\.from\(\s*crypto\.hkdfSync\([\s\S]*?\)\s*,?\s*\);/,
+    );
+    expect(Buffer.from(crypto.hkdfSync(
+      "sha256",
+      Buffer.alloc(32, 1),
+      Buffer.alloc(16, 2),
+      Buffer.from("kyutxo/sqlcipher/v1"),
+      32,
+    )).toString("hex")).toMatch(/^[0-9a-f]{64}$/);
+  });
 });

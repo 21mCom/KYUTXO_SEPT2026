@@ -127,7 +127,18 @@ async function derive(password, h) {
   return Buffer.from(result);
 }
 function deriveSubkey(label) {
-  return crypto.hkdfSync('sha256', vdk, Buffer.from(header.vaultId), Buffer.from(`kyutxo/${label}/v1`), 32);
+  // Node 20+ may return an ArrayBuffer here. Normalize it before calling
+  // Buffer-only APIs such as toString('hex'); otherwise SQLCipher receives the
+  // literal string "[object ArrayBuffer]" instead of the derived key.
+  return Buffer.from(
+    crypto.hkdfSync(
+      'sha256',
+      vdk,
+      Buffer.from(header.vaultId),
+      Buffer.from(`kyutxo/${label}/v1`),
+      32,
+    ),
+  );
 }
 function readHeader() {
   let value;
