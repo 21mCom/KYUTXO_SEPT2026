@@ -51,10 +51,15 @@ const PROTECTED_TABLES = Object.freeze([
 const SAFE_ERROR = 'Protected store operation failed';
 
 class ProtectedStoreClient {
-  constructor({ dataDir, workerPath = path.join(__dirname, 'protected-store-worker.cjs') }) {
+  constructor({
+    dataDir,
+    workerPath = path.join(__dirname, 'protected-store-worker.cjs'),
+    enableTestFixtures = false,
+  }) {
     if (typeof dataDir !== 'string' || !dataDir) throw new TypeError('dataDir is required');
     this.workerPath = workerPath;
     this.dataDir = dataDir;
+    this.enableTestFixtures = enableTestFixtures === true;
     this.worker = null;
     this.nextId = 1;
     this.pending = new Map();
@@ -62,7 +67,12 @@ class ProtectedStoreClient {
 
   _ensureWorker() {
     if (this.worker) return this.worker;
-    const worker = new Worker(this.workerPath, { workerData: { dataDir: this.dataDir } });
+    const worker = new Worker(this.workerPath, {
+      workerData: {
+        dataDir: this.dataDir,
+        enableTestFixtures: this.enableTestFixtures,
+      },
+    });
     worker.on('message', (message) => {
       const pending = this.pending.get(message && message.requestId);
       if (!pending) return;
@@ -82,7 +92,8 @@ class ProtectedStoreClient {
   }
 
   call(type, payload = {}) {
-    if (!Object.values(MESSAGE_TYPES).includes(type)) {
+    const testFixture = type === 'testDamageOwnerReportCache' && this.enableTestFixtures;
+    if (!Object.values(MESSAGE_TYPES).includes(type) && !testFixture) {
       return Promise.reject(new TypeError('Unsupported protected-store operation'));
     }
     return new Promise((resolve, reject) => {

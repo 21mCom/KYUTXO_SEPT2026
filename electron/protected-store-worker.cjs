@@ -16,6 +16,7 @@ const {
 
 const ROOT = workerData && workerData.dataDir;
 if (typeof ROOT !== 'string' || !ROOT) throw new Error('protected store configuration invalid');
+const TEST_FIXTURES_ENABLED = workerData && workerData.enableTestFixtures === true;
 const HEADER = path.join(ROOT, 'protected-store.header.json');
 const DB_FILE = path.join(ROOT, 'protected-store.sqlite');
 const OBJECTS = path.join(ROOT, 'protected-objects');
@@ -397,6 +398,23 @@ function ownerCostBasisPage(options) {
   if (options.expectedCheckpointKey !== undefined && options.expectedCheckpointKey !== key) fail();
   const report = selectOwnerCostBasisReport(checkpoint.report, options.selectedOwner);
   return pageOwnerCostBasis(report, key, limit, ownerCostBasisEditorRows(report));
+}
+
+function testDamageOwnerReportCache() {
+  locked();
+  if (!TEST_FIXTURES_ENABLED) fail();
+  const cached = db.prepare(
+    'SELECT value_json FROM protected_derived_cache WHERE cache_id=?',
+  ).get(OWNER_BOOK_CACHE_ID);
+  if (!cached) fail();
+  const report = JSON.parse(cached.value_json);
+  if (!Array.isArray(report.batches) || report.batches.length === 0) fail();
+  report.batches[0] = { ...report.batches[0], remainingSats: 'malformed' };
+  db.prepare(
+    'UPDATE protected_derived_cache SET value_json=? WHERE cache_id=?',
+  ).run(JSON.stringify(report), OWNER_BOOK_CACHE_ID);
+  ownerBookCheckpoint = null;
+  return { damaged: true };
 }
 
 function ownerCheckpointKey(checkpoint, selectedOwner = '') {
@@ -859,6 +877,7 @@ async function handle(type, message) {
   if (type === 'finishAttachment') return finishAttachment(message);
   if (type === 'abortAttachment') return abortAttachment(message);
   if (type === 'verifyAttachments') return verifyAttachments(message);
+  if (type === 'testDamageOwnerReportCache') return testDamageOwnerReportCache();
   if (type === 'readAttachment') return readAttachment(message);
   if (type === 'deleteAttachment') {
     locked();

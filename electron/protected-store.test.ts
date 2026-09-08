@@ -24,6 +24,15 @@ function makeClient() {
   return { root, client: new ProtectedStoreClient({ dataDir: root }) };
 }
 
+function makeFixtureClient() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kyutxo-protected-"));
+  roots.push(root);
+  return {
+    root,
+    client: new ProtectedStoreClient({ dataDir: root, enableTestFixtures: true }),
+  };
+}
+
 describe("protected store", () => {
   it("keeps the preload delete/archive bridge on the typed command DTO", () => {
     const preload = fs.readFileSync(path.join(__dirname, "preload.cjs"), "utf8");
@@ -131,6 +140,65 @@ describe("protected store", () => {
       expect(restoredCheckpoint.openBatchesTotal).toBe(0);
       await client.call(MESSAGE_TYPES.LOCK);
       await expect(call("records", "ownerCostBasisPage", { options: { limit: 1 } })).rejects.toThrow();
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
+  it("rebuilds a malformed encrypted owner report cache without changing vault sources or attachments", async () => {
+    const { client } = makeFixtureClient();
+    const password = "damaged owner report test password";
+    const call = (collection: string, operation: string, payload: object = {}) =>
+      client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: collection === "blockchainTransactions" || collection === "transactionParticipants"
+          ? "transactions" : "records",
+        collection,
+        operation,
+        ...payload,
+      });
+    const sourceRows = {
+      owner: { id: 1, name: "Alice", createdAt: 1 },
+      record: {
+        id: 1, type: "address", inputString: "owned", label: "", tags: [], categories: [],
+        owner: "Alice", addressImportance: "manual",
+      },
+      transaction: {
+        id: 1, txid: "damaged-cache-source", blockHeight: 1,
+        blockTime: 1_700_000_000, fee: 0, feeRate: 0, syncedAt: 1,
+      },
+      participant: {
+        id: 1, txid: "damaged-cache-source", role: "output",
+        address: "owned", amount: 25_000, vout: 0,
+      },
+    };
+    const attachmentBytes = Buffer.from("owner-report-cache-attachment-sentinel");
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password });
+      await call("owners", "save", { row: sourceRows.owner });
+      await call("records", "save", { row: sourceRows.record });
+      await call("blockchainTransactions", "save", { row: sourceRows.transaction });
+      await call("transactionParticipants", "save", { row: sourceRows.participant });
+      const attachment = await client.call(MESSAGE_TYPES.WRITE_ATTACHMENT, {
+        alias: "records/owner-report-proof.bin",
+        bytes: attachmentBytes,
+      });
+
+      const valid = await call("records", "ownerCostBasisPage", { options: { limit: 25 } });
+      expect(valid.openBatchesTotal).toBe(1);
+      await client.call("testDamageOwnerReportCache");
+      await client.call(MESSAGE_TYPES.LOCK);
+      await client.call(MESSAGE_TYPES.UNLOCK, { password });
+
+      const rebuilt = await call("records", "ownerCostBasisPage", { options: { limit: 25 } });
+      expect(rebuilt).toEqual(valid);
+      await expect(call("owners", "find", { id: 1 })).resolves.toEqual(sourceRows.owner);
+      await expect(call("records", "find", { id: 1 })).resolves.toEqual(sourceRows.record);
+      await expect(call("blockchainTransactions", "find", { id: 1 }))
+        .resolves.toEqual(sourceRows.transaction);
+      await expect(call("transactionParticipants", "find", { id: 1 }))
+        .resolves.toEqual(sourceRows.participant);
+      expect(Buffer.from(await client.call(MESSAGE_TYPES.READ_ATTACHMENT, attachment)))
+        .toEqual(attachmentBytes);
     } finally {
       await client.close();
     }
