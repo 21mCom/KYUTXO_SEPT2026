@@ -241,38 +241,52 @@ async function main() {
       ? [...packagedCdpLaunchArgs(cdpUserDataDir)]
       : [ASAR, '--no-sandbox', '--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)];
     const executable = IS_WINDOWS ? PACKAGED_EXECUTABLE : electronBin;
-    child = spawn(executable, args, {
-      cwd: tempHome,
-      env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
-      detached: !IS_WINDOWS,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    child.stdout.on('data', (chunk) => process.stdout.write(`${TAG}[app] ${chunk}`));
-    child.stderr.on('data', (chunk) => process.stdout.write(`${TAG}[app-err] ${chunk}`));
+    const stopPackagedApp = async () => {
+      const ownedPort = cdpPort;
+      await browser?.close().catch(() => {});
+      browser = null;
+      killTree(child);
+      child = null;
+      if (ownedPort !== null && !(await waitForPackagedCdpDown(ownedPort, 30_000))) {
+        throw new Error(`${TAG} packaged process still owns CDP port ${ownedPort} after shutdown`);
+      }
+      cdpPort = null;
+    };
+    const startPackagedApp = async () => {
+      child = spawn(executable, args, {
+        cwd: tempHome,
+        env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
+        detached: !IS_WINDOWS,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      child.stdout.on('data', (chunk) => process.stdout.write(`${TAG}[app] ${chunk}`));
+      child.stderr.on('data', (chunk) => process.stdout.write(`${TAG}[app-err] ${chunk}`));
 
-    const cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
-    cdpPort = cdp.port;
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
-    const page = await waitForPage(browser);
-    await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', null, {
-      timeout: 60_000,
-    });
-
-    const capability = await page.evaluate(({ apiName, methodName }) => {
-      const api = window.electronAPI?.[apiName];
-      return {
-        present: !!api,
-        method: typeof api?.[methodName],
-      };
-    }, { apiName: PROTECTED_VAULT_TEST_API, methodName: PROTECTED_VAULT_TEST_METHOD });
-    if (!capability.present || capability.method !== 'function') {
-      throw new Error(
-        `${TAG} missing ${PROTECTED_VAULT_TEST_API}.${PROTECTED_VAULT_TEST_METHOD}; ` +
-        'the packaged app has no protected-vault proof bridge',
-      );
-    }
+      const cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+      cdpPort = cdp.port;
+      browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
+      const page = await waitForPage(browser);
+      await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', null, {
+        timeout: 60_000,
+      });
+      const capability = await page.evaluate(({ apiName, methodName }) => {
+        const api = window.electronAPI?.[apiName];
+        return {
+          present: !!api,
+          method: typeof api?.[methodName],
+        };
+      }, { apiName: PROTECTED_VAULT_TEST_API, methodName: PROTECTED_VAULT_TEST_METHOD });
+      if (!capability.present || capability.method !== 'function') {
+        throw new Error(
+          `${TAG} missing ${PROTECTED_VAULT_TEST_API}.${PROTECTED_VAULT_TEST_METHOD}; ` +
+          'the packaged app has no protected-vault proof bridge',
+        );
+      }
+      return page;
+    };
 
     for (const scenario of PROTECTED_VAULT_SCENARIOS) {
+      const page = await startPackagedApp();
       const report = await page.evaluate(
         async ({ apiName, methodName, scenario, fixtureTokens }) => {
           return window.electronAPI[apiName][methodName]({ scenario, fixtureTokens });
@@ -285,6 +299,9 @@ async function main() {
         },
       );
       classifyAndAssert(report, scenario);
+      // Chromium holds profile files open on Windows. Stop the exact process
+      // and its owned CDP endpoint before scanning; never exclude locked files.
+      await stopPackagedApp();
       const scan = scanDisposableProfile(tempHome);
       if (report.recoveryAction === 'source-preserved') {
         if (report.plaintextSourceRelativeRoot !== PLAINTEXT_MIGRATION_SOURCE_ROOT) {
