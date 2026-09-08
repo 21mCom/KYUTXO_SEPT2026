@@ -210,8 +210,9 @@ export async function unlockIfNeeded(page, password, options = {}) {
     await runPhase(label, 'vault setup confirmation entry', () => confirmInput.fill(password));
   }
   await runPhase(label, `${unlockPhase} submission`, () => page.getByTestId('button-submit').click());
+  const completionLocator = isSetup ? confirmInput : pwInput;
   await runPhase(label, `${unlockPhase} completion`, () =>
-    pwInput.waitFor({ state: 'detached', timeout: submitTimeoutMs }),
+    completionLocator.waitFor({ state: 'detached', timeout: submitTimeoutMs }),
   );
 
   if (dismissMigration) await dismissMigrationOverlayIfPresent(page, { label });
