@@ -768,6 +768,13 @@ test('the packaged network activity relaunch rejects stale CDP ownership before 
     /activityRows\.nth\(activity\.length\)\.waitFor\(\{ state: 'visible' \}\)[\s\S]*await activityRows\.count\(\)/,
     'activity labels must be checked only after every asynchronously queried row renders',
   );
+  assert.doesNotMatch(
+    source,
+    /indexedDB\.open\('KYUTXODatabase'\)/,
+    'packaged activity persistence must not be seeded through the obsolete IndexedDB mirror',
+  );
+  assert.match(source, /repository\.saveBatch\('networkPrivacyActivity', activity\)/);
+  assert.match(source, /repository\.page\('networkPrivacyActivity', after, 1000, 'asc'\)/);
 });
 
 test('the packaged Coin Passport gate is release-wired after the native worker check', () => {
