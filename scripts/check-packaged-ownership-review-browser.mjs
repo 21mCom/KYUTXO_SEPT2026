@@ -199,9 +199,26 @@ async function ownershipState(page) {
       ownership: (await collect('addressOwnership')).map(({ recordId, state, entityId, walletId }) => ({
         recordId, state, entityId: entityId ?? null, walletId: walletId ?? null,
       })),
-      decisions: (await collect('ownershipReviewDecisions')).map(({ state, action, recordIds, undoToken }) => ({ state, action, recordIds, undoToken })),
+      decisions: (await collect('ownershipReviewDecisions')).map(({ evidenceFingerprint, state, action, recordIds, undoToken }) => ({
+        evidenceFingerprint, state, action, recordIds, undoToken,
+      })),
     };
   });
+}
+
+async function changeRejectedEvidence(page) {
+  return page.evaluate(async ({ recordId, discoveredInTxid }) => {
+    const { getVaultRepository } = await import('/src/lib/repository/index.ts');
+    const repository = getVaultRepository();
+    const record = await repository.get('records', recordId);
+    if (!record) throw new Error(`Missing ownership evidence record ${recordId}`);
+    await repository.put('records', {
+      ...record,
+      discoveredInTxid,
+      updatedAt: record.updatedAt + 1,
+    });
+    return { discoveredInTxid };
+  }, { recordId: 6, discoveredInTxid: 'propagation-reject-materially-changed' });
 }
 
 async function waitForOwnershipRows(page, expected) {
@@ -343,6 +360,10 @@ async function main() {
       'undo restores the exact pre-cascade ownership states',
     );
 
+    await page.getByTestId('button-ownership-inspect-6').click();
+    const rejectedEvidenceText = await page.getByTestId('ownership-evidence-6').innerText();
+    const rejectedFingerprint = rejectedEvidenceText.match(/ownership-v1:[0-9a-f]{8}/)?.[0];
+    assert.ok(rejectedFingerprint, 'rejected suggestion exposes its evidence fingerprint');
     await page.getByTestId('button-ownership-reject-6').click();
     await page.getByText('Suggestion rejected').first().waitFor();
     await page.getByTestId('ownership-suggestion-6').waitFor({ state: 'detached' });
@@ -365,8 +386,41 @@ async function main() {
     state = await ownershipState(page);
     assert.equal(state.kind, 'protected');
     assert.equal(state.ownership.find((row) => row.recordId === 2)?.entityId, 1, 'single accepted assignment survives relaunch');
-    assert.ok(state.decisions.some((row) => row.state === 'rejected' && row.recordIds.includes(6)), 'rejected decision survives relaunch');
+    assert.ok(
+      state.decisions.some((row) =>
+        row.state === 'rejected' &&
+        row.recordIds.includes(6) &&
+        row.evidenceFingerprint === rejectedFingerprint),
+      'rejected decision and its original fingerprint survive relaunch',
+    );
     assert.ok(state.decisions.some((row) => row.action === 'assign-wallet' && !row.undoToken), 'undone wallet decision remains auditable but cannot be replayed');
+
+    const changedEvidence = await changeRejectedEvidence(page);
+    assert.equal(changedEvidence.discoveredInTxid, 'propagation-reject-materially-changed');
+    await page.reload();
+    await page.getByTestId('ownership-resolution-page').waitFor({ state: 'visible' });
+    await page.getByTestId('ownership-loading').waitFor({ state: 'detached' });
+    const changedSuggestion = page.getByTestId('ownership-suggestion-6');
+    await changedSuggestion.waitFor({ state: 'visible' });
+    await changedSuggestion.getByTestId('button-ownership-inspect-6').click();
+    const changedEvidenceText = await changedSuggestion.getByTestId('ownership-evidence-6').innerText();
+    assert.match(changedEvidenceText, /propagation-reject-materially-changed/);
+    const changedFingerprint = changedEvidenceText.match(/ownership-v1:[0-9a-f]{8}/)?.[0];
+    assert.ok(changedFingerprint, 'changed suggestion exposes its evidence fingerprint');
+    assert.notEqual(changedFingerprint, rejectedFingerprint, 'materially changed local evidence produces a new review fingerprint');
+    state = await ownershipState(page);
+    assert.ok(
+      state.decisions.some((row) =>
+        row.state === 'rejected' &&
+        row.recordIds.includes(6) &&
+        row.evidenceFingerprint === rejectedFingerprint),
+      'the prior rejection remains auditable after changed evidence returns for review',
+    );
+    assert.equal(
+      state.decisions.some((row) => row.evidenceFingerprint === changedFingerprint),
+      false,
+      'the changed fingerprint is a fresh suggestion with no inherited decision',
+    );
 
     await page.goto('kyutxo-app://bundle/#/privacy-audit');
     await page.getByTestId('button-run-audit').click();
@@ -383,7 +437,7 @@ async function main() {
       'unknown ownership does not create an additional multi-owner finding',
     );
 
-    console.log(`${TAG} protected ownership review, restart persistence, undo, and Privacy Audit checks passed`);
+    console.log(`${TAG} protected ownership review, changed-evidence return, restart persistence, undo, and Privacy Audit checks passed`);
   } finally {
     await browser?.close().catch(() => {});
     await stop(child);
