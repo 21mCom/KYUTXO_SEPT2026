@@ -109,10 +109,12 @@ async function main() {
   let xvfbBin;
   if (!IS_WINDOWS) ({ electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG }));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-forgotten-source-'));
-  const cdpUserDataDir = path.join(home, 'cdp-profile');
   const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
     root: ROOT, asarPath: ASAR, home, tag: TAG,
   }) : null;
+  const cdpUserDataDir = IS_WINDOWS
+    ? path.join(portableSetup.launchDir, 'KYUTXO_Data')
+    : path.join(home, 'cdp-profile');
   const env = {
     ...(portableSetup?.env || process.env), HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'),
     XDG_CACHE_HOME: path.join(home, '.cache'), XDG_DATA_HOME: path.join(home, '.local', 'share'),

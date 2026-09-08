@@ -277,10 +277,12 @@ async function main() {
   }
 
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-network-privacy-'));
-  const cdpUserDataDir = path.join(tempHome, 'cdp-profile');
   const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
     root: ROOT, asarPath: ASAR, home: tempHome, tag: TAG,
   }) : null;
+  const cdpUserDataDir = IS_WINDOWS
+    ? path.join(portableSetup.launchDir, 'KYUTXO_Data')
+    : path.join(tempHome, 'cdp-profile');
   const env = {
     ...(portableSetup?.env || process.env),
     HOME: tempHome,

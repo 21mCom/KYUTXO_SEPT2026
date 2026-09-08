@@ -266,10 +266,12 @@ async function main() {
   buildPackage();
   const binaries = IS_WINDOWS ? { electronBin: null, xvfbBin: null } : findPackagedBinaries({ tag: TAG });
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-passport-'));
-  const cdpUserDataDir = path.join(tempHome, 'cdp-profile');
   const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
     root: ROOT, asarPath: ASAR, home: tempHome, tag: TAG,
   }) : null;
+  const cdpUserDataDir = IS_WINDOWS
+    ? path.join(portableSetup.launchDir, 'KYUTXO_Data')
+    : path.join(tempHome, 'cdp-profile');
   const display = `:${500 + (process.pid % 300)}`;
   let xvfb;
   let child;

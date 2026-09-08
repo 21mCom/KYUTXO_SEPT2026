@@ -692,6 +692,7 @@ test('the packaged network activity forced shutdown cannot become graceful', () 
   const forcedHelper = source.match(
     /async function forceStopPackagedProcess\(child\) \{(?<body>[\s\S]*?)\n\}/,
   )?.groups?.body;
+  assert.match(source, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
   assert.ok(forcedHelper, 'forced shutdown helper must remain independently testable in source');
 
   assert.match(
@@ -779,6 +780,7 @@ test('the packaged Coin Passport gate is release-wired after the native worker c
   assert.match(script, /expectedCheckpointKey/);
   assert.match(script, /IPC_PAGE_CAP = 250/);
   assert.match(script, /prepareWindowsPortableLaunch/);
+  assert.match(script, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
   assert.match(script, /portable launch copy/);
   assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
   assert.match(
@@ -803,6 +805,7 @@ test('the forgotten-source gate launches the copied Windows portable artifact an
   const buildScript = fs.readFileSync(path.join(SCRIPTS_DIR, 'electron-build.sh'), 'utf8');
 
   assert.match(script, /prepareWindowsPortableLaunch/);
+  assert.match(script, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
   assert.match(script, /cwd: IS_WINDOWS \? portableSetup\.launchDir : home/);
   assert.doesNotMatch(script, /path\.join\(UNPACKED_DIR, 'KYUTXO\.exe'\)/);
   assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
@@ -834,6 +837,7 @@ test('the packaged Coin Origins gate is release-wired after the native worker ch
   assert.match(script, /holdingsTotal === 3/);
   assert.match(script, /origin-holding-unknown/);
   assert.match(script, /prepareWindowsPortableLaunch/);
+  assert.match(script, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
   assert.match(
     workflow,
     /- name: Verify Coin Origins wallet-scoped counts through packaged IPC\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-coin-origins-browser\.mjs/,
