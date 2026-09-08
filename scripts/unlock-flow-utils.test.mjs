@@ -210,6 +210,7 @@ function makePage({
       return setup;
     },
     fill: async (value) => calls.push(['confirm.fill', value]),
+    waitFor: async (options) => calls.push(['confirm.waitFor', options]),
   };
   const submit = {
     click: async () => calls.push(['submit.click']),
@@ -311,10 +312,37 @@ describe('browser-check unlock helper', () => {
         'password.fill',
         'confirm.fill',
         'submit.click',
-        'password.waitFor',
+        'confirm.waitFor',
       ],
     );
     assert.equal(page.calls[0][1].state, 'visible');
+    assert.equal(page.calls.at(-1)[1].state, 'detached');
+  });
+
+  it('accepts setup completion when an immediate idle lock keeps the password form visible', async () => {
+    const page = makePage({ setup: true });
+    page.getByTestId('input-password').waitFor = async (options) => {
+      page.calls.push(['password.waitFor', options]);
+      if (options.state === 'detached') {
+        throw timeoutError('password field was replaced by the immediate lock screen');
+      }
+    };
+
+    assert.equal(
+      await unlockIfNeeded(page, 'setup-password', {
+        label: 'setup-idle-race-check',
+        dismissMigration: false,
+      }),
+      true,
+    );
+    assert.equal(
+      page.calls.some(([name, options]) => name === 'password.waitFor' && options.state === 'detached'),
+      false,
+    );
+    assert.deepEqual(page.calls.at(-1), [
+      'confirm.waitFor',
+      { state: 'detached', timeout: 30_000 },
+    ]);
   });
 
   it('unlocks an existing vault without filling a confirmation field', async () => {
