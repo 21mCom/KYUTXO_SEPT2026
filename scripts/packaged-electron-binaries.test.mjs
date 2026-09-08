@@ -781,6 +781,8 @@ test('the packaged Coin Passport gate is release-wired after the native worker c
   assert.match(script, /IPC_PAGE_CAP = 250/);
   assert.match(script, /prepareWindowsPortableLaunch/);
   assert.match(script, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
+  assert.match(script, /waitForPackagedCdpDown\(cdpPort, 30_000\)/);
+  assert.match(script, /maxRetries: 10, retryDelay: 250/);
   assert.match(script, /portable launch copy/);
   assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
   assert.match(
@@ -806,6 +808,8 @@ test('the forgotten-source gate launches the copied Windows portable artifact an
 
   assert.match(script, /prepareWindowsPortableLaunch/);
   assert.match(script, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
+  assert.match(script, /waitForPackagedCdpDown\(cdpPort, 30_000\)/);
+  assert.match(script, /maxRetries: 10, retryDelay: 250/);
   assert.match(script, /cwd: IS_WINDOWS \? portableSetup\.launchDir : home/);
   assert.doesNotMatch(script, /path\.join\(UNPACKED_DIR, 'KYUTXO\.exe'\)/);
   assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
