@@ -108,6 +108,14 @@ test('tagged and explicitly requested releases run the full suite before packagi
   );
   assert.doesNotMatch(packageJson.scripts['test:full:unguarded'], /\btest:fast\b/);
   assert.doesNotMatch(packageJson.scripts['test:full:unguarded'], /check-release-fixtures/);
+  assert.match(
+    workflow,
+    /name: Run million-row owner report release gate[\s\S]*if: >-[\s\S]*startsWith\(github\.ref, 'refs\/tags\/v'\)[\s\S]*inputs\.publish_release[\s\S]*timeout-minutes: 10[\s\S]*KYUTXO_OWNER_BOOK_SCALE_ROWS: '1000000'[\s\S]*run: npm run test:owner-book-million/,
+  );
+  assert.match(
+    packageJson.scripts['test:owner-book-million'],
+    /node --max-old-space-size=4096 .*--maxWorkers=1 .*--testTimeout=180000 .*owner-cost-basis-core\.test\.ts/,
+  );
 });
 
 test('the release full-suite entry point names deleted and rewritten tracked samples', (t) => {

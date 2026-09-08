@@ -223,11 +223,16 @@ describe('owner cost-basis book', () => {
     const cachedStarted = performance.now();
     const pages = Array.from({ length: 10 }, () => pageOwnerCostBasis(report, 'scale', 25));
     const cachedBurstMs = performance.now() - cachedStarted;
-    expect(pages.every(page => page.openBatches.length === 25)).toBe(true);
+    expect(pages.every(page =>
+      page.byOwner.length <= 25
+      && page.disposals.length <= 25
+      && page.openBatches.length === 25
+    )).toBe(true);
     expect(pages[0].openBatchesTotal).toBe(count);
     // Relative work on this process, never a machine-specific absolute budget.
-    expect(cachedBurstMs).toBeLessThan(buildMs);
-  }, 120_000);
+    // Ten cached pages together must remain materially cheaper than one build.
+    expect(cachedBurstMs).toBeLessThan(buildMs * 0.25);
+  }, 180_000);
 
   it('uses exact input/output conservation rather than missing or wrong provider fees', () => {
     const common = { ...base, transactions: [

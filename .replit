@@ -3974,3 +3974,14 @@ args = "KYUTXO_PACKAGED_RESTORE_SAFETY=1 node scripts/check-encrypted-backup-res
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "owner-book-million-row-release-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "KYUTXO_OWNER_BOOK_SCALE_ROWS=1000000 npm run test:owner-book-million"
+
+[workflows.workflow.metadata]
+isValidation = true

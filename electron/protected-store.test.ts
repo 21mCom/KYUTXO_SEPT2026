@@ -81,9 +81,11 @@ describe("protected store", () => {
       const cachedMs = performance.now() - cachedStarted;
       expect(first.openBatchesTotal).toBe(count);
       expect(first.openBatches).toHaveLength(25);
+      expect(first.byOwner.length).toBeLessThanOrEqual(25);
+      expect(first.disposals.length).toBeLessThanOrEqual(25);
       expect(JSON.stringify(first)).not.toContain('"allocations"');
       expect(second).toEqual(first);
-      expect(cachedMs).toBeLessThan(buildMs);
+      expect(cachedMs).toBeLessThan(buildMs * 0.25);
       expect(first.checkpointKey).toMatch(/owner-book:protected:v4:owner-cost-basis:v1:.*:[a-f0-9]{64}:[a-f0-9]{64}:/);
 
       await call("transactionMetadata", "save", { row: { id: 1, txid: "scale-0", costBasisUsd: 2, updatedAt: 2 } });
