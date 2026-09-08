@@ -693,6 +693,11 @@ test('the packaged network activity forced shutdown cannot become graceful', () 
     /async function forceStopPackagedProcess\(child\) \{(?<body>[\s\S]*?)\n\}/,
   )?.groups?.body;
   assert.match(source, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
+  assert.match(
+    source,
+    /fs\.rmSync\(tempHome, \{ recursive: true, force: true, maxRetries: 10, retryDelay: 250 \}\)/,
+    'Windows cleanup must tolerate delayed executable handle release',
+  );
   assert.ok(forcedHelper, 'forced shutdown helper must remain independently testable in source');
 
   assert.match(
