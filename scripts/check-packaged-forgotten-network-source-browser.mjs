@@ -92,6 +92,17 @@ async function navigateToNodeSettings(page) {
   await page.getByRole('heading', { name: 'Node Connection' }).waitFor({ state: 'visible' });
 }
 
+async function completeFreshVaultOnboardingWithSource(page) {
+  const sourceStep = page.getByTestId('network-onboarding-source');
+  await sourceStep.waitFor({ state: 'visible', timeout: 60_000 });
+  await page.getByTestId('choice-network-own-node').click();
+  await page.getByTestId('input-onboarding-node-url').fill(CUSTOM_URL);
+  await page.getByTestId('button-save-network-choice').click();
+  await page.getByTestId('network-onboarding-import').waitFor({ state: 'visible' });
+  await page.getByTestId('button-onboarding-finish').click();
+  await sourceStep.waitFor({ state: 'detached' });
+}
+
 async function stop(child) {
   if (!child?.pid) return;
   if (IS_WINDOWS) {
@@ -156,7 +167,7 @@ async function main() {
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     let page = await rendererPage(browser);
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-forgotten-source-setup' });
-    await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-forgotten-source-setup' });
+    await completeFreshVaultOnboardingWithSource(page);
     await navigateToNodeSettings(page);
     await page.getByTestId('radio-provider-custom-electrs').click();
     await page.getByTestId('input-custom-url').fill(CUSTOM_URL);
@@ -170,7 +181,7 @@ async function main() {
       0,
       'packaged provider test IPC ran before the source was first explicitly enabled',
     );
-    await page.getByTestId('button-enable-selected-source').click();
+    await page.getByTestId('button-save-settings').click();
     await page.getByText('Settings Saved').first().waitFor();
     await page.getByTestId('button-forget-network-source').click();
     await page.getByTestId('dialog-forget-network-source').waitFor({ state: 'visible' });
