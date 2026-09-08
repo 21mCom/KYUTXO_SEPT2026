@@ -15,6 +15,7 @@
   "files": [
     "dist/**/*",
     "electron/**/*",
+    "shared/attachment-listing.cjs",
     "client/public/**/*",
     "package.json",
     "!**/*.map",

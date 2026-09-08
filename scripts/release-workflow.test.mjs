@@ -88,6 +88,13 @@ test('pull requests and all packages are gated by typecheck and the documented f
   assert.equal(packageJson.scripts['test:scripts'], 'node scripts/run-node-tests.mjs');
 });
 
+test('desktop packages include the shared attachment listing contract', () => {
+  assert.ok(
+    builder.files.includes('shared/attachment-listing.cjs'),
+    'file-handlers.cjs requires the shared attachment listing module at runtime',
+  );
+});
+
 test('the pull-request fast-tier entry point names deleted and rewritten tracked samples', (t) => {
   assertMixedSampleDamageIsRejected(t, 'test:fast', 'fast-tier-fixture-checkout-');
 });

@@ -3,8 +3,9 @@ import multer from 'multer';
 import * as fs from 'fs/promises';
 import { constants as fsConstants } from 'fs';
 import * as path from 'path';
-import { randomBytes, randomUUID } from 'crypto';
+import { randomBytes } from 'crypto';
 import { pipeline } from 'stream/promises';
+import attachmentListingModule from '../shared/attachment-listing.cjs';
 
 // O_NOFOLLOW (Linux/macOS) makes the OPEN itself refuse a symlink at the final
 // path component, closing the check-then-open race for that component; it is
@@ -429,30 +430,6 @@ router.post('/upload', singleFileUpload, async (req: Request, res) => {
   }
 });
 
-type AttachmentListSession = {
-  iterator: AsyncGenerator<string>;
-  expiresAt: number;
-};
-const attachmentListSessions = new Map<string, AttachmentListSession>();
-const ATTACHMENT_LIST_SESSION_TTL_MS = 5 * 60_000;
-const ATTACHMENT_LIST_DEFAULT_LIMIT = 1_000;
-const ATTACHMENT_LIST_MAX_SESSIONS = 8;
-
-async function closeAttachmentListSession(id: string): Promise<void> {
-  const session = attachmentListSessions.get(id);
-  if (!session) return;
-  attachmentListSessions.delete(id);
-  await session.iterator.return(undefined);
-}
-
-const attachmentListSessionReaper = setInterval(() => {
-  const now = Date.now();
-  for (const [id, session] of attachmentListSessions) {
-    if (session.expiresAt <= now) void closeAttachmentListSession(id);
-  }
-}, 30_000);
-attachmentListSessionReaper.unref();
-
 let attachmentTraversalVisits = 0;
 export function resetAttachmentTraversalVisitsForTest(): void {
   attachmentTraversalVisits = 0;
@@ -461,93 +438,28 @@ export function getAttachmentTraversalVisitsForTest(): number {
   return attachmentTraversalVisits;
 }
 
-async function* iterateAttachmentFiles(): AsyncGenerator<string> {
-  const entries = await fs.opendir(ATTACHMENTS_DIR);
-  for await (const entry of entries) {
-    if (entry.isDirectory()) {
-      const subDir = path.join(ATTACHMENTS_DIR, entry.name);
-      const files = await fs.opendir(subDir);
-      for await (const file of files) {
-        if (file.isFile()) {
-          attachmentTraversalVisits += 1;
-          yield path.join(entry.name, file.name);
-        }
-      }
-    } else if (entry.isFile()) {
-      attachmentTraversalVisits += 1;
-      yield entry.name;
-    }
-  }
-}
-
-async function attachmentSummary(): Promise<{ total: number; totalBytes: number }> {
-  let total = 0;
-  let totalBytes = 0;
-  for await (const relativePath of iterateAttachmentFiles()) {
-    try {
-      const stat = await fs.stat(path.join(ATTACHMENTS_DIR, relativePath));
-      total += 1;
-      totalBytes += stat.size;
-    } catch {
-      // File vanished between enumeration and stat.
-    }
-  }
-  return { total, totalBytes };
-}
+const { createAttachmentListing } = attachmentListingModule;
+const attachmentListing = createAttachmentListing({
+  attachmentsDir: ATTACHMENTS_DIR,
+  onFileVisited: () => { attachmentTraversalVisits += 1; },
+});
+attachmentListing.startReaper();
 
 // List ALL attachments recursively (for backup) - MUST be before wildcard routes
 router.get('/list-all', async (req, res) => {
   try {
     await ensureDir(ATTACHMENTS_DIR);
-    const parsedLimit = Number(req.query.limit);
-    const limit = Number.isSafeInteger(parsedLimit) && parsedLimit > 0
-      ? Math.min(parsedLimit, 10_000)
-      : ATTACHMENT_LIST_DEFAULT_LIMIT;
-    const now = Date.now();
-    for (const [id, stale] of attachmentListSessions) {
-      if (stale.expiresAt <= now) {
-        await closeAttachmentListSession(id);
-      }
+    const result = await attachmentListing.list({
+      limit: Number(req.query.limit),
+      cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      closeCursor: typeof req.query.closeCursor === 'string' ? req.query.closeCursor : undefined,
+      summaryOnly: req.query.summaryOnly === '1',
+    });
+    if (!result.success) {
+      const status = result.code === 'EXPIRED' ? 410 : 429;
+      return res.status(status).json({ error: result.error });
     }
-    if (req.query.summaryOnly === '1') {
-      return res.json({ success: true, ...(await attachmentSummary()) });
-    }
-    const closeCursor = typeof req.query.closeCursor === 'string' ? req.query.closeCursor : null;
-    if (closeCursor) {
-      await closeAttachmentListSession(closeCursor);
-      return res.json({ success: true });
-    }
-    const requestedCursor = typeof req.query.cursor === 'string' ? req.query.cursor : null;
-    let cursor = requestedCursor;
-    let session = cursor ? attachmentListSessions.get(cursor) : undefined;
-    let summary: { total: number; totalBytes: number } | undefined;
-    if (!session) {
-      if (cursor) return res.status(410).json({ error: 'Attachment listing expired' });
-      summary = await attachmentSummary();
-      if (summary.total === 0) return res.json({ success: true, files: [], ...summary, cursor: null });
-      if (attachmentListSessions.size >= ATTACHMENT_LIST_MAX_SESSIONS) {
-        return res.status(429).json({ error: 'Too many attachment listings' });
-      }
-      cursor = randomUUID();
-      session = { iterator: iterateAttachmentFiles(), expiresAt: now + ATTACHMENT_LIST_SESSION_TTL_MS };
-      attachmentListSessions.set(cursor, session);
-    }
-    session.expiresAt = now + ATTACHMENT_LIST_SESSION_TTL_MS;
-    const files: string[] = [];
-    let done = false;
-    while (files.length < limit) {
-      const next = await session.iterator.next();
-      if (next.done) {
-        done = true;
-        break;
-      }
-      files.push(next.value);
-    }
-    if (done) {
-      attachmentListSessions.delete(cursor!);
-      cursor = null;
-    }
-    res.json({ success: true, files, ...(summary ?? {}), cursor });
+    res.json(result);
   } catch (error) {
     logServerError('List all attachments error', error);
     res.status(500).json({ error: 'List failed' });

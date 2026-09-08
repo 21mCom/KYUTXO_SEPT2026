@@ -2,6 +2,7 @@ const path = require('path');
 const { sanitizeIpcError, logMainError } = require('./security-utils.cjs');
 const fs = require('fs');
 const crypto = require('crypto');
+const { createAttachmentListing } = require('../shared/attachment-listing.cjs');
 
 // Hard cap on a single attachment's bytes, mirrored on the server
 // (server/attachments.ts). Without it a restore/backup-stream write of an
@@ -372,99 +373,16 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     }
   });
 
-  const attachmentListSessions = new Map();
-  const attachmentListSessionTtlMs = 5 * 60_000;
-  const attachmentListDefaultLimit = 1_000;
-  const attachmentListMaxSessions = 8;
-  async function closeAttachmentListSession(id) {
-    const session = attachmentListSessions.get(id);
-    if (!session) return;
-    attachmentListSessions.delete(id);
-    await session.iterator.return();
-  }
-  const attachmentListSessionReaper = setInterval(() => {
-    const now = Date.now();
-    for (const [id, session] of attachmentListSessions) {
-      if (session.expiresAt <= now) void closeAttachmentListSession(id);
-    }
-  }, 30_000);
-  attachmentListSessionReaper.unref();
-  async function* iterateAttachmentFiles() {
-    const entries = await fs.promises.opendir(attachmentsDir);
-    for await (const entry of entries) {
-      if (entry.isDirectory()) {
-        const subDir = path.join(attachmentsDir, entry.name);
-        const files = await fs.promises.opendir(subDir);
-        for await (const file of files) {
-          if (file.isFile()) yield path.join(entry.name, file.name);
-        }
-      } else if (entry.isFile()) {
-        yield entry.name;
-      }
-    }
-  }
-  async function attachmentSummary() {
-    let total = 0;
-    let totalBytes = 0;
-    for await (const relativePath of iterateAttachmentFiles()) {
-      try {
-        const stat = await fs.promises.stat(path.join(attachmentsDir, relativePath));
-        total += 1;
-        totalBytes += stat.size;
-      } catch {}
-    }
-    return { total, totalBytes };
-  }
+  const attachmentListing = createAttachmentListing({ attachmentsDir });
+  attachmentListing.startReaper();
 
   // List ALL attachments recursively (for backup)
   ipcMain.handle('list-all-attachments', async (_event, page = {}) => {
     try {
-      const limit = Number.isSafeInteger(page?.limit) && page.limit > 0
-        ? Math.min(page.limit, 10_000)
-        : attachmentListDefaultLimit;
       if (!fs.existsSync(attachmentsDir)) {
         return { success: true, files: [], total: 0, totalBytes: 0, cursor: null };
       }
-      const now = Date.now();
-      for (const [id, stale] of attachmentListSessions) {
-        if (stale.expiresAt <= now) {
-          await closeAttachmentListSession(id);
-        }
-      }
-      if (typeof page?.closeCursor === 'string') {
-        await closeAttachmentListSession(page.closeCursor);
-        return { success: true };
-      }
-      let cursor = typeof page?.cursor === 'string' ? page.cursor : null;
-      let session = cursor ? attachmentListSessions.get(cursor) : undefined;
-      let summary;
-      if (!session) {
-        if (cursor) return { success: false, error: 'Attachment listing expired' };
-        summary = await attachmentSummary();
-        if (summary.total === 0) return { success: true, files: [], ...summary, cursor: null };
-        if (attachmentListSessions.size >= attachmentListMaxSessions) {
-          return { success: false, error: 'Too many attachment listings' };
-        }
-        cursor = require('crypto').randomUUID();
-        session = { iterator: iterateAttachmentFiles(), expiresAt: now + attachmentListSessionTtlMs };
-        attachmentListSessions.set(cursor, session);
-      }
-      session.expiresAt = now + attachmentListSessionTtlMs;
-      const files = [];
-      let done = false;
-      while (files.length < limit) {
-        const next = await session.iterator.next();
-        if (next.done) {
-          done = true;
-          break;
-        }
-        files.push(next.value);
-      }
-      if (done) {
-        attachmentListSessions.delete(cursor);
-        cursor = null;
-      }
-      return { success: true, files, ...(summary || {}), cursor };
+      return await attachmentListing.list(page);
     } catch (error) {
       logMainError('[KYUTXO] list-all-attachments failed', error);
       return { success: false, error: sanitizeIpcError(error, 'Failed to list attachments') };
@@ -568,7 +486,7 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
       if (!fs.existsSync(attachmentsDir)) {
         return { success: true, totalBytes: 0, fileCount: 0 };
       }
-      const summary = await attachmentSummary();
+      const summary = await attachmentListing.summary();
       return { success: true, totalBytes: summary.totalBytes, fileCount: summary.total };
     } catch (error) {
       logMainError('[KYUTXO] get-attachments-size failed', error);
