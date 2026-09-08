@@ -8,7 +8,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CHECK = path.join(ROOT, 'scripts/check-evidence-package-streaming-browser.mjs');
 
 test('renderer errors fail both evidence streaming contexts', { timeout: 60_000 }, (t) => {
-  const chromium = spawnSync('which', ['chromium'], { encoding: 'utf8' }).stdout.trim();
+  const chromium = spawnSync('which', ['chromium'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  }).stdout.trim();
   if (!chromium) {
     t.skip('chromium is not installed');
     return;

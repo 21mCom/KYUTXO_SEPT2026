@@ -40,6 +40,7 @@ test('CLI fails closed when Actions identifies any other repository', () => {
     cwd: ROOT,
     encoding: 'utf8',
     env: { ...process.env, GITHUB_REPOSITORY: '21mCom/KYUTXO_12-JUNE-26_NO_ENCRYPTION' },
+    timeout: 30_000,
   });
   assert.equal(rejected.status, 1);
   assert.match(rejected.stderr, /GitHub destination check failed/);
@@ -48,6 +49,7 @@ test('CLI fails closed when Actions identifies any other repository', () => {
     cwd: ROOT,
     encoding: 'utf8',
     env: { ...process.env, GITHUB_REPOSITORY: EXPECTED_GITHUB_REPOSITORY },
+    timeout: 30_000,
   });
   assert.equal(accepted.status, 0, accepted.stderr);
 });

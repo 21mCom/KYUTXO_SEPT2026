@@ -335,7 +335,10 @@ setInterval(() => {}, 1_000);
   assert.throws(
     () => inspectInternalVersion('linux', artifactPath, (command, args, options) => {
       extractDir = options.cwd;
-      return execFileSync(process.execPath, [command, ...args], options);
+      return execFileSync(process.execPath, [command, ...args], {
+        ...options,
+        timeout: options.timeout,
+      });
     }, 250),
     (error) => {
       assert.match(

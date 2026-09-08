@@ -45,7 +45,7 @@ test('labels deleted and rewritten documents together without reverting remainin
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const unusualFilename = 'damaged\nsample.pdf';
   fs.writeFileSync(path.join(root, unusualFilename), 'unusual original');
-  spawnSync('git', ['add', unusualFilename], { cwd: root });
+  spawnSync('git', ['add', unusualFilename], { cwd: root, timeout: 30_000 });
   fs.writeFileSync(path.join(root, 'sample.pdf'), 'pre-existing user edit');
 
   const result = run(

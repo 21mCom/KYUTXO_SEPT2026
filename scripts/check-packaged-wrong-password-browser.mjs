@@ -57,12 +57,17 @@ const PACKAGED_EXECUTABLE = path.join(UNPACKED_DIR, IS_WINDOWS ? 'KYUTXO.exe' : 
 const TAG = '[wrong-password-packaged]';
 const GOOD_PASSWORD = 'correct-horse-battery';
 const WRONG_PASSWORD = 'definitely-not-it-42';
+const SYNC_COMMAND_TIMEOUT_MS = 10 * 60_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function run(cmd, args) {
   console.log(`${TAG} $ ${cmd} ${args.join(' ')}`);
-  const res = spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit' });
+  const res = spawnSync(cmd, args, {
+    cwd: ROOT,
+    stdio: 'inherit',
+    timeout: SYNC_COMMAND_TIMEOUT_MS,
+  });
   if (res.status !== 0) {
     throw new Error(`${TAG} command failed (exit ${res.status}): ${cmd} ${args.join(' ')}`);
   }
@@ -133,6 +138,7 @@ async function stopApp(child, cdpPort) {
       cwd: ROOT,
       stdio: 'ignore',
       windowsHide: true,
+      timeout: 30_000,
     });
     if (result.error) throw result.error;
   } else {
