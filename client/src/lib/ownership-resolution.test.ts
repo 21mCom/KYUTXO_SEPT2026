@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AddressOwnership, Record, TransactionParticipant } from './db-types';
-import { decideOwnership, decideWalletOwnership, generateOwnershipSuggestions, getOwnershipWalletCascade, undoOwnershipDecision, visibleOwnershipSuggestions } from './ownership-resolution';
+import { decideOwnership, decideWalletOwnership, generateOwnershipSuggestions, getOwnershipWalletCascade, OWNERSHIP_REVIEW_LIMITS, undoOwnershipDecision, visibleOwnershipSuggestions } from './ownership-resolution';
 
 const address = (id: number, inputString: string, extra: Partial<Record> = {}): Record =>
   ({ id, type: 'address', inputString, label: '', tags: [], categories: [], createdAt: 1, updatedAt: 1, ...extra });
@@ -76,6 +76,68 @@ describe('ownership resolution evidence', () => {
     });
     expect(suggestions.map(s => s.valueSats)).toEqual([...suggestions.map(s => s.valueSats)].sort((a, b) => b - a));
     expect(suggestions.every(s => s.recordId !== 1)).toBe(true);
+  });
+
+  it('derives and filters the maximum documented local evidence scope within the scale budget', () => {
+    const records = Array.from({ length: OWNERSHIP_REVIEW_LIMITS.records }, (_, index) =>
+      address(index + 1, `bc1qscale${index}`, index === 0 ? {} : {
+        discoveredFromRecordId: 1,
+        discoveredInTxid: `scale-tx-${index % 4_000}`,
+        cachedBalanceSats: index,
+      }));
+    const participants = Array.from({ length: OWNERSHIP_REVIEW_LIMITS.participants }, (_, index) =>
+      input(`scale-tx-${Math.floor(index / 2)}`, (index % OWNERSHIP_REVIEW_LIMITS.records) + 1));
+    const started = performance.now();
+    const suggestions = generateOwnershipSuggestions({
+      records,
+      ownership: [assigned(1, 7)],
+      participants,
+      limit: OWNERSHIP_REVIEW_LIMITS.suggestions,
+    });
+    const filtered = suggestions.filter(suggestion =>
+      `${records[suggestion.recordId - 1]?.inputString} ${suggestion.explanation}`.includes('bc1qscale1999'));
+    const elapsedMs = performance.now() - started;
+
+    expect(records).toHaveLength(2_000);
+    expect(participants).toHaveLength(8_000);
+    expect(suggestions).toHaveLength(500);
+    expect(filtered).toHaveLength(1);
+    // Generous CI budget: this primarily catches accidental O(suggestions × participants) scans.
+    expect(elapsedMs).toBeLessThan(1_500);
+  });
+
+  it('keeps decision and undo repository paging bounded at the review limits', async () => {
+    const ownership = Array.from({ length: OWNERSHIP_REVIEW_LIMITS.records }, (_, index) => ({
+      id: index + 1, recordId: index + 1, state: 'undetermined', createdAt: 1, updatedAt: 1,
+    } as AddressOwnership));
+    const decisions: any[] = [];
+    const pageLimits: number[] = [];
+    const listedTables: string[] = [];
+    const repository: any = {
+      list: async (table: string, options: { cursor?: number; limit: number }) => {
+        listedTables.push(table);
+        pageLimits.push(options.limit);
+        const rows = table === 'addressOwnership' ? ownership : decisions;
+        const start = options.cursor ?? 0;
+        const page = rows.slice(start, start + options.limit);
+        return { rows: page, cursor: start + page.length < rows.length ? start + page.length : undefined };
+      },
+      get: async (table: string, key: string) =>
+        table === 'ownershipReviewDecisions' ? decisions.find(decision => decision.id === key) : undefined,
+      commitOwnershipReview: async (command: any) => {
+        const saved = { ...command.decision, createdOwnershipRecordIds: command.ownershipRows.filter((row: AddressOwnership) => row.id === undefined).map((row: AddressOwnership) => row.recordId) };
+        decisions.splice(0, decisions.length, saved);
+        return saved;
+      },
+    };
+    const suggestion = { fingerprint: 'ownership-v1:scale-page', kind: 'propagation' as const, recordId: 2, recordIds: [2],
+      entityId: 7, suggestedState: 'assigned' as const, confidence: 'low' as const, valueSats: 1, explanation: '', transactionIds: [] };
+    const decision = await decideOwnership({ suggestion, action: 'assign', now: 2 }, repository);
+    await undoOwnershipDecision(decision.undoToken!, repository);
+
+    expect(pageLimits.length).toBe(8);
+    expect(Math.max(...pageLimits)).toBe(500);
+    expect(listedTables).toEqual(Array(8).fill('addressOwnership'));
   });
 
   it('commits an accepted new ownership row with its decision and undo deletes that new row', async () => {

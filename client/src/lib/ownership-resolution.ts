@@ -51,6 +51,13 @@ export function generateOwnershipSuggestions(input: {
   const addresses = input.records.filter((row): row is Record & { id: number } => row.type === 'address' && Number.isSafeInteger(row.id));
   const byId = new Map(addresses.map(row => [row.id, row]));
   const entityById = new Map((input.entities ?? []).filter(entity => entity.id !== undefined).map(entity => [entity.id!, entity]));
+  const participantAmounts = new Map<number, Map<string, number>>();
+  for (const participant of input.participants.slice(0, input.participantLimit ?? OWNERSHIP_REVIEW_LIMITS.participants)) {
+    if (participant.recordId === undefined) continue;
+    const byTx = participantAmounts.get(participant.recordId) ?? new Map<string, number>();
+    byTx.set(participant.txid, (byTx.get(participant.txid) ?? 0) + Math.max(0, participant.amount));
+    participantAmounts.set(participant.recordId, byTx);
+  }
   const recordKey = (id: number) => {
     const row = byId.get(id);
     return row?.inputStringLower || row?.inputString.trim() || `missing-record:${id}`;
@@ -70,9 +77,13 @@ export function generateOwnershipSuggestions(input: {
     const evidenceEntityId = entityId ?? ownership.get(recordId)?.counterpartyEntityId;
     const key = fingerprint(kind, recordKey(recordId), entityKey(evidenceEntityId), ids.map(recordKey), tx);
     const cached = ids.reduce((total, id) => total + Math.max(0, byId.get(id)?.cachedBalanceSats ?? 0), 0);
-    const observed = input.participants.reduce((total, participant) =>
-      participant.recordId !== undefined && ids.includes(participant.recordId) && (tx.length === 0 || tx.includes(participant.txid))
-        ? total + Math.max(0, participant.amount) : total, 0);
+    const observed = ids.reduce((total, id) => {
+      const byTx = participantAmounts.get(id);
+      if (!byTx) return total;
+      return total + (tx.length === 0
+        ? [...byTx.values()].reduce((sum, amount) => sum + amount, 0)
+        : tx.reduce((sum, txid) => sum + (byTx.get(txid) ?? 0), 0));
+    }, 0);
     results.set(key, { fingerprint: key, kind, recordId, recordIds: ids, entityId, suggestedState, confidence,
       valueSats: Math.max(cached, observed), explanation, transactionIds: tx });
   };
@@ -214,10 +225,11 @@ export async function decideWalletOwnership(input: OwnershipDecisionInput & { re
 }
 
 export async function undoOwnershipDecision(token: string, repository: VaultRepository = getVaultRepository()): Promise<boolean> {
-  // An undo token may belong to a decision beyond the first storage page.
-  const decisions = await listRows<OwnershipReviewDecision>(repository, 'ownershipReviewDecisions', Number.MAX_SAFE_INTEGER);
-  const decision = decisions.find(row => row.undoToken === token);
-  if (!decision || !decision.previousOwnership) return false;
+  const separator = token.lastIndexOf(':');
+  if (separator <= 0) return false;
+  const decisionId = token.slice(0, separator);
+  const decision = await repository.get('ownershipReviewDecisions', decisionId);
+  if (!decision || decision.undoToken !== token || !decision.previousOwnership) return false;
   const ownership = await listRows<AddressOwnership>(repository, 'addressOwnership', OWNERSHIP_REVIEW_LIMITS.records);
   const deleteOwnershipIds = ownership.filter(row => decision.createdOwnershipRecordIds?.includes(row.recordId) && row.id !== undefined)
     .map(row => row.id!);

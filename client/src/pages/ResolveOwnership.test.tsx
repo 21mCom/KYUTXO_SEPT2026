@@ -16,6 +16,7 @@ vi.mock("@/lib/ownership-resolution", async importOriginal => {
   return { ...actual, decideOwnership: decide, undoOwnershipDecision: undo };
 });
 
+import { OWNERSHIP_REVIEW_LIMITS } from "@/lib/ownership-resolution";
 import ResolveOwnership, { ownershipSuggestionValue } from "./ResolveOwnership";
 
 const address = (id: number, inputString: string, cachedBalanceSats = 0) => ({
@@ -91,6 +92,87 @@ describe("ResolveOwnership", () => {
     fireEvent.change(getByTestId("input-ownership-search"), { target: { value: "does-not-match" } });
     await waitFor(() => expect(getByTestId("ownership-empty")).toBeTruthy());
   });
+
+  it("confirms and undoes a decision without reloading the bounded evidence scope", async () => {
+    const records = [address(1, "bc1target", 12), address(2, "bc1source")];
+    repository.list.mockImplementation((table: string) => Promise.resolve({
+      rows: table === "records" ? records
+        : table === "addressOwnership" ? [{ id: 2, recordId: 2, state: "assigned", entityId: 7, createdAt: 1, updatedAt: 1 }]
+          : table === "transactionParticipants" ? [{ txid: "tx", role: "input", recordId: 1, amount: 1 }, { txid: "tx", role: "input", recordId: 2, amount: 1 }]
+            : [],
+      cursor: undefined,
+    }));
+    decide.mockResolvedValue({
+      id: "ownership-v1:local-state",
+      evidenceFingerprint: "ownership-v1:local-state",
+      state: "accepted",
+      action: "assign",
+      recordIds: [1],
+      entityId: 7,
+      previousOwnership: [],
+      createdOwnershipRecordIds: [1],
+      undoToken: "ownership-v1:local-state:10",
+      createdAt: 10,
+      updatedAt: 10,
+    });
+    undo.mockResolvedValue(true);
+    const { getByTestId } = render(<ResolveOwnership />);
+    await waitFor(() => expect(getByTestId("button-ownership-assign-1")).toBeTruthy());
+    const readsAfterInitialLoad = repository.list.mock.calls.length;
+
+    fireEvent.click(getByTestId("button-ownership-assign-1"));
+    await waitFor(() => expect(getByTestId("button-ownership-undo")).toBeTruthy());
+    expect(repository.list).toHaveBeenCalledTimes(readsAfterInitialLoad);
+    fireEvent.click(getByTestId("button-ownership-undo"));
+    await waitFor(() => expect(undo).toHaveBeenCalled());
+    expect(repository.list).toHaveBeenCalledTimes(readsAfterInitialLoad);
+  });
+
+  it("renders and filters the maximum local evidence scope within the UI budget", async () => {
+    const records = Array.from({ length: OWNERSHIP_REVIEW_LIMITS.records }, (_, index) =>
+      address(index + 1, `bc1quiscale${index}`, index));
+    records.slice(1).forEach((record, index) => {
+      Object.assign(record, { discoveredFromRecordId: 1, discoveredInTxid: `ui-scale-tx-${index}` });
+    });
+    const ownership = records.map((record, index) => ({
+      id: index + 1,
+      recordId: record.id,
+      state: index === 0 ? "assigned" : "undetermined",
+      entityId: index === 0 ? 7 : undefined,
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+    const participants = Array.from({ length: OWNERSHIP_REVIEW_LIMITS.participants }, (_, index) => ({
+      id: index + 1,
+      txid: `ui-scale-tx-${Math.floor(index / 2)}`,
+      role: "input",
+      recordId: (index % OWNERSHIP_REVIEW_LIMITS.records) + 1,
+      amount: 1,
+    }));
+    const rowsByTable: Record<string, any[]> = {
+      records,
+      addressOwnership: ownership,
+      transactionParticipants: participants,
+      ownershipReviewDecisions: [],
+    };
+    repository.list.mockImplementation((table: string, options: { cursor?: number; limit: number }) => {
+      const rows = rowsByTable[table] ?? [];
+      const start = options.cursor ?? 0;
+      const page = rows.slice(start, start + options.limit);
+      return Promise.resolve({ rows: page, cursor: start + page.length < rows.length ? start + page.length : undefined });
+    });
+
+    const renderStarted = performance.now();
+    const { getAllByTestId, getByTestId } = render(<ResolveOwnership />);
+    await waitFor(() => expect(getAllByTestId(/ownership-suggestion-/)).toHaveLength(OWNERSHIP_REVIEW_LIMITS.suggestions), { timeout: 10_000 });
+    expect(performance.now() - renderStarted).toBeLessThan(10_000);
+
+    const filterStarted = performance.now();
+    fireEvent.change(getByTestId("input-ownership-search"), { target: { value: "bc1quiscale1999" } });
+    await waitFor(() => expect(getAllByTestId(/ownership-suggestion-/)).toHaveLength(1), { timeout: 2_000 });
+    expect(performance.now() - filterStarted).toBeLessThan(2_000);
+    expect(repository.list.mock.calls.every(([, options]) => options.limit <= 500)).toBe(true);
+  }, 15_000);
 
   it("sums only positive cached sats for ranking", () => {
     expect(ownershipSuggestionValue({ recordIds: [1, 2] } as any, [address(1, "a", -5), address(2, "b", 9)])).toBe(9);

@@ -30,6 +30,10 @@ const emptyData: LoadedOwnershipData = { records: [], ownership: [], participant
 /** Value is locally cached satoshis only; no heuristic ever changes this ranking. */
 export function ownershipSuggestionValue(suggestion: OwnershipSuggestion, records: DbRecord[]) {
   const recordMap = new Map(records.map(record => [record.id, record]));
+  return ownershipSuggestionValueFromMap(suggestion, recordMap);
+}
+
+function ownershipSuggestionValueFromMap(suggestion: OwnershipSuggestion, recordMap: Map<number | undefined, DbRecord>) {
   return suggestion.recordIds.reduce((total, id) => total + Math.max(0, recordMap.get(id)?.cachedBalanceSats ?? 0), 0);
 }
 
@@ -52,6 +56,8 @@ export default function ResolveOwnership() {
   const [undoToken, setUndoToken] = useState<string | null>(null);
   const [suggestionOffset, setSuggestionOffset] = useState(0);
   const [scopePages, setScopePages] = useState(1);
+  const ignoreNextDbSignal = useRef(false);
+  const lastDbSignal = useRef(dbSignal);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,9 +90,30 @@ export default function ResolveOwnership() {
     }
   }, [scopePages]);
 
-  useEffect(() => { void load(); }, [load, dbSignal]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (lastDbSignal.current === dbSignal) return;
+    lastDbSignal.current = dbSignal;
+    if (ignoreNextDbSignal.current) {
+      ignoreNextDbSignal.current = false;
+      return;
+    }
+    void load();
+  }, [dbSignal, load]);
 
   const entityById = useMemo(() => new Map(data.entities.map(entity => [entity.id, entity])), [data.entities]);
+  const recordById = useMemo(() => new Map(data.records.map(record => [record.id, record])), [data.records]);
+  const ownershipByRecordId = useMemo(() => new Map(data.ownership.map(row => [row.recordId, row])), [data.ownership]);
+  const walletRecordIds = useMemo(() => {
+    const rows = new Map<number, number[]>();
+    for (const row of data.ownership) {
+      if (!Number.isSafeInteger(row.walletId) || (row.state !== "undetermined" && row.state !== "ours-owner-unknown")) continue;
+      const ids = rows.get(row.walletId!) ?? [];
+      ids.push(row.recordId);
+      rows.set(row.walletId!, ids);
+    }
+    return rows;
+  }, [data.ownership]);
   const suggestions = useMemo(() => {
     const all = visibleOwnershipSuggestions(generateOwnershipSuggestions({
       records: data.records, ownership: data.ownership, participants: data.participants,
@@ -97,15 +124,15 @@ export default function ResolveOwnership() {
     }), data.decisions);
     const needle = search.trim().toLowerCase();
     return all.filter(suggestion => {
-      const record = data.records.find(row => row.id === suggestion.recordId);
+      const record = recordById.get(suggestion.recordId);
       const owner = suggestion.entityId === undefined ? "unassigned" : entityById.get(suggestion.entityId)?.name ?? "Unknown entity";
       return (kind === "all" || suggestion.kind === kind) && (!needle ||
         [record?.inputString, record?.label, owner, suggestion.explanation, ...suggestion.transactionIds].filter(Boolean)
           .join(" ").toLowerCase().includes(needle));
-    }).sort((a, b) => ownershipSuggestionValue(b, data.records) - ownershipSuggestionValue(a, data.records) ||
+    }).sort((a, b) => ownershipSuggestionValueFromMap(b, recordById) - ownershipSuggestionValueFromMap(a, recordById) ||
       a.fingerprint.localeCompare(b.fingerprint))
       .slice(suggestionOffset, suggestionOffset + OWNERSHIP_REVIEW_LIMITS.suggestions);
-  }, [data, entityById, kind, search, suggestionOffset]);
+  }, [data, entityById, kind, recordById, search, suggestionOffset]);
 
   const ownerId = (suggestion: OwnershipSuggestion) => {
     const value = ownerOverrides[suggestion.fingerprint];
@@ -116,9 +143,27 @@ export default function ResolveOwnership() {
       const decision = action === "assign-wallet"
         ? await decideWalletOwnership({ suggestion, action, entityId: ownerId(suggestion), recordIds: walletRecordIds ?? [] })
         : await decideOwnership({ suggestion, action, entityId: action.startsWith("assign") ? ownerId(suggestion) : undefined });
+      ignoreNextDbSignal.current = true;
       if (decision.undoToken) setUndoToken(decision.undoToken);
       setPending(null);
-      await load();
+      setData(current => {
+        const decisions = [...current.decisions.filter(row => row.id !== decision.id), decision];
+        if (decision.state !== "accepted" && decision.state !== "not-ours") return { ...current, decisions };
+        const recordIds = new Set(decision.recordIds);
+        const existingByRecordId = new Map(current.ownership.map(row => [row.recordId, row]));
+        const changed = decision.recordIds.map(recordId => {
+          const existing = existingByRecordId.get(recordId);
+          return {
+            ...existing,
+            recordId,
+            state: decision.state === "not-ours" ? "not-ours" as const : "assigned" as const,
+            entityId: decision.state === "accepted" ? decision.entityId : undefined,
+            createdAt: existing?.createdAt ?? decision.createdAt,
+            updatedAt: decision.updatedAt,
+          };
+        });
+        return { ...current, decisions, ownership: [...current.ownership.filter(row => !recordIds.has(row.recordId)), ...changed] };
+      });
       toast({ title: action === "reject" ? "Suggestion rejected" : action === "undecided" ? "Left undecided" : "Ownership decision saved" });
     } catch (error) {
       toast({ title: "Could not save decision", description: error instanceof Error ? error.message : "Try selecting an owner.", variant: "destructive" });
@@ -126,18 +171,34 @@ export default function ResolveOwnership() {
   };
   const undo = async () => {
     if (!undoToken) return;
+    const undone = data.decisions.find(decision => decision.undoToken === undoToken);
     if (await undoOwnershipDecision(undoToken)) {
+      ignoreNextDbSignal.current = true;
       setUndoToken(null);
-      await load();
+      if (undone?.previousOwnership) {
+        setData(current => {
+          const restoredIds = new Set(undone.previousOwnership!.map(row => row.recordId));
+          const createdIds = new Set(undone.createdOwnershipRecordIds ?? []);
+          return {
+            ...current,
+            ownership: [
+              ...current.ownership.filter(row => !restoredIds.has(row.recordId) && !createdIds.has(row.recordId)),
+              ...undone.previousOwnership!,
+            ],
+            decisions: current.decisions.map(decision =>
+              decision.id === undone.id ? { ...decision, undoToken: undefined } : decision),
+          };
+        });
+      }
       toast({ title: "Last ownership change undone" });
     }
   };
 
   const ownerEntities = data.entities.filter(entity => entity.id !== undefined && entity.kind !== "counterparty");
   const walletCascade = (suggestion: OwnershipSuggestion) => {
-    const walletId = data.ownership.find(row => row.recordId === suggestion.recordId)?.walletId;
+    const walletId = ownershipByRecordId.get(suggestion.recordId)?.walletId;
     if (!Number.isSafeInteger(walletId)) return undefined;
-    const recordIds = data.ownership.filter(row => row.walletId === walletId && (row.state === "undetermined" || row.state === "ours-owner-unknown")).map(row => row.recordId);
+    const recordIds = walletRecordIds.get(walletId!) ?? [];
     return recordIds.length ? {
       walletId: walletId!,
       recordIds,
@@ -168,10 +229,10 @@ export default function ResolveOwnership() {
       {loading ? <p className="text-sm text-muted-foreground" data-testid="ownership-loading">Loading ownership review…</p> : suggestions.length === 0 ? (
         <Card data-testid="ownership-empty"><CardContent className="py-8 text-center"><Check className="mx-auto mb-2 h-7 w-7 text-muted-foreground" /><p className="font-medium">No ownership suggestions to review</p><p className="text-sm text-muted-foreground">Rejected unchanged evidence stays out of this queue.</p></CardContent></Card>
       ) : suggestions.map(suggestion => {
-        const record = data.records.find(row => row.id === suggestion.recordId);
+        const record = recordById.get(suggestion.recordId);
         const assignedOwner = ownerId(suggestion);
         const ownerName = assignedOwner === undefined || !entityById.has(assignedOwner) ? "Unassigned" : entityById.get(assignedOwner)?.name ?? "Unassigned";
-        const value = ownershipSuggestionValue(suggestion, data.records);
+        const value = ownershipSuggestionValueFromMap(suggestion, recordById);
         const open = inspect === suggestion.fingerprint;
         const cascade = walletCascade(suggestion);
         return <Card key={suggestion.fingerprint} data-testid={`ownership-suggestion-${suggestion.recordId}`}>
@@ -184,7 +245,7 @@ export default function ResolveOwnership() {
               {suggestion.suggestedState === "assigned" && <select value={assignedOwner ?? ""} onChange={event => setOwnerOverrides(current => ({ ...current, [suggestion.fingerprint]: event.target.value }))} className="h-8 rounded border bg-background px-2 text-sm" aria-label={`Owner for ${record?.inputString ?? suggestion.recordId}`} data-testid={`select-ownership-owner-${suggestion.recordId}`}><option value="">Unassigned</option>{ownerEntities.map(entity => <option key={entity.id} value={entity.id}>{entity.name}</option>)}</select>}
             </div>
             <Button size="sm" variant="ghost" onClick={() => setInspect(open ? null : suggestion.fingerprint)} data-testid={`button-ownership-inspect-${suggestion.recordId}`}>{open ? "Hide evidence" : "Inspect evidence"}</Button>
-            {open && <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1" data-testid={`ownership-evidence-${suggestion.recordId}`}><p><strong>Addresses:</strong> {suggestion.recordIds.map(id => data.records.find(row => row.id === id)?.inputString ?? `Record #${id}`).join(", ")}</p><p><strong>Transactions:</strong> {suggestion.transactionIds.length ? suggestion.transactionIds.join(", ") : "No transaction evidence for this suggestion."}</p><p className="text-xs text-muted-foreground">Evidence fingerprint: {suggestion.fingerprint}</p></div>}
+            {open && <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1" data-testid={`ownership-evidence-${suggestion.recordId}`}><p><strong>Addresses:</strong> {suggestion.recordIds.map(id => recordById.get(id)?.inputString ?? `Record #${id}`).join(", ")}</p><p><strong>Transactions:</strong> {suggestion.transactionIds.length ? suggestion.transactionIds.join(", ") : "No transaction evidence for this suggestion."}</p><p className="text-xs text-muted-foreground">Evidence fingerprint: {suggestion.fingerprint}</p></div>}
             <div className="flex flex-wrap gap-2 border-t pt-3">
               {suggestion.suggestedState === "assigned" && <><Button size="sm" onClick={() => void save(suggestion, "assign")} data-testid={`button-ownership-assign-${suggestion.recordId}`}>Assign one</Button>
                 <Button size="sm" variant="outline" disabled={suggestion.recordIds.length < 2} onClick={() => setPending({ suggestion, action: "assign-cluster" })} data-testid={`button-ownership-cluster-${suggestion.recordId}`}>Assign entire cluster ({suggestion.recordIds.length})</Button>
@@ -204,7 +265,7 @@ export default function ResolveOwnership() {
       {suggestions.length === OWNERSHIP_REVIEW_LIMITS.suggestions && <div className="flex justify-center"><Button variant="outline" onClick={() => setSuggestionOffset(current => current + OWNERSHIP_REVIEW_LIMITS.suggestions)} data-testid="button-ownership-load-more">Load next {OWNERSHIP_REVIEW_LIMITS.suggestions} suggestions</Button></div>}
       <AlertDialog open={!!pending} onOpenChange={open => !open && setPending(null)}><AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>{pending?.action === "assign-cluster" ? "Assign entire address cluster?" : pending?.action === "assign-wallet" ? "Assign normalized wallet addresses?" : "Mark address not ours?"}</AlertDialogTitle>
-          <AlertDialogDescription>{pending?.action === "assign-cluster" ? `This explicitly assigns ${pending.suggestion.recordIds.length} address records to ${entityById.get(ownerId(pending.suggestion) ?? -1)?.name ?? "the selected owner"}.` : pending?.action === "assign-wallet" ? (() => { const ids = pending.recordIds ?? []; const txs = new Set(data.participants.filter(row => ids.includes(row.recordId ?? -1)).map(row => row.txid)).size; const addresses = ids.map(id => data.records.find(row => row.id === id)?.inputString ?? `Record #${id}`).join(", "); return `This explicitly assigns exactly ${ids.length} unresolved addresses (${addresses}) in this normalized wallet, with ${txs} related local transactions/batches, to ${entityById.get(ownerId(pending.suggestion) ?? -1)?.name ?? "the selected owner"}.`; })() : "This explicitly excludes this address from your ownership. It can be changed later only by a new review decision."}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogDescription>{pending?.action === "assign-cluster" ? `This explicitly assigns ${pending.suggestion.recordIds.length} address records to ${entityById.get(ownerId(pending.suggestion) ?? -1)?.name ?? "the selected owner"}.` : pending?.action === "assign-wallet" ? (() => { const ids = pending.recordIds ?? []; const idSet = new Set(ids); const txs = new Set(data.participants.filter(row => idSet.has(row.recordId ?? -1)).map(row => row.txid)).size; const addresses = ids.map(id => recordById.get(id)?.inputString ?? `Record #${id}`).join(", "); return `This explicitly assigns exactly ${ids.length} unresolved addresses (${addresses}) in this normalized wallet, with ${txs} related local transactions/batches, to ${entityById.get(ownerId(pending.suggestion) ?? -1)?.name ?? "the selected owner"}.`; })() : "This explicitly excludes this address from your ownership. It can be changed later only by a new review decision."}</AlertDialogDescription></AlertDialogHeader>
         <AlertDialogFooter><AlertDialogCancel data-testid="button-ownership-cancel-confirmation">Cancel</AlertDialogCancel><AlertDialogAction onClick={() => pending && void save(pending.suggestion, pending.action, pending.recordIds)} data-testid="button-ownership-confirm-action">Confirm</AlertDialogAction></AlertDialogFooter>
       </AlertDialogContent></AlertDialog>
     </div>
