@@ -763,6 +763,11 @@ test('the packaged network activity relaunch rejects stale CDP ownership before 
     source.indexOf('const abruptlyTerminatedCdp = cdp;') + freshOwnershipIndex < connectIndex,
     'fresh ownership must be asserted before Playwright connects to the relaunched process',
   );
+  assert.match(
+    source,
+    /activityRows\.nth\(activity\.length\)\.waitFor\(\{ state: 'visible' \}\)[\s\S]*await activityRows\.count\(\)/,
+    'activity labels must be checked only after every asynchronously queried row renders',
+  );
 });
 
 test('the packaged Coin Passport gate is release-wired after the native worker check', () => {
