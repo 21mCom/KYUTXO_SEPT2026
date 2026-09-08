@@ -379,6 +379,10 @@ args = "evidence-package-streaming-browser-check"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "evidence-package-streaming-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "notarization-merge-restore-browser-check"
 
 [[workflows.workflow.tasks]]
@@ -3047,6 +3051,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-evidence-package-streaming-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "evidence-package-streaming-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-evidence-package-streaming-browser.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
