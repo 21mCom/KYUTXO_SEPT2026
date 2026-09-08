@@ -257,26 +257,59 @@ function findComputedTestidHits(source, file, full) {
     return ts.isObjectLiteralExpression(node) ? node : undefined;
   }
 
+  function resolveArrayLiteral(node, seen = new Set()) {
+    if (ts.isParenthesizedExpression(node)) {
+      return resolveArrayLiteral(node.expression, seen);
+    }
+    if (ts.isIdentifier(node)) {
+      if (seen.has(node.text)) return undefined;
+      const initializer = bindings.get(node.text);
+      return initializer
+        ? resolveArrayLiteral(initializer, new Set([...seen, node.text]))
+        : undefined;
+    }
+    return ts.isArrayLiteralExpression(node) ? node : undefined;
+  }
+
   function recordConstBinding(name, initializer) {
     if (ts.isIdentifier(name)) {
       bindings.set(name.text, initializer);
       return;
     }
-    if (!ts.isObjectBindingPattern(name)) return;
-    const objectLiteral = resolveObjectLiteral(initializer);
-    if (!objectLiteral) return;
-    for (const element of name.elements) {
-      if (element.dotDotDotToken || !ts.isIdentifier(element.name)) continue;
-      const sourceName = element.propertyName ?? element.name;
-      if (!ts.isIdentifier(sourceName) && !ts.isStringLiteral(sourceName)) continue;
-      const property = objectLiteral.properties.find(
-        (candidate) =>
-          ts.isPropertyAssignment(candidate) &&
-          (ts.isIdentifier(candidate.name) || ts.isStringLiteral(candidate.name)) &&
-          candidate.name.text === sourceName.text,
-      );
-      if (property && ts.isPropertyAssignment(property)) {
-        bindings.set(element.name.text, property.initializer);
+    if (ts.isObjectBindingPattern(name)) {
+      const objectLiteral = resolveObjectLiteral(initializer);
+      if (!objectLiteral) return;
+      for (const element of name.elements) {
+        if (element.dotDotDotToken || !ts.isIdentifier(element.name)) continue;
+        const sourceName = element.propertyName ?? element.name;
+        if (!ts.isIdentifier(sourceName) && !ts.isStringLiteral(sourceName)) continue;
+        const property = objectLiteral.properties.find(
+          (candidate) =>
+            ts.isPropertyAssignment(candidate) &&
+            (ts.isIdentifier(candidate.name) || ts.isStringLiteral(candidate.name)) &&
+            candidate.name.text === sourceName.text,
+        );
+        if (property && ts.isPropertyAssignment(property)) {
+          bindings.set(element.name.text, property.initializer);
+        }
+      }
+      return;
+    }
+    if (!ts.isArrayBindingPattern(name)) return;
+    const arrayLiteral = resolveArrayLiteral(initializer);
+    if (!arrayLiteral) return;
+    for (let index = 0; index < name.elements.length; index += 1) {
+      const element = name.elements[index];
+      if (
+        ts.isOmittedExpression(element) ||
+        element.dotDotDotToken ||
+        !ts.isIdentifier(element.name)
+      ) {
+        continue;
+      }
+      const value = arrayLiteral.elements[index];
+      if (value && !ts.isSpreadElement(value)) {
+        bindings.set(element.name.text, value);
       }
     }
   }

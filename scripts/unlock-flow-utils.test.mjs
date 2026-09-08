@@ -92,6 +92,16 @@ describe('browser-check unlock guard', () => {
            "page.getByTestId(computedChoiceAlias('offline'));",
            "let { buildChoice: mutableChoiceAlias } = helperBag;",
            "page.getByTestId(mutableChoiceAlias('offline'));",
+           "const helperList = [(kind) => `choice-network-${kind}`, () => 'button-onboarding-finish'];",
+           "const [arrayChoiceAlias, arrayFinishAlias] = helperList;",
+           "page.getByTestId(arrayChoiceAlias('offline'));",
+           "page.getByTestId(arrayFinishAlias());",
+           "let [mutableArrayChoiceAlias] = helperList;",
+           "page.getByTestId(mutableArrayChoiceAlias('offline'));",
+           "const [...restArrayChoiceAliases] = helperList;",
+           "page.getByTestId(restArrayChoiceAliases[0]('offline'));",
+           "const computedArrayChoiceAlias = helperList[runtimeHelperIndex()];",
+           "page.getByTestId(computedArrayChoiceAlias('offline'));",
           '',
         ].join('\n'),
       );
@@ -156,6 +166,11 @@ describe('browser-check unlock guard', () => {
         assert.match(result.stderr, /check-generic-browser\.mjs:40\s+\[choice-network-offline\]/);
         assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:43\s+/);
         assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:45\s+/);
+         assert.match(result.stderr, /check-generic-browser\.mjs:48\s+\[choice-network-offline\]/);
+         assert.match(result.stderr, /check-generic-browser\.mjs:49\s+\[button-onboarding-finish\]/);
+         assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:51\s+/);
+         assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:53\s+/);
+         assert.doesNotMatch(result.stderr, /check-generic-browser\.mjs:55\s+/);
       assert.doesNotMatch(result.stderr, /check-first-run-network-privacy-browser\.mjs:/);
       assert.doesNotMatch(result.stderr, /check-packaged-vault-lock-native\.mjs:/);
       assert.match(result.stderr, /completeFreshVaultOnboardingIfPresent/);
