@@ -431,16 +431,31 @@ async function main() {
 
     // Do not close CDP first or send SIGTERM: kill the whole detached process
     // group so Electron cannot run before-quit or Chromium's graceful shutdown.
+    const abruptlyTerminatedCdp = cdp;
+    console.log(
+      `${TAG} recorded abruptly terminated CDP ownership ` +
+        `${abruptlyTerminatedCdp.browserPath} on port ${abruptlyTerminatedCdp.port}`,
+    );
     await forceStopPackagedProcess(child);
     child = null;
     browser = null;
-    if (!(await waitForPackagedCdpDown(cdp.port, 30_000))) {
+    if (!(await waitForPackagedCdpDown(abruptlyTerminatedCdp.port, 30_000))) {
       throw new Error(`${TAG} packaged Electron CDP endpoint stayed up after forced termination`);
     }
     clearPackagedCdpOwnership(cdpUserDataDir);
 
     launchPackagedProcess();
     cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    assert.notEqual(
+      cdp.browserPath,
+      abruptlyTerminatedCdp.browserPath,
+      `${TAG} relaunch reused stale packaged CDP ownership file/token ` +
+        `${abruptlyTerminatedCdp.browserPath}`,
+    );
+    console.log(
+      `${TAG} same-profile relaunch established fresh CDP ownership ` +
+        `${cdp.browserPath} before Playwright connected`,
+    );
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     page = await waitForRendererPage(browser);
     attachPageDiagnostics(page);

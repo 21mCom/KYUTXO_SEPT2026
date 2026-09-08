@@ -725,6 +725,43 @@ test('the packaged network activity forced shutdown cannot become graceful', () 
   );
 });
 
+test('the packaged network activity relaunch rejects stale CDP ownership before connecting', () => {
+  const source = fs.readFileSync(
+    path.join(SCRIPTS_DIR, 'check-packaged-network-privacy-activity-browser.mjs'),
+    'utf8',
+  );
+  const relaunchScenario = source.match(
+    /const abruptlyTerminatedCdp = cdp;(?<body>[\s\S]*?)browser = await chromium\.connectOverCDP/,
+  )?.groups?.body;
+  assert.ok(relaunchScenario, 'forced relaunch must retain the abruptly terminated CDP ownership');
+  assert.match(
+    relaunchScenario,
+    /waitForPackagedCdpDown\(abruptlyTerminatedCdp\.port, 30_000\)/,
+    'forced relaunch must prove the prior endpoint is unavailable',
+  );
+  assert.match(
+    relaunchScenario,
+    /clearPackagedCdpOwnership\(cdpUserDataDir\)[\s\S]*launchPackagedProcess\(\)/,
+    'forced relaunch must clear stale ownership only after shutdown and before same-profile launch',
+  );
+  assert.match(
+    relaunchScenario,
+    /assert\.notEqual\(\s*cdp\.browserPath,\s*abruptlyTerminatedCdp\.browserPath,[\s\S]*reused stale packaged CDP ownership file\/token/,
+    'forced relaunch must reject reuse of the prior browser ownership token',
+  );
+
+  const freshOwnershipIndex = relaunchScenario.indexOf('assert.notEqual(');
+  const connectIndex = source.indexOf(
+    'browser = await chromium.connectOverCDP',
+    source.indexOf('const abruptlyTerminatedCdp = cdp;'),
+  );
+  assert.ok(freshOwnershipIndex >= 0, 'fresh ownership assertion must exist');
+  assert.ok(
+    source.indexOf('const abruptlyTerminatedCdp = cdp;') + freshOwnershipIndex < connectIndex,
+    'fresh ownership must be asserted before Playwright connects to the relaunched process',
+  );
+});
+
 test('the packaged Coin Passport gate is release-wired after the native worker check', () => {
   const script = fs.readFileSync(
     path.join(SCRIPTS_DIR, 'check-packaged-coin-passport-browser.mjs'),
