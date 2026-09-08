@@ -17,7 +17,6 @@ const { resolveDataDirs, ensureDirectories: ensureDataDirectories } = require('.
 const { registerElectrumHandlers, stopKeepalive } = require('./electrum-client.cjs');
 const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.cjs');
 const {
-  applyIdleLockTimeoutOverride,
   parseIdleLockTimeoutEnv,
   validateVaultLockSettings,
   createVaultLockLifecycle,
@@ -422,10 +421,7 @@ ipcMain.handle('set-vault-lock-settings', async (event, rawSettings) => {
       return { success: false, error: parsed.error };
     }
 
-    vaultLockSettings = applyIdleLockTimeoutOverride(
-      parsed.settings,
-      process.env.KYUTXO_IDLE_LOCK_SECONDS,
-    );
+    vaultLockSettings = parsed.settings;
     vaultLockLifecycle.applyPolicy(vaultLockSettings);
     return { success: true };
   } catch (error) {
@@ -655,7 +651,6 @@ app.whenReady().then(async () => {
       }
       createWindow();
       vaultLockLifecycle.registerPowerMonitorListeners();
-      vaultLockLifecycle.applyPolicy(vaultLockSettings);
     }).catch(() => {
       const blocked = new BrowserWindow({
         width: 700, height: 360, resizable: false,
@@ -669,7 +664,6 @@ app.whenReady().then(async () => {
   createWindow();
   
   vaultLockLifecycle.registerPowerMonitorListeners();
-  vaultLockLifecycle.applyPolicy(vaultLockSettings);
 });
 
 app.on('window-all-closed', () => {

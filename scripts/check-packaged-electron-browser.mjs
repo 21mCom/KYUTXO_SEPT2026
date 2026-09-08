@@ -330,8 +330,6 @@ async function main() {
     XDG_DATA_HOME: path.join(tmpHome, '.local', 'share'),
     XDG_STATE_HOME: path.join(tmpHome, '.local', 'state'),
     NODE_ENV: 'production',
-    // Exercise the main→preload→AuthContext lock signal in this live gate.
-    KYUTXO_IDLE_LOCK_SECONDS: '2',
   };
   if (IS_WINDOWS) {
     // The portable wrapper sets PORTABLE_EXECUTABLE_DIR to the directory
@@ -685,6 +683,26 @@ async function main() {
       submitTimeoutMs: 60_000,
       label: 'idle-lock',
     });
+    if (!unlockedForIdleCheck) {
+      throw new Error(`${TAG} fresh vault setup did not run before the idle-lock check.`);
+    }
+    // Lifecycle locking is intentionally unarmed until authentication finishes,
+    // so it cannot interrupt protected-store setup/unlock. After AuthContext has
+    // synced the persisted defaults, arm the shortest supported policy through
+    // the real preload→main IPC boundary. Synthetic Playwright input does not
+    // reset Windows' system idle clock, so the mature CI VM is already over 60s.
+    await page.waitForTimeout(1_000);
+    const armedIdlePolicy = await page.evaluate(async () => {
+      return window.electronAPI?.setVaultLockSettings?.({
+        idleTimeoutSeconds: 60,
+        lockOnSuspend: true,
+        lockOnResume: true,
+        lockOnScreenLock: true,
+      });
+    });
+    if (!armedIdlePolicy?.success) {
+      throw new Error(`${TAG} could not arm the authenticated idle-lock policy.`);
+    }
     let idleLocked = false;
     let idleLockDetail = '';
     try {
@@ -705,18 +723,20 @@ async function main() {
 
     if (IS_WINDOWS) {
       // Unlocking the vault before shutdown makes this a real persistence check.
-      const created = await unlockIfNeeded(page, PORTABLE_CHECK_PASSWORD, {
+      const unlockedBeforeRestart = await unlockIfNeeded(page, PORTABLE_CHECK_PASSWORD, {
         appearTimeoutMs: 60_000,
         submitTimeoutMs: 60_000,
         label: 'portable-restart',
       });
       steps.push({
         name: 'portable wrapper creates a small vault',
-        passed: created,
-        detail: created ? 'vault setup completed' : 'vault setup form was not available',
+        passed: unlockedForIdleCheck && unlockedBeforeRestart,
+        detail: unlockedBeforeRestart
+          ? 'vault setup completed and unlocked before restart'
+          : 'vault could not be unlocked before restart',
       });
-      if (!created) {
-        throw new Error(`${TAG} portable vault setup did not run on the fresh launch.`);
+      if (!unlockedBeforeRestart) {
+        throw new Error(`${TAG} portable vault could not be unlocked before restart.`);
       }
 
       await browser.close().catch(() => {});

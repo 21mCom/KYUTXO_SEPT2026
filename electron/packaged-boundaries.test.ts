@@ -60,6 +60,7 @@ describe("packaged Electron privilege boundaries", () => {
     );
     expect(mainSource).toMatch(/event\.sender !== mainWindow\.webContents/);
     expect(mainSource).toMatch(/vaultLockLifecycle\.applyPolicy\(vaultLockSettings\)/);
+    expect(mainSource.match(/vaultLockLifecycle\.applyPolicy\(vaultLockSettings\)/g)).toHaveLength(1);
     expect(mainSource).toMatch(/vaultLockLifecycle\.shutdown\(\)/);
   });
 });
