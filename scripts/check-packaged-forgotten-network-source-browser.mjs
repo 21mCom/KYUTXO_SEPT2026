@@ -85,6 +85,13 @@ async function rendererPage(browser) {
   throw new Error(`${TAG} packaged renderer did not appear`);
 }
 
+async function navigateToNodeSettings(page) {
+  await page.evaluate(() => {
+    window.location.hash = '/node-settings';
+  });
+  await page.getByRole('heading', { name: 'Node Connection' }).waitFor({ state: 'visible' });
+}
+
 async function stop(child) {
   if (!child?.pid) return;
   if (IS_WINDOWS) {
@@ -150,7 +157,7 @@ async function main() {
     let page = await rendererPage(browser);
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-forgotten-source-setup' });
     await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-forgotten-source-setup' });
-    await page.goto('kyutxo-app://bundle/#/node-settings');
+    await navigateToNodeSettings(page);
     await page.getByTestId('radio-provider-custom-electrs').click();
     await page.getByTestId('input-custom-url').fill(CUSTOM_URL);
     await page.getByTestId('switch-use-tor').click();
@@ -196,7 +203,7 @@ async function main() {
       true,
       'forgotten source onboarding did not appear after desktop restart',
     );
-    await page.goto('kyutxo-app://bundle/#/node-settings');
+    await navigateToNodeSettings(page);
     await page.getByText('No network source configured').first().waitFor();
     await page.getByTestId('text-network-privacy-state').getByText('Offline').waitFor();
 
@@ -250,7 +257,7 @@ async function main() {
     await browser?.close().catch(() => {});
     await stop(child);
     try { process.kill(-xvfb?.pid, 'SIGTERM'); } catch { xvfb?.kill?.('SIGTERM'); }
-    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
   }
 }
 
