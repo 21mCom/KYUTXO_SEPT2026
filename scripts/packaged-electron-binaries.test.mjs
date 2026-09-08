@@ -859,4 +859,7 @@ test('the packaged protected-vault gate waits for CDP shutdown before cleanup', 
   );
   assert.match(script, /waitForPackagedCdpDown\(cdpPort, 30_000\)/);
   assert.match(script, /maxRetries: 10, retryDelay: 250/);
+  assert.match(script, /function readFileWithTransientRetries/);
+  assert.match(script, /\['EBUSY', 'EPERM', 'EACCES'\]/);
+  assert.match(script, /const bytes = readFileWithTransientRetries\(absolutePath\)/);
 });
