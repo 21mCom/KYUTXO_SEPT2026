@@ -516,7 +516,7 @@ async function main() {
     } catch {
       xvfb?.kill?.('SIGTERM');
     }
-    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
   }
 }
 
