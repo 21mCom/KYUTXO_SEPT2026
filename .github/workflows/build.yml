@@ -44,22 +44,6 @@ jobs:
             arch: x64
             runner_label: desktop-release-win-x64
             builder_flag: --win
-          - platform: darwin
-            arch: x64
-            runner_label: desktop-release-darwin-x64
-            builder_flag: --mac
-          - platform: darwin
-            arch: arm64
-            runner_label: desktop-release-darwin-arm64
-            builder_flag: --mac
-          - platform: linux
-            arch: x64
-            runner_label: desktop-release-linux-x64
-            builder_flag: --linux
-          - platform: linux
-            arch: arm64
-            runner_label: desktop-release-linux-arm64
-            builder_flag: --linux
     runs-on:
       - self-hosted
       - "${{ matrix.runner_label }}"
@@ -426,10 +410,6 @@ jobs:
           const evidenceDir = 'native-power-smoke';
           const expected = [
             'native-power-smoke-win-x64.log',
-            'native-power-smoke-darwin-x64.log',
-            'native-power-smoke-darwin-arm64.log',
-            'native-power-smoke-linux-x64.log',
-            'native-power-smoke-linux-arm64.log',
           ];
           for (const filename of expected) {
             const filePath = path.join(evidenceDir, filename);
@@ -460,7 +440,7 @@ jobs:
           mapfile -t EXES < <(find release-assets -maxdepth 1 -type f -name '*.exe' -print)
           mapfile -t SUMS < <(find release-assets -maxdepth 1 -type f -name '*.exe.sha256' -print)
           mapfile -t SMOKE_LOGS < <(find native-power-smoke -maxdepth 1 -type f -name '*.log' -print)
-          if [ "${#EXES[@]}" -eq 0 ] || [ "${#EXES[@]}" -ne "${#SUMS[@]}" ] || [ "${#SMOKE_LOGS[@]}" -ne 5 ]; then
+          if [ "${#EXES[@]}" -eq 0 ] || [ "${#EXES[@]}" -ne "${#SUMS[@]}" ] || [ "${#SMOKE_LOGS[@]}" -ne 1 ]; then
             echo "::error::Validated executable, SHA-256 sidecar, or native power evidence is missing"
             exit 1
           fi
