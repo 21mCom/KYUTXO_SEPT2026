@@ -162,13 +162,13 @@ const attachmentWriter = {
       throw new Error(err.error || res.statusText);
     }
   },
-  async listPage(cursor: string | null, limit: number): Promise<{ files: string[]; cursor: string | null }> {
+  async listPage(cursor: string | null, limit: number): Promise<{ files: string[]; cursor: string | null; total?: number }> {
     const query = new URLSearchParams({ limit: String(limit) });
     if (cursor) query.set("cursor", cursor);
     const res = await fetch(`/api/attachments/list-all?${query}`);
     if (!res.ok) throw new Error(`list-all failed: ${res.status}`);
     const data = await res.json();
-    return { files: data.files ?? [], cursor: data.cursor ?? null };
+    return { files: data.files ?? [], cursor: data.cursor ?? null, total: data.total };
   },
   async closeListing(cursor: string): Promise<void> {
     await fetch(`/api/attachments/list-all?closeCursor=${encodeURIComponent(cursor)}`);
@@ -356,6 +356,7 @@ describe("v3 restore over a populated data dir sweeps the prior vault's stranded
     }
 
     const requestedLimits: number[] = [];
+    const cleanupProgress: Array<{ percent: number; phase: string }> = [];
     const pagedWriter = {
       ...attachmentWriter,
       async listPage(cursor: string | null, limit: number) {
@@ -365,10 +366,25 @@ describe("v3 restore over a populated data dir sweeps the prior vault's stranded
       },
     };
 
-    await restoreV3Backup({ source: blobChunks(backupBlob), attachmentWriter: pagedWriter });
+    await restoreV3Backup({
+      source: blobChunks(backupBlob),
+      attachmentWriter: pagedWriter,
+      onProgress(progress) {
+        if (progress.phase.startsWith("Cleaning up old attachment files")) {
+          cleanupProgress.push(progress);
+        }
+      },
+    });
 
     expect(requestedLimits.length).toBeGreaterThan(2);
     expect(Math.max(...requestedLimits)).toBeLessThan(oldCount);
+    expect(cleanupProgress.map((progress) => progress.phase)).toEqual([
+      "Cleaning up old attachment files...",
+      "Cleaning up old attachment files... 500 of 1205",
+      "Cleaning up old attachment files... 1000 of 1205",
+      "Cleaning up old attachment files... 1205 of 1205",
+    ]);
+    expect(cleanupProgress.map((progress) => progress.percent)).toEqual([95, 96, 98, 99]);
     expect(await listDiskFiles()).toEqual([]);
   });
 });

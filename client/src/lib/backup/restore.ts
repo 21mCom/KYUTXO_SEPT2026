@@ -221,7 +221,7 @@ export interface AttachmentFileWriter {
   listPage?(
     cursor: string | null,
     limit: number,
-  ): Promise<{ files: string[]; cursor: string | null }>;
+  ): Promise<{ files: string[]; cursor: string | null; total?: number }>;
   // Explicitly release an unfinished traversal after a listing/delete failure.
   closeListing?(cursor: string): Promise<void>;
   // Optional: write an attachment whose owning record was absent (orphan) to a
@@ -718,11 +718,22 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     const written = new Set(writtenFiles.map(normalizeRelPath));
     const PAGE_SIZE = 500;
     let cursor: string | null = null;
+    let filesChecked = 0;
+    let totalFiles: number | null = null;
+    opts.onProgress?.({ percent: 95, phase: "Cleaning up old attachment files..." });
     try {
       do {
-        const page: { files: string[]; cursor: string | null } =
+        const page: { files: string[]; cursor: string | null; total?: number } =
           await listPage.call(opts.attachmentWriter, cursor, PAGE_SIZE);
         cursor = page.cursor;
+        if (
+          totalFiles === null &&
+          typeof page.total === "number" &&
+          Number.isFinite(page.total) &&
+          page.total >= 0
+        ) {
+          totalFiles = page.total;
+        }
         for (const relPath of page.files) {
           const oldRel = normalizeRelPath(relPath);
           if (written.has(oldRel)) continue;
@@ -732,6 +743,16 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
             // intentionally ignored — see comment above
           }
         }
+        filesChecked += page.files.length;
+        const cleanupPercent =
+          totalFiles !== null && totalFiles > 0
+            ? 95 + Math.min(4, Math.floor((filesChecked / totalFiles) * 4))
+            : 95 + Math.min(4, Math.floor(filesChecked / PAGE_SIZE));
+        const phase =
+          totalFiles !== null
+            ? `Cleaning up old attachment files... ${Math.min(filesChecked, totalFiles)} of ${totalFiles}`
+            : `Cleaning up old attachment files... ${filesChecked} checked`;
+        opts.onProgress?.({ percent: cleanupPercent, phase });
       } while (cursor);
     } catch {
       // Best-effort cleanup: listing failure must not turn a valid restore into
@@ -759,7 +780,8 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       : 1;
   let processed = 0;
   const report = (phase: string) => {
-    const pct = 10 + Math.min(89, Math.round((processed / total()) * 89));
+    // Reserve 95-99 for the success-only old-file cleanup phase.
+    const pct = 10 + Math.min(84, Math.round((processed / total()) * 84));
     opts.onProgress?.({ percent: pct, phase });
   };
 

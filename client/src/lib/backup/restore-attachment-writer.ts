@@ -57,7 +57,11 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         if (!result.success) {
           throw new Error(result.error || "Failed to list attachments");
         }
-        return { files: result.files ?? [], cursor: result.cursor ?? null };
+        return {
+          files: result.files ?? [],
+          cursor: result.cursor ?? null,
+          total: result.total,
+        };
       }
       const query = new URLSearchParams({ limit: String(limit) });
       if (cursor) query.set("cursor", cursor);
@@ -66,7 +70,11 @@ export function createRestoreAttachmentWriter(): AttachmentFileWriter {
         throw new Error(`Failed to list attachments: ${response.status}`);
       }
       const data = await response.json();
-      return { files: data.files ?? [], cursor: data.cursor ?? null };
+      return {
+        files: data.files ?? [],
+        cursor: data.cursor ?? null,
+        total: data.total,
+      };
     },
     async closeListing(cursor) {
       if (isElectron()) {
