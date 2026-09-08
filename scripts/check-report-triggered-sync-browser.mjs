@@ -111,12 +111,86 @@ try {
       networkPrivacyChosenAt: Date.now(),
       networkAccessEnabled: false,
       networkOnboardingStage: 'complete',
-      firstSyncConfirmedAt: undefined,
+      firstSyncConfirmedAt: 1,
     });
   }, { ownedAddress, missingFundingTxid, spendingTxid });
 
+  await page.goto(`${baseUrl}/transaction-sync`, { waitUntil: 'domcontentloaded' });
+  await unlockIfNeeded(page, password, { label: 'normal-sync-recovery' });
+  await page.getByTestId('text-page-title').waitFor({ state: 'visible' });
+
+  const settingsBefore = await page.evaluate(async () => {
+    const { transactionSyncService } = await import('/src/lib/transaction-sync.ts');
+    const { NETWORK_BLOCKED_MESSAGE } = await import('/src/lib/network-privacy.ts');
+    const settings = await import('/src/lib/data/node-settings-crud.ts');
+    window.__offlineRecoverySyncCalls = [];
+    transactionSyncService.updateProvider = () => undefined;
+    transactionSyncService.syncWithDepth = async (options) => {
+      window.__offlineRecoverySyncCalls.push(options);
+      return {
+        success: false,
+        addressesSynced: 0,
+        transactionsImported: 0,
+        transactionsUpdated: 0,
+        newlyQueuedTransactions: 0,
+        newAddressRecords: 0,
+        addressesSkipped: 0,
+        addressesFiltered: 0,
+        transactionsAlreadySynced: 0,
+        depthsProcessed: [],
+        errors: [NETWORK_BLOCKED_MESSAGE],
+      };
+    };
+    return JSON.stringify(await settings.getNodeSettings('default'));
+  });
+
+  const normalSyncButton = page.getByTestId('button-sync');
+  await normalSyncButton.waitFor({ state: 'visible' });
+  await normalSyncButton.click();
+  let settingsAction = page.getByTestId('action-open-node-settings');
+  await settingsAction.waitFor({ state: 'visible' });
+  let toastText = await settingsAction.locator('..').innerText();
+  if (!toastText.includes('Network access is offline')) {
+    throw new Error(`Blocked normal sync showed the wrong recovery message: ${toastText}`);
+  }
+  const normalCalls = await page.evaluate(() => window.__offlineRecoverySyncCalls);
+  if (normalCalls.length !== 1 || normalCalls[0]?.sourceFilter !== 'custom') {
+    throw new Error(`Normal sync did not reach the full-sync runner exactly once: ${JSON.stringify(normalCalls)}`);
+  }
+  await settingsAction.click();
+  await page.waitForURL('**/node-settings');
+  const normalSettingsState = await page.evaluate(async () => {
+    const settings = await import('/src/lib/data/node-settings-crud.ts');
+    return JSON.stringify(await settings.getNodeSettings('default'));
+  });
+  if (normalSettingsState !== settingsBefore) {
+    throw new Error(`Normal sync recovery changed provider or network settings: ${JSON.stringify({ settingsBefore, normalSettingsState })}`);
+  }
+
   await page.goto(`${baseUrl}/annual-activity`, { waitUntil: 'domcontentloaded' });
   await unlockIfNeeded(page, password, { label: 'report-triggered-sync-report' });
+  await page.evaluate(async () => {
+    const { transactionSyncService } = await import('/src/lib/transaction-sync.ts');
+    const { NETWORK_BLOCKED_MESSAGE } = await import('/src/lib/network-privacy.ts');
+    window.__offlineRecoverySyncCalls = [];
+    transactionSyncService.updateProvider = () => undefined;
+    transactionSyncService.syncWithDepth = async (options) => {
+      window.__offlineRecoverySyncCalls.push(options);
+      return {
+        success: false,
+        addressesSynced: 0,
+        transactionsImported: 0,
+        transactionsUpdated: 0,
+        newlyQueuedTransactions: 0,
+        newAddressRecords: 0,
+        addressesSkipped: 0,
+        addressesFiltered: 0,
+        transactionsAlreadySynced: 0,
+        depthsProcessed: [],
+        errors: [NETWORK_BLOCKED_MESSAGE],
+      };
+    };
+  });
 
   const addressInput = page.getByTestId('input-annual-activity-addresses');
   await addressInput.fill(ownedAddress);
@@ -125,58 +199,37 @@ try {
   await page.getByTestId('warning-unresolved-input-amounts').waitFor({ state: 'visible' });
   await page.getByTestId('button-toggle-unresolved-details').click();
 
-  await page.evaluate(async () => {
-    const { transactionSyncService } = await import('/src/lib/transaction-sync.ts');
-    const original = transactionSyncService.updateProvider.bind(transactionSyncService);
-    window.__reportTargetedProviderAttempts = 0;
-    transactionSyncService.updateProvider = (...args) => {
-      window.__reportTargetedProviderAttempts += 1;
-      return original(...args);
-    };
-  });
-
   await page.getByTestId('button-sync-unresolved').click();
   await page.waitForURL('**/transaction-sync');
   await page.getByTestId('text-page-title').waitFor({ state: 'visible' });
 
-  const disclosure = page.getByTestId('dialog-first-sync-disclosure');
-  await disclosure.waitFor({ state: 'visible' }).catch(async (error) => {
-    const diagnostics = await page.evaluate(async () => {
-      const settings = await import('/src/lib/data/node-settings-crud.ts');
-      return {
-        nodeSettings: await settings.getNodeSettings('default'),
-        providerAttempts: window.__reportTargetedProviderAttempts,
-        bodyText: document.body.innerText,
-      };
-    });
-    throw new Error(`First-sync disclosure did not appear after report navigation: ${JSON.stringify(diagnostics)}`, {
-      cause: error,
-    });
-  });
-  const disclosureText = await disclosure.innerText();
-  if (!disclosureText.includes('1 address') || !disclosureText.includes('blockstream.info directly')) {
-    throw new Error(`Report handoff showed the wrong first-sync disclosure: ${disclosureText}`);
-  }
-  if (await page.getByTestId('action-open-node-settings').isVisible()) {
-    throw new Error('Targeted sync contacted the provider before first-sync approval');
-  }
-
-  await page.getByTestId('button-confirm-first-sync').click();
-  const settingsAction = page.getByTestId('action-open-node-settings');
+  settingsAction = page.getByTestId('action-open-node-settings');
   await settingsAction.waitFor({ state: 'visible' });
-  const toastText = await settingsAction.locator('..').innerText();
+  toastText = await settingsAction.locator('..').innerText();
   if (!toastText.includes('Network access is offline')) {
     throw new Error(`Blocked targeted sync showed the wrong recovery message: ${toastText}`);
   }
 
-  const attempts = await page.evaluate(() => window.__reportTargetedProviderAttempts);
-  if (attempts !== 1) {
-    throw new Error(`Approval started ${attempts} targeted provider attempts instead of exactly one`);
+  const targetedCalls = await page.evaluate(() => window.__offlineRecoverySyncCalls);
+  if (
+    targetedCalls.length !== 1
+    || targetedCalls[0]?.sourceFilter !== 'all'
+    || targetedCalls[0]?.maxDepth !== 1
+    || targetedCalls[0]?.specificRecordIds?.length !== 1
+  ) {
+    throw new Error(`Report-targeted sync did not reach the full-sync runner exactly once: ${JSON.stringify(targetedCalls)}`);
   }
 
   await settingsAction.click();
   await page.waitForURL('**/node-settings');
-  console.log('Report-triggered targeted sync navigation browser check passed');
+  const targetedSettingsState = await page.evaluate(async () => {
+    const settings = await import('/src/lib/data/node-settings-crud.ts');
+    return JSON.stringify(await settings.getNodeSettings('default'));
+  });
+  if (targetedSettingsState !== settingsBefore) {
+    throw new Error(`Report-targeted sync recovery changed provider or network settings: ${JSON.stringify({ settingsBefore, targetedSettingsState })}`);
+  }
+  console.log('Normal and report-triggered offline sync recovery browser check passed');
 } finally {
   await browser.close();
   server?.kill('SIGTERM');

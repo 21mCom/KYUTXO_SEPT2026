@@ -133,3 +133,4 @@
 - [Owner tax books vs physical provenance](owner-tax-books-vs-provenance.md) — keep tax allocation separate from Coin Origins; only affirmatively controlled addresses enter owner books.
 - [Packaged CDP ownership](packaged-cdp-ownership.md) — use OS-selected loopback ports plus DevToolsActivePort token proof; clear stale ownership only after endpoint shutdown before relaunch.
 - [Attachment export totals](attachment-export-totals.md) — manifest-first exports must compare archived file count/bytes with the preflight filesystem summary and abort on drift.
+- [Browser instrumentation across navigation](browser-instrumentation-navigation.md) — page.goto resets window state and module monkeypatches; reinstall after full loads or keep baselines in Node.
