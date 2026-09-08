@@ -94,6 +94,46 @@ test(
   },
 );
 
+test(
+  'keeps colliding invalid UTF-8 tracked document names distinct in one failure',
+  { skip: process.platform === 'win32' ? 'Windows paths cannot contain arbitrary byte sequences' : false },
+  (t) => {
+    const root = makeRepo();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const filenameBytes = [
+      Buffer.from('collision-X.pdf', 'ascii'),
+      Buffer.from('collision-X.pdf', 'ascii'),
+    ];
+    filenameBytes[0][10] = 0xff;
+    filenameBytes[1][10] = 0xfe;
+    for (const filename of filenameBytes) {
+      fs.writeFileSync(
+        Buffer.concat([Buffer.from(`${root}${path.sep}`), filename]),
+        'invalid utf8 original',
+      );
+    }
+    spawnSync('git', ['add', '--all'], { cwd: root, timeout: 30_000 });
+
+    const result = run(
+      root,
+      [
+        `const fs = require('node:fs')`,
+        `const path = require('node:path')`,
+        `const names = ${JSON.stringify(filenameBytes.map((name) => name.toString('hex')))}`,
+        `for (const hex of names) {`,
+        `  const name = Buffer.from(hex, 'hex')`,
+        `  fs.writeFileSync(Buffer.concat([Buffer.from(process.cwd() + path.sep), name]), 'rewritten')`,
+        `}`,
+      ].join(';'),
+    );
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /rewritten: "collision-\\xff\.pdf"/);
+    assert.match(result.stderr, /rewritten: "collision-\\xfe\.pdf"/);
+    assert.doesNotMatch(result.stderr, /\ufffd/);
+  },
+);
+
 test('preserves a failing test command status when fixtures are unchanged', (t) => {
   const root = makeRepo();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
