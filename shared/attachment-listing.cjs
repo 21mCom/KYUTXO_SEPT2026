@@ -51,16 +51,47 @@ function createAttachmentListing(options) {
   async function summary() {
     let total = 0;
     let totalBytes = 0;
+    const fingerprintBytes = Buffer.alloc(32);
     for await (const relativePath of iterateFiles()) {
+      let fileHandle;
       try {
-        const stat = await fs.promises.stat(path.join(attachmentsDir, relativePath));
+        const filePath = path.join(attachmentsDir, relativePath);
+        fileHandle = await fs.promises.open(filePath, 'r');
+        const before = await fileHandle.stat();
+        const contentHash = crypto.createHash('sha256');
+        const stream = fileHandle.createReadStream({ autoClose: false });
+        for await (const chunk of stream) contentHash.update(chunk);
+        const after = await fileHandle.stat();
+        if (
+          before.dev !== after.dev ||
+          before.ino !== after.ino ||
+          before.size !== after.size ||
+          before.mtimeMs !== after.mtimeMs ||
+          before.ctimeMs !== after.ctimeMs
+        ) {
+          const error = new Error('Attachment changed during summary');
+          error.code = 'ATTACHMENT_CHANGED';
+          throw error;
+        }
+        const fileToken = crypto
+          .createHash('sha256')
+          .update(Buffer.from(relativePath, 'utf8'))
+          .update(Buffer.from([0]))
+          .update(contentHash.digest())
+          .digest();
+        for (let index = 0; index < fingerprintBytes.length; index++) {
+          fingerprintBytes[index] ^= fileToken[index];
+        }
         total += 1;
-        totalBytes += stat.size;
-      } catch {
-        // A file may vanish between enumeration and stat.
+        totalBytes += before.size;
+      } catch (error) {
+        if (error && error.code === 'ATTACHMENT_CHANGED') throw error;
+        // A file may vanish or become unreadable during the summary traversal.
+      } finally {
+        await fileHandle?.close().catch(() => undefined);
       }
     }
-    return { total, totalBytes };
+    return { total, totalBytes, fingerprint: fingerprintBytes.toString('hex') };
   }
 
   async function list(page = {}) {
@@ -97,7 +128,13 @@ function createAttachmentListing(options) {
     const files = [];
     let done = false;
     while (files.length < limit) {
-      const next = await session.iterator.next();
+      let next;
+      try {
+        next = await session.iterator.next();
+      } catch (error) {
+        await closeCursor(cursor).catch(() => undefined);
+        throw error;
+      }
       if (next.done) {
         done = true;
         break;

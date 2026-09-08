@@ -61,8 +61,9 @@ export interface AttachmentFileIO {
     cursor: string | null;
     total?: number;
     totalBytes?: number;
+    fingerprint?: string;
   }>;
-  summary?(): Promise<{ total: number; totalBytes: number | null }>;
+  summary?(): Promise<{ total: number; totalBytes: number | null; fingerprint?: string }>;
   closeListing?(cursor: string): Promise<void>;
   // Legacy compatibility for injected/runtime implementations. Production
   // browser and Electron exporters use listPage.
@@ -89,6 +90,23 @@ export class AttachmentSnapshotChangedError extends Error {
     );
     this.name = "AttachmentSnapshotChangedError";
   }
+}
+
+async function attachmentFileToken(relPath: string, bytes: Uint8Array): Promise<Uint8Array> {
+  const contentDigest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", bytes as BufferSource),
+  );
+  const pathBytes = new TextEncoder().encode(relPath);
+  const framed = new Uint8Array(pathBytes.length + 1 + contentDigest.length);
+  framed.set(pathBytes);
+  framed.set(contentDigest, pathBytes.length + 1);
+  return new Uint8Array(
+    await crypto.subtle.digest("SHA-256", framed as BufferSource),
+  );
+}
+
+function fingerprintHex(bytes: Uint8Array): string {
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export interface ExportOptions {
@@ -453,6 +471,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     let attachmentOffset = 0;
     let archivedAttachmentFiles = 0;
     let archivedAttachmentBytes = 0;
+    const archivedAttachmentFingerprint = new Uint8Array(32);
     let attachmentPage = legacyAttachmentFiles ?? [];
     if (legacyAttachmentFiles === null && opts.attachmentIO.listPage) {
       const firstPage = await opts.attachmentIO.listPage(null, batchSize);
@@ -465,7 +484,11 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
         const data = await opts.attachmentIO.read(relPath);
         if (data) {
           const bytes = new Uint8Array(data);
-          await writer.addBytes(`${ATTACHMENTS_DIR}/${relPath}`, new Uint8Array(data), {
+          const fileToken = await attachmentFileToken(relPath, bytes);
+          for (let index = 0; index < archivedAttachmentFingerprint.length; index++) {
+            archivedAttachmentFingerprint[index] ^= fileToken[index];
+          }
+          await writer.addBytes(`${ATTACHMENTS_DIR}/${relPath}`, bytes, {
             compress: false,
           });
           archivedAttachmentFiles += 1;
@@ -481,14 +504,27 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
       attachmentCursor = nextPage.cursor;
     }
 
+    const finalAttachmentSummary = opts.attachmentIO.summary
+      ? await opts.attachmentIO.summary()
+      : null;
+
     // The manifest must remain first for restore pre-flight, so it cannot be
     // rewritten after streaming. Instead, fail closed if the independent
-    // summary and streaming traversals observed different attachment contents.
-    // This catches additions/removals and replacements whose byte size changed;
-    // same-sized replacements preserve the only manifest facts promised here.
+    // pre-stream summary, archived bytes, and final filesystem traversal
+    // observed different attachment contents.
+    // Count/bytes catch additions and size changes; the bounded content
+    // fingerprint also catches same-sized in-place rewrites.
     if (
       archivedAttachmentFiles !== attachmentFileCount ||
-      (hasExactAttachmentByteTotal && archivedAttachmentBytes !== totalAttachmentBytes)
+      (hasExactAttachmentByteTotal && archivedAttachmentBytes !== totalAttachmentBytes) ||
+      (typeof attachmentSummary?.fingerprint === "string" &&
+        fingerprintHex(archivedAttachmentFingerprint) !== attachmentSummary.fingerprint) ||
+      (finalAttachmentSummary !== null &&
+        (finalAttachmentSummary.total !== attachmentFileCount ||
+          (hasExactAttachmentByteTotal &&
+            finalAttachmentSummary.totalBytes !== totalAttachmentBytes) ||
+          (typeof attachmentSummary?.fingerprint === "string" &&
+            finalAttachmentSummary.fingerprint !== attachmentSummary.fingerprint)))
     ) {
       throw new AttachmentSnapshotChangedError();
     }

@@ -345,7 +345,7 @@ interface ElectronAPI {
   deleteAttachment: (relativePath: string) => Promise<{ success: boolean; error?: string }>;
   listAttachments: (identifier: string) => Promise<{ success: boolean; files?: string[]; error?: string }>;
   // Backup/restore operations
-  listAllAttachments: (cursor?: string | null, limit?: number) => Promise<{ success: boolean; files?: string[]; total?: number; totalBytes?: number; cursor?: string | null; error?: string }>;
+  listAllAttachments: (cursor?: string | null, limit?: number) => Promise<{ success: boolean; files?: string[]; total?: number; totalBytes?: number; fingerprint?: string; cursor?: string | null; error?: string }>;
   closeAttachmentListing: (cursor: string) => Promise<{ success: boolean; error?: string }>;
   // `code: "ATTACHMENT_TOO_LARGE"` marks a size-cap rejection so the restore
   // writer can skip just that file (parity with the web endpoint's HTTP 413).
@@ -376,7 +376,7 @@ interface ElectronAPI {
   // Free/total disk space on the attachments filesystem (pre-flight restore check)
   getDiskSpace: () => Promise<{ success: boolean; freeBytes?: number; totalBytes?: number; error?: string }>;
   // Total byte size of all attachment files (pre-flight export size estimate)
-  getAttachmentsSize: () => Promise<{ success: boolean; totalBytes?: number; fileCount?: number; error?: string }>;
+  getAttachmentsSize: () => Promise<{ success: boolean; totalBytes?: number; fileCount?: number; fingerprint?: string; error?: string }>;
   // Needs Review folder (orphaned restore attachments)
   writeNeedsReview: (originalFilename: string, data: ArrayBuffer) => Promise<{ success: boolean; savedName?: string; error?: string; code?: string }>;
   openNeedsReviewFolder: () => Promise<{ success: boolean; error?: string }>;

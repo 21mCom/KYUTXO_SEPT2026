@@ -89,7 +89,7 @@ async function listAttachmentFilesPage(cursor: string | null, limit: number) {
     const api = getElectronAPI();
     const result = await api.listAllAttachments(cursor, limit);
     if (!result.success) throw new Error(result.error || "Could not list attachments");
-    return { files: result.files || [], total: result.total, totalBytes: result.totalBytes, cursor: result.cursor ?? null };
+    return { files: result.files || [], total: result.total, totalBytes: result.totalBytes, fingerprint: result.fingerprint, cursor: result.cursor ?? null };
   } else {
     const query = new URLSearchParams({ limit: String(limit) });
     if (cursor) query.set("cursor", cursor);
@@ -97,7 +97,7 @@ async function listAttachmentFilesPage(cursor: string | null, limit: number) {
     if (response.ok) {
       const data = await response.json();
       if (!data.success) throw new Error(data.error || "Could not list attachments");
-      return { files: data.files || [], total: data.total, totalBytes: data.totalBytes, cursor: data.cursor ?? null };
+      return { files: data.files || [], total: data.total, totalBytes: data.totalBytes, fingerprint: data.fingerprint, cursor: data.cursor ?? null };
     }
     throw new Error(`Could not list attachments: ${response.status}`);
   }
@@ -122,17 +122,17 @@ async function totalAttachmentFileBytes(): Promise<number | null> {
   }
 }
 
-async function attachmentFileSummary(): Promise<{ total: number; totalBytes: number | null }> {
+async function attachmentFileSummary(): Promise<{ total: number; totalBytes: number | null; fingerprint?: string }> {
   if (isElectron()) {
     const result = await getElectronAPI().getAttachmentsSize();
     if (!result.success) throw new Error(result.error || "Could not measure attachments");
-    return { total: result.fileCount ?? 0, totalBytes: result.totalBytes ?? null };
+    return { total: result.fileCount ?? 0, totalBytes: result.totalBytes ?? null, fingerprint: result.fingerprint };
   }
   const response = await fetch('/api/attachments/list-all?summaryOnly=1');
   if (!response.ok) throw new Error(`Could not measure attachments: ${response.status}`);
   const data = await response.json();
   if (!data.success) throw new Error(data.error || "Could not measure attachments");
-  return { total: data.total ?? 0, totalBytes: data.totalBytes ?? null };
+  return { total: data.total ?? 0, totalBytes: data.totalBytes ?? null, fingerprint: data.fingerprint };
 }
 
 async function closeAttachmentListing(cursor: string): Promise<void> {

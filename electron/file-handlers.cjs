@@ -380,7 +380,7 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
   ipcMain.handle('list-all-attachments', async (_event, page = {}) => {
     try {
       if (!fs.existsSync(attachmentsDir)) {
-        return { success: true, files: [], total: 0, totalBytes: 0, cursor: null };
+        return { success: true, files: [], total: 0, totalBytes: 0, fingerprint: '0'.repeat(64), cursor: null };
       }
       return await attachmentListing.list(page);
     } catch (error) {
@@ -484,10 +484,20 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
   ipcMain.handle('get-attachments-size', async () => {
     try {
       if (!fs.existsSync(attachmentsDir)) {
-        return { success: true, totalBytes: 0, fileCount: 0 };
+        return {
+          success: true,
+          totalBytes: 0,
+          fileCount: 0,
+          fingerprint: '0'.repeat(64),
+        };
       }
       const summary = await attachmentListing.summary();
-      return { success: true, totalBytes: summary.totalBytes, fileCount: summary.total };
+      return {
+        success: true,
+        totalBytes: summary.totalBytes,
+        fileCount: summary.total,
+        fingerprint: summary.fingerprint,
+      };
     } catch (error) {
       logMainError('[KYUTXO] get-attachments-size failed', error);
       return { success: false, error: sanitizeIpcError(error, 'Failed to measure attachments size') };

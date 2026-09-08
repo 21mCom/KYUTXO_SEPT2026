@@ -412,6 +412,91 @@ describe("v3 backup export stays bounded", () => {
 
     expect(sink.blob).toBeNull();
   });
+
+  it("aborts when an attachment is rewritten with the same byte length", async () => {
+    const sink = new MemorySink();
+    let bytes = new Uint8Array([1, 2, 3]);
+    const originalContent = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const framed = new Uint8Array("docs/file.bin".length + 1 + originalContent.length);
+    framed.set(new TextEncoder().encode("docs/file.bin"));
+    framed.set(originalContent, "docs/file.bin".length + 1);
+    const fingerprint = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", framed)))
+      .map(byte => byte.toString(16).padStart(2, "0"))
+      .join("");
+
+    await expect(exportBackup({
+      sink,
+      encrypted: false,
+      attachmentIO: {
+        async summary() {
+          bytes = new Uint8Array([9, 8, 7]);
+          return { total: 1, totalBytes: 3, fingerprint };
+        },
+        async listPage() {
+          return { files: ["docs/file.bin"], cursor: null };
+        },
+        async read() {
+          return bytes.buffer;
+        },
+      },
+    })).rejects.toBeInstanceOf(AttachmentSnapshotChangedError);
+
+    expect(sink.blob).toBeNull();
+  });
+
+  it("aborts when an already archived attachment is rewritten before finalization", async () => {
+    const sink = new MemorySink();
+    const files = new Map([
+      ["docs/first.bin", new Uint8Array([1, 2])],
+      ["docs/second.bin", new Uint8Array([3, 4])],
+    ]);
+    const summarize = async () => {
+      const fingerprintBytes = new Uint8Array(32);
+      let totalBytes = 0;
+      for (const [relPath, bytes] of files) {
+        const contentDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+        const pathBytes = new TextEncoder().encode(relPath);
+        const framed = new Uint8Array(pathBytes.length + 1 + contentDigest.length);
+        framed.set(pathBytes);
+        framed.set(contentDigest, pathBytes.length + 1);
+        const token = new Uint8Array(await crypto.subtle.digest("SHA-256", framed));
+        token.forEach((byte, index) => { fingerprintBytes[index] ^= byte; });
+        totalBytes += bytes.byteLength;
+      }
+      return {
+        total: files.size,
+        totalBytes,
+        fingerprint: Array.from(fingerprintBytes)
+          .map(byte => byte.toString(16).padStart(2, "0"))
+          .join(""),
+      };
+    };
+
+    await expect(exportBackup({
+      sink,
+      encrypted: false,
+      batchSize: 1,
+      attachmentIO: {
+        summary: summarize,
+        async listPage(cursor) {
+          const index = cursor ? Number(cursor) : 0;
+          const paths = [...files.keys()];
+          return {
+            files: paths.slice(index, index + 1),
+            cursor: index + 1 < paths.length ? String(index + 1) : null,
+          };
+        },
+        async read(relPath) {
+          if (relPath === "docs/second.bin") {
+            files.set("docs/first.bin", new Uint8Array([9, 9]));
+          }
+          return files.get(relPath)?.buffer ?? null;
+        },
+      },
+    })).rejects.toBeInstanceOf(AttachmentSnapshotChangedError);
+
+    expect(sink.blob).toBeNull();
+  });
 });
 
 describe("v3 backup restore stays bounded and round-trips", () => {

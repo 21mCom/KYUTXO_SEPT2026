@@ -10,6 +10,7 @@ export type AttachmentListingResult = {
   files?: string[];
   total?: number;
   totalBytes?: number;
+  fingerprint?: string;
   cursor?: string | null;
   code?: 'EXPIRED' | 'TOO_MANY';
   error?: string;
@@ -24,7 +25,7 @@ export function createAttachmentListing(options: {
   maxSessions?: number;
 }): {
   list(page?: AttachmentListingPage): Promise<AttachmentListingResult>;
-  summary(): Promise<{ total: number; totalBytes: number }>;
+  summary(): Promise<{ total: number; totalBytes: number; fingerprint: string }>;
   closeCursor(id: string): Promise<void>;
   reapExpired(currentTime?: number): Promise<void>;
   startReaper(intervalMs?: number): NodeJS.Timeout;

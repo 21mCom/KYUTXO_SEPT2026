@@ -64,13 +64,19 @@ describe("shared attachment listing contract", () => {
       maxSessions: 2,
     });
 
-    expect(await listing.list({ summaryOnly: true })).toEqual({
+    expect(await listing.list({ summaryOnly: true })).toMatchObject({
       success: true,
       total: 3,
       totalBytes: 10,
+      fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     const first = await listing.list({ limit: 1 });
-    expect(first).toMatchObject({ total: 3, totalBytes: 10, cursor: "cursor-1" });
+    expect(first).toMatchObject({
+      total: 3,
+      totalBytes: 10,
+      fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      cursor: "cursor-1",
+    });
     expect(first.files).toHaveLength(1);
     expect(first.files?.some((name) => name.includes("linked"))).toBe(false);
 
@@ -103,5 +109,18 @@ describe("shared attachment listing contract", () => {
     const listing = createAttachmentListing({ attachmentsDir });
     expect((await listing.list()).files).toHaveLength(1_000);
     expect((await listing.list({ limit: 50_000 })).files).toHaveLength(10_000);
+  }, 20_000);
+
+  it("changes the fingerprint after a same-sized in-place rewrite", async () => {
+    const attachmentsDir = fixture();
+    const listing = createAttachmentListing({ attachmentsDir });
+    const before = await listing.summary();
+
+    fs.writeFileSync(path.join(attachmentsDir, "root.bin"), Buffer.from([9, 9]));
+
+    const after = await listing.summary();
+    expect(after.total).toBe(before.total);
+    expect(after.totalBytes).toBe(before.totalBytes);
+    expect(after.fingerprint).not.toBe(before.fingerprint);
   });
 });
