@@ -356,7 +356,9 @@ async function main() {
     `${TAG} launching packaged app${IS_WINDOWS ? '' : ` on ${DISPLAY}`} ` +
       '(OS-selected loopback CDP port)...',
   );
-  const cdpUserDataDir = path.join(tmpHome, 'cdp-profile');
+  const cdpUserDataDir = IS_WINDOWS
+    ? path.join(portableSetup.launchDir, 'KYUTXO_Data')
+    : path.join(tmpHome, 'cdp-profile');
   const cdpArgs = packagedCdpLaunchArgs(cdpUserDataDir);
   const launchArgs = IS_WINDOWS
     ? [
