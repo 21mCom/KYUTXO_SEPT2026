@@ -358,12 +358,16 @@ async function main() {
     ? path.join(portableSetup.launchDir, 'KYUTXO_Data')
     : path.join(tmpHome, 'cdp-profile');
   const cdpArgs = packagedCdpLaunchArgs(cdpUserDataDir);
+  // Provide a deterministic camera device without enabling Chromium's fake
+  // permission UI, so Electron's real permission handler remains authoritative.
+  const mediaDeviceArgs = ['--use-fake-device-for-media-stream'];
   const launchArgs = IS_WINDOWS
     ? [
         '--disable-gpu',
+        ...mediaDeviceArgs,
         ...cdpArgs,
       ]
-    : [ASAR, '--no-sandbox', '--disable-gpu', ...cdpArgs];
+    : [ASAR, '--no-sandbox', '--disable-gpu', ...mediaDeviceArgs, ...cdpArgs];
   let child = null;
   let appExited = false;
   let appLaunchError = null;

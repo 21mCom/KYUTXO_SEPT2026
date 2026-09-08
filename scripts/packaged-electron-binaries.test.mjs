@@ -633,6 +633,8 @@ test('the packaged browser gate launches the generated Windows portable renderer
   assert.match(source, /path\.join\(ROOT, 'release', IS_WINDOWS \? 'win-unpacked' : 'linux-unpacked'\)/);
   assert.match(source, /IS_WINDOWS \? 'KYUTXO\.exe' : 'kyutxo'/);
   assert.match(source, /prepareWindowsPortableLaunch/);
+  assert.match(source, /--use-fake-device-for-media-stream/);
+  assert.doesNotMatch(source, new RegExp('--use-fake-' + 'ui-for-media-stream'));
   assert.match(source, /portableSetup\.executable/);
   assert.match(source, /portableSetup\.launchDir/);
   assert.match(source, /taskkill.*args\.push\('\/F'\)/s);
