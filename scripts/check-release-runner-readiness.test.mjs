@@ -7,7 +7,8 @@ import { hostTarget, parseExpectedTarget } from './check-release-runner-readines
 import { validateGitHubActionsCron } from './check-workflow-schedules.mjs';
 
 const readWorkflow = (filename) =>
-  fs.readFileSync(new URL(`../.github/workflows/${filename}`, import.meta.url), 'utf8');
+  fs.readFileSync(new URL(`../.github/workflows/${filename}`, import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
 
 function parseWorkflow(workflow, context) {
   let document;

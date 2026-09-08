@@ -18,6 +18,7 @@ const checksumScript = fileURLToPath(new URL('./generate-sha256.mjs', import.met
 function runChecksumCli(args) {
   return spawnSync(process.execPath, [checksumScript, ...args], {
     encoding: 'utf8',
+    timeout: 30_000,
   });
 }
 

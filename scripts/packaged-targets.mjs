@@ -5,7 +5,7 @@
 
 export const SUPPORTED_PACKAGED_TARGETS = Object.freeze([
   Object.freeze({ platform: 'win', arch: 'x64', runner: 'windows-2022' }),
-  Object.freeze({ platform: 'darwin', arch: 'x64', runner: 'macos-13' }),
+  Object.freeze({ platform: 'darwin', arch: 'x64', runner: 'macos-15-intel' }),
   Object.freeze({ platform: 'darwin', arch: 'arm64', runner: 'macos-14' }),
   Object.freeze({ platform: 'linux', arch: 'x64', runner: 'ubuntu-22.04' }),
   Object.freeze({ platform: 'linux', arch: 'arm64', runner: 'ubuntu-24.04-arm' }),

@@ -25,6 +25,7 @@ function run7ZipExtract(archivePath, outputDir) {
   const result = spawnSync('7z', ['x', '-y', `-o${outputDir}`, archivePath], {
     encoding: 'utf8',
     windowsHide: true,
+    timeout: 5 * 60_000,
   });
   if (result.error || result.status !== 0) {
     const detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim();

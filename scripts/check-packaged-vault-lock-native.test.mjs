@@ -100,7 +100,7 @@ test('policy execution reads the current app output before comparing lock signal
   assert.match(result.detail, /renderer lock verified/);
 });
 
-test('release publishing requires five self-hosted native smoke jobs without changing PR safety', () => {
+test('release publishing requires the self-hosted Windows native smoke job without changing PR safety', () => {
   const releaseWorkflow = fs.readFileSync(
     new URL('../.github/workflows/build.yml', import.meta.url),
     'utf8',
@@ -110,18 +110,11 @@ test('release publishing requires five self-hosted native smoke jobs without cha
     'utf8',
   );
 
-  for (const label of [
-    'desktop-release-win-x64',
-    'desktop-release-darwin-x64',
-    'desktop-release-darwin-arm64',
-    'desktop-release-linux-x64',
-    'desktop-release-linux-arm64',
-  ]) {
-    assert.match(releaseWorkflow, new RegExp(`runner_label: ${label}`));
-  }
+  assert.match(releaseWorkflow, /runner_label: desktop-release-win-x64/);
+  assert.doesNotMatch(releaseWorkflow, /runner_label: desktop-release-(?:darwin|linux)-/);
   assert.match(
     releaseWorkflow,
-    /native-power-smoke:\s*\n\s*needs: verify-desktop-package-matrix\s*\n\s*if: >-\s*\n\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/,
+    /native-power-smoke:[\s\S]*?\n\s*needs: verify-desktop-package-matrix[\s\S]*?\n\s*if: >-\s*\n\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/,
   );
   assert.match(releaseWorkflow, /runs-on:\s*\n\s*- self-hosted/);
   assert.match(releaseWorkflow, /KYUTXO_NATIVE_POWER_SMOKE: '1'/);
@@ -129,7 +122,7 @@ test('release publishing requires five self-hosted native smoke jobs without cha
   assert.match(releaseWorkflow, /Expected 5 PASS results and no FAIL results/);
   assert.match(
     releaseWorkflow,
-    /publish-release:\s*\n\s*needs: \[build-windows, native-power-smoke\]/,
+    /publish-release:[\s\S]*?\n\s*needs: \[build-windows, native-power-smoke\]/,
   );
   assert.match(
     releaseWorkflow,
