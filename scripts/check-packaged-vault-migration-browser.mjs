@@ -42,7 +42,11 @@ import {
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
-import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';
+import {
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+  waitForPackagedCdpDown,
+} from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -193,6 +197,7 @@ async function main() {
   let xvfb;
   let child;
   let browser;
+  let cdpPort = null;
   const results = [];
 
   try {
@@ -232,6 +237,7 @@ async function main() {
     child.stderr.on('data', (chunk) => process.stdout.write(`${TAG}[app-err] ${chunk}`));
 
     const cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    cdpPort = cdp.port;
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     const page = await waitForPage(browser);
     await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', null, {
@@ -302,8 +308,11 @@ async function main() {
   } finally {
     await browser?.close().catch(() => {});
     killTree(child);
+    if (cdpPort !== null && !(await waitForPackagedCdpDown(cdpPort, 30_000))) {
+      throw new Error(`${TAG} packaged process still owns CDP port ${cdpPort} after shutdown`);
+    }
     try { process.kill(-xvfb?.pid, 'SIGTERM'); } catch { xvfb?.kill?.('SIGTERM'); }
-    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
   }
 
   if (results.length !== PROTECTED_VAULT_SCENARIOS.length) {

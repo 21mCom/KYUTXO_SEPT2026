@@ -851,3 +851,12 @@ test('the packaged Coin Origins gate is release-wired after the native worker ch
     /KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts\/check-packaged-coin-origins-browser\.mjs/,
   );
 });
+
+test('the packaged protected-vault gate waits for CDP shutdown before cleanup', () => {
+  const script = fs.readFileSync(
+    path.join(SCRIPTS_DIR, 'check-packaged-vault-migration-browser.mjs'),
+    'utf8',
+  );
+  assert.match(script, /waitForPackagedCdpDown\(cdpPort, 30_000\)/);
+  assert.match(script, /maxRetries: 10, retryDelay: 250/);
+});
