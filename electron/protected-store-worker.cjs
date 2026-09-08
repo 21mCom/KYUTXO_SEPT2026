@@ -10,6 +10,7 @@ const {
   calculateOwnerCostBasisFromStoredRows,
   ownerCostBasisEditorRows,
   pageOwnerCostBasis,
+  parseOwnerCostBasisReport,
   selectOwnerCostBasisReport,
 } = require('./owner-cost-basis.bundle.cjs');
 
@@ -83,6 +84,7 @@ const OWNER_BOOK_POLICY_TABLES = Object.freeze([
   'owners', 'ownerResidencies', 'transactionLegMetadata', 'entities',
   'addressOwnership', 'recordModelMigrationState',
 ]);
+const OWNER_BOOK_CACHE_ID = 'owner-cost-basis';
 try { Database = require('better-sqlite3-multiple-ciphers'); } catch {}
 
 function fail() { throw new Error('Protected store operation failed'); }
@@ -243,7 +245,37 @@ function loadDatabase() {
         object_name TEXT NOT NULL,
         plaintext_size INTEGER NOT NULL
       ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS protected_derived_cache (
+        cache_id TEXT PRIMARY KEY,
+        calculator_version TEXT NOT NULL,
+        vault_id TEXT NOT NULL,
+        source_fingerprint TEXT NOT NULL,
+        policy_fingerprint TEXT NOT NULL,
+        value_json TEXT NOT NULL
+      ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS protected_derived_state (
+        cache_id TEXT PRIMARY KEY,
+        calculator_version TEXT NOT NULL,
+        vault_id TEXT NOT NULL,
+        source_fingerprint TEXT NOT NULL,
+        policy_fingerprint TEXT NOT NULL
+      ) WITHOUT ROWID;
     `);
+    // Source mutations invalidate the matching cache and fingerprint state in
+    // the same SQLite transaction as the write. This makes a cold-unlock hit
+    // O(cache size), without trusting a revision that could survive a crash.
+    for (const collection of OWNER_BOOK_SOURCE_TABLES) {
+      for (const action of ['INSERT', 'UPDATE', 'DELETE']) {
+        db.exec(`
+          CREATE TRIGGER IF NOT EXISTS "invalidate_owner_book_${collection}_${action.toLowerCase()}"
+          AFTER ${action} ON "${collection}"
+          BEGIN
+            DELETE FROM protected_derived_cache WHERE cache_id='${OWNER_BOOK_CACHE_ID}';
+            DELETE FROM protected_derived_state WHERE cache_id='${OWNER_BOOK_CACHE_ID}';
+          END
+        `);
+      }
+    }
     // FORMAT 1 shipped before the query projections below. ADD COLUMN is
     // backwards compatible, while the fixed names keep migrations private.
     const projections = projectionMigrations;
@@ -299,8 +331,32 @@ function ownerBookFingerprint(collections) {
 
 function getOwnerBookCheckpoint() {
   if (ownerBookCheckpoint && ownerBookCheckpoint.revision === dataRevision) return ownerBookCheckpoint;
+  const persisted = db.prepare(`
+    SELECT cache.value_json,cache.source_fingerprint,cache.policy_fingerprint
+      FROM protected_derived_cache cache
+      JOIN protected_derived_state state
+        ON state.cache_id=cache.cache_id
+       AND state.calculator_version=cache.calculator_version
+       AND state.vault_id=cache.vault_id
+       AND state.source_fingerprint=cache.source_fingerprint
+       AND state.policy_fingerprint=cache.policy_fingerprint
+     WHERE cache.cache_id=? AND cache.calculator_version=? AND cache.vault_id=?
+  `).get(OWNER_BOOK_CACHE_ID, OWNER_BOOK_CALCULATOR_VERSION, header.vaultId);
+  if (persisted) {
+    const report = parseOwnerCostBasisReport(persisted.value_json);
+    if (report) {
+      const keyBase = `owner-book:protected:v4:${OWNER_BOOK_CALCULATOR_VERSION}:${header.vaultId}:${persisted.source_fingerprint}:${persisted.policy_fingerprint}`;
+      ownerBookCheckpoint = { revision: dataRevision, report, keyBase };
+      return ownerBookCheckpoint;
+    }
+    db.transaction(() => {
+      db.prepare('DELETE FROM protected_derived_cache WHERE cache_id=?').run(OWNER_BOOK_CACHE_ID);
+      db.prepare('DELETE FROM protected_derived_state WHERE cache_id=?').run(OWNER_BOOK_CACHE_ID);
+    })();
+  }
   const sourceFingerprint = ownerBookFingerprint(OWNER_BOOK_SOURCE_TABLES);
   const policyFingerprint = ownerBookFingerprint(OWNER_BOOK_POLICY_TABLES);
+  const keyBase = `owner-book:protected:v4:${OWNER_BOOK_CALCULATOR_VERSION}:${header.vaultId}:${sourceFingerprint}:${policyFingerprint}`;
   const migrations = allRows('recordModelMigrationState');
   const report = calculateOwnerCostBasisFromStoredRows({
     records: allRows('records'),
@@ -314,7 +370,20 @@ function getOwnerBookCheckpoint() {
     residencies: allRows('ownerResidencies'),
     migrationComplete: migrations.some((row) => row.id === 'v44' && row.phase === 'complete'),
   });
-  const keyBase = `owner-book:protected:v4:${OWNER_BOOK_CALCULATOR_VERSION}:${header.vaultId}:${sourceFingerprint}:${policyFingerprint}`;
+  db.transaction(() => {
+    db.prepare(`
+      INSERT OR REPLACE INTO protected_derived_cache(
+        cache_id,calculator_version,vault_id,source_fingerprint,policy_fingerprint,value_json
+      ) VALUES (?,?,?,?,?,?)
+    `).run(OWNER_BOOK_CACHE_ID, OWNER_BOOK_CALCULATOR_VERSION, header.vaultId,
+      sourceFingerprint, policyFingerprint, JSON.stringify(report));
+    db.prepare(`
+      INSERT OR REPLACE INTO protected_derived_state(
+        cache_id,calculator_version,vault_id,source_fingerprint,policy_fingerprint
+      ) VALUES (?,?,?,?,?)
+    `).run(OWNER_BOOK_CACHE_ID, OWNER_BOOK_CALCULATOR_VERSION, header.vaultId,
+      sourceFingerprint, policyFingerprint);
+  })();
   ownerBookCheckpoint = { revision: dataRevision, report, keyBase };
   return ownerBookCheckpoint;
 }

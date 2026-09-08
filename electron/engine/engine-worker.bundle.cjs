@@ -456,8 +456,8 @@ function calculateCoinOrigins(input) {
           owner: record?.owner ?? null,
           label: record?.label ?? null,
           acquisitionMethod: tx2.acquisitionMethod ?? null,
-          costBasisUsd: Number.isFinite(tx2.costBasisUsd) ? tx2.costBasisUsd : null,
-          costProvenance: Number.isFinite(tx2.costBasisUsd) ? "provided" : "unknown"
+          costBasisUsd: Number.isFinite(tx2.costBasisUsd) ? tx2.costBasisUsd : Number.isFinite(tx2.estimatedCostBasisUsd) ? tx2.estimatedCostBasisUsd : null,
+          costProvenance: Number.isFinite(tx2.costBasisUsd) ? "provided" : Number.isFinite(tx2.estimatedCostBasisUsd) ? "estimated" : "unknown"
         };
         lots.push(lot);
         lotBoundaries.set(id, acquisitionBoundary);
@@ -736,6 +736,7 @@ function createTablesOnly(db2) {
       txid              TEXT NOT NULL,
       acquisitionMethod TEXT,
       costBasisUsd      REAL,
+      estimatedCostBasisUsd REAL,
       updatedAt         INTEGER
     );
 
@@ -825,7 +826,7 @@ function setEngineMeta(db2, key, value) {
     [key, value]
   );
 }
-var ENGINE_SCHEMA_VERSION = 6;
+var ENGINE_SCHEMA_VERSION = 7;
 var SCHEMA_VERSION_KEY = "schemaVersion";
 function getEngineSchemaVersion(db2) {
   const v = getEngineMeta(db2, SCHEMA_VERSION_KEY);
@@ -1049,9 +1050,9 @@ function insertParticipants(db2, rows) {
 function insertTransactionMetadata(db2, rows) {
   if (rows.length === 0) return;
   db2.insertMany(
-    `INSERT INTO transactionMetadata (id, txid, acquisitionMethod, costBasisUsd, updatedAt)
-     VALUES (?,?,?,?,?)`,
-    rows.map((r) => [r.id, r.txid, r.acquisitionMethod ?? null, r.costBasisUsd ?? null, r.updatedAt ?? null])
+    `INSERT INTO transactionMetadata (id, txid, acquisitionMethod, costBasisUsd, estimatedCostBasisUsd, updatedAt)
+     VALUES (?,?,?,?,?,?)`,
+    rows.map((r) => [r.id, r.txid, r.acquisitionMethod ?? null, r.costBasisUsd ?? null, r.estimatedCostBasisUsd ?? null, r.updatedAt ?? null])
   );
 }
 function escapeLikeTerm(term) {
@@ -1546,8 +1547,15 @@ function getVaultSummaries(db2, opts = {}) {
   );
 }
 function getCoinOrigins(db2, opts = {}) {
-  const ledger = getCoinOriginsCheckpoint(db2).ledger;
-  return filterCoinOriginsByOwner(filterCoinOrigins(ledger, { walletName: opts.walletName }), opts.owners);
+  const checkpoint = getCoinOriginsCheckpoint(db2);
+  if (opts.expectedCheckpointKey && opts.expectedCheckpointKey !== checkpoint.key) {
+    throw new Error("Coin Origins checkpoint changed; reload the active window");
+  }
+  const ledger = checkpoint.ledger;
+  return filterCoinOriginsByOwner(
+    filterCoinOrigins(ledger, { walletName: opts.walletName }),
+    opts.owners
+  );
 }
 var coinOriginsCheckpoints = /* @__PURE__ */ new WeakMap();
 function getCoinOriginsCheckpoint(db2) {
@@ -1564,7 +1572,7 @@ function getCoinOriginsCheckpoint(db2) {
   const transactions = selectRows(
     db2,
     `SELECT t.txid, t.blockHeight, t.blockTime, t.fee,
-            m.acquisitionMethod, m.costBasisUsd
+            m.acquisitionMethod, m.costBasisUsd, m.estimatedCostBasisUsd
        FROM blockchainTransactions t
        LEFT JOIN transactionMetadata m ON m.txid = t.txid`
   );

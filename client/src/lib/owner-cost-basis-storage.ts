@@ -19,6 +19,84 @@ export interface OwnerCostBasisStoredRows {
   migrationComplete: boolean;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isOptionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || isFiniteNumber(value);
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+const provenance = new Set(['provided', 'estimated', 'unknown']);
+const matchingMethods = new Set(['fifo', 'lifo', 'hifo', 'specific-identification']);
+const transferRules = new Set(['carry-over', 'market-value-step-up']);
+function isMember(values: Set<string>, value: unknown): value is string {
+  return typeof value === 'string' && values.has(value);
+}
+
+/**
+ * Parse a persisted derived report without trusting its shape. The protected
+ * worker treats any incompatible or corrupt payload as a cache miss and
+ * rebuilds it from source rows.
+ */
+export function parseOwnerCostBasisReport(value: string): OwnerCostBasisReport | null {
+  let report: unknown;
+  try {
+    report = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!isRecord(report) || report.version !== 1 || typeof report.policyRevision !== 'string' ||
+      !Array.isArray(report.batches) || !Array.isArray(report.disposals) ||
+      !Array.isArray(report.warnings) || !Array.isArray(report.assumptions) ||
+      !Array.isArray(report.byOwner)) return null;
+  const validBatch = (row: unknown) => isRecord(row) &&
+    typeof row.lotId === 'string' && typeof row.owner === 'string' &&
+    typeof row.acquiredTxid === 'string' && isOptionalString(row.acquiredAt) &&
+    isFiniteNumber(row.sats) && isFiniteNumber(row.remainingSats) &&
+    isOptionalFiniteNumber(row.costUsd) && isMember(provenance, row.costProvenance);
+  const validAllocation = (row: unknown) => isRecord(row) &&
+    typeof row.lotId === 'string' && isFiniteNumber(row.sats) &&
+    isOptionalFiniteNumber(row.costUsd) && isMember(provenance, row.costProvenance);
+  const validDisposal = (row: unknown) => isRecord(row) &&
+    typeof row.txid === 'string' && isOptionalString(row.date) && typeof row.owner === 'string' &&
+    isMember(new Set(['external', 'fee', 'owner-transfer']), row.kind) &&
+    isFiniteNumber(row.sats) && Array.isArray(row.allocations) && row.allocations.every(validAllocation) &&
+    isOptionalFiniteNumber(row.costUsd) && isMember(provenance, row.costProvenance) &&
+    isOptionalFiniteNumber(row.proceedsUsd) && isMember(provenance, row.proceedsProvenance) &&
+    isMember(matchingMethods, row.matchingMethod) &&
+    (row.transferBasisRule === undefined || isMember(transferRules, row.transferBasisRule)) &&
+    isOptionalString(row.sourceLegKey) && isOptionalString(row.recipientLegKey) &&
+    isOptionalString(row.recipientOwner);
+  const validWarning = (row: unknown) => isRecord(row) &&
+    isMember(new Set(['residency-gap', 'missing-disposal-date', 'unknown-owner-policy',
+      'specific-identification-unavailable']), row.code) &&
+    typeof row.owner === 'string' && isOptionalString(row.date) && typeof row.message === 'string';
+  const validAssumption = (row: unknown) => isRecord(row) && typeof row.owner === 'string' &&
+    isOptionalString(row.date) && isMember(matchingMethods, row.matchingMethod) &&
+    typeof row.fallback === 'boolean' && (row.residency === undefined ||
+      (isRecord(row.residency) && typeof row.residency.jurisdiction === 'string' &&
+        isOptionalString(row.residency.region) && typeof row.residency.startDate === 'string' &&
+        isOptionalString(row.residency.endDate)));
+  const validSummary = (row: unknown) => isRecord(row) && typeof row.owner === 'string' &&
+    isFiniteNumber(row.disposedSats) && isFiniteNumber(row.feeSats) &&
+    isOptionalFiniteNumber(row.proceedsUsd) && isOptionalFiniteNumber(row.costUsd) &&
+    isOptionalFiniteNumber(row.gainUsd) && isFiniteNumber(row.openSats) &&
+    isFiniteNumber(row.unknownCostSats);
+  if (!report.batches.every(validBatch) || !report.disposals.every(validDisposal) ||
+      !report.warnings.every(validWarning) || !report.assumptions.every(validAssumption) ||
+      !report.byOwner.every(validSummary) || !isOptionalString(report.selectedOwner)) return null;
+  return report as unknown as OwnerCostBasisReport;
+}
+
 export function calculateOwnerCostBasisFromStoredRows(rows: OwnerCostBasisStoredRows): OwnerCostBasisReport {
   const { records, transactions, participants, metadata, owners, residencies, legMetadata, entities, ownership } = rows;
   const metaByTxid = new Map(metadata.map(row => [row.txid, row]));

@@ -42,8 +42,8 @@ describe("protected store", () => {
     expect(worker).not.toContain("message.sql");
   });
 
-  it("materializes bounded owner pages and rejects stale protected checkpoints", async () => {
-    const { client } = makeClient();
+  it("persists encrypted owner pages across unlock and rejects stale protected checkpoints", async () => {
+    const { root, client } = makeClient();
     const call = (collection: string, operation: string, payload: object = {}) =>
       client.call(MESSAGE_TYPES.REPOSITORY, {
         repository: collection === "blockchainTransactions" || collection === "transactionParticipants"
@@ -87,6 +87,16 @@ describe("protected store", () => {
       expect(second).toEqual(first);
       expect(cachedMs).toBeLessThan(buildMs * 0.25);
       expect(first.checkpointKey).toMatch(/owner-book:protected:v4:owner-cost-basis:v1:.*:[a-f0-9]{64}:[a-f0-9]{64}:/);
+      const sqliteBytes = fs.readFileSync(path.join(root, "protected-store.sqlite"));
+      expect(sqliteBytes.includes(Buffer.from("scale-1999"))).toBe(false);
+
+      await client.call(MESSAGE_TYPES.LOCK);
+      await client.call(MESSAGE_TYPES.UNLOCK, { password: "owner book test password" });
+      const reopenedStarted = performance.now();
+      const reopened = await call("records", "ownerCostBasisPage", { options: { limit: 25 } });
+      const reopenedMs = performance.now() - reopenedStarted;
+      expect(reopened).toEqual(first);
+      expect(reopenedMs).toBeLessThan(buildMs);
 
       await call("transactionMetadata", "save", { row: { id: 1, txid: "scale-0", costBasisUsd: 2, updatedAt: 2 } });
       await expect(call("records", "ownerCostBasisPage", {
@@ -102,6 +112,23 @@ describe("protected store", () => {
       await call("owners", "save", { row: { id: 1, name: "Alice", createdAt: 1, defaultMatchingMethod: "lifo" } });
       const policyCheckpoint = await call("records", "ownerCostBasisPage", { options: { limit: 1 } });
       expect(policyCheckpoint.checkpointKey).not.toBe(replacedCheckpoint.checkpointKey);
+
+      await expect(client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "vault", collection: "settings", operation: "restoreCommit",
+        replaceExisting: true,
+        rows: { records: [{ id: 2, label: "x".repeat(17 * 1024 * 1024) }] },
+      })).rejects.toThrow("Protected store operation failed");
+      await expect(call("records", "ownerCostBasisPage", {
+        options: { limit: 1, expectedCheckpointKey: policyCheckpoint.checkpointKey },
+      })).resolves.toMatchObject({ checkpointKey: policyCheckpoint.checkpointKey });
+
+      await client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "vault", collection: "settings", operation: "restoreCommit",
+        replaceExisting: true, rows: { records: [] },
+      });
+      const restoredCheckpoint = await call("records", "ownerCostBasisPage", { options: { limit: 1 } });
+      expect(restoredCheckpoint.checkpointKey).not.toBe(policyCheckpoint.checkpointKey);
+      expect(restoredCheckpoint.openBatchesTotal).toBe(0);
       await client.call(MESSAGE_TYPES.LOCK);
       await expect(call("records", "ownerCostBasisPage", { options: { limit: 1 } })).rejects.toThrow();
     } finally {
