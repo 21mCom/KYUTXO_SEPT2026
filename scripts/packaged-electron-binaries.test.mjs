@@ -862,4 +862,6 @@ test('the packaged protected-vault gate waits for CDP shutdown before cleanup', 
   assert.match(script, /function readFileWithTransientRetries/);
   assert.match(script, /\['EBUSY', 'EPERM', 'EACCES'\]/);
   assert.match(script, /const bytes = readFileWithTransientRetries\(absolutePath\)/);
+  assert.match(script, /for \(const scenario of PROTECTED_VAULT_SCENARIOS\) \{\s+const page = await startPackagedApp\(\)/);
+  assert.match(script, /await stopPackagedApp\(\);\s+const scan = scanDisposableProfile\(tempHome\)/);
 });
