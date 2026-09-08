@@ -40,7 +40,8 @@ export function expectedArtifactName(platform, arch, version) {
   getPackagedTarget(platform, arch);
   if (platform === 'win') return `KYUTXO-${version}-Portable.exe`;
   const extension = platform === 'darwin' ? 'dmg' : 'AppImage';
-  return `KYUTXO-${version}-${arch}.${extension}`;
+  const artifactArch = platform === 'linux' && arch === 'x64' ? 'x86_64' : arch;
+  return `KYUTXO-${version}-${artifactArch}.${extension}`;
 }
 
 export function expectedArtifactNames(platform, arch, version) {
