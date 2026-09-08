@@ -21,6 +21,10 @@ do not create a public GitHub release. Public releases are created only by:
   tag `v1.2.3` for package version `1.2.3`); or
 - manually dispatching the workflow with **Publish a GitHub release** enabled.
 
+All package and release jobs fail closed unless GitHub identifies the repository
+as `21mCom/KYUTXO_SEPT2026`. The local pre-push hook applies the same restriction
+to normal Git pushes from this project.
+
 ## Verify a downloaded Windows build
 
 Each released `.exe` has a sibling `.exe.sha256` file. Keep both files in the

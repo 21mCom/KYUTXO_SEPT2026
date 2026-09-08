@@ -41,6 +41,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Verify September repository destination
+        run: node scripts/check-github-destination.mjs
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:

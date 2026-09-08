@@ -15,7 +15,7 @@
     "test:unit": "vitest run --silent --maxWorkers=1",
     "test:scripts": "node scripts/run-node-tests.mjs",
     "test:fast": "node scripts/check-release-fixtures.mjs -- npm run test:fast:unguarded",
-    "test:fast:unguarded": "vitest run --silent --maxWorkers=2 client/src/lib/bitcoin.canonicalize.test.ts client/src/lib/crypto.kdf.test.ts client/src/lib/backup/compact-roundtrip.runtime.test.ts server/launch-token.test.ts electron/security-utils.test.ts && node --test scripts/check-audit.test.mjs scripts/check-release-runner-readiness.test.mjs scripts/generate-sha256.test.mjs scripts/release-workflow.test.mjs scripts/release-sync-subprocess-timeouts.test.mjs",
+    "test:fast:unguarded": "vitest run --silent --maxWorkers=2 client/src/lib/bitcoin.canonicalize.test.ts client/src/lib/crypto.kdf.test.ts client/src/lib/backup/compact-roundtrip.runtime.test.ts server/launch-token.test.ts electron/security-utils.test.ts && node --test scripts/check-audit.test.mjs scripts/check-github-destination.test.mjs scripts/check-release-runner-readiness.test.mjs scripts/generate-sha256.test.mjs scripts/release-workflow.test.mjs scripts/release-sync-subprocess-timeouts.test.mjs",
     "test:full": "node scripts/check-release-fixtures.mjs -- npm run test:full:unguarded",
     "test:full:unguarded": "npm run test:unit && npm run test:scripts",
     "test:owner-book-million": "node --max-old-space-size=4096 ./node_modules/vitest/vitest.mjs run --maxWorkers=1 --testTimeout=180000 --testNamePattern=\"keeps a representative materialized book bounded and faster to page than build\" client/src/lib/owner-cost-basis-core.test.ts",
