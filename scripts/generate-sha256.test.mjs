@@ -186,3 +186,36 @@ test('CLI --verify usage errors exit non-zero and print usage to stderr', () => 
     /FAIL: Usage: node scripts\/generate-sha256\.mjs \[--verify\] <exe-or-directory> \[\.\.\.\]/,
   );
 });
+
+test('CLI --verify rejects missing and non-executable input paths clearly', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-checksum-cli-input-'));
+  try {
+    const missingPath = path.join(dir, 'missing.exe');
+    const nonExecutablePath = path.join(dir, 'release-notes.txt');
+    fs.writeFileSync(nonExecutablePath, 'not a release executable');
+
+    const cases = [
+      {
+        name: 'missing path',
+        input: missingPath,
+        error: new RegExp(`FAIL: .*input does not exist: ${missingPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+      },
+      {
+        name: 'non-executable file',
+        input: nonExecutablePath,
+        error: new RegExp(`FAIL: .*expected an \\.exe file or directory: ${nonExecutablePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = runChecksumCli(['--verify', testCase.input]);
+
+      assert.notEqual(result.status, 0, `${testCase.name} unexpectedly succeeded`);
+      assert.equal(result.signal, null);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, testCase.error);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
