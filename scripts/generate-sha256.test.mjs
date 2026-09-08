@@ -51,6 +51,106 @@ test('fails closed when a directory contains no executable', () => {
   }
 });
 
+test('CLI generation creates a sidecar for a direct executable and reports it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-checksum-cli-file-'));
+  try {
+    const executable = path.join(dir, 'KYUTXO-Portable.exe');
+    fs.writeFileSync(executable, 'portable bytes');
+
+    const result = runChecksumCli([executable]);
+    const digest = sha256File(executable);
+    const checksumPath = `${executable}.sha256`;
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.signal, null);
+    assert.equal(result.stderr, '');
+    assert.equal(fs.readFileSync(checksumPath, 'utf8'), `${digest}  KYUTXO-Portable.exe\n`);
+    assert.match(
+      result.stdout,
+      new RegExp(`\\[release-checksums\\] .*KYUTXO-Portable\\.exe\\.sha256 -> ${digest}`),
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI generation creates and reports every sidecar in a directory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-checksum-cli-dir-'));
+  try {
+    const executables = [
+      path.join(dir, 'KYUTXO-Installer.exe'),
+      path.join(dir, 'KYUTXO-Portable.EXE'),
+    ];
+    fs.writeFileSync(executables[0], 'installer bytes');
+    fs.writeFileSync(executables[1], 'portable bytes');
+    fs.writeFileSync(path.join(dir, 'release-notes.txt'), 'not an executable');
+
+    const result = runChecksumCli([dir]);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.signal, null);
+    assert.equal(result.stderr, '');
+    for (const executable of executables) {
+      const digest = sha256File(executable);
+      const checksumPath = `${executable}.sha256`;
+      assert.equal(
+        fs.readFileSync(checksumPath, 'utf8'),
+        `${digest}  ${path.basename(executable)}\n`,
+      );
+      assert.match(
+        result.stdout,
+        new RegExp(
+          `\\[release-checksums\\] .*${path.basename(checksumPath).replaceAll('.', '\\.')} -> ${digest}`,
+        ),
+      );
+    }
+    assert.equal(fs.existsSync(path.join(dir, 'release-notes.txt.sha256')), false);
+    assert.equal(result.stdout.trim().split('\n').length, executables.length);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI generation rejects empty directories and unsupported files with actionable stderr', () => {
+  const cases = [
+    {
+      name: 'empty-directory',
+      prepare(dir) {
+        fs.writeFileSync(path.join(dir, 'release-notes.txt'), 'not an executable');
+        return dir;
+      },
+      error: /FAIL: .*no \.exe release assets found/,
+    },
+    {
+      name: 'unsupported-file',
+      prepare(dir) {
+        const input = path.join(dir, 'release-notes.txt');
+        fs.writeFileSync(input, 'not an executable');
+        return input;
+      },
+      error: /FAIL: .*expected an \.exe file or directory: .*release-notes\.txt/,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `kyutxo-checksum-cli-${testCase.name}-`));
+    try {
+      const result = runChecksumCli([testCase.prepare(dir)]);
+
+      assert.notEqual(result.status, 0, `${testCase.name} unexpectedly succeeded`);
+      assert.equal(result.signal, null);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, testCase.error);
+      assert.deepEqual(
+        fs.readdirSync(dir).filter((name) => name.endsWith('.sha256')),
+        [],
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test('verifies every executable against its matching sidecar', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-checksum-verify-'));
   try {
