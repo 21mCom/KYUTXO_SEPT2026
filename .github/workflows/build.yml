@@ -284,7 +284,11 @@ jobs:
         env:
           KYUTXO_PACKAGED_SKIP_BUILD: '1'
           KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON: '1'
-        run: node scripts/check-packaged-native-engine.mjs
+        run: >-
+          node scripts/check-packaged-native-engine.mjs
+          --platform win
+          --arch x64
+          --require-electron
 
       # RELEASE GATE: launch the exact generated Portable.exe release asset
       # from a disposable directory, create a vault, stop the full process
