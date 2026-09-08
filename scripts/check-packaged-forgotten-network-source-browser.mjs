@@ -97,7 +97,7 @@ async function readProtectedNodeSettings(page) {
     const repository = window.electronAPI?.protectedStore?.repository;
     if (!repository) throw new Error('Protected repository bridge is unavailable');
     const envelope = await repository.find('nodeSettings', 'default');
-    if (!envelope?.ok || envelope.result === undefined) {
+    if (!envelope?.ok || envelope.result == null) {
       throw new Error(envelope?.error || 'Protected repository operation failed');
     }
     return envelope.result;
@@ -113,7 +113,8 @@ async function seedConfiguredSourcePrecondition(page) {
       throw new Error(current?.error || 'Protected repository read failed');
     }
     const saved = await repository.save('nodeSettings', {
-      ...current.result,
+      ...(current.result ?? {}),
+      id: 'default',
       providerType: 'custom-electrs',
       customUrl,
       useElectrum: false,
