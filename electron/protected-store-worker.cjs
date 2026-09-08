@@ -89,6 +89,11 @@ const OWNER_BOOK_CACHE_ID = 'owner-cost-basis';
 try { Database = require('better-sqlite3-multiple-ciphers'); } catch {}
 
 function fail() { throw new Error('Protected store operation failed'); }
+function failAtStage(stage) {
+  const error = new Error('Protected store operation failed');
+  error.diagnosticStage = stage;
+  throw error;
+}
 function locked() { if (!db || !vdk || !keys) fail(); }
 function b64(bytes) { return Buffer.from(bytes).toString('base64'); }
 function fromB64(value, expected) {
@@ -307,7 +312,7 @@ function loadDatabase() {
   } catch {
     console.error(`[ProtectedStore] database initialization failed during ${stage}`);
     closeUnlocked();
-    fail();
+    failAtStage(`database-${stage}`);
   }
 }
 function closeUnlocked() {
@@ -600,9 +605,10 @@ async function create({ password }) {
     keys = { sql: deriveSubkey('sqlcipher'), attachment: deriveSubkey('attachment') };
     loadDatabase();
     return { mode: 'protected', verified: true, unlocked: true };
-  } catch {
+  } catch (error) {
     console.error(`[ProtectedStore] vault creation failed during ${stage}`);
-    throw new Error('Protected store operation failed');
+    if (error && typeof error.diagnosticStage === 'string') throw error;
+    failAtStage(`create-${stage}`);
   }
 }
 async function unlock({ password }) {
@@ -1380,8 +1386,15 @@ parentPort.on('message', async (message) => {
   try {
     const result = await handle(message && message.type, message && message.payload || {});
     parentPort.postMessage({ requestId, ok: true, result });
-  } catch {
+  } catch (error) {
     // A single stable error avoids exposing passwords, keys, paths, sqlite text, or object names.
-    parentPort.postMessage({ requestId, ok: false, error: 'Protected store operation failed' });
+    parentPort.postMessage({
+      requestId,
+      ok: false,
+      error: 'Protected store operation failed',
+      diagnosticStage: typeof error?.diagnosticStage === 'string'
+        ? error.diagnosticStage
+        : undefined,
+    });
   }
 });

@@ -674,5 +674,13 @@ describe("protected store", () => {
       "console.error(`[ProtectedStore] vault creation failed during ${stage}`)",
     );
     expect(workerSource).not.toMatch(/console\.error\([^)]*\b(?:error|err)\b/);
+    const clientSource = fs.readFileSync(
+      path.join(process.cwd(), "electron", "protected-store.cjs"),
+      "utf8",
+    );
+    expect(clientSource).toContain("SAFE_DIAGNOSTIC_STAGE.test(message.diagnosticStage || '')");
+    expect(clientSource).toContain(
+      "pending.reject(new Error('Protected store operation failed'))",
+    );
   });
 });

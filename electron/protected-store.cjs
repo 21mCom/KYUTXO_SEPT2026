@@ -49,6 +49,7 @@ const PROTECTED_TABLES = Object.freeze([
 ]);
 
 const SAFE_ERROR = 'Protected store operation failed';
+const SAFE_DIAGNOSTIC_STAGE = /^(?:create-(?:directories|key-derivation|header-persistence|database-initialization)|database-(?:native-open|cipher-setup|schema|projection-migration|sentinel))$/;
 
 class ProtectedStoreClient {
   constructor({
@@ -78,7 +79,12 @@ class ProtectedStoreClient {
       if (!pending) return;
       this.pending.delete(message.requestId);
       if (message.ok) pending.resolve(message.result);
-      else pending.reject(new Error('Protected store operation failed'));
+      else {
+        if (SAFE_DIAGNOSTIC_STAGE.test(message.diagnosticStage || '')) {
+          console.error(`[ProtectedStore] operation failed during ${message.diagnosticStage}`);
+        }
+        pending.reject(new Error('Protected store operation failed'));
+      }
     });
     const fail = () => {
       for (const [, pending] of this.pending) pending.reject(new Error('Protected store worker unavailable'));
