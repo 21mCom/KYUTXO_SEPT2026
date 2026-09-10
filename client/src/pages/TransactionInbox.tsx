@@ -180,6 +180,7 @@ export default function TransactionInbox() {
   const [activeViewId, setActiveViewId] = useState("");
   const [initialPageLoading, setInitialPageLoading] = useState(true);
   const [initialPageFailed, setInitialPageFailed] = useState(false);
+  const [loadRetry, setLoadRetry] = useState(0);
   const dbSignal = useDbChangeSignal(["blockchainTransactions", "transactionParticipants", "records", "settings"], 100);
   const mountedRef = useRef(false);
   const loadGeneration = useRef(0);
@@ -234,7 +235,7 @@ export default function TransactionInbox() {
     }).finally(() => {
       if (isCurrent()) setInitialPageLoading(false);
     });
-  }, [tab, dbSignal]);
+  }, [tab, dbSignal, loadRetry]);
   const txids = useMemo(() => rows.map(row => row.txid), [rows]);
   const participants = useLiveQuery(
     () => txids.length ? fetchParticipantsByTxids(txids) : Promise.resolve([]),
@@ -517,7 +518,19 @@ export default function TransactionInbox() {
         </CardHeader>
       </Card>
 
-      <div ref={parentRef} className="flex-1 min-h-0 overflow-y-auto" data-testid="inbox-virtual-scroll">
+      {initialPageFailed ? (
+        <Card className="border-destructive/50" data-testid="inbox-load-error">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-6">
+            <div>
+              <p className="font-medium text-destructive">Could not load Transaction Inbox</p>
+              <p className="text-sm text-muted-foreground">The local data query failed. Try loading this page again.</p>
+            </div>
+            <Button variant="outline" onClick={() => setLoadRetry(value => value + 1)} data-testid="button-inbox-retry">
+              <RotateCcw className="mr-2 h-4 w-4" />Retry
+            </Button>
+          </CardContent>
+        </Card>
+      ) : <div ref={parentRef} className="flex-1 min-h-0 overflow-y-auto" data-testid="inbox-virtual-scroll">
         <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
           {virtualizer.getVirtualItems().map(item => {
             const tx = visibleRows[item.index];
@@ -570,7 +583,7 @@ export default function TransactionInbox() {
             </Button>
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

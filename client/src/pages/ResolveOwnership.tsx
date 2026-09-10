@@ -244,7 +244,12 @@ export default function ResolveOwnership() {
         This bounded review scope currently covers up to {(OWNERSHIP_REVIEW_LIMITS.records * scopePages).toLocaleString()} address/ownership rows and {(OWNERSHIP_REVIEW_LIMITS.participants * scopePages).toLocaleString()} participant rows loaded locally. Showing value-ranked suggestion page {Math.floor(suggestionOffset / OWNERSHIP_REVIEW_LIMITS.suggestions) + 1}; load another page to traverse more derived suggestions. Decisions are read across all pages.
         <Button className="ml-2 h-7 text-xs" variant="outline" onClick={() => { setSuggestionOffset(0); setScopePages(current => current + 1); }} data-testid="button-ownership-load-more-scope">Load more local review scope</Button>
       </CardContent></Card>
-      {loading ? <p className="text-sm text-muted-foreground" data-testid="ownership-loading">Loading ownership review…</p> : suggestions.length === 0 ? (
+      {loading ? <p className="text-sm text-muted-foreground" data-testid="ownership-loading">Loading ownership review…</p> : loadFailed ? (
+        <Card className="border-destructive/50" data-testid="ownership-load-error"><CardContent className="flex flex-wrap items-center justify-between gap-3 py-6">
+          <div><p className="font-medium text-destructive">Could not load ownership review</p><p className="text-sm text-muted-foreground">The local data query failed. Try loading this review again.</p></div>
+          <Button variant="outline" onClick={() => void load()} data-testid="button-ownership-retry"><RotateCcw className="mr-2 h-4 w-4" />Retry</Button>
+        </CardContent></Card>
+      ) : suggestions.length === 0 ? (
         <Card data-testid="ownership-empty"><CardContent className="py-8 text-center"><Check className="mx-auto mb-2 h-7 w-7 text-muted-foreground" /><p className="font-medium">No ownership suggestions to review</p><p className="text-sm text-muted-foreground">Rejected unchanged evidence stays out of this queue.</p></CardContent></Card>
       ) : suggestions.map(suggestion => {
         const record = recordById.get(suggestion.recordId);

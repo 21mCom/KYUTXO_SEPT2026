@@ -32,6 +32,19 @@ function deferred<T>() {
 describe("ResolveOwnership", () => {
   afterEach(() => cleanup());
 
+  it("shows a failed primary load and recovers when retried", async () => {
+    repository.list.mockRejectedValueOnce(new Error("temporary database failure"));
+    const view = render(<ResolveOwnership />);
+    expect((await view.findByTestId("ownership-load-error")).textContent).toContain("Could not load ownership review");
+    expect(view.getByTestId("ownership-resolution-page").getAttribute("data-navigation-ready")).toBe("false");
+
+    repository.list.mockResolvedValue({ rows: [], cursor: undefined });
+    fireEvent.click(view.getByTestId("button-ownership-retry"));
+    await waitFor(() => expect(view.queryByTestId("ownership-load-error")).toBeNull());
+    expect(view.getByTestId("ownership-empty")).toBeTruthy();
+    expect(view.getByTestId("ownership-resolution-page").getAttribute("data-navigation-ready")).toBe("true");
+  });
+
   it("ranks review evidence by cached value, exposes evidence, and requires cluster confirmation", async () => {
     const records = [address(1, "bc1low", 10), address(2, "bc1high", 200), address(3, "bc1known", 0)];
     repository.list.mockImplementation((table: string) => Promise.resolve({

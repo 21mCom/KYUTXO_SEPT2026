@@ -574,6 +574,7 @@ export default function CoinOriginsPage() {
   const [ledger, setLedger] = useState<CoinOriginsLedger>();
   const [costBasis, setCostBasis] = useState<OwnerCostBasisPage>();
   const [costBasisRevision, setCostBasisRevision] = useState(0);
+  const [loadRetry, setLoadRetry] = useState(0);
   const [nativePage, setNativePage] = useState<CoinOriginsPage>();
   const [nativeBacked, setNativeBacked] = useState(false);
   const [passportPage, setPassportPage] = useState<CoinOriginsPage>();
@@ -638,7 +639,7 @@ export default function CoinOriginsPage() {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [wallet, owners, holdingsPageIndex, outpointsPageIndex, dbSignal, costBasisRevision]);
+  }, [wallet, owners, holdingsPageIndex, outpointsPageIndex, dbSignal, costBasisRevision, loadRetry]);
 
   const selected = (passportPage && passportPage.checkpointKey === nativePage?.checkpointKey
     ? passportPage.outpoints.find((row) => `${row.txid}:${row.vout}` === selectedOutpoint)
@@ -802,7 +803,10 @@ export default function CoinOriginsPage() {
       {loading || recordsLoading ? (
         <div className="flex items-center justify-center gap-2 p-12 text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Building origin ledger…</div>
       ) : error ? (
-        <Card><CardContent className="flex items-center gap-2 p-6 text-destructive"><ShieldQuestion className="h-5 w-5" /> {error}</CardContent></Card>
+        <Card className="border-destructive/50" data-testid="coin-origins-load-error"><CardContent className="flex flex-wrap items-center justify-between gap-3 p-6">
+          <div className="flex items-start gap-2"><ShieldQuestion className="mt-0.5 h-5 w-5 text-destructive" /><div><p className="font-medium text-destructive">Could not load Coin Origins</p><p className="text-sm text-muted-foreground">{error}</p></div></div>
+          <Button variant="outline" onClick={() => setLoadRetry(value => value + 1)} data-testid="button-coin-origins-retry">Retry</Button>
+        </CardContent></Card>
       ) : (
         <>
           <Card>

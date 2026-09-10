@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoinOriginsPage } from "@/lib/coin-origins";
 import CoinOriginsPageComponent from "./CoinOrigins";
@@ -98,6 +98,22 @@ describe("Coin Origins native windows", () => {
 
     expect(screen.queryAllByText("stale-window:0")).toHaveLength(0);
     expect(screen.getAllByText("fresh-window:0").length).toBeGreaterThan(0);
+    expect(mocks.engineGetCoinOriginsPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a failed primary load and recovers when retried", async () => {
+    mocks.engineGetCoinOriginsPage
+      .mockRejectedValueOnce(new Error("temporary database failure"))
+      .mockResolvedValueOnce(page("recovered-window", "recovered"));
+    render(<CoinOriginsPageComponent />);
+
+    expect((await screen.findByTestId("coin-origins-load-error")).textContent).toContain("temporary database failure");
+    expect(screen.getByTestId("coin-origins-page").getAttribute("data-navigation-ready")).toBe("false");
+    fireEvent.click(screen.getByTestId("button-coin-origins-retry"));
+
+    await waitFor(() => expect(screen.queryByTestId("coin-origins-load-error")).toBeNull());
+    expect(screen.getAllByText("recovered-window:0").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("coin-origins-page").getAttribute("data-navigation-ready")).toBe("true");
     expect(mocks.engineGetCoinOriginsPage).toHaveBeenCalledTimes(2);
   });
 });

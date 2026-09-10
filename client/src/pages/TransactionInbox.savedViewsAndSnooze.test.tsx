@@ -172,6 +172,22 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("Transaction Inbox saved views and snooze choices", () => {
+  it("shows a failed primary load and recovers when retried", async () => {
+    mockGetTransactionsByCurationState
+      .mockRejectedValueOnce(new Error("temporary database failure"))
+      .mockResolvedValueOnce([{ id: 1, txid: TXID, curationState: "new", blockTime: 1_700_000_000 }]);
+    render(<TransactionInbox />);
+
+    expect((await screen.findByTestId("inbox-load-error")).textContent).toContain("Could not load Transaction Inbox");
+    expect(screen.getByTestId("transaction-curation-inbox").getAttribute("data-navigation-ready")).toBe("false");
+    fireEvent.click(screen.getByTestId("button-inbox-retry"));
+
+    await waitFor(() => expect(screen.queryByTestId("inbox-load-error")).toBeNull());
+    expect(screen.getByText(TXID)).toBeTruthy();
+    expect(screen.getByTestId("transaction-curation-inbox").getAttribute("data-navigation-ready")).toBe("true");
+    expect(mockGetTransactionsByCurationState).toHaveBeenCalledTimes(2);
+  });
+
   it("restores and saves named filter views", async () => {
     render(<TransactionInbox />);
 
