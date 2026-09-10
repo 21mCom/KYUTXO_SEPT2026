@@ -31,7 +31,7 @@ isValidation = true
 name = "restore-safety-isolation-guard"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node scripts/check-restore-safety-isolation.js && node --test scripts/check-restore-safety-isolation.test.mjs"
+args = "node scripts/check-stable-backup-fixture-privacy.mjs && node scripts/check-restore-safety-isolation.js && node --test scripts/check-restore-safety-isolation.test.mjs scripts/stable-backup-fixture.test.mjs"
 [workflows.workflow.metadata]
 isValidation = true
 
@@ -585,6 +585,17 @@ test('rejects a focused restore check that is no longer validation', () => {
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /encrypted-backup-restore-safety-browser-check is no longer marked/);
+});
+
+test('rejects a guard that no longer runs the stable fixture privacy audit', () => {
+  const result = runFixture({
+    replit: validReplit().replace(
+      'node scripts/check-stable-backup-fixture-privacy.mjs && ',
+      '',
+    ),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /must run the fixture privacy audit, guard, and script tests/);
 });
 
 const requiredFocusedFragments = [

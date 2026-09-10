@@ -3828,7 +3828,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node scripts/check-restore-safety-isolation.js && node --test scripts/check-restore-safety-isolation.test.mjs"
+args = "node scripts/check-stable-backup-fixture-privacy.mjs && node scripts/check-restore-safety-isolation.js && node --test scripts/check-restore-safety-isolation.test.mjs scripts/stable-backup-fixture.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

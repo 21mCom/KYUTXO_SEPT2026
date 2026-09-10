@@ -17,6 +17,8 @@ const inboxRelative = 'scripts/check-transaction-inbox-saved-view-snooze-browser
 const focusedRelative = 'scripts/check-encrypted-backup-restore-safety-browser.mjs';
 const dotReplitRelative = '.replit';
 const guardWorkflow = 'restore-safety-isolation-guard';
+const fixturePrivacyRelative = 'scripts/check-stable-backup-fixture-privacy.mjs';
+const fixturePrivacyTestRelative = 'scripts/stable-backup-fixture.test.mjs';
 const focusedWorkflow = 'encrypted-backup-restore-safety-browser-check';
 const packagedFocusedWorkflow = 'packaged-encrypted-backup-restore-safety-browser-check';
 const failures = [];
@@ -435,9 +437,12 @@ const guardBlock = workflowBlock(dotReplit, guardWorkflow);
 if (!guardBlock || !/\bisValidation\s*=\s*true\b/.test(guardBlock)) {
   failures.push(`${guardWorkflow} must exist and be marked isValidation = true.`);
 }
-if (!guardBlock.includes('node scripts/check-restore-safety-isolation.js') ||
-    !guardBlock.includes('node --test scripts/check-restore-safety-isolation.test.mjs')) {
-  failures.push(`${guardWorkflow} must run both the guard and its script tests.`);
+if (!guardBlock.includes(`node ${fixturePrivacyRelative}`) ||
+    !guardBlock.includes('node scripts/check-restore-safety-isolation.js') ||
+    !guardBlock.includes(
+      `node --test scripts/check-restore-safety-isolation.test.mjs ${fixturePrivacyTestRelative}`,
+    )) {
+  failures.push(`${guardWorkflow} must run the fixture privacy audit, guard, and script tests.`);
 }
 
 const projectBlock = workflowBlock(dotReplit, 'Project');
@@ -452,5 +457,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  'check-restore-safety-isolation: OK — inbox is restore-independent and the focused safety proof plus guard remain complete and in validation.',
+  'check-restore-safety-isolation: OK — the fixture privacy audit, focused safety proof, and guard remain complete and in validation.',
 );
