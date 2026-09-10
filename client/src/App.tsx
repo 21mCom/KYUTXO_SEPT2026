@@ -15,7 +15,16 @@ import { LogOut } from "lucide-react";
 import { KeyboardShortcutsDialog } from "@/components/KeyboardShortcutsDialog";
 import { LegacyMigrationOverlay } from "@/components/LegacyMigrationOverlay";
 import { useAdaptiveLocation } from "@/lib/hashLocation";
-import { lazy, Suspense, useCallback, useState, useEffect } from "react";
+import {
+  Component,
+  lazy,
+  Suspense,
+  useCallback,
+  useState,
+  useEffect,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { OrphanedTxNotifier } from "@/components/OrphanedTxNotifier";
 import { ActivityBusProvider } from "@/lib/activity-bus";
 import { ActivityPulseDot } from "@/components/ActivityPulseDot";
@@ -25,65 +34,139 @@ import { NetworkPrivacyControl } from "@/components/NetworkPrivacyControl";
 import { NetworkPrivacyOnboarding } from "@/components/NetworkPrivacyOnboarding";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 
-const UIAssets = lazy(() => import("@/pages/UIAssets"));
-const IconsReference = lazy(() => import("@/pages/IconsReference"));
-const NavigationPatterns = lazy(() => import("@/pages/NavigationPatterns"));
-const GroupedSidebarPreview = lazy(() => import("@/pages/GroupedSidebarPreview"));
-const FlowVisualizations = lazy(() => import("@/pages/FlowVisualizations"));
-const DevTestData = lazy(() => import("@/pages/DevTestData"));
+type RouteLoadErrorBoundaryProps = {
+  children: ReactNode;
+  onRetry: () => void;
+};
+
+type RouteLoadErrorBoundaryState = {
+  error: Error | null;
+};
+
+class RouteLoadErrorBoundary extends Component<
+  RouteLoadErrorBoundaryProps,
+  RouteLoadErrorBoundaryState
+> {
+  state: RouteLoadErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): RouteLoadErrorBoundaryState {
+    return { error };
+  }
+
+  private retry = () => {
+    this.setState({ error: null });
+    this.props.onRetry();
+  };
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div
+          className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center"
+          role="alert"
+          data-testid="route-load-error"
+        >
+          <div className="space-y-1">
+            <h2 className="text-lg font-semibold">This page couldn't be loaded</h2>
+            <p className="text-sm text-muted-foreground">
+              The page download failed. Check your connection and try again.
+            </p>
+          </div>
+          <Button onClick={this.retry} data-testid="button-retry-route">
+            Try again
+          </Button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+export function retryableLazy(
+  importer: () => Promise<{ default: ComponentType<Record<string, never>> }>,
+) {
+  const InitialLazyRoute = lazy(importer);
+
+  return function RetryableLazyRoute() {
+    const [attempt, setAttempt] = useState(0);
+    const [LazyRoute, setLazyRoute] = useState(() => InitialLazyRoute);
+
+    const retry = () => {
+      setLazyRoute(() => lazy(importer));
+      setAttempt((value) => value + 1);
+    };
+
+    return (
+      <RouteLoadErrorBoundary
+        key={attempt}
+        onRetry={retry}
+      >
+        <LazyRoute />
+      </RouteLoadErrorBoundary>
+    );
+  };
+}
+
+const UIAssets = retryableLazy(() => import("@/pages/UIAssets"));
+const IconsReference = retryableLazy(() => import("@/pages/IconsReference"));
+const NavigationPatterns = retryableLazy(() => import("@/pages/NavigationPatterns"));
+const GroupedSidebarPreview = retryableLazy(() => import("@/pages/GroupedSidebarPreview"));
+const FlowVisualizations = retryableLazy(() => import("@/pages/FlowVisualizations"));
+const DevTestData = retryableLazy(() => import("@/pages/DevTestData"));
 import { ScheduledBackupRunner } from "@/components/ScheduledBackupRunner";
 
-const Dashboard = lazy(() => import("@/pages/Dashboard"));
-const ValueUpdaterPage = lazy(() => import("@/pages/ValueUpdaterPage"));
-const BulkImport = lazy(() => import("@/pages/BulkImport"));
-const WalletImport = lazy(() => import("@/pages/WalletImport"));
-const MobileWalletImport = lazy(() => import("@/pages/MobileWalletImport"));
-const DescriptorImport = lazy(() => import("@/pages/DescriptorImport"));
-const BIP329Import = lazy(() => import("@/pages/BIP329Import"));
-const PriceImport = lazy(() => import("@/pages/PriceImport"));
-const TransactionSync = lazy(() => import("@/pages/TransactionSync"));
-const Transactions = lazy(() => import("@/pages/Transactions"));
-const TransactionInbox = lazy(() => import("@/pages/TransactionInbox"));
-const ResolveOwnership = lazy(() => import("@/pages/ResolveOwnership"));
-const UTXOs = lazy(() => import("@/pages/UTXOs"));
-const UtxoProvenance = lazy(() => import("@/pages/UtxoProvenance"));
-const CoinOrigins = lazy(() => import("@/pages/CoinOrigins"));
-const Nudgie = lazy(() => import("@/pages/Nudgie"));
-const LightningSpeculator = lazy(() => import("@/pages/LightningSpeculator"));
-const Provenance = lazy(() => import("@/pages/Provenance"));
-const AddressReuse = lazy(() => import("@/pages/AddressReuse"));
-const DataStats = lazy(() => import("@/pages/DataStats"));
-const Records = lazy(() => import("@/pages/Records"));
-const QRScanner = lazy(() => import("@/pages/QRScanner"));
-const ExportPage = lazy(() => import("@/pages/ExportPage"));
-const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
-const NodeSettings = lazy(() => import("@/pages/NodeSettings"));
-const Reports = lazy(() => import("@/pages/Reports"));
-const BitcoinFlowVisualizer = lazy(() => import("@/pages/BitcoinFlowVisualizer"));
-const BulkEditor = lazy(() => import("@/pages/BulkEditor"));
-const QuickTagger = lazy(() => import("@/pages/QuickTagger"));
-const ConflictResolution = lazy(() => import("@/pages/ConflictResolution"));
-const EvidencePage = lazy(() => import("@/pages/Evidence"));
-const VaultManagement = lazy(() => import("@/pages/VaultManagement"));
-const WalletOverview = lazy(() => import("@/pages/WalletOverview"));
-const Cleanup = lazy(() => import("@/pages/Cleanup"));
-const StatementReport = lazy(() => import("@/pages/StatementReport"));
-const QuantumRiskScanner = lazy(() => import("@/pages/QuantumRiskScanner"));
-const PrivacyAudit = lazy(() => import("@/pages/PrivacyAudit"));
-const BalanceOverview = lazy(() => import("@/pages/BalanceOverview"));
-const NetworkAnalysis = lazy(() => import("@/pages/NetworkAnalysis"));
-const FundTrail = lazy(() => import("@/pages/FundTrail"));
-const EngineDiagnostics = lazy(() => import("@/pages/EngineDiagnostics"));
-const DatabaseDoctor = lazy(() => import("@/pages/DatabaseDoctor"));
-const VaultHealth = lazy(() => import("@/pages/VaultHealth"));
-const AnnualActivityReport = lazy(() => import("@/pages/AnnualActivityReport"));
-const AddressChecker = lazy(() => import("@/pages/AddressChecker"));
-const AddressDeriver = lazy(() => import("@/pages/AddressDeriver"));
-const ProofOfFundsDeclaration = lazy(() => import("@/pages/ProofOfFundsDeclaration"));
-const DustedPage = lazy(() => import("@/pages/DustedPage"));
-const AddressPoisoning = lazy(() => import("@/pages/AddressPoisoning"));
-const DormantCoins = lazy(() => import("@/pages/DormantCoins"));
-const NotFound = lazy(() => import("@/pages/not-found"));
+const Dashboard = retryableLazy(() => import("@/pages/Dashboard"));
+const ValueUpdaterPage = retryableLazy(() => import("@/pages/ValueUpdaterPage"));
+const BulkImport = retryableLazy(() => import("@/pages/BulkImport"));
+const WalletImport = retryableLazy(() => import("@/pages/WalletImport"));
+const MobileWalletImport = retryableLazy(() => import("@/pages/MobileWalletImport"));
+const DescriptorImport = retryableLazy(() => import("@/pages/DescriptorImport"));
+const BIP329Import = retryableLazy(() => import("@/pages/BIP329Import"));
+const PriceImport = retryableLazy(() => import("@/pages/PriceImport"));
+const TransactionSync = retryableLazy(() => import("@/pages/TransactionSync"));
+const Transactions = retryableLazy(() => import("@/pages/Transactions"));
+const TransactionInbox = retryableLazy(() => import("@/pages/TransactionInbox"));
+const ResolveOwnership = retryableLazy(() => import("@/pages/ResolveOwnership"));
+const UTXOs = retryableLazy(() => import("@/pages/UTXOs"));
+const UtxoProvenance = retryableLazy(() => import("@/pages/UtxoProvenance"));
+const CoinOrigins = retryableLazy(() => import("@/pages/CoinOrigins"));
+const Nudgie = retryableLazy(() => import("@/pages/Nudgie"));
+const LightningSpeculator = retryableLazy(() => import("@/pages/LightningSpeculator"));
+const Provenance = retryableLazy(() => import("@/pages/Provenance"));
+const AddressReuse = retryableLazy(() => import("@/pages/AddressReuse"));
+const DataStats = retryableLazy(() => import("@/pages/DataStats"));
+const Records = retryableLazy(() => import("@/pages/Records"));
+const QRScanner = retryableLazy(() => import("@/pages/QRScanner"));
+const ExportPage = retryableLazy(() => import("@/pages/ExportPage"));
+const SettingsPage = retryableLazy(() => import("@/pages/SettingsPage"));
+const NodeSettings = retryableLazy(() => import("@/pages/NodeSettings"));
+const Reports = retryableLazy(() => import("@/pages/Reports"));
+const BitcoinFlowVisualizer = retryableLazy(() => import("@/pages/BitcoinFlowVisualizer"));
+const BulkEditor = retryableLazy(() => import("@/pages/BulkEditor"));
+const QuickTagger = retryableLazy(() => import("@/pages/QuickTagger"));
+const ConflictResolution = retryableLazy(() => import("@/pages/ConflictResolution"));
+const EvidencePage = retryableLazy(() => import("@/pages/Evidence"));
+const VaultManagement = retryableLazy(() => import("@/pages/VaultManagement"));
+const WalletOverview = retryableLazy(() => import("@/pages/WalletOverview"));
+const Cleanup = retryableLazy(() => import("@/pages/Cleanup"));
+const StatementReport = retryableLazy(() => import("@/pages/StatementReport"));
+const QuantumRiskScanner = retryableLazy(() => import("@/pages/QuantumRiskScanner"));
+const PrivacyAudit = retryableLazy(() => import("@/pages/PrivacyAudit"));
+const BalanceOverview = retryableLazy(() => import("@/pages/BalanceOverview"));
+const NetworkAnalysis = retryableLazy(() => import("@/pages/NetworkAnalysis"));
+const FundTrail = retryableLazy(() => import("@/pages/FundTrail"));
+const EngineDiagnostics = retryableLazy(() => import("@/pages/EngineDiagnostics"));
+const DatabaseDoctor = retryableLazy(() => import("@/pages/DatabaseDoctor"));
+const VaultHealth = retryableLazy(() => import("@/pages/VaultHealth"));
+const AnnualActivityReport = retryableLazy(() => import("@/pages/AnnualActivityReport"));
+const AddressChecker = retryableLazy(() => import("@/pages/AddressChecker"));
+const AddressDeriver = retryableLazy(() => import("@/pages/AddressDeriver"));
+const ProofOfFundsDeclaration = retryableLazy(() => import("@/pages/ProofOfFundsDeclaration"));
+const DustedPage = retryableLazy(() => import("@/pages/DustedPage"));
+const AddressPoisoning = retryableLazy(() => import("@/pages/AddressPoisoning"));
+const DormantCoins = retryableLazy(() => import("@/pages/DormantCoins"));
+const NotFound = retryableLazy(() => import("@/pages/not-found"));
 
 function RouteCommitReporter({ onCommit }: { onCommit: () => void }) {
   const [location] = useLocation();

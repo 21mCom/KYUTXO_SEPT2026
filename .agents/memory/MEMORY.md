@@ -135,3 +135,4 @@
 - [Packaged CDP ownership](packaged-cdp-ownership.md) — use OS-selected loopback ports plus DevToolsActivePort token proof; clear stale ownership only after endpoint shutdown before relaunch.
 - [Attachment export totals](attachment-export-totals.md) — manifest-first exports must compare archived file count/bytes with the preflight filesystem summary and abort on drift.
 - [Browser instrumentation across navigation](browser-instrumentation-navigation.md) — page.goto resets window state and module monkeypatches; reinstall after full loads or keep baselines in Node.
+- [Retryable React lazy imports](retryable-react-lazy-imports.md) — create the initial lazy component outside suspended render; retries must create a fresh lazy identity from committed state.
