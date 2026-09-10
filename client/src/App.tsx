@@ -122,7 +122,11 @@ function RetryableRouteBoundary({
 export function retryableLazy(
   importer: () => Promise<{ default: ComponentType<Record<string, never>> }>,
 ) {
-  const lazyRoutes = new Map<string, ReturnType<typeof lazy>>();
+  type LazyRouteEntry = {
+    component: ReturnType<typeof lazy>;
+    status: "pending" | "failed" | "successful";
+  };
+  const lazyRoutes = new Map<string, LazyRouteEntry>();
 
   return function RetryableLazyRoute() {
     const { pendingPath, retryGeneration, reportFailure } = useContext(RouteNavigationContext);
@@ -131,17 +135,38 @@ export function retryableLazy(
       pendingPath ? `navigation:${pendingPath}:${retryGeneration}` : null,
     );
     const routeKey = navigationKey.current ?? `standalone:${attempt}`;
-    let LazyRoute = lazyRoutes.get(routeKey);
-    if (!LazyRoute) {
+    let routeEntry = lazyRoutes.get(routeKey);
+    if (!routeEntry) {
       const failedPath = pendingPath;
-      LazyRoute = lazy(() => importer().catch((error) => {
-        if (failedPath) reportFailure(failedPath);
-        throw error;
-      }));
-      lazyRoutes.set(routeKey, LazyRoute);
+      routeEntry = {
+        status: "pending",
+        component: lazy(() => importer().then(
+          (module) => {
+            if (routeEntry) routeEntry.status = "successful";
+            return module;
+          },
+          (error) => {
+            if (routeEntry) routeEntry.status = "failed";
+            if (failedPath) reportFailure(failedPath);
+            throw error;
+          },
+        )),
+      };
+      lazyRoutes.set(routeKey, routeEntry);
     }
+    const activeEntry = routeEntry;
+    const LazyRoute = activeEntry.component;
+
+    useEffect(() => () => {
+      if (activeEntry.status === "failed" && lazyRoutes.get(routeKey) === activeEntry) {
+        lazyRoutes.delete(routeKey);
+      }
+    }, [activeEntry, routeKey]);
 
     const retry = () => {
+      if (activeEntry.status === "failed" && lazyRoutes.get(routeKey) === activeEntry) {
+        lazyRoutes.delete(routeKey);
+      }
       setAttempt((value) => value + 1);
     };
 

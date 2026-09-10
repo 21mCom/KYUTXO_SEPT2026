@@ -17,6 +17,7 @@ function Harness({ importer }: { importer: () => Promise<{ default: () => JSX.El
   const Records = useMemo(() => retryableLazy(importer), [importer]);
   return (
     <>
+      <button onClick={() => setLocation("/")}>Open dashboard</button>
       <button onClick={() => setLocation("/records")}>Open records</button>
       <RouteNavigationContent
         location={location}
@@ -129,6 +130,32 @@ describe("route navigation recovery", () => {
     expect(await screen.findByText("Records page content")).toBeTruthy();
     expect(screen.queryByTestId("route-navigation-error")).toBeNull();
     expect(importer).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases each obsolete failed attempt while keeping the successful route stable", async () => {
+    const importer = vi
+      .fn<() => Promise<{ default: () => JSX.Element }>>()
+      .mockRejectedValueOnce(new Error("first chunk download failed"))
+      .mockRejectedValueOnce(new Error("second chunk download failed"))
+      .mockResolvedValue({
+        default: () => <div>Stable records page content</div>,
+      });
+
+    render(<Harness importer={importer} />);
+    expect(await screen.findByText("Current dashboard content")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open records" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByText("Stable records page content")).toBeTruthy();
+    expect(importer).toHaveBeenCalledTimes(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dashboard" }));
+    expect(await screen.findByText("Current dashboard content")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open records" }));
+    expect(await screen.findByText("Stable records page content")).toBeTruthy();
+    expect(importer).toHaveBeenCalledTimes(3);
   });
 
   it("ignores a late failure from a page that is no longer the navigation target", async () => {
