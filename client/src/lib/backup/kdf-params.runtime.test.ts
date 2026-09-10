@@ -21,6 +21,9 @@
 import "fake-indexeddb/auto";
 
 import { describe, it, expect, beforeEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { exportBackup, type AttachmentFileIO } from "./export";
 import { restoreV3Backup, type AttachmentFileWriter } from "./restore";
@@ -58,6 +61,27 @@ import {
 } from "@/lib/data/lineage-crud";
 
 const PASSWORD = "backup-encryption-password";
+const STABLE_PASSWORD = "stable-release-fixture-v1.1.24";
+const STABLE_FIXTURE_DIR = path.resolve(process.cwd(), "test-fixtures/backups");
+
+function readStableReleaseFixture(): Blob {
+  const fixtureName = "kyutxo-v1.1.24-sanitized-v3.zip";
+  const bytes = fs.readFileSync(path.join(STABLE_FIXTURE_DIR, fixtureName));
+  const provenance = JSON.parse(fs.readFileSync(
+    path.join(STABLE_FIXTURE_DIR, "kyutxo-v1.1.24-sanitized-v3.provenance.json"),
+    "utf8",
+  ));
+  const sidecarDigest = fs.readFileSync(
+    path.join(STABLE_FIXTURE_DIR, `${fixtureName}.sha256`),
+    "utf8",
+  ).trim().split(/\s+/)[0];
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  expect(provenance.sourceRevision).toBe("b4021938b4c258a894e77698976cf28aa20d23c5");
+  expect(provenance.sourceTag).toBe("v1.1.24");
+  expect(digest).toBe(sidecarDigest);
+  expect(digest).toBe(provenance.sha256);
+  return new Blob([bytes]);
+}
 
 const attachmentIO: AttachmentFileIO = {
   async listAll() {
@@ -267,6 +291,28 @@ describe("encrypted backup with strengthened (600k PBKDF2) parameters", () => {
 });
 
 describe("encrypted backup with legacy (pre-strengthening) parameters", () => {
+  it("restores the checksum-pinned v1.1.24 release artifact and rejects its wrong password", async () => {
+    const blob = readStableReleaseFixture();
+    await expect(
+      restoreV3Backup({
+        source: blobChunks(blob),
+        password: `${STABLE_PASSWORD}-wrong`,
+        attachmentWriter,
+      }),
+    ).rejects.toThrow(/password|corrupt/i);
+
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      password: STABLE_PASSWORD,
+      attachmentWriter,
+    });
+    expect(result.manifest.appVersion).toBe("1.1.24");
+    expect(result.manifest.kdf).toBeUndefined();
+    expect(result.manifest.kdfIterations).toBeUndefined();
+    expect(result.counts.records).toBe(1);
+    expect(result.counts.blockchainTransactions).toBe(1);
+  });
+
   it("restores a manifest that records no kdfIterations", async () => {
     const blob = await buildPbkdf2EncryptedZip(LEGACY_PBKDF2_ITERATIONS, false);
 

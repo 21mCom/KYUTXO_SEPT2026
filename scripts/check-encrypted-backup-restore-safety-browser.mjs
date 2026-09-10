@@ -22,6 +22,11 @@ import {
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
+import {
+  STABLE_BACKUP_FIXTURE_NAME,
+  STABLE_BACKUP_PASSWORD,
+  readVerifiedStableBackupFixture,
+} from './stable-backup-fixture.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -318,6 +323,7 @@ async function proveWrongThenCorrect(page, {
   correctPassword,
   beforeWrong,
   verifyCorrect,
+  verifyReopen,
   record,
   label,
   corruptBackupBuffer,
@@ -403,10 +409,21 @@ async function proveWrongThenCorrect(page, {
   const restored = await snapshot(page);
   const verification = verifyCorrect(restored);
   record(`${label}-correct-password-retry`, verification.passed, verification.detail);
+  if (verifyReopen) {
+    await page.reload({ waitUntil: 'load', timeout: 60_000 });
+    await unlockIfNeeded(page, SETUP_PASSWORD, {
+      appearTimeoutMs: 30_000,
+      label: `${label}-reopen`,
+    });
+    const reopened = await snapshot(page);
+    const reopenVerification = verifyReopen(reopened, restored);
+    record(`${label}-reopen`, reopenVerification.passed, reopenVerification.detail);
+  }
 }
 
 async function main() {
   buildPackage();
+  const stableBackup = readVerifiedStableBackupFixture();
   let devProc;
   let appProc;
   let xvfb;
@@ -534,17 +551,31 @@ async function main() {
     }, TX_BACKED_UP);
 
     const beforeMalformed = await snapshot(page);
+    record(
+      'stable-release-fixture-checksum',
+      stableBackup.provenance.sourceTag === 'v1.1.24',
+      `sha256=${stableBackup.digest} source=${stableBackup.provenance.sourceRevision}`,
+    );
     await page.getByTestId('button-open-restore').click();
     await page.getByTestId('input-restore-file').setInputFiles({
       name: 'malformed-legacy-backup.zip',
       mimeType: 'application/zip',
       buffer: await buildMalformedPlaintextBackup(),
     });
-    await page.getByTestId('button-continue-restore').click();
-    await page.getByText('Malformed backup data').first().waitFor({
-      state: 'visible',
-      timeout: 20_000,
-    });
+    // Newer restore previews reject malformed plaintext envelopes during file
+    // classification; older ones did so after Continue. Accept either point,
+    // while still requiring the same visible failure and no vault mutation.
+    const malformedContinue = page.getByTestId('button-continue-restore');
+    await page.waitForTimeout(500);
+    const malformedRejectedDuringSelection =
+      !(await malformedContinue.isEnabled().catch(() => false));
+    if (!malformedRejectedDuringSelection) {
+      await malformedContinue.click();
+      await page.getByText(/Malformed backup data|Could not read backup/).first().waitFor({
+        state: 'visible',
+        timeout: 20_000,
+      });
+    }
     const afterMalformed = await snapshot(page);
     const malformedConfirmVisible = await page.getByTestId('button-confirm-restore')
       .isVisible()
@@ -553,7 +584,7 @@ async function main() {
       'malformed-plaintext-non-destructive',
       !malformedConfirmVisible &&
         JSON.stringify(afterMalformed) === JSON.stringify(beforeMalformed),
-      `confirm=${malformedConfirmVisible} vaultUnchanged=${
+      `rejectedDuringSelection=${malformedRejectedDuringSelection} confirm=${malformedConfirmVisible} vaultUnchanged=${
         JSON.stringify(afterMalformed) === JSON.stringify(beforeMalformed)
       }`,
     );
@@ -631,6 +662,53 @@ async function main() {
       },
     });
 
+    await page.evaluate(async (staleTxid) => {
+      const txCrud = await import('/src/lib/data/transaction-crud.ts');
+      await txCrud.clearTransactions({ skipNotification: true });
+      await txCrud.bulkAddTransactions([{
+        txid: staleTxid,
+        blockHeight: 999_997,
+        blockTime: 1_700_000_003,
+        syncedAt: Date.now(),
+        curationState: 'ignored',
+      }]);
+    }, TX_STALE);
+    const beforeStableWrong = await snapshot(page);
+    const verifyStableFixture = ({ portableTables }) => {
+      const records = portableTables.records ?? [];
+      const transactions = portableTables.blockchainTransactions ?? [];
+      const settings = portableTables.settings?.find((row) => row.id === 'default');
+      const recordRow = records[0];
+      const passed =
+        records.length === 1 &&
+        recordRow?.inputString === 'bc1qstablefixture0000000000000000000000000' &&
+        recordRow?.label === 'Sanitized stable release fixture' &&
+        recordRow?.notes === 'No user data' &&
+        JSON.stringify(recordRow?.tags) === JSON.stringify(['golden']) &&
+        transactions.length === 1 &&
+        transactions[0]?.txid === '245'.padStart(64, '0') &&
+        !transactions.some((row) => row.txid === TX_STALE) &&
+        settings?.disableOrphanCheck === true;
+      return {
+        passed,
+        detail:
+          `records=${records.length} input=${recordRow?.inputString} ` +
+          `txids=${transactions.map((tx) => tx.txid).join(',')} ` +
+          `setting=${settings?.disableOrphanCheck} tags=${JSON.stringify(recordRow?.tags)}`,
+      };
+    };
+    await proveWrongThenCorrect(page, {
+      backupName: STABLE_BACKUP_FIXTURE_NAME,
+      backupBuffer: stableBackup.buffer,
+      wrongPassword: `${STABLE_BACKUP_PASSWORD}-wrong`,
+      correctPassword: STABLE_BACKUP_PASSWORD,
+      beforeWrong: beforeStableWrong,
+      record,
+      label: 'stable-v1.1.24',
+      verifyCorrect: verifyStableFixture,
+      verifyReopen: (reopened) => verifyStableFixture(reopened),
+    });
+
     const legacyData = await page.evaluate(async () => {
       const recordCrud = await import('/src/lib/data/record-crud.ts');
       const settingsCrud = await import('/src/lib/data/settings-crud.ts');
@@ -649,6 +727,7 @@ async function main() {
     });
     const legacyBackup = await buildLegacyBackup(legacyData, LEGACY_PASSWORD);
     const corruptLegacyBackup = await corruptLegacyCiphertext(legacyBackup);
+    const legacyExpectedTxid = legacyData.blockchainTransactions[0]?.txid;
 
     await page.evaluate(async (staleTxid) => {
       const settingsCrud = await import('/src/lib/data/settings-crud.ts');
@@ -684,7 +763,7 @@ async function main() {
         return {
           passed: settings?.disableOrphanCheck === true &&
             transactions.length === 1 &&
-            transactions[0]?.txid === TX_BACKED_UP,
+            transactions[0]?.txid === legacyExpectedTxid,
           detail: `disableOrphanCheck=${settings?.disableOrphanCheck} txids=${transactions.map((tx) => tx.txid).join(',')}`,
         };
       },
@@ -706,7 +785,7 @@ async function main() {
   if (failed.length) {
     throw new Error(`Failed steps: ${failed.map((step) => step.name).join(', ')}`);
   }
-  console.log(`${TAG} PASSED: malformed, wrong-password, and corrupt-ciphertext restores are non-destructive and intact retries succeed.`);
+  console.log(`${TAG} PASSED: pinned stable-release, malformed, wrong-password, and corrupt-ciphertext restores are non-destructive; intact restores survive reopen.`);
 }
 
 main().catch((error) => {

@@ -18,6 +18,7 @@ const focusedRelative = 'scripts/check-encrypted-backup-restore-safety-browser.m
 const dotReplitRelative = '.replit';
 const guardWorkflow = 'restore-safety-isolation-guard';
 const focusedWorkflow = 'encrypted-backup-restore-safety-browser-check';
+const packagedFocusedWorkflow = 'packaged-encrypted-backup-restore-safety-browser-check';
 const failures = [];
 const localImportPattern =
   /\b(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
@@ -55,6 +56,18 @@ const focusedRequirements = [
     description: 'successful intact-backup retry assertion',
     pattern:
       /record\(\s*`\$\{label\}-correct-password-retry`\s*,\s*verification\.passed\s*,\s*verification\.detail\s*,?\s*\)/s,
+  },
+  {
+    description: 'pinned stable-release checksum verification',
+    pattern: /readVerifiedStableBackupFixture\(\)/,
+  },
+  {
+    description: 'pinned stable-release restore proof invocation',
+    pattern: /label:\s*['"]stable-v1\.1\.24['"]/,
+  },
+  {
+    description: 'pinned stable-release reopen assertion',
+    pattern: /verifyReopen:\s*\(reopened\)/,
   },
   {
     description: 'v3 restore proof invocation',
@@ -401,6 +414,20 @@ if (!focusedBlock) {
   }
   if (!/\bisValidation\s*=\s*true\b/.test(focusedBlock)) {
     failures.push(`${focusedWorkflow} is no longer marked isValidation = true.`);
+  }
+}
+
+const packagedFocusedBlock = workflowBlock(dotReplit, packagedFocusedWorkflow);
+if (!packagedFocusedBlock) {
+  failures.push(`${packagedFocusedWorkflow} is not registered as a workflow in .replit.`);
+} else {
+  if (!packagedFocusedBlock.includes(
+    `KYUTXO_PACKAGED_RESTORE_SAFETY=1 node ${focusedRelative}`,
+  )) {
+    failures.push(`${packagedFocusedWorkflow} no longer runs the packaged focused restore proof.`);
+  }
+  if (!/\bisValidation\s*=\s*true\b/.test(packagedFocusedBlock)) {
+    failures.push(`${packagedFocusedWorkflow} is no longer marked isValidation = true.`);
   }
 }
 

@@ -34,6 +34,14 @@ task = "shell.exec"
 args = "node scripts/check-restore-safety-isolation.js && node --test scripts/check-restore-safety-isolation.test.mjs"
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-encrypted-backup-restore-safety-browser-check"
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "KYUTXO_PACKAGED_RESTORE_SAFETY=1 node scripts/check-encrypted-backup-restore-safety-browser.mjs"
+[workflows.workflow.metadata]
+isValidation = true
 `;
 }
 
@@ -104,6 +112,11 @@ proveWrongThenCorrect({ label: 'v3' });
 proveWrongThenCorrect({
   label: 'legacy',
   corruptBackupBuffer: corruptLegacyBackup,
+});
+readVerifiedStableBackupFixture();
+proveWrongThenCorrect({
+  label: 'stable-v1.1.24',
+  verifyReopen: (reopened) => verifyStableFixture(reopened),
 });
 const failed = steps.filter((step) => !step.passed);
 if (failed.length) {
@@ -586,6 +599,9 @@ const requiredFocusedFragments = [
   ['wrong-password non-destructive assertion', '`${label}-wrong-password-non-destructive`'],
   ['corrupt-ciphertext non-destructive assertion', '`${label}-corrupt-ciphertext-non-destructive`'],
   ['successful intact-backup retry assertion', '`${label}-correct-password-retry`'],
+  ['pinned stable-release checksum verification', 'readVerifiedStableBackupFixture();'],
+  ['pinned stable-release restore proof invocation', "label: 'stable-v1.1.24'"],
+  ['pinned stable-release reopen assertion', 'verifyReopen: (reopened)'],
   ['v3 restore proof invocation', "label: 'v3'"],
   ['legacy restore proof invocation', "label: 'legacy'"],
   ['corrupt legacy ciphertext proof input', 'corruptBackupBuffer: corruptLegacyBackup'],
