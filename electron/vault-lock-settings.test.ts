@@ -109,6 +109,7 @@ describe("desktop vault lock policy validation", () => {
     expect(parseIdleLockTimeoutEnv("0")).toBe(0);
     expect(parseIdleLockTimeoutEnv("120")).toBe(120);
   });
+
 });
 
 describe("desktop vault lock lifecycle", () => {

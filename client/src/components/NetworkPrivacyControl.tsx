@@ -42,12 +42,14 @@ const ACTION_LABELS: Record<NetworkPrivacyActivityEntry['action'], string> = {
 function NetworkPrivacyActivityDialog() {
   const [open, setOpen] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
-  const entries = useLiveQuery(() => getNetworkPrivacyActivity(), []) ?? [];
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const entries = useLiveQuery(() => getNetworkPrivacyActivity(), [refreshVersion]) ?? [];
 
   const clearActivity = async () => {
     setIsClearing(true);
     try {
       await clearNetworkPrivacyActivity();
+      setRefreshVersion(version => version + 1);
     } finally {
       setIsClearing(false);
     }

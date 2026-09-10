@@ -85,6 +85,56 @@ async function rendererPage(browser) {
   throw new Error(`${TAG} packaged renderer did not appear`);
 }
 
+async function navigateToNodeSettings(page) {
+  await page.evaluate(() => {
+    window.location.hash = '/node-settings';
+  });
+  await page.getByRole('heading', { name: 'Node Connection' }).waitFor({ state: 'visible' });
+}
+
+async function readProtectedNodeSettings(page) {
+  return page.evaluate(async () => {
+    const repository = window.electronAPI?.protectedStore?.repository;
+    if (!repository) throw new Error('Protected repository bridge is unavailable');
+    const envelope = await repository.find('nodeSettings', 'default');
+    if (!envelope?.ok || envelope.result == null) {
+      throw new Error(envelope?.error || 'Protected repository operation failed');
+    }
+    return envelope.result;
+  });
+}
+
+async function seedConfiguredSourcePrecondition(page) {
+  await page.evaluate(async ({ customUrl }) => {
+    const repository = window.electronAPI?.protectedStore?.repository;
+    if (!repository) throw new Error('Protected repository bridge is unavailable');
+    const current = await repository.find('nodeSettings', 'default');
+    if (!current?.ok || current.result === undefined) {
+      throw new Error(current?.error || 'Protected repository read failed');
+    }
+    const saved = await repository.save('nodeSettings', {
+      ...(current.result ?? {}),
+      id: 'default',
+      providerType: 'custom-electrs',
+      customUrl,
+      useElectrum: false,
+      useTor: false,
+      networkPrivacyMode: 'own-node',
+      networkAccessEnabled: true,
+      networkOnboardingStage: 'complete',
+    });
+    if (!saved?.ok || saved.result === undefined) {
+      throw new Error(saved?.error || 'Protected repository write failed');
+    }
+    await window.electronAPI.protectedStore.lock();
+  }, { customUrl: CUSTOM_URL });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await unlockIfNeeded(page, PASSWORD, {
+    appearTimeoutMs: 60_000,
+    label: 'packaged-forgotten-source-configured-precondition',
+  });
+}
+
 async function stop(child) {
   if (!child?.pid) return;
   if (IS_WINDOWS) {
@@ -109,10 +159,12 @@ async function main() {
   let xvfbBin;
   if (!IS_WINDOWS) ({ electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG }));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-forgotten-source-'));
-  const cdpUserDataDir = path.join(home, 'cdp-profile');
   const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
     root: ROOT, asarPath: ASAR, home, tag: TAG,
   }) : null;
+  const cdpUserDataDir = IS_WINDOWS
+    ? path.join(portableSetup.launchDir, 'KYUTXO_Data')
+    : path.join(home, 'cdp-profile');
   const env = {
     ...(portableSetup?.env || process.env), HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'),
     XDG_CACHE_HOME: path.join(home, '.cache'), XDG_DATA_HOME: path.join(home, '.local', 'share'),
@@ -147,8 +199,8 @@ async function main() {
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     let page = await rendererPage(browser);
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-forgotten-source-setup' });
-    await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-forgotten-source-setup' });
-    await page.goto('kyutxo-app://bundle/#/node-settings');
+    await seedConfiguredSourcePrecondition(page);
+    await navigateToNodeSettings(page);
     await page.getByTestId('radio-provider-custom-electrs').click();
     await page.getByTestId('input-custom-url').fill(CUSTOM_URL);
     await page.getByTestId('switch-use-tor').click();
@@ -161,7 +213,7 @@ async function main() {
       0,
       'packaged provider test IPC ran before the source was first explicitly enabled',
     );
-    await page.getByTestId('button-enable-selected-source').click();
+    await page.getByTestId('button-save-settings').click();
     await page.getByText('Settings Saved').first().waitFor();
     await page.getByTestId('button-forget-network-source').click();
     await page.getByTestId('dialog-forget-network-source').waitFor({ state: 'visible' });
@@ -183,18 +235,20 @@ async function main() {
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-forgotten-source-reopen' });
     await page.getByText('Choose before KYUTXO connects').waitFor();
 
-    const consent = await page.evaluate(async () => {
-      const { getNodeSettings } = await import('/src/lib/data/node-settings-crud.ts');
-      const settings = await getNodeSettings('default');
-      return [settings?.networkPrivacyMode, settings?.networkAccessEnabled, settings?.networkOnboardingStage];
-    });
+    const reopenedSettings = await readProtectedNodeSettings(page);
+    const consent = [
+      reopenedSettings?.networkPrivacyMode,
+      reopenedSettings?.networkAccessEnabled,
+      reopenedSettings?.networkOnboardingStage,
+    ];
     assert.deepEqual(consent, [undefined, false, 'source'], 'forgotten source consent did not survive desktop restart');
     assert.equal(
       await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-forgotten-source-reopen' }),
       true,
       'forgotten source onboarding did not appear after desktop restart',
     );
-    await page.goto('kyutxo-app://bundle/#/node-settings');
+    await page.waitForFunction(() => window.location.hash === '#/');
+    await navigateToNodeSettings(page);
     await page.getByText('No network source configured').first().waitFor();
     await page.getByTestId('text-network-privacy-state').getByText('Offline').waitFor();
 
@@ -202,19 +256,16 @@ async function main() {
       ['input-custom-url', CUSTOM_URL], ['input-tor-proxy', TOR_PROXY],
       ['input-electrum-host', ELECTRUM_HOST], ['input-electrum-port', '50002'],
     ]) assert.equal(await page.getByTestId(id).inputValue(), expected, `${id} was not retained`);
-    const retained = await page.evaluate(async () => {
-      const { getNodeSettings } = await import('/src/lib/data/node-settings-crud.ts');
-      const settings = await getNodeSettings('default');
-      return {
-        provider: settings?.provider,
-        useTor: settings?.useTor,
-        useElectrum: settings?.useElectrum,
-        electrumSSL: settings?.electrumSSL,
-        electrumServerType: settings?.electrumServerType,
-      };
-    });
+    const retainedSettings = await readProtectedNodeSettings(page);
+    const retained = {
+      providerType: retainedSettings?.providerType,
+      useTor: retainedSettings?.useTor,
+      useElectrum: retainedSettings?.useElectrum,
+      electrumSSL: retainedSettings?.electrumSSL,
+      electrumServerType: retainedSettings?.electrumServerType,
+    };
     assert.deepEqual(retained, {
-      provider: 'custom-electrs',
+      providerType: 'custom-electrs',
       useTor: true,
       useElectrum: true,
       electrumSSL: true,
@@ -248,7 +299,7 @@ async function main() {
     await browser?.close().catch(() => {});
     await stop(child);
     try { process.kill(-xvfb?.pid, 'SIGTERM'); } catch { xvfb?.kill?.('SIGTERM'); }
-    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
   }
 }
 

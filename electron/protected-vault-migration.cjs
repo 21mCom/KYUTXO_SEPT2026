@@ -76,6 +76,12 @@ function keyOf(id) {
     ? `n:${(BigInt(id) + 9007199254740991n).toString().padStart(17, '0')}`
     : `s:${id}`;
 }
+function migrationRow(id, row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) throw safe();
+  const { id: embeddedId, ...value } = row;
+  if (embeddedId !== undefined && keyOf(embeddedId) !== keyOf(id)) throw safe();
+  return value;
+}
 function attachmentLine(file) {
   return `${file.id}\0${file.bytes}\0${file.digest}\n`;
 }
@@ -134,15 +140,24 @@ async function availableBytes(root) {
   const stat = await fsp.statfs(root);
   return Number(stat.bavail) * Number(stat.bsize);
 }
-async function durableTree(root) {
+function durableFileOpenMode(platform = process.platform) {
+  return platform === 'win32' ? 'r+' : 'r';
+}
+async function durableTree(root, openFile = fsp.open) {
   const entries = await fsp.readdir(root, { withFileTypes: true });
   for (const entry of entries) {
     const target = path.join(root, entry.name);
-    if (entry.isDirectory()) await durableTree(target);
+    if (entry.isDirectory()) await durableTree(target, openFile);
     else if (entry.isFile()) {
-      const handle = await fsp.open(target, 'r');
-      await handle.sync();
-      await handle.close();
+      // Windows FlushFileBuffers requires write access. r+ is non-truncating
+      // and retains the fail-closed durability guarantee there. Hardened
+      // Unix files can remain read-only because fsync supports such handles.
+      const handle = await openFile(target, durableFileOpenMode());
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
     }
   }
   await syncDirectory(root);
@@ -276,13 +291,14 @@ class ProtectedVaultMigrationController {
         if (!Array.isArray(batch) || batch.length > BATCH) throw safe();
         for (const item of batch) {
           const key = keyOf(item.id);
+          const row = migrationRow(item.id, item.row);
           if (prior !== null && key <= prior) throw safe();
           prior = key;
-          hash.update(`${key}\0${canonical(item.row)}\n`);
+          hash.update(`${key}\0${canonical(row)}\n`);
           count++;
           if (client) {
             await client.call(MESSAGE_TYPES.PUT_ROW, {
-              table, id: item.id, row: item.row,
+              table, id: item.id, row,
             });
           }
         }
@@ -436,29 +452,43 @@ class ProtectedVaultMigrationController {
     this.state.session = session.id;
     const stage = this.stagePath(session.generation);
     let baseline;
+    let diagnosticStage = 'preflight';
     try {
       await this.preflight(session);
       // Readability, canonical IDs, attachment lengths, and reference audit
       // are proven before writes are frozen.
+      diagnosticStage = 'source-scan';
       baseline = await this.scanSource();
       session.evidence = contentEvidence(baseline);
+      diagnosticStage = 'source-freeze';
       await this.checkpoint('freeze', session);
       if (await this.source.freeze({ sessionId: session.id }) !== true) throw safe();
       await this.checkpoint('stage', session);
       await rm(stage);
       const client = this.clientFactory(stage);
       try {
+        diagnosticStage = 'protected-create';
         await client.call(MESSAGE_TYPES.CREATE, { password });
+        diagnosticStage = 'protected-copy';
         const copied = await this.scanSource(client);
         if (!equalContent(copied, baseline)) throw safe();
+        diagnosticStage = 'protected-lock';
         await client.call(MESSAGE_TYPES.LOCK);
       } finally {
-        await client.close();
+        try {
+          await client.close();
+        } catch (error) {
+          diagnosticStage = 'protected-close';
+          throw error;
+        }
       }
+      diagnosticStage = 'protected-reopen';
       await this.checkpoint('verify', session);
       const staged = await this.protectedSnapshot(stage, session.generation, password);
       if (!equalContent(staged, baseline)) throw safe();
+      diagnosticStage = 'durability-flush';
       await durableTree(stage);
+      diagnosticStage = 'generation-publish';
       await this.checkpoint('commit', session);
       await this.checkpoint('generation-swap.prepare', session);
       await fsp.mkdir(this.generations, { recursive: true, mode: 0o700 });
@@ -468,9 +498,11 @@ class ProtectedVaultMigrationController {
       await this.checkpoint('generation-swap.publish', session);
       await atomicJson(this.pointer, { version: 1, generation: session.generation });
       if (this.fault) await this.fault('generation-swap.publish.after');
+      diagnosticStage = 'published-reopen';
       const active = await this.protectedSnapshot(published, session.generation, password);
       if (!equalContent(active, baseline)) throw safe();
       await this.checkpoint('generation-swap.cleanup', session);
+      diagnosticStage = 'source-cleanup';
       await this.cleanupAndComplete(session, this.source);
       return { baseline, active, generation: session.generation };
     } catch (error) {
@@ -501,7 +533,9 @@ class ProtectedVaultMigrationController {
         // Publication makes cleanup the only safe direction; never thaw.
         this.state.frozen = true;
       }
-      throw safe();
+      const failure = safe();
+      failure.diagnosticStage = diagnosticStage;
+      throw failure;
     }
   }
   async recover({ password, resumeContext } = {}) {
@@ -970,4 +1004,5 @@ module.exports = {
   canonical,
   runProtectedVaultScenario,
   SOURCE_ROOT,
+  _test: { durableFileOpenMode, durableTree },
 };

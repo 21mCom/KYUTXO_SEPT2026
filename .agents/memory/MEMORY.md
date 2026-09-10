@@ -137,3 +137,4 @@
 - [Browser instrumentation across navigation](browser-instrumentation-navigation.md) — page.goto resets window state and module monkeypatches; reinstall after full loads or keep baselines in Node.
 - [Retryable React lazy imports](retryable-react-lazy-imports.md) — create the initial lazy component outside suspended render; retries must create a fresh lazy identity from committed state.
 - [Deferred route failure correlation](deferred-route-failure-correlation.md) — retained-page lazy navigation must correlate chunk failures to the live target; stale downloads cannot roll back newer navigation.
+- [Protected-store browser fixtures](protected-store-browser-fixtures.md) — null means missing; seed natural IDs, lock before reload, and let onboarding navigation settle.

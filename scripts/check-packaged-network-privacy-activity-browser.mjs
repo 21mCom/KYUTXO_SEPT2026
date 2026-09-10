@@ -170,62 +170,50 @@ async function forceStopPackagedProcess(child) {
 
 async function readActivityState(page) {
   return page.evaluate(async () => {
-    const requestResult = (request) => new Promise((resolve, reject) => {
-      request.onerror = () => reject(request.error || new Error('IndexedDB request failed'));
-      request.onsuccess = () => resolve(request.result);
-    });
-    const database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open('KYUTXODatabase');
-      request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
-      request.onsuccess = () => resolve(request.result);
-    });
-    const transaction = database.transaction(['networkPrivacyActivity', 'nodeSettings'], 'readonly');
-    const activity = await requestResult(transaction.objectStore('networkPrivacyActivity').getAll());
-    const settings = await requestResult(transaction.objectStore('nodeSettings').get('default'));
-    database.close();
+    const repository = window.electronAPI?.protectedStore?.repository;
+    if (!repository) throw new Error('Protected repository bridge is unavailable');
+    const unwrap = (envelope) => {
+      if (!envelope?.ok || envelope.result === undefined) {
+        throw new Error(envelope?.error || 'Protected repository operation failed');
+      }
+      return envelope.result;
+    };
+    const activity = [];
+    let after;
+    do {
+      const result = unwrap(await repository.page('networkPrivacyActivity', after, 1000, 'asc'));
+      activity.push(...result.items);
+      after = result.next === null ? undefined : result.next;
+    } while (after !== undefined);
+    const settings = unwrap(await repository.find('nodeSettings', 'default'));
     return { activity, settings };
   });
 }
 
 async function seedActivityState(page, { settings, activity }) {
   await page.evaluate(async ({ settings, activity }) => {
-    const requestResult = (request) => new Promise((resolve, reject) => {
-      request.onerror = () => reject(request.error || new Error('IndexedDB request failed'));
-      request.onsuccess = () => resolve(request.result);
-    });
-    const database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open('KYUTXODatabase');
-      request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
-      request.onsuccess = () => resolve(request.result);
-    });
-    const transaction = database.transaction(['networkPrivacyActivity', 'nodeSettings'], 'readwrite');
-    transaction.objectStore('networkPrivacyActivity').clear();
-    transaction.objectStore('nodeSettings').put(settings);
-    for (const row of activity) transaction.objectStore('networkPrivacyActivity').add(row);
-    await new Promise((resolve, reject) => {
-      transaction.onerror = () => reject(transaction.error || new Error('IndexedDB write failed'));
-      transaction.onabort = () => reject(transaction.error || new Error('IndexedDB write aborted'));
-      transaction.oncomplete = resolve;
-    });
-    database.close();
+    const repository = window.electronAPI?.protectedStore?.repository;
+    if (!repository) throw new Error('Protected repository bridge is unavailable');
+    const unwrap = (envelope) => {
+      if (!envelope?.ok || envelope.result === undefined) {
+        throw new Error(envelope?.error || 'Protected repository operation failed');
+      }
+      return envelope.result;
+    };
+    unwrap(await repository.clear('networkPrivacyActivity'));
+    unwrap(await repository.save('nodeSettings', settings));
+    unwrap(await repository.saveBatch('networkPrivacyActivity', activity));
   }, { settings, activity });
 }
 
 async function appendCommittedActivity(page, activity) {
   await page.evaluate(async (activity) => {
-    const database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open('KYUTXODatabase');
-      request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
-      request.onsuccess = () => resolve(request.result);
-    });
-    const transaction = database.transaction('networkPrivacyActivity', 'readwrite');
-    transaction.objectStore('networkPrivacyActivity').add(activity);
-    await new Promise((resolve, reject) => {
-      transaction.onerror = () => reject(transaction.error || new Error('IndexedDB write failed'));
-      transaction.onabort = () => reject(transaction.error || new Error('IndexedDB write aborted'));
-      transaction.oncomplete = resolve;
-    });
-    database.close();
+    const repository = window.electronAPI?.protectedStore?.repository;
+    if (!repository) throw new Error('Protected repository bridge is unavailable');
+    const envelope = await repository.save('networkPrivacyActivity', activity);
+    if (!envelope?.ok || envelope.result === undefined) {
+      throw new Error(envelope?.error || 'Protected repository operation failed');
+    }
   }, activity);
 }
 
@@ -277,10 +265,12 @@ async function main() {
   }
 
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-network-privacy-'));
-  const cdpUserDataDir = path.join(tempHome, 'cdp-profile');
   const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
     root: ROOT, asarPath: ASAR, home: tempHome, tag: TAG,
   }) : null;
+  const cdpUserDataDir = IS_WINDOWS
+    ? path.join(portableSetup.launchDir, 'KYUTXO_Data')
+    : path.join(tempHome, 'cdp-profile');
   const env = {
     ...(portableSetup?.env || process.env),
     HOME: tempHome,
@@ -484,6 +474,13 @@ async function main() {
     await page.getByTestId('button-network-privacy-activity').click();
     const dialog = page.getByTestId('network-privacy-activity-dialog');
     await dialog.waitFor({ state: 'visible' });
+    const activityRows = dialog.locator('[data-testid^="network-privacy-activity-row-"]');
+    await activityRows.nth(activity.length).waitFor({ state: 'visible' });
+    assert.equal(
+      await activityRows.count(),
+      activity.length + 1,
+      'activity dialog rendered an unexpected number of rows',
+    );
     const dialogText = await dialog.innerText();
     for (const expected of [
       'Local network activity',
@@ -519,7 +516,7 @@ async function main() {
     } catch {
       xvfb?.kill?.('SIGTERM');
     }
-    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
   }
 }
 

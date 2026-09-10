@@ -42,7 +42,11 @@ import {
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
-import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';
+import {
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+  waitForPackagedCdpDown,
+} from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -121,6 +125,18 @@ function isWithin(relativePath, relativeRoot) {
   return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
 }
 
+function readFileWithTransientRetries(file, attempts = 20, delayMs = 100) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return fs.readFileSync(file);
+    } catch (error) {
+      const transient = error && ['EBUSY', 'EPERM', 'EACCES'].includes(error.code);
+      if (!transient || attempt >= attempts) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+  }
+}
+
 function scanDisposableProfile(root) {
   const files = [];
   const matches = [];
@@ -135,7 +151,9 @@ function scanDisposableProfile(root) {
         continue;
       }
       if (!entry.isFile()) continue;
-      const bytes = fs.readFileSync(absolutePath);
+      // Chromium can briefly retain a Windows file handle while updating its
+      // profile. Never skip the file: retry the read, then fail closed.
+      const bytes = readFileWithTransientRetries(absolutePath);
       const relativePath = path.relative(root, absolutePath);
       const digest = createHash('sha256').update(bytes).digest('hex');
       files.push({ relativePath, bytes: bytes.length, digest });
@@ -193,6 +211,7 @@ async function main() {
   let xvfb;
   let child;
   let browser;
+  let cdpPort = null;
   const results = [];
 
   try {
@@ -222,37 +241,52 @@ async function main() {
       ? [...packagedCdpLaunchArgs(cdpUserDataDir)]
       : [ASAR, '--no-sandbox', '--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)];
     const executable = IS_WINDOWS ? PACKAGED_EXECUTABLE : electronBin;
-    child = spawn(executable, args, {
-      cwd: tempHome,
-      env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
-      detached: !IS_WINDOWS,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    child.stdout.on('data', (chunk) => process.stdout.write(`${TAG}[app] ${chunk}`));
-    child.stderr.on('data', (chunk) => process.stdout.write(`${TAG}[app-err] ${chunk}`));
+    const stopPackagedApp = async () => {
+      const ownedPort = cdpPort;
+      await browser?.close().catch(() => {});
+      browser = null;
+      killTree(child);
+      child = null;
+      if (ownedPort !== null && !(await waitForPackagedCdpDown(ownedPort, 30_000))) {
+        throw new Error(`${TAG} packaged process still owns CDP port ${ownedPort} after shutdown`);
+      }
+      cdpPort = null;
+    };
+    const startPackagedApp = async () => {
+      child = spawn(executable, args, {
+        cwd: tempHome,
+        env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
+        detached: !IS_WINDOWS,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      child.stdout.on('data', (chunk) => process.stdout.write(`${TAG}[app] ${chunk}`));
+      child.stderr.on('data', (chunk) => process.stdout.write(`${TAG}[app-err] ${chunk}`));
 
-    const cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
-    const page = await waitForPage(browser);
-    await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', null, {
-      timeout: 60_000,
-    });
-
-    const capability = await page.evaluate(({ apiName, methodName }) => {
-      const api = window.electronAPI?.[apiName];
-      return {
-        present: !!api,
-        method: typeof api?.[methodName],
-      };
-    }, { apiName: PROTECTED_VAULT_TEST_API, methodName: PROTECTED_VAULT_TEST_METHOD });
-    if (!capability.present || capability.method !== 'function') {
-      throw new Error(
-        `${TAG} missing ${PROTECTED_VAULT_TEST_API}.${PROTECTED_VAULT_TEST_METHOD}; ` +
-        'the packaged app has no protected-vault proof bridge',
-      );
-    }
+      const cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+      cdpPort = cdp.port;
+      browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
+      const page = await waitForPage(browser);
+      await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', null, {
+        timeout: 60_000,
+      });
+      const capability = await page.evaluate(({ apiName, methodName }) => {
+        const api = window.electronAPI?.[apiName];
+        return {
+          present: !!api,
+          method: typeof api?.[methodName],
+        };
+      }, { apiName: PROTECTED_VAULT_TEST_API, methodName: PROTECTED_VAULT_TEST_METHOD });
+      if (!capability.present || capability.method !== 'function') {
+        throw new Error(
+          `${TAG} missing ${PROTECTED_VAULT_TEST_API}.${PROTECTED_VAULT_TEST_METHOD}; ` +
+          'the packaged app has no protected-vault proof bridge',
+        );
+      }
+      return page;
+    };
 
     for (const scenario of PROTECTED_VAULT_SCENARIOS) {
+      const page = await startPackagedApp();
       const report = await page.evaluate(
         async ({ apiName, methodName, scenario, fixtureTokens }) => {
           return window.electronAPI[apiName][methodName]({ scenario, fixtureTokens });
@@ -265,6 +299,9 @@ async function main() {
         },
       );
       classifyAndAssert(report, scenario);
+      // Chromium holds profile files open on Windows. Stop the exact process
+      // and its owned CDP endpoint before scanning; never exclude locked files.
+      await stopPackagedApp();
       const scan = scanDisposableProfile(tempHome);
       if (report.recoveryAction === 'source-preserved') {
         if (report.plaintextSourceRelativeRoot !== PLAINTEXT_MIGRATION_SOURCE_ROOT) {
@@ -302,8 +339,11 @@ async function main() {
   } finally {
     await browser?.close().catch(() => {});
     killTree(child);
+    if (cdpPort !== null && !(await waitForPackagedCdpDown(cdpPort, 30_000))) {
+      throw new Error(`${TAG} packaged process still owns CDP port ${cdpPort} after shutdown`);
+    }
     try { process.kill(-xvfb?.pid, 'SIGTERM'); } catch { xvfb?.kill?.('SIGTERM'); }
-    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
   }
 
   if (results.length !== PROTECTED_VAULT_SCENARIOS.length) {
