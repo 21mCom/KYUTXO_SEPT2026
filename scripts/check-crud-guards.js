@@ -12,6 +12,12 @@ const ROOT = path.resolve(__dirname, '..');
 // excluded from the scan.  The crud-guards workflow and the pre-commit hook run
 // without this flag so they continue to cover everything.
 const PRODUCTION_ONLY = process.argv.includes('--production-only');
+const FIXTURE_FILE_ARG = '--fixture-file';
+const fixtureArgIndex = process.argv.indexOf(FIXTURE_FILE_ARG);
+const fixtureFile =
+  fixtureArgIndex >= 0 && process.argv[fixtureArgIndex + 1]
+    ? path.resolve(process.argv[fixtureArgIndex + 1])
+    : null;
 
 /** Returns true for any file that only exists in the test suite.
  *
@@ -221,6 +227,18 @@ const ALLOWED_FILES_SET = new Set([
 const SCAN_DIR = path.resolve(ROOT, 'client/src');
 const EXTENSIONS = new Set(['.ts', '.tsx']);
 
+if (fixtureArgIndex >= 0) {
+  if (!fixtureFile || !fs.existsSync(fixtureFile)) {
+    console.error(`${FIXTURE_FILE_ARG} requires an existing fixture file`);
+    process.exit(1);
+  }
+  const relativeToScanDir = path.relative(SCAN_DIR, fixtureFile);
+  if (!relativeToScanDir.startsWith('..') && !path.isAbsolute(relativeToScanDir)) {
+    console.error(`${FIXTURE_FILE_ARG} must be outside client/src`);
+    process.exit(1);
+  }
+}
+
 // Self-check: if any hardcoded file (a CRUD layer or an allow-listed file) no
 // longer exists (renamed/moved/deleted), fail loudly instead of silently
 // guarding nothing / allow-listing stale paths.
@@ -267,6 +285,7 @@ function collectFiles(dir, files = []) {
 }
 
 const files = collectFiles(SCAN_DIR);
+if (fixtureFile) files.push(fixtureFile);
 const writeViolations = [];
 const readViolations = [];
 

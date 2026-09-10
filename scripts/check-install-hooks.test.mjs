@@ -197,6 +197,46 @@ test('duplicate identical tagged lines are collapsed to one', () => {
 
 const SCANNER = path.resolve(path.dirname(__filename), 'check-crud-guards.js');
 const scannerSource = fs.readFileSync(SCANNER, 'utf8');
+const ROOT = path.resolve(path.dirname(__filename), '..');
+const LEGACY_FIXTURE_DIR = path.join('client', 'src', '__crud_guard_violation_fixture__');
+
+function withCrudGuardFixture(filename, fn) {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crud-guard-fixture-'));
+  const fixtureFile = path.join(fixtureDir, filename);
+  fs.mkdirSync(path.dirname(fixtureFile), { recursive: true });
+  fs.writeFileSync(
+    fixtureFile,
+    '// CRUD-guard fixture — generated outside production sources\ndb.records.add({ id: "x" });\n'
+  );
+  try {
+    return fn(fixtureFile);
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+}
+
+function runScanner(fixtureFile, ...args) {
+  return spawnSync(
+    'node',
+    [SCANNER, ...args, '--fixture-file', fixtureFile],
+    { cwd: ROOT, encoding: 'utf8', timeout: 30_000 }
+  );
+}
+
+test('legacy in-source CRUD guard fixture is ignored and not tracked', () => {
+  const ignored = spawnSync('git', ['check-ignore', '-q', path.join(LEGACY_FIXTURE_DIR, 'violation.ts')], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  });
+  assert.equal(ignored.status, 0, `${LEGACY_FIXTURE_DIR} is not covered by .gitignore`);
+
+  const tracked = spawnSync('git', ['ls-files', '--', LEGACY_FIXTURE_DIR], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  });
+  assert.equal(tracked.status, 0, tracked.stderr);
+  assert.equal(tracked.stdout.trim(), '', `${LEGACY_FIXTURE_DIR} must never remain tracked`);
+});
 
 test('install-hooks.sh wires crud-guards without --production-only', () => {
   // The CRUD_CMD variable must be the plain invocation, not the build-time
@@ -241,69 +281,33 @@ test('check-crud-guards.js gates test-file skipping on PRODUCTION_ONLY flag', ()
 });
 
 test('scanner in full-scan mode flags a raw-Dexie write inside a .test.ts file', () => {
-  // Create a temporary fixture file inside the real scan directory that
-  // contains a direct db.records.add() call (a guarded-table write outside
-  // any CRUD layer).  Running the scanner without --production-only must
-  // detect it and exit non-zero.  The fixture is cleaned up in a finally
-  // block regardless of the outcome.
-  const ROOT = path.resolve(path.dirname(__filename), '..');
-  const fixtureDir = path.join(ROOT, 'client', 'src', '__crud_guard_violation_fixture__');
-  const fixtureFile = path.join(fixtureDir, 'violation.test.ts');
-
-  fs.mkdirSync(fixtureDir, { recursive: true });
-  fs.writeFileSync(
-    fixtureFile,
-    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
-  );
-
-  let result;
-  try {
-    result = spawnSync('node', [SCANNER], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
-  } finally {
-    fs.rmSync(fixtureDir, { recursive: true, force: true });
-  }
-
-  assert.equal(
-    result.status,
-    1,
-    'scanner should exit 1 when a test file contains a guarded-table write, ' +
-      'but it exited ' + result.status + '\nstdout: ' + result.stdout +
-      '\nstderr: ' + result.stderr
-  );
-  assert.ok(
-    result.stderr.includes('violation.test.ts') || result.stdout.includes('violation.test.ts'),
-    'scanner output does not mention the violating test file'
-  );
+  withCrudGuardFixture('violation.test.ts', (fixtureFile) => {
+    const result = runScanner(fixtureFile);
+    assert.equal(
+      result.status,
+      1,
+      'scanner should exit 1 when a test file contains a guarded-table write, ' +
+        'but it exited ' + result.status + '\nstdout: ' + result.stdout +
+        '\nstderr: ' + result.stderr
+    );
+    assert.ok(
+      result.stderr.includes('violation.test.ts') || result.stdout.includes('violation.test.ts'),
+      'scanner output does not mention the violating test file'
+    );
+  });
 });
 
 test('scanner in --production-only mode ignores a raw-Dexie write inside a .test.ts file', () => {
-  // Create the same fixture as the full-scan test above, but run the scanner
-  // with --production-only.  Build mode must skip test files entirely so that
-  // seeding helpers used only in tests never block CI builds.
-  const ROOT = path.resolve(path.dirname(__filename), '..');
-  const fixtureDir = path.join(ROOT, 'client', 'src', '__crud_guard_violation_fixture__');
-  const fixtureFile = path.join(fixtureDir, 'violation.test.ts');
-
-  fs.mkdirSync(fixtureDir, { recursive: true });
-  fs.writeFileSync(
-    fixtureFile,
-    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
-  );
-
-  let result;
-  try {
-    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
-  } finally {
-    fs.rmSync(fixtureDir, { recursive: true, force: true });
-  }
-
-  assert.equal(
-    result.status,
-    0,
-    'scanner with --production-only should exit 0 when the only violation is inside a .test.ts file, ' +
-      'but it exited ' + result.status + '\nstdout: ' + result.stdout +
-      '\nstderr: ' + result.stderr
-  );
+  withCrudGuardFixture('violation.test.ts', (fixtureFile) => {
+    const result = runScanner(fixtureFile, '--production-only');
+    assert.equal(
+      result.status,
+      0,
+      'scanner with --production-only should exit 0 when the only violation is inside a .test.ts file, ' +
+        'but it exited ' + result.status + '\nstdout: ' + result.stdout +
+        '\nstderr: ' + result.stderr
+    );
+  });
 });
 
 test('scanner in --production-only mode flags a raw-Dexie write inside a non-test source file', () => {
@@ -313,34 +317,20 @@ test('scanner in --production-only mode flags a raw-Dexie write inside a non-tes
   // (violation.ts, not violation.test.ts) containing a direct db.records.add()
   // call must still cause the scanner to exit non-zero even when
   // --production-only is active.
-  const ROOT = path.resolve(path.dirname(__filename), '..');
-  const fixtureDir = path.join(ROOT, 'client', 'src', '__crud_guard_violation_fixture__');
-  const fixtureFile = path.join(fixtureDir, 'violation.ts');
-
-  fs.mkdirSync(fixtureDir, { recursive: true });
-  fs.writeFileSync(
-    fixtureFile,
-    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
-  );
-
-  let result;
-  try {
-    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
-  } finally {
-    fs.rmSync(fixtureDir, { recursive: true, force: true });
-  }
-
-  assert.equal(
-    result.status,
-    1,
-    'scanner with --production-only should exit 1 when a non-test source file contains a guarded-table write, ' +
-      'but it exited ' + result.status + '\nstdout: ' + result.stdout +
-      '\nstderr: ' + result.stderr
-  );
-  assert.ok(
-    result.stderr.includes('violation.ts') || result.stdout.includes('violation.ts'),
-    'scanner output does not mention the violating non-test source file'
-  );
+  withCrudGuardFixture('violation.ts', (fixtureFile) => {
+    const result = runScanner(fixtureFile, '--production-only');
+    assert.equal(
+      result.status,
+      1,
+      'scanner with --production-only should exit 1 when a non-test source file contains a guarded-table write, ' +
+        'but it exited ' + result.status + '\nstdout: ' + result.stdout +
+        '\nstderr: ' + result.stderr
+    );
+    assert.ok(
+      result.stderr.includes('violation.ts') || result.stdout.includes('violation.ts'),
+      'scanner output does not mention the violating non-test source file'
+    );
+  });
 });
 
 test('scanner in --production-only mode flags a raw-Dexie write in a file whose path contains .test.ts as a substring but whose basename does not end in .test.ts/.test.tsx', () => {
@@ -353,36 +343,22 @@ test('scanner in --production-only mode flags a raw-Dexie write in a file whose 
   // (`rel.includes('.test.ts')`), isTestFile returned true and --production-only
   // silently skipped the file.  With the correct endsWith predicate it is
   // scanned and the write is flagged.
-  const ROOT = path.resolve(path.dirname(__filename), '..');
-  const fixtureDir = path.join(ROOT, 'client', 'src', '__crud_guard_violation_fixture__');
-  const fixtureFile = path.join(fixtureDir, 'violation.test.tsx.utils.ts');
-
-  fs.mkdirSync(fixtureDir, { recursive: true });
-  fs.writeFileSync(
-    fixtureFile,
-    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
-  );
-
-  let result;
-  try {
-    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
-  } finally {
-    fs.rmSync(fixtureDir, { recursive: true, force: true });
-  }
-
-  assert.equal(
-    result.status,
-    1,
-    'scanner with --production-only should exit 1 when a file whose basename ' +
-      'contains ".test.ts" as a substring (but does not end in .test.ts/.test.tsx) ' +
-      'contains a guarded-table write, but it exited ' + result.status +
-      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
-  );
-  assert.ok(
-    result.stderr.includes('violation.test.tsx.utils.ts') ||
-      result.stdout.includes('violation.test.tsx.utils.ts'),
-    'scanner output does not mention the violating file'
-  );
+  withCrudGuardFixture('violation.test.tsx.utils.ts', (fixtureFile) => {
+    const result = runScanner(fixtureFile, '--production-only');
+    assert.equal(
+      result.status,
+      1,
+      'scanner with --production-only should exit 1 when a file whose basename ' +
+        'contains ".test.ts" as a substring (but does not end in .test.ts/.test.tsx) ' +
+        'contains a guarded-table write, but it exited ' + result.status +
+        '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    assert.ok(
+      result.stderr.includes('violation.test.tsx.utils.ts') ||
+        result.stdout.includes('violation.test.tsx.utils.ts'),
+      'scanner output does not mention the violating file'
+    );
+  });
 });
 
 test('scanner in --production-only mode flags a raw-Dexie write inside a non-test file in __tests__/', () => {
@@ -392,40 +368,18 @@ test('scanner in --production-only mode flags a raw-Dexie write inside a non-tes
   // in its name) placed inside client/src/__tests__/ with a direct
   // db.records.add() call must still cause the scanner to exit non-zero even
   // when --production-only is active.
-  const ROOT = path.resolve(path.dirname(__filename), '..');
-  const fixtureDir = path.join(ROOT, 'client', 'src', '__tests__');
-  const fixtureFile = path.join(fixtureDir, 'violation_helper.ts');
-
-  // __tests__ may already exist; create the fixture file only.
-  const dirExisted = fs.existsSync(fixtureDir);
-  if (!dirExisted) {
-    fs.mkdirSync(fixtureDir, { recursive: true });
-  }
-  fs.writeFileSync(
-    fixtureFile,
-    '// CRUD-guard fixture — do not commit\ndb.records.add({ id: "x" });\n'
-  );
-
-  let result;
-  try {
-    result = spawnSync('node', [SCANNER, '--production-only'], { cwd: ROOT, encoding: 'utf8', timeout: 30_000 });
-  } finally {
-    fs.rmSync(fixtureFile, { force: true });
-    // Only remove the directory if we created it.
-    if (!dirExisted) {
-      try { fs.rmdirSync(fixtureDir); } catch { /* ignore if non-empty */ }
-    }
-  }
-
-  assert.equal(
-    result.status,
-    1,
-    'scanner with --production-only should exit 1 when a non-test file inside __tests__/ ' +
-      'contains a guarded-table write, but it exited ' + result.status +
-      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
-  );
-  assert.ok(
-    result.stderr.includes('violation_helper.ts') || result.stdout.includes('violation_helper.ts'),
-    'scanner output does not mention the violating non-test helper file'
-  );
+  withCrudGuardFixture(path.join('__tests__', 'violation_helper.ts'), (fixtureFile) => {
+    const result = runScanner(fixtureFile, '--production-only');
+    assert.equal(
+      result.status,
+      1,
+      'scanner with --production-only should exit 1 when a non-test file inside __tests__/ ' +
+        'contains a guarded-table write, but it exited ' + result.status +
+        '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    assert.ok(
+      result.stderr.includes('violation_helper.ts') || result.stdout.includes('violation_helper.ts'),
+      'scanner output does not mention the violating non-test helper file'
+    );
+  });
 });
