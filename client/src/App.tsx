@@ -17,9 +17,13 @@ import { LegacyMigrationOverlay } from "@/components/LegacyMigrationOverlay";
 import { useAdaptiveLocation } from "@/lib/hashLocation";
 import {
   Component,
+  createContext,
   lazy,
   Suspense,
   useCallback,
+  useContext,
+  useDeferredValue,
+  useRef,
   useState,
   useEffect,
   type ComponentType,
@@ -37,6 +41,7 @@ import { useNodeSettings } from "@/hooks/use-node-settings";
 type RouteLoadErrorBoundaryProps = {
   children: ReactNode;
   onRetry: () => void;
+  suppressFallback?: boolean;
 };
 
 type RouteLoadErrorBoundaryState = {
@@ -60,6 +65,7 @@ class RouteLoadErrorBoundary extends Component<
 
   render() {
     if (this.state.error) {
+      if (this.props.suppressFallback) return null;
       return (
         <div
           className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center"
@@ -83,27 +89,69 @@ class RouteLoadErrorBoundary extends Component<
   }
 }
 
+type RouteNavigationState = {
+  pendingPath: string | null;
+  retryGeneration: number;
+  reportFailure: (path: string) => void;
+};
+
+const RouteNavigationContext = createContext<RouteNavigationState>({
+  pendingPath: null,
+  retryGeneration: 0,
+  reportFailure: () => undefined,
+});
+
+function RetryableRouteBoundary({
+  children,
+  onRetry,
+}: {
+  children: ReactNode;
+  onRetry: () => void;
+}) {
+  const { pendingPath } = useContext(RouteNavigationContext);
+  return (
+    <RouteLoadErrorBoundary
+      onRetry={onRetry}
+      suppressFallback={Boolean(pendingPath)}
+    >
+      {children}
+    </RouteLoadErrorBoundary>
+  );
+}
+
 export function retryableLazy(
   importer: () => Promise<{ default: ComponentType<Record<string, never>> }>,
 ) {
-  const InitialLazyRoute = lazy(importer);
+  const lazyRoutes = new Map<string, ReturnType<typeof lazy>>();
 
   return function RetryableLazyRoute() {
+    const { pendingPath, retryGeneration, reportFailure } = useContext(RouteNavigationContext);
     const [attempt, setAttempt] = useState(0);
-    const [LazyRoute, setLazyRoute] = useState(() => InitialLazyRoute);
+    const navigationKey = useRef(
+      pendingPath ? `navigation:${pendingPath}:${retryGeneration}` : null,
+    );
+    const routeKey = navigationKey.current ?? `standalone:${attempt}`;
+    let LazyRoute = lazyRoutes.get(routeKey);
+    if (!LazyRoute) {
+      const failedPath = pendingPath;
+      LazyRoute = lazy(() => importer().catch((error) => {
+        if (failedPath) reportFailure(failedPath);
+        throw error;
+      }));
+      lazyRoutes.set(routeKey, LazyRoute);
+    }
 
     const retry = () => {
-      setLazyRoute(() => lazy(importer));
       setAttempt((value) => value + 1);
     };
 
     return (
-      <RouteLoadErrorBoundary
+      <RetryableRouteBoundary
         key={attempt}
         onRetry={retry}
       >
         <LazyRoute />
-      </RouteLoadErrorBoundary>
+      </RetryableRouteBoundary>
     );
   };
 }
@@ -168,15 +216,15 @@ const AddressPoisoning = retryableLazy(() => import("@/pages/AddressPoisoning"))
 const DormantCoins = retryableLazy(() => import("@/pages/DormantCoins"));
 const NotFound = retryableLazy(() => import("@/pages/not-found"));
 
-function RouteCommitReporter({ onCommit }: { onCommit: () => void }) {
+function RouteCommitReporter({ onCommit }: { onCommit: (path: string) => void }) {
   const [location] = useLocation();
   useEffect(() => {
-    onCommit();
+    onCommit(location);
   }, [location, onCommit]);
   return null;
 }
 
-function AppRoutes({ onRouteCommit }: { onRouteCommit: () => void }) {
+function AppRoutes({ onRouteCommit }: { onRouteCommit: (path: string) => void }) {
   return (
     <Suspense fallback={<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground" data-testid="route-loading">Loading page…</div>}>
       <Switch>
@@ -276,6 +324,90 @@ function DeferredBackgroundServices({ enabled }: { enabled: boolean }) {
   );
 }
 
+export function RouteNavigationContent({
+  location,
+  navigate,
+  onInitialCommit,
+  renderRoutes,
+}: {
+  location: string;
+  navigate: (path: string) => void;
+  onInitialCommit?: () => void;
+  renderRoutes?: (onCommit: (path: string) => void) => ReactNode;
+}) {
+  const displayedLocation = useDeferredValue(location);
+  const [committedPath, setCommittedPath] = useState(location);
+  const [failedPath, setFailedPath] = useState<string | null>(null);
+  const [retryGeneration, setRetryGeneration] = useState(0);
+  const initialCommitReported = useRef(false);
+  const pendingPathRef = useRef<string | null>(null);
+  const committedPathRef = useRef(committedPath);
+  const navigateRef = useRef(navigate);
+  const markRouteCommitted = useCallback((path: string) => {
+    setCommittedPath(path);
+    setFailedPath(null);
+    if (!initialCommitReported.current) {
+      initialCommitReported.current = true;
+      onInitialCommit?.();
+    }
+  }, [onInitialCommit]);
+  const pendingPath = committedPath === location ? null : location;
+  pendingPathRef.current = pendingPath;
+  committedPathRef.current = committedPath;
+  navigateRef.current = navigate;
+  const reportFailure = useCallback((path: string) => {
+    if (path !== pendingPathRef.current) return;
+    setFailedPath(path);
+    navigateRef.current(committedPathRef.current);
+  }, []);
+  const retryFailedNavigation = useCallback(() => {
+    if (!failedPath) return;
+    const target = failedPath;
+    setRetryGeneration((value) => value + 1);
+    setFailedPath(null);
+    navigate(target);
+  }, [failedPath, navigate]);
+
+  return (
+    <main className="relative flex-1 flex flex-col overflow-hidden">
+      <RouteNavigationContext.Provider value={{ pendingPath, retryGeneration, reportFailure }}>
+        <Router hook={() => [displayedLocation, navigate]}>
+          {renderRoutes ? renderRoutes(markRouteCommitted) : <AppRoutes onRouteCommit={markRouteCommitted} />}
+        </Router>
+      </RouteNavigationContext.Provider>
+      {pendingPath && (
+        <div
+          className="absolute right-4 top-4 rounded-md border bg-background/95 px-3 py-2 text-sm shadow-sm"
+          role="status"
+          data-testid="route-navigation-loading"
+        >
+          Loading selected page…
+        </div>
+      )}
+      {failedPath && (
+        <div
+          className="absolute right-4 top-4 max-w-sm rounded-md border border-destructive/40 bg-background p-4 shadow-lg"
+          role="alert"
+          data-testid="route-navigation-error"
+        >
+          <p className="font-medium">The selected page couldn't be downloaded</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Your current page is still available. Check your connection and try again.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button size="sm" onClick={retryFailedNavigation} data-testid="button-retry-navigation">
+              Try again
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setFailedPath(null)}>
+              Stay on this page
+            </Button>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
 // Loads any persisted offline entity-list snapshot into the active Privacy
 // Audit list once at startup. Falls back silently to the bundled list. Shows
 // a non-blocking warning toast when the snapshot was partially invalid and
@@ -341,8 +473,9 @@ function SyncStatsBackfill() {
 
 function AuthenticatedApp() {
   const { logout } = useAuth();
+  const [location, navigate] = useLocation();
   const [initialRouteCommitted, setInitialRouteCommitted] = useState(false);
-  const markRouteCommitted = useCallback(() => setInitialRouteCommitted(true), []);
+  const markInitialRouteCommitted = useCallback(() => setInitialRouteCommitted(true), []);
   
   const style = {
     "--sidebar-width": "20rem",
@@ -379,9 +512,11 @@ function AuthenticatedApp() {
                   </Button>
                 </div>
               </header>
-              <main className="flex-1 flex flex-col overflow-hidden">
-                <AppRoutes onRouteCommit={markRouteCommitted} />
-              </main>
+              <RouteNavigationContent
+                location={location}
+                navigate={navigate}
+                onInitialCommit={markInitialRouteCommitted}
+              />
             </div>
           </div>
         </SidebarProvider>
