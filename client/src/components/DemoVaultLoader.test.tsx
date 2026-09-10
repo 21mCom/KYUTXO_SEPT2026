@@ -27,9 +27,9 @@ vi.mock("@/lib/backup/zip-stream", () => ({
   blobChunks: (file: unknown) => file,
 }));
 
-const isV3Manifest = vi.fn();
+const classifyBackupManifest = vi.fn();
 vi.mock("@/lib/backup/format", () => ({
-  isV3Manifest: (...args: unknown[]) => isV3Manifest(...args),
+  classifyBackupManifest: (...args: unknown[]) => classifyBackupManifest(...args),
 }));
 
 vi.mock("@/lib/backup/restore-attachment-writer", () => ({
@@ -100,7 +100,7 @@ describe("DemoVaultLoader", () => {
   it("runs the v3 restore path and reloads when a plaintext v3 zip is picked", async () => {
     liveCount = 0;
     peekManifest.mockResolvedValue({ formatVersion: 3, encrypted: false });
-    isV3Manifest.mockReturnValue(true);
+    classifyBackupManifest.mockReturnValue(true);
     restoreV3Backup.mockResolvedValue({
       counts: { records: 4500, blockchainTransactions: 700 },
     });
@@ -118,7 +118,7 @@ describe("DemoVaultLoader", () => {
   it("refuses encrypted backups without touching the vault", async () => {
     liveCount = 0;
     peekManifest.mockResolvedValue({ formatVersion: 3, encrypted: true });
-    isV3Manifest.mockReturnValue(true);
+    classifyBackupManifest.mockReturnValue(true);
 
     render(<DemoVaultLoader />);
     pickFile();
@@ -136,7 +136,7 @@ describe("DemoVaultLoader", () => {
   it("refuses non-v3 zips without touching the vault", async () => {
     liveCount = 0;
     peekManifest.mockResolvedValue({});
-    isV3Manifest.mockReturnValue(false);
+    classifyBackupManifest.mockReturnValue(false);
 
     render(<DemoVaultLoader />);
     pickFile();
@@ -169,7 +169,7 @@ describe("DemoVaultLoader", () => {
       }
       return { formatVersion: 3, encrypted: false };
     });
-    isV3Manifest.mockReturnValue(true);
+    classifyBackupManifest.mockReturnValue(true);
     restoreV3Backup.mockResolvedValue({
       counts: { records: 4500, blockchainTransactions: 700 },
     });
@@ -238,7 +238,7 @@ describe("DemoVaultLoader", () => {
   it("surfaces restore failures and re-enables the button", async () => {
     liveCount = 0;
     peekManifest.mockResolvedValue({ formatVersion: 3, encrypted: false });
-    isV3Manifest.mockReturnValue(true);
+    classifyBackupManifest.mockReturnValue(true);
     restoreV3Backup.mockRejectedValue(new Error("boom"));
 
     render(<DemoVaultLoader />);

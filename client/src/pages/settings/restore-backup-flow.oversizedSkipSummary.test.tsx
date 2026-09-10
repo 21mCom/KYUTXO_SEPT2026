@@ -45,6 +45,12 @@ vi.mock("@/lib/backup/post-restore-backfill", () => ({
 
 vi.mock("@/lib/backup/legacy-restore-pipeline", () => ({
   runLegacyJsonRestore: (...args: unknown[]) => runLegacyJsonRestore(...args),
+  assertLegacyBackupData: (data: unknown) => {
+    if (!data || typeof data !== "object" ||
+        !Array.isArray((data as { records?: unknown }).records)) {
+      throw new Error("Invalid legacy backup data");
+    }
+  },
 }));
 
 vi.mock("@/lib/data/settings-crud", () => ({
@@ -75,9 +81,12 @@ import { RestoreBackupFlow } from "./restore-backup-flow";
 
 const V3_MANIFEST = {
   formatVersion: 3,
+  app: "KYUTXO",
+  appVersion: "3.0.0-legacy",
   encrypted: false,
   exportDate: "2026-08-01T00:00:00.000Z",
   counts: { records: 2 },
+  streamedTables: [],
 };
 
 const BASE_COUNTS = {

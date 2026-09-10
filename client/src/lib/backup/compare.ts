@@ -30,7 +30,7 @@ import {
   isStreamedTablePath,
   parseBatchLine,
   parseInline,
-  isV3Manifest,
+  classifyBackupManifest,
   MANIFEST_FILENAME,
   ATTACHMENTS_DIR,
   CHECK_SENTINEL,
@@ -297,9 +297,7 @@ export async function readBackupSnapshot(opts: SnapshotOptions): Promise<BackupS
         return collectBytesConsumer(async (bytes) => {
           throwIfAborted();
           const parsed = JSON.parse(new TextDecoder().decode(bytes));
-          if (!isV3Manifest(parsed)) {
-            throw new Error("Not a v3 backup");
-          }
+          if (!classifyBackupManifest(parsed)) throw new Error("Not a v3 backup");
           manifest = parsed;
           if (manifest.encrypted) {
             if (!opts.password) throw new Error("Password required for encrypted backup");

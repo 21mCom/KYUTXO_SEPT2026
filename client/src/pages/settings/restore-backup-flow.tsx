@@ -40,7 +40,12 @@ import {
   analyzeV3Backup,
   type MergeAnalysisResult,
 } from "@/lib/backup/analyze";
-import { isV3Manifest, parseInline, getBackupKdfParams } from "@/lib/backup/format";
+import {
+  classifyBackupManifest,
+  assertLegacyBackupEnvelope,
+  parseInline,
+  getBackupKdfParams,
+} from "@/lib/backup/format";
 import {
   previewSettingsPreferences,
   type PortablePreferencePreview,
@@ -133,7 +138,7 @@ export function RestoreBackupFlow() {
       // streaming peek so a multi-GB backup is never loaded into memory just to
       // preview it. The v3 manifest carries counts/encrypted/date in plaintext.
       const manifestPeek = await peekManifest(blobChunks(file));
-      if (isV3Manifest(manifestPeek)) {
+      if (classifyBackupManifest(manifestPeek)) {
         setBackupInfo({
           encrypted: manifestPeek.encrypted || false,
           date: manifestPeek.exportDate || "Unknown",
@@ -154,11 +159,14 @@ export function RestoreBackupFlow() {
 
       const content = await backupFile.async("text");
       const backup = JSON.parse(content);
+      assertLegacyBackupEnvelope(backup);
 
       setBackupInfo({
         encrypted: backup.encrypted || false,
         date: backup.exportDate || "Unknown",
-        recordCount: backup.encrypted ? -1 : (backup.data?.records?.length || 0),
+        recordCount: backup.encrypted
+          ? -1
+          : (Array.isArray(backup.data.records) ? backup.data.records.length : 0),
       });
     } catch (error) {
       console.error("Failed to read backup file:", error);
@@ -243,7 +251,7 @@ export function RestoreBackupFlow() {
 
     try {
       const manifestPeek = await peekManifest(blobChunks(restoreFile));
-      if (isV3Manifest(manifestPeek)) {
+      if (classifyBackupManifest(manifestPeek)) {
         let key: CryptoKey | null = null;
         if (manifestPeek.encrypted) {
           if (!restorePassword) {
@@ -325,6 +333,7 @@ export function RestoreBackupFlow() {
         throw new Error("Invalid backup file - missing backup.json");
       }
       const backup = JSON.parse(await backupFile.async("text"));
+      assertLegacyBackupEnvelope(backup);
 
       let legacyData = backup.data;
       if (backup.encrypted) {
@@ -459,7 +468,7 @@ export function RestoreBackupFlow() {
       // backups (no formatVersion / a `.data` blob) fall through to the legacy
       // JSON path below, which is left untouched for backward compatibility.
       const manifestPeek = await peekManifest(blobChunks(restoreFile));
-      if (isV3Manifest(manifestPeek)) {
+      if (classifyBackupManifest(manifestPeek)) {
         wasV3Restore = true;
         // Pre-flight disk-space check (Electron only). Attachment files are
         // stored UNCOMPRESSED in the v3 ZIP and are what a restore writes to

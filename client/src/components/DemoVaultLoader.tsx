@@ -12,7 +12,7 @@ import {
 } from "@/lib/backup/restore";
 import { createRestoreAttachmentWriter } from "@/lib/backup/restore-attachment-writer";
 import { blobChunks } from "@/lib/backup/zip-stream";
-import { isV3Manifest } from "@/lib/backup/format";
+import { classifyBackupManifest } from "@/lib/backup/format";
 import { runPostRestoreTxidBackfill } from "@/lib/backup/post-restore-backfill";
 import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
 import { getElectronAPISafe } from "@/lib/electron";
@@ -98,7 +98,7 @@ export function DemoVaultLoader() {
       // (legacy/encrypted/random zip) should go through the full Settings
       // restore flow, which handles passwords and legacy formats.
       const manifestPeek = await peekManifest(makeChunks());
-      if (!isV3Manifest(manifestPeek)) {
+      if (!classifyBackupManifest(manifestPeek)) {
         toast({
           variant: "destructive",
           title: "Not a demo vault",

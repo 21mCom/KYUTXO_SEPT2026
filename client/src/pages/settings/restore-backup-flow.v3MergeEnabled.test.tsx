@@ -68,9 +68,12 @@ import { RestoreBackupFlow } from "./restore-backup-flow";
 // `inline` payload, so the prepare stage's parseInline returns {}.
 const V3_MANIFEST = {
   formatVersion: 3,
+  app: "KYUTXO",
+  appVersion: "3.0.0-legacy",
   encrypted: false,
   exportDate: "2026-07-30T00:00:00.000Z",
   counts: { records: 5 },
+  streamedTables: [],
 };
 
 const RESTORE_RESULT = {

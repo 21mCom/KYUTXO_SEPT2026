@@ -261,6 +261,10 @@ describe("v3 encrypted restore round-trips", () => {
     for (const [path, bytes] of sourceFiles) {
       expect([...(restoredFiles.get(path) ?? [])]).toEqual([...bytes]);
     }
+
+    db.close();
+    await db.open();
+    expect(await liveCounts()).toEqual(live);
   });
 });
 

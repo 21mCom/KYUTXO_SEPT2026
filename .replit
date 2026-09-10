@@ -1913,7 +1913,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx vitest run client/src/lib/legacy-migration.test.ts client/src/lib/__tests__/legacy-decrypt.test.ts client/src/components/LegacyMigrationOverlay.test.tsx"
+args = "npx vitest run client/src/lib/legacy-migration.test.ts client/src/lib/__tests__/legacy-decrypt.test.ts client/src/components/LegacyMigrationOverlay.test.tsx client/src/lib/backup/format.compatibility.test.ts client/src/lib/backup/kdf-params.runtime.test.ts client/src/lib/backup/restore.edge.runtime.test.ts client/src/lib/backup/legacy-restore-pipeline.runtime.test.ts client/src/lib/backup/legacy-restore.runtime.test.ts client/src/lib/backup/legacy-restore-misc.runtime.test.ts client/src/lib/backup/legacy-node-settings-restore.runtime.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true

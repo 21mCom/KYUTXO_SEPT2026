@@ -10,7 +10,7 @@ import { computeCompactPlan } from "./compact";
 import { BackupCancelledError, type BackupSink } from "./sink";
 import { peekManifest } from "./restore";
 import {
-  isV3Manifest,
+  classifyBackupManifest,
   parseInline,
   parseBatchLine,
   getBackupKdfParams,
@@ -405,7 +405,9 @@ export async function verifyScheduledBackup(
   throwIfCancelled(signal);
   const peek = await peekManifest(sourceFactory());
   await validateZipStructure(sourceFactory, signal);
-  if (!isV3Manifest(peek)) throw new Error("Scheduled backup is not a valid KYUTXO v3 archive");
+  if (!classifyBackupManifest(peek)) {
+    throw new Error("Scheduled backup is not a valid KYUTXO v3 archive");
+  }
   let key: CryptoKey | null = null;
   if (peek.encrypted) {
     if (!password) throw new Error("An encryption password is required to verify this backup");

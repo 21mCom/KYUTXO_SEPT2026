@@ -134,6 +134,74 @@ export function isV3Manifest(obj: unknown): obj is BackupManifest {
   );
 }
 
+/** Validate the manifest fields which are needed before a v3 restore starts. */
+export function assertV3Manifest(obj: unknown): asserts obj is BackupManifest {
+  if (!obj || typeof obj !== "object") throw new Error("Invalid v3 backup manifest");
+  const m = obj as Partial<BackupManifest>;
+  if (m.formatVersion !== BACKUP_FORMAT_VERSION ||
+      typeof m.app !== "string" ||
+      typeof m.appVersion !== "string" ||
+      typeof m.exportDate !== "string" ||
+      typeof m.encrypted !== "boolean" ||
+      !m.counts || typeof m.counts !== "object" ||
+      !Array.isArray(m.streamedTables)) {
+    throw new Error("Invalid v3 backup manifest");
+  }
+  if (m.encrypted) {
+    if (typeof m.salt !== "string" || typeof m.check !== "string") {
+      throw new Error("Invalid encrypted v3 backup manifest");
+    }
+  } else if (m.salt !== undefined || m.check !== undefined) {
+    throw new Error("Invalid plaintext v3 backup manifest");
+  }
+}
+
+/**
+ * Classify a backup manifest without allowing a damaged v3-looking object to
+ * fall through to the legacy whole-file restore (which has a destructive path).
+ */
+export function classifyBackupManifest(obj: unknown): obj is BackupManifest {
+  // Legacy single-file archives have no manifest.json, so peekManifest returns
+  // null and the caller must continue to backup.json envelope validation.
+  if (obj === null) return false;
+  if (typeof obj !== "object") throw new Error("Invalid backup manifest");
+  const value = obj as Record<string, unknown>;
+  const v3Looking =
+    "formatVersion" in value ||
+    "streamedTables" in value ||
+    "counts" in value ||
+    "inline" in value ||
+    "inlineEnc" in value;
+  if (v3Looking) {
+    assertV3Manifest(obj);
+    return true;
+  }
+  assertLegacyBackupEnvelope(obj);
+  return false;
+}
+
+/** Validate the outer envelope before decrypting or clearing a legacy restore. */
+export type LegacyBackupEnvelope =
+  | { encrypted: true; data: string; salt: string; exportDate?: string }
+  | { encrypted: false; data: Record<string, unknown>; exportDate?: string };
+
+export function assertLegacyBackupEnvelope(
+  obj: unknown,
+): asserts obj is LegacyBackupEnvelope {
+  if (!obj || typeof obj !== "object") throw new Error("Invalid legacy backup envelope");
+  const envelope = obj as Record<string, unknown>;
+  if (typeof envelope.encrypted !== "boolean" || !("data" in envelope)) {
+    throw new Error("Invalid legacy backup envelope");
+  }
+  if (envelope.encrypted) {
+    if (typeof envelope.data !== "string" || typeof envelope.salt !== "string") {
+      throw new Error("Invalid encrypted legacy backup envelope");
+    }
+  } else if (!envelope.data || typeof envelope.data !== "object" || Array.isArray(envelope.data)) {
+    throw new Error("Invalid plaintext legacy backup envelope");
+  }
+}
+
 // Iteration count the backup's encryption key was derived with. Manifests
 // written before the KDF strengthening carry no kdfIterations field and are
 // always legacy (100k). PBKDF2-era resolution only — prefer getBackupKdfParams.

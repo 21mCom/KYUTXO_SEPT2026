@@ -19,7 +19,7 @@ import {
   isStreamedTablePath,
   parseBatchLine,
   parseInline,
-  isV3Manifest,
+  classifyBackupManifest,
   MANIFEST_FILENAME,
   ATTACHMENTS_DIR,
   CHECK_SENTINEL,
@@ -1491,9 +1491,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
           return collectBytesConsumer(async (bytes) => {
             throwIfAborted();
             const parsed = JSON.parse(new TextDecoder().decode(bytes));
-            if (!isV3Manifest(parsed)) {
-              throw new Error("Not a v3 backup");
-            }
+            if (!classifyBackupManifest(parsed)) throw new Error("Not a v3 backup");
             manifest = parsed;
             compactRestore = manifest.compact === true;
 

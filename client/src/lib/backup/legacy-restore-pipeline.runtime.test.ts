@@ -48,6 +48,7 @@ import {
   getAllTransactions,
   getAllTransactionParticipants,
 } from "@/lib/data/transaction-crud";
+import { getSettings } from "@/lib/data/settings-crud";
 import {
   clearAddressSyncState,
   getAllAddressSyncState,
@@ -124,6 +125,7 @@ function makeBackupData() {
     addressSyncState: [
       { id: 1, address: "addr-a", recordId: 101, lastSyncedHeight: 800000, lastSyncedAt: 1_700_000_000, txCount: 1 },
     ],
+    settings: [{ id: "default", disableOrphanCheck: true }],
   };
 }
 
@@ -489,6 +491,27 @@ describe("runLegacyJsonRestore: encrypted backups", () => {
     expect(await getAllRecords()).toHaveLength(2);
   });
 
+  it("keeps restored relationships, settings, and attachment metadata after database reopen", async () => {
+    const file = await makeEncryptedZip(makeBackupData(), "hunter2");
+    const { cb } = makeCallbacks();
+
+    await runLegacyJsonRestore(file, "hunter2", "replace", cb);
+    db.close();
+    await db.open();
+
+    const records = await getAllRecords();
+    const addrA = records.find((record) => record.inputString === "addr-a");
+    expect(addrA?.id).toEqual(expect.any(Number));
+
+    const [participant] = await getAllTransactionParticipants();
+    expect(participant.recordId).toBe(addrA?.id);
+    expect((await getAllAddressSyncState())[0].recordId).toBe(addrA?.id);
+    expect((await getAllAttachments()).find((attachment) => attachment.filename === "a.pdf")?.recordId)
+      .toBe(addrA?.id);
+    expect((await getAllTransactions()).filter((tx) => tx.txid === "tx-1")).toHaveLength(1);
+    expect((await getSettings())?.disableOrphanCheck).toBe(true);
+  });
+
   it("throws the wrong-password error before touching the vault", async () => {
     await bulkCreateRecords(
       [{ type: "address", inputString: "keep-me", label: "Keep", tags: [], categories: [] } as any],
@@ -622,7 +645,7 @@ describe("runLegacyJsonRestore: invalid backups", () => {
     const { cb, events } = makeCallbacks();
 
     await expect(runLegacyJsonRestore(file, "", "replace", cb)).rejects.toThrow(
-      "Invalid legacy backup data",
+      "Invalid plaintext legacy backup envelope",
     );
     expect(await countRecords()).toBe(1);
     expect(events.some((event) => event.kind === "cleared")).toBe(false);
@@ -636,5 +659,37 @@ describe("runLegacyJsonRestore: invalid backups", () => {
     await expect(runLegacyJsonRestore(file, "", "replace", cb)).rejects.toThrow(
       "Invalid backup file",
     );
+  });
+
+  it("rejects a malformed optional table before replace mode clears the live vault", async () => {
+    await bulkCreateRecords(
+      [{ type: "address", inputString: "live-record", label: "Keep me", tags: [], categories: [] } as any],
+      { skipNotification: true },
+    );
+    const file = await makePlainZip({ records: [], attachments: { damaged: true } });
+    const { cb, events } = makeCallbacks();
+
+    await expect(runLegacyJsonRestore(file, "", "replace", cb)).rejects.toThrow(
+      "Invalid legacy backup data: attachments must be an array",
+    );
+    expect(await countRecords()).toBe(1);
+    expect(events.some((event) => event.kind === "cleared")).toBe(false);
+  });
+
+  it("rejects a non-boolean encryption marker before replace mode clears the live vault", async () => {
+    await bulkCreateRecords(
+      [{ type: "address", inputString: "live-record", label: "Keep me", tags: [], categories: [] } as any],
+      { skipNotification: true },
+    );
+    const zip = new JSZip();
+    zip.file("backup.json", JSON.stringify({ encrypted: "false", data: makeBackupData() }));
+    const file = await zipToFile(zip);
+    const { cb, events } = makeCallbacks();
+
+    await expect(runLegacyJsonRestore(file, "", "replace", cb)).rejects.toThrow(
+      "Invalid legacy backup envelope",
+    );
+    expect(await countRecords()).toBe(1);
+    expect(events.some((event) => event.kind === "cleared")).toBe(false);
   });
 });

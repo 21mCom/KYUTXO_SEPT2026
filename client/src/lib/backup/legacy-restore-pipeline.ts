@@ -57,6 +57,7 @@ import { getVaultRepository } from "@/lib/repository";
 import { runRecordModelMigration } from "@/lib/data/record-model-crud";
 import { BackupCancelledError } from "./sink";
 import { RestoreInterruptedError } from "./restore";
+import { assertLegacyBackupEnvelope } from "./format";
 
 export type LegacyRestoreMode = "replace" | "merge";
 
@@ -76,9 +77,25 @@ export interface LegacyRestoreOptions {
   cleanupAfterClear?: () => Promise<void>;
 }
 
-export function assertLegacyBackupData(data: any): void {
-  if (!data || typeof data !== "object" || !Array.isArray(data.records)) {
+export function assertLegacyBackupData(
+  data: unknown,
+): asserts data is Record<string, any> & { records: any[] } {
+  const value = data as Record<string, unknown> | null;
+  if (!value || !Array.isArray(value.records)) {
     throw new Error("Invalid legacy backup data");
+  }
+  const tableFields = [
+    "tags", "categories", "attachments", "recordOrigins", "customFields",
+    "owners", "ownerResidencies", "walletNames", "seedNames", "walletSoftware",
+    "derivationTemplates", "evidence", "evidenceAttachments", "priceData",
+    "settings", "nodeSettings", "utxoLineage", "custodySegments",
+    "lineageSnapshots", "blockchainTransactions", "transactionParticipants",
+    "addressSyncState", "dustFlags",
+  ];
+  for (const field of tableFields) {
+    if (value[field] !== undefined && !Array.isArray(value[field])) {
+      throw new Error(`Invalid legacy backup data: ${field} must be an array`);
+    }
   }
 }
 
@@ -199,6 +216,7 @@ export async function runLegacyJsonRestore(
   cb.onProgress(10, "Reading backup file...");
   const content = await backupFile.async("text");
   const backup = JSON.parse(content);
+  assertLegacyBackupEnvelope(backup);
 
   let data = backup.data;
 
