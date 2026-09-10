@@ -15,41 +15,12 @@ import { LogOut } from "lucide-react";
 import { KeyboardShortcutsDialog } from "@/components/KeyboardShortcutsDialog";
 import { LegacyMigrationOverlay } from "@/components/LegacyMigrationOverlay";
 import { useAdaptiveLocation } from "@/lib/hashLocation";
-import Dashboard from "@/pages/Dashboard";
-import ValueUpdaterPage from "@/pages/ValueUpdaterPage";
-import BulkImport from "@/pages/BulkImport";
-import WalletImport from "@/pages/WalletImport";
-import MobileWalletImport from "@/pages/MobileWalletImport";
-import DescriptorImport from "@/pages/DescriptorImport";
-import BIP329Import from "@/pages/BIP329Import";
-import PriceImport from "@/pages/PriceImport";
-import TransactionSync from "@/pages/TransactionSync";
-import Transactions from "@/pages/Transactions";
-import Provenance from "@/pages/Provenance";
-import AddressReuse from "@/pages/AddressReuse";
-import DataStats from "@/pages/DataStats";
-import Records from "@/pages/Records";
-import QRScanner from "@/pages/QRScanner";
-import ExportPage from "@/pages/ExportPage";
-import SettingsPage from "@/pages/SettingsPage";
-import NodeSettings from "@/pages/NodeSettings";
-import Reports from "@/pages/Reports";
-import LightningSpeculator from "@/pages/LightningSpeculator";
-import UTXOs from "@/pages/UTXOs";
-import UtxoProvenance from "@/pages/UtxoProvenance";
-import Nudgie from "@/pages/Nudgie";
-import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
-import BulkEditor from "@/pages/BulkEditor";
-import QuickTagger from "@/pages/QuickTagger";
-import { lazy, Suspense, useState, useEffect } from "react";
+import { lazy, Suspense, useCallback, useState, useEffect } from "react";
 import { OrphanedTxNotifier } from "@/components/OrphanedTxNotifier";
 import { ActivityBusProvider } from "@/lib/activity-bus";
 import { ActivityPulseDot } from "@/components/ActivityPulseDot";
 import { EngineBootstrapper, EnginePreparingIndicator } from "@/components/EngineMaintenanceUI";
 import { GlobalCommandPalette } from "@/components/GlobalCommandPalette";
-import CoinOrigins from "@/pages/CoinOrigins";
-import TransactionInbox from "@/pages/TransactionInbox";
-import ResolveOwnership from "@/pages/ResolveOwnership";
 import { NetworkPrivacyControl } from "@/components/NetworkPrivacyControl";
 import { NetworkPrivacyOnboarding } from "@/components/NetworkPrivacyOnboarding";
 import { useNodeSettings } from "@/hooks/use-node-settings";
@@ -60,33 +31,72 @@ const NavigationPatterns = lazy(() => import("@/pages/NavigationPatterns"));
 const GroupedSidebarPreview = lazy(() => import("@/pages/GroupedSidebarPreview"));
 const FlowVisualizations = lazy(() => import("@/pages/FlowVisualizations"));
 const DevTestData = lazy(() => import("@/pages/DevTestData"));
-import ConflictResolution from "@/pages/ConflictResolution";
-import EvidencePage from "@/pages/Evidence";
-import VaultManagement from "@/pages/VaultManagement";
-import WalletOverview from "@/pages/WalletOverview";
-import Cleanup from "@/pages/Cleanup";
-import StatementReport from "@/pages/StatementReport";
-import QuantumRiskScanner from "@/pages/QuantumRiskScanner";
-import PrivacyAudit from "@/pages/PrivacyAudit";
-import BalanceOverview from "@/pages/BalanceOverview";
-import NetworkAnalysis from "@/pages/NetworkAnalysis";
-import FundTrail from "@/pages/FundTrail";
-import EngineDiagnostics from "@/pages/EngineDiagnostics";
-import DatabaseDoctor from "@/pages/DatabaseDoctor";
-import VaultHealth from "@/pages/VaultHealth";
 import { ScheduledBackupRunner } from "@/components/ScheduledBackupRunner";
-import AnnualActivityReport from "@/pages/AnnualActivityReport";
-import AddressChecker from "@/pages/AddressChecker";
-import AddressDeriver from "@/pages/AddressDeriver";
-import ProofOfFundsDeclaration from "@/pages/ProofOfFundsDeclaration";
-import DustedPage from "@/pages/DustedPage";
-import AddressPoisoning from "@/pages/AddressPoisoning";
-import DormantCoins from "@/pages/DormantCoins";
-import NotFound from "@/pages/not-found";
 
-function AppRoutes() {
+const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const ValueUpdaterPage = lazy(() => import("@/pages/ValueUpdaterPage"));
+const BulkImport = lazy(() => import("@/pages/BulkImport"));
+const WalletImport = lazy(() => import("@/pages/WalletImport"));
+const MobileWalletImport = lazy(() => import("@/pages/MobileWalletImport"));
+const DescriptorImport = lazy(() => import("@/pages/DescriptorImport"));
+const BIP329Import = lazy(() => import("@/pages/BIP329Import"));
+const PriceImport = lazy(() => import("@/pages/PriceImport"));
+const TransactionSync = lazy(() => import("@/pages/TransactionSync"));
+const Transactions = lazy(() => import("@/pages/Transactions"));
+const TransactionInbox = lazy(() => import("@/pages/TransactionInbox"));
+const ResolveOwnership = lazy(() => import("@/pages/ResolveOwnership"));
+const UTXOs = lazy(() => import("@/pages/UTXOs"));
+const UtxoProvenance = lazy(() => import("@/pages/UtxoProvenance"));
+const CoinOrigins = lazy(() => import("@/pages/CoinOrigins"));
+const Nudgie = lazy(() => import("@/pages/Nudgie"));
+const LightningSpeculator = lazy(() => import("@/pages/LightningSpeculator"));
+const Provenance = lazy(() => import("@/pages/Provenance"));
+const AddressReuse = lazy(() => import("@/pages/AddressReuse"));
+const DataStats = lazy(() => import("@/pages/DataStats"));
+const Records = lazy(() => import("@/pages/Records"));
+const QRScanner = lazy(() => import("@/pages/QRScanner"));
+const ExportPage = lazy(() => import("@/pages/ExportPage"));
+const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
+const NodeSettings = lazy(() => import("@/pages/NodeSettings"));
+const Reports = lazy(() => import("@/pages/Reports"));
+const BitcoinFlowVisualizer = lazy(() => import("@/pages/BitcoinFlowVisualizer"));
+const BulkEditor = lazy(() => import("@/pages/BulkEditor"));
+const QuickTagger = lazy(() => import("@/pages/QuickTagger"));
+const ConflictResolution = lazy(() => import("@/pages/ConflictResolution"));
+const EvidencePage = lazy(() => import("@/pages/Evidence"));
+const VaultManagement = lazy(() => import("@/pages/VaultManagement"));
+const WalletOverview = lazy(() => import("@/pages/WalletOverview"));
+const Cleanup = lazy(() => import("@/pages/Cleanup"));
+const StatementReport = lazy(() => import("@/pages/StatementReport"));
+const QuantumRiskScanner = lazy(() => import("@/pages/QuantumRiskScanner"));
+const PrivacyAudit = lazy(() => import("@/pages/PrivacyAudit"));
+const BalanceOverview = lazy(() => import("@/pages/BalanceOverview"));
+const NetworkAnalysis = lazy(() => import("@/pages/NetworkAnalysis"));
+const FundTrail = lazy(() => import("@/pages/FundTrail"));
+const EngineDiagnostics = lazy(() => import("@/pages/EngineDiagnostics"));
+const DatabaseDoctor = lazy(() => import("@/pages/DatabaseDoctor"));
+const VaultHealth = lazy(() => import("@/pages/VaultHealth"));
+const AnnualActivityReport = lazy(() => import("@/pages/AnnualActivityReport"));
+const AddressChecker = lazy(() => import("@/pages/AddressChecker"));
+const AddressDeriver = lazy(() => import("@/pages/AddressDeriver"));
+const ProofOfFundsDeclaration = lazy(() => import("@/pages/ProofOfFundsDeclaration"));
+const DustedPage = lazy(() => import("@/pages/DustedPage"));
+const AddressPoisoning = lazy(() => import("@/pages/AddressPoisoning"));
+const DormantCoins = lazy(() => import("@/pages/DormantCoins"));
+const NotFound = lazy(() => import("@/pages/not-found"));
+
+function RouteCommitReporter({ onCommit }: { onCommit: () => void }) {
+  const [location] = useLocation();
+  useEffect(() => {
+    onCommit();
+  }, [location, onCommit]);
+  return null;
+}
+
+function AppRoutes({ onRouteCommit }: { onRouteCommit: () => void }) {
   return (
-    <Switch>
+    <Suspense fallback={<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground" data-testid="route-loading">Loading page…</div>}>
+      <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/value-updater" component={ValueUpdaterPage} />
       <Route path="/import" component={BulkImport} />
@@ -148,7 +158,38 @@ function AppRoutes() {
       <Route path="/address-poisoning" component={AddressPoisoning} />
       <Route path="/dormant-coins" component={DormantCoins} />
       <Route component={NotFound} />
-    </Switch>
+      </Switch>
+      <RouteCommitReporter onCommit={onRouteCommit} />
+    </Suspense>
+  );
+}
+
+function DeferredBackgroundServices({ enabled }: { enabled: boolean }) {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const windowWithIdle = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    if (windowWithIdle.requestIdleCallback) {
+      const handle = windowWithIdle.requestIdleCallback(() => setReady(true), { timeout: 1500 });
+      return () => windowWithIdle.cancelIdleCallback?.(handle);
+    }
+    const handle = window.setTimeout(() => setReady(true), 250);
+    return () => window.clearTimeout(handle);
+  }, [enabled]);
+
+  if (!ready) return null;
+  return (
+    <>
+      <EngineBootstrapper />
+      <ScheduledBackupRunner />
+      <OrphanedTxNotifier />
+      <EntityListLoader />
+      <SyncStatsBackfill />
+    </>
   );
 }
 
@@ -217,6 +258,8 @@ function SyncStatsBackfill() {
 
 function AuthenticatedApp() {
   const { logout } = useAuth();
+  const [initialRouteCommitted, setInitialRouteCommitted] = useState(false);
+  const markRouteCommitted = useCallback(() => setInitialRouteCommitted(true), []);
   
   const style = {
     "--sidebar-width": "20rem",
@@ -227,11 +270,7 @@ function AuthenticatedApp() {
     <Router hook={useAdaptiveLocation}>
       <RecordPreviewProvider>
         <SidebarProvider style={style as React.CSSProperties}>
-          <EngineBootstrapper />
-          <ScheduledBackupRunner />
-          <OrphanedTxNotifier />
-          <EntityListLoader />
-          <SyncStatsBackfill />
+          <DeferredBackgroundServices enabled={initialRouteCommitted} />
           <GlobalCommandPalette />
           <div className="flex h-screen w-full">
             <AppSidebar />
@@ -258,7 +297,7 @@ function AuthenticatedApp() {
                 </div>
               </header>
               <main className="flex-1 flex flex-col overflow-hidden">
-                <AppRoutes />
+                <AppRoutes onRouteCommit={markRouteCommitted} />
               </main>
             </div>
           </div>

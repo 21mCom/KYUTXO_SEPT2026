@@ -178,7 +178,15 @@ export default function TransactionInbox() {
   const [undo, setUndo] = useState<UndoEntry | null>(null);
   const [viewName, setViewName] = useState("");
   const [activeViewId, setActiveViewId] = useState("");
+  const [initialPageLoading, setInitialPageLoading] = useState(true);
+  const [initialPageFailed, setInitialPageFailed] = useState(false);
   const dbSignal = useDbChangeSignal(["blockchainTransactions", "transactionParticipants", "records", "settings"], 100);
+  const mountedRef = useRef(false);
+  const loadGeneration = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const settings = useLiveQuery(() => getSettings("default"), [dbSignal]);
   const savedViews = useMemo(
     () => sanitizeSavedInboxViews(settings?.savedInboxViews) ?? [],
@@ -196,8 +204,11 @@ export default function TransactionInbox() {
   }, [dbSignal], { new: 0, snoozed: 0, annotated: 0, ignored: 0 });
 
   const loadPage = useCallback(async (reset = false) => {
+    const generation = ++loadGeneration.current;
+    const isCurrent = () => mountedRef.current && loadGeneration.current === generation;
     const beforeId = reset ? undefined : nextBeforeId;
     const page = await getTransactionsByCurationState(tab, PAGE_LIMIT, beforeId);
+    if (!isCurrent()) return;
     setRows(current => {
       const combined = reset ? page : [...current, ...page];
       // Keep dependent participant/record reads bounded while allowing users
@@ -209,14 +220,20 @@ export default function TransactionInbox() {
   }, [tab, nextBeforeId]);
 
   useEffect(() => {
-    let cancelled = false;
+    const generation = ++loadGeneration.current;
+    const isCurrent = () => mountedRef.current && loadGeneration.current === generation;
+    setInitialPageLoading(true);
+    setInitialPageFailed(false);
     void getTransactionsByCurationState(tab, PAGE_LIMIT).then(page => {
-      if (cancelled) return;
+      if (!isCurrent()) return;
       setRows(page);
       setNextBeforeId(page.length ? page[page.length - 1].id : undefined);
       setHasMore(page.length === PAGE_LIMIT);
+    }).catch(() => {
+      if (isCurrent()) setInitialPageFailed(true);
+    }).finally(() => {
+      if (isCurrent()) setInitialPageLoading(false);
     });
-    return () => { cancelled = true; };
   }, [tab, dbSignal]);
   const txids = useMemo(() => rows.map(row => row.txid), [rows]);
   const participants = useLiveQuery(
@@ -415,7 +432,11 @@ export default function TransactionInbox() {
   const allVisibleSelected = visibleRows.length > 0 && visibleRows.every(tx => selected.has(tx.txid));
 
   return (
-    <div className="h-full flex flex-col gap-4 p-4 md:p-6" data-testid="transaction-curation-inbox">
+    <div
+      className="h-full flex flex-col gap-4 p-4 md:p-6"
+      data-testid="transaction-curation-inbox"
+      data-navigation-ready={!initialPageLoading && !initialPageFailed ? "true" : "false"}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><Inbox className="h-6 w-6" />Transaction Inbox</h1>

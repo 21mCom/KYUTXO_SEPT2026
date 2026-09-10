@@ -1089,6 +1089,10 @@ args = "report-triggered-sync-browser-check"
 task = "workflow.run"
 args = "packaged-backup-schedule-save-lock-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "empty-vault-navigation-browser-check"
+
 [[workflows.workflow]]
 name = "electrum-spend-discovery-node-check"
 author = "agent"
@@ -4034,6 +4038,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-packaged-engine-rebuild-scale-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "empty-vault-navigation-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-empty-vault-navigation-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

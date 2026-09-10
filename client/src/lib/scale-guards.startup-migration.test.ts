@@ -59,6 +59,7 @@ const fakeApi = {
 vi.mock("@/lib/electron", () => ({
   isElectron: () => true,
   getElectronAPI: () => fakeApi,
+  getElectronAPISafe: () => null,
 }));
 
 // A realistic decryptBinary stand-in: it only "decrypts" buffers that still carry
@@ -104,6 +105,17 @@ vi.mock("@/lib/database", async () => {
     get db() {
       return testDb;
     },
+  };
+});
+
+// The production repository selector caches its first Dexie adapter. These
+// tests replace the database for every case, so return an adapter bound to the
+// current test database instead of retaining the closed database from case 1.
+vi.mock("@/lib/repository", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/repository")>();
+  return {
+    ...actual,
+    getVaultRepository: () => new actual.DexieVaultRepository(testDb),
   };
 });
 

@@ -48,6 +48,7 @@ export default function ResolveOwnership() {
   const dbSignal = useDbChangeSignal(["records", "entities", "addressOwnership", "transactionParticipants", "ownershipReviewDecisions"], 100);
   const [data, setData] = useState<LoadedOwnershipData>(emptyData);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"all" | OwnershipSuggestion["kind"]>("all");
   const [ownerOverrides, setOwnerOverrides] = useState<globalThis.Record<string, string>>({});
@@ -58,9 +59,19 @@ export default function ResolveOwnership() {
   const [scopePages, setScopePages] = useState(1);
   const ignoreNextDbSignal = useRef(false);
   const lastDbSignal = useRef(dbSignal);
+  const mountedRef = useRef(false);
+  const loadGeneration = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
+    const isCurrent = () => mountedRef.current && loadGeneration.current === generation;
     setLoading(true);
+    setLoadFailed(false);
     try {
       const repository = getVaultRepository();
       const [records, ownership, participants, decisions] = await Promise.all([
@@ -78,15 +89,18 @@ export default function ResolveOwnership() {
         .filter((id): id is number => Number.isSafeInteger(id)))];
       const entities = (await Promise.all(entityIds.map(id => repository.get("entities", id))))
         .filter((entity): entity is RecordEntity => !!entity);
+      if (!isCurrent()) return;
       setData({ records, ownership, participants, decisions, entities });
       const undoable = decisions
         .filter(decision => !!decision.undoToken)
         .sort((a, b) => b.updatedAt - a.updatedAt)[0];
       setUndoToken(undoable?.undoToken ?? null);
     } catch (error) {
+      if (!isCurrent()) return;
+      setLoadFailed(true);
       toastRef.current({ title: "Could not load ownership review", description: error instanceof Error ? error.message : "Try again.", variant: "destructive" });
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [scopePages]);
 
@@ -206,7 +220,11 @@ export default function ResolveOwnership() {
     } : undefined;
   };
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4" data-testid="ownership-resolution-page">
+    <div
+      className="h-full overflow-y-auto p-4 md:p-6 space-y-4"
+      data-testid="ownership-resolution-page"
+      data-navigation-ready={!loading && !loadFailed ? "true" : "false"}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold"><ShieldQuestion className="h-6 w-6" />Resolve Ownership</h1>

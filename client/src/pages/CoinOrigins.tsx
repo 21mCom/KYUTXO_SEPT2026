@@ -740,7 +740,7 @@ export default function CoinOriginsPage() {
   };
 
   return (
-    <div className="container mx-auto space-y-4 p-4" data-testid="coin-origins-page">
+    <div className="container mx-auto space-y-4 p-4" data-testid="coin-origins-page" data-navigation-ready={!loading && !recordsLoading && !error ? "true" : "false"}>
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-bold"><Route className="h-6 w-6" /> Coin Origins</h1>
         <p className="text-sm text-muted-foreground">A deterministic per-outpoint lot ledger. Unresolved prevouts stay visibly unknown.</p>

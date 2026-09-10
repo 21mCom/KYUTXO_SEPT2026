@@ -23,6 +23,12 @@ const address = (id: number, inputString: string, cachedBalanceSats = 0) => ({
   id, type: "address" as const, inputString, label: "", tags: [], categories: [], cachedBalanceSats,
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(res => { resolve = res; });
+  return { promise, resolve };
+}
+
 describe("ResolveOwnership", () => {
   afterEach(() => cleanup());
 
@@ -126,6 +132,34 @@ describe("ResolveOwnership", () => {
     fireEvent.click(getByTestId("button-ownership-undo"));
     await waitFor(() => expect(undo).toHaveBeenCalled());
     expect(repository.list).toHaveBeenCalledTimes(readsAfterInitialLoad);
+  });
+
+  it("does not commit an older scope load after a newer load completes", async () => {
+    const loads = Array.from({ length: 8 }, () => deferred<{ rows: unknown[]; cursor?: number }>());
+    let loadCall = 0;
+    repository.list.mockClear();
+    repository.list.mockImplementation(() => loads[loadCall++].promise);
+    const oldRecords = [address(1, "bc1old-target"), address(2, "bc1old-source")];
+    const newRecords = [address(11, "bc1new-target"), address(12, "bc1new-source")];
+    const response = (records: ReturnType<typeof address>[]) => (table: string) => ({
+      rows: table === "records" ? records
+        : table === "addressOwnership" ? [{ id: 1, recordId: records[1].id, state: "assigned", entityId: 7, createdAt: 1, updatedAt: 1 }]
+          : table === "transactionParticipants" ? [{ txid: `${records[0].inputString}-tx`, role: "input", recordId: records[0].id }, { txid: `${records[0].inputString}-tx`, role: "input", recordId: records[1].id }]
+            : [],
+    });
+
+    const { getByTestId, queryByTestId } = render(<ResolveOwnership />);
+    await waitFor(() => expect(repository.list).toHaveBeenCalledTimes(4));
+    const oldResponse = response(oldRecords);
+    const newResponse = response(newRecords);
+    fireEvent.click(getByTestId("button-ownership-load-more-scope"));
+    await waitFor(() => expect(repository.list).toHaveBeenCalledTimes(8));
+
+    [4, 5, 6, 7].forEach((index, offset) => loads[index].resolve(newResponse(["records", "addressOwnership", "transactionParticipants", "ownershipReviewDecisions"][offset])));
+    await waitFor(() => expect(getByTestId("ownership-suggestion-11")).toBeTruthy());
+    [0, 1, 2, 3].forEach((index, offset) => loads[index].resolve(oldResponse(["records", "addressOwnership", "transactionParticipants", "ownershipReviewDecisions"][offset])));
+    await waitFor(() => expect(queryByTestId("ownership-suggestion-11")).toBeTruthy());
+    expect(queryByTestId("ownership-suggestion-1")).toBeNull();
   });
 
   it("renders and filters the maximum local evidence scope within the UI budget", async () => {

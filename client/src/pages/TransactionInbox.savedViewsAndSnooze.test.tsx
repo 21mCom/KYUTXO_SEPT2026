@@ -9,7 +9,15 @@ const mockUpdateTransactionCuration = vi.fn(async () => true);
 const mockUpdateSettings = vi.fn(async (_id: string, changes: Partial<Settings>) => {
   mockSettings = { ...mockSettings, ...changes } as Settings;
 });
+
+const mockGetTransactionsByCurationState = vi.fn(async () => [{
+  id: 1,
+  txid: TXID,
+  curationState: "new",
+  blockTime: 1_700_000_000,
+}]);
 let mockSettings: Settings;
+let mockDbSignal = 0;
 
 vi.mock("dexie-react-hooks", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
@@ -40,11 +48,15 @@ vi.mock("@tanstack/react-virtual", () => ({
 }));
 
 vi.mock("@/hooks/use-db-change-signal", () => ({
-  useDbChangeSignal: () => 0,
+  useDbChangeSignal: () => mockDbSignal,
 }));
 
 vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
+}));
+
+vi.mock("@/contexts/RecordPreviewContext", () => ({
+  useRecordPreview: () => ({ openTransactionAnnotation: vi.fn() }),
 }));
 
 vi.mock("@/lib/data/settings-crud", () => ({
@@ -69,12 +81,7 @@ vi.mock("@/lib/data/transaction-crud", async (importOriginal) => {
   return {
     ...actual,
     countTransactionCurations: vi.fn(async () => 1),
-    getTransactionsByCurationState: vi.fn(async () => [{
-      id: 1,
-      txid: TXID,
-      curationState: "new",
-      blockTime: 1_700_000_000,
-    }]),
+    getTransactionsByCurationState: () => mockGetTransactionsByCurationState(),
     updateTransactionCuration: (...args: Parameters<typeof mockUpdateTransactionCuration>) =>
       mockUpdateTransactionCuration(...args),
   };
@@ -114,6 +121,14 @@ const { default: TransactionInbox } = await import("./TransactionInbox");
 beforeEach(() => {
   mockUpdateSettings.mockClear();
   mockUpdateTransactionCuration.mockClear();
+  mockGetTransactionsByCurationState.mockReset();
+  mockGetTransactionsByCurationState.mockResolvedValue([{
+    id: 1,
+    txid: TXID,
+    curationState: "new",
+    blockTime: 1_700_000_000,
+  }]);
+  mockDbSignal = 0;
   mockSettings = {
     id: "default",
     fieldVisibility: {
@@ -219,5 +234,36 @@ describe("Transaction Inbox saved views and snooze choices", () => {
     await waitFor(() => expect(mockUpdateTransactionCuration).toHaveBeenCalled());
     expect(mockUpdateTransactionCuration.mock.calls[0][2].snoozedUntil)
       .toBe(new Date(2099, 11, 31, 23, 59, 59, 999).getTime());
+  });
+
+  it("does not commit an older tab load after the newest tab response", async () => {
+    type TxRow = {
+      id: number;
+      txid: string;
+      curationState: "new" | "snoozed";
+      blockTime: number;
+    };
+    const deferred = () => {
+      let resolve!: (rows: TxRow[]) => void;
+      const promise = new Promise<TxRow[]>(res => { resolve = res; });
+      return { promise, resolve };
+    };
+    const oldLoad = deferred();
+    const newLoad = deferred();
+    mockGetTransactionsByCurationState
+      .mockImplementationOnce(() => oldLoad.promise)
+      .mockImplementationOnce(() => newLoad.promise);
+
+    const view = render(<TransactionInbox />);
+    await waitFor(() => expect(mockGetTransactionsByCurationState).toHaveBeenCalledTimes(1));
+    mockDbSignal = 1;
+    view.rerender(<TransactionInbox />);
+    await waitFor(() => expect(mockGetTransactionsByCurationState).toHaveBeenCalledTimes(2));
+
+    newLoad.resolve([{ id: 2, txid: "newest-response", curationState: "snoozed", blockTime: 1_700_000_001 }]);
+    await waitFor(() => expect(screen.getByText("newest-response")).toBeTruthy());
+    oldLoad.resolve([{ id: 1, txid: "stale-response", curationState: "new", blockTime: 1_700_000_000 }]);
+    await waitFor(() => expect(screen.getByText("newest-response")).toBeTruthy());
+    expect(screen.queryByText("stale-response")).toBeNull();
   });
 });

@@ -21,7 +21,17 @@ import { DEV_TOOLS_GROUP, NAV_GROUPS, type NavGroup } from "@/config/navigation"
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const inboxCount = useLiveQuery(() => countActionableTransactionCurations(), [], 0);
+  const [backgroundCountsReady, setBackgroundCountsReady] = useState(false);
+  const inboxCount = useLiveQuery(
+    () => backgroundCountsReady ? countActionableTransactionCurations() : Promise.resolve(0),
+    [backgroundCountsReady],
+    0,
+  );
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => setBackgroundCountsReady(true), 500);
+    return () => window.clearTimeout(handle);
+  }, []);
   
   const getInitialOpenState = () => {
     const state: Record<string, boolean> = {};
