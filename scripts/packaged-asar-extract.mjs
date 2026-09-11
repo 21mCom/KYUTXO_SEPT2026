@@ -10,7 +10,7 @@ function entrySegments(entry) {
   return segments;
 }
 
-export function extractAvailableAsarTree({ asar, archivePath, destination, onMissingUnpacked }) {
+export function extractAvailableAsarTree({ asar, archivePath, destination, onMissingEntry }) {
   const destinationRoot = path.resolve(destination);
   fs.mkdirSync(destinationRoot, { recursive: true });
 
@@ -36,18 +36,17 @@ export function extractAvailableAsarTree({ asar, archivePath, destination, onMis
       continue;
     }
 
-    const info = asar.statFile(archivePath, relativePath, false);
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    if (info.unpacked) {
-      const unpackedPath = path.join(`${archivePath}.unpacked`, ...segments);
-      if (!fs.existsSync(unpackedPath)) {
-        onMissingUnpacked?.(relativePath);
+    let contents;
+    try {
+      contents = asar.extractFile(archivePath, relativePath);
+    } catch (error) {
+      if (error?.code === 'ENOENT' || /was not found in this archive/.test(error?.message ?? '')) {
+        onMissingEntry?.(relativePath, error);
         continue;
       }
-      fs.copyFileSync(unpackedPath, targetPath);
-      continue;
+      throw error;
     }
-
-    fs.writeFileSync(targetPath, asar.extractFile(archivePath, relativePath));
+    fs.writeFileSync(targetPath, contents);
   }
 }

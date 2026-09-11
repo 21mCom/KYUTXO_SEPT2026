@@ -25,16 +25,16 @@ test('extracts available files while tolerating absent unpacked metadata entries
     const missing = [];
     const guardedAsar = {
       ...asar,
-      statFile: (...args) => {
+      extractFile: (...args) => {
         assert.notEqual(args[1], 'native', 'directories must not be passed to asar.statFile');
-        return asar.statFile(...args);
+        return asar.extractFile(...args);
       },
     };
     extractAvailableAsarTree({
       asar: guardedAsar,
       archivePath: archive,
       destination,
-      onMissingUnpacked: (entry) => missing.push(entry),
+      onMissingEntry: (entry) => missing.push(entry),
     });
 
     assert.equal(fs.readFileSync(path.join(destination, 'worker.cjs'), 'utf8'), 'module.exports = 42;\n');

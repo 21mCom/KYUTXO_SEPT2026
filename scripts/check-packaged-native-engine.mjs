@@ -356,8 +356,8 @@ async function main() {
       asar,
       archivePath: ASAR,
       destination: path.join(tmp, 'app'),
-      onMissingUnpacked: (entry) => {
-        console.warn(`${TAG} skipping absent unpacked metadata entry: ${entry}`);
+      onMissingEntry: (entry) => {
+        console.warn(`${TAG} skipping unavailable ASAR metadata entry: ${entry}`);
       },
     });
     const bundlePath = path.join(tmp, 'app', WORKER_REL);
