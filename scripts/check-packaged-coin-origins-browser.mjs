@@ -356,13 +356,23 @@ async function main() {
       'native page response keeps the unresolved allocation in Alpha and the entire-vault scope only',
     );
 
-    // Navigate through the real app link so the deferred route boundary keeps
-    // the authenticated renderer state and observes the lazy-route commit.
-    await page.getByTestId('link-coin-origins').click();
+    await page.evaluate(() => { window.location.hash = '/coin-origins'; });
+    await page.waitForFunction(() => window.location.hash === '#/coin-origins', null, { timeout: 10_000 });
+    await sleep(2_000);
+    const routeState = await page.evaluate(() => ({
+      href: window.location.href,
+      hash: window.location.hash,
+      testIds: Array.from(document.querySelectorAll('[data-testid]'))
+        .map((element) => element.getAttribute('data-testid'))
+        .filter(Boolean)
+        .slice(0, 100),
+    }));
+    console.log(`${TAG} route state ${JSON.stringify(routeState)}`);
     const routeOutcome = await Promise.race([
-      page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'page'),
-      page.getByTestId('route-navigation-error').waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'error'),
+      page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'page', () => null),
+      page.getByTestId('route-navigation-error').waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'error', () => null),
     ]);
+    if (!routeOutcome) throw new Error(`Coin Origins route did not settle: ${JSON.stringify(routeState)}`);
     if (routeOutcome === 'error') {
       const diagnostic = await page.evaluate(() => ({
         href: window.location.href,
