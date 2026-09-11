@@ -62,7 +62,7 @@ const REPOSITORIES = Object.freeze({
   vault: new Set(['settings', 'vault']),
 });
 const REPOSITORY_OPERATIONS = new Set([
-  'save', 'find', 'page', 'remove', 'saveBatch', 'removeBatch', 'batch', 'count', 'clear', 'query', 'command',
+  'save', 'find', 'page', 'remove', 'saveBatch', 'removeBatch', 'batch', 'count', 'fingerprint', 'clear', 'query', 'command',
   // Fixed cross-collection commands.  These are commands, not a renderer
   // transaction callback or a generic multi-table mutation language.
   'deleteOrArchiveRecords', 'saveTransactionWithParticipants', 'saveSettingsWithHistory', 'clearAll', 'restoreCommit', 'commitOwnershipReview',
@@ -972,7 +972,7 @@ function repository(message) {
   const outer = repositoryDepth++ === 0;
   try {
     const result = repositoryImpl(message);
-    if (outer && !['find', 'page', 'count', 'query', 'ownerCostBasisPage', 'ownerCostBasisProjection'].includes(message.operation)) {
+    if (outer && !['find', 'page', 'count', 'fingerprint', 'query', 'ownerCostBasisPage', 'ownerCostBasisProjection'].includes(message.operation)) {
       dataRevision++;
       ownerBookCheckpoint = null;
     }
@@ -1222,6 +1222,29 @@ function repositoryImpl(message) {
     return { deleted };
   }
   if (operation === 'count') return { count: db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count };
+  if (operation === 'fingerprint') {
+    if (collection === 'records' || collection === 'transactionMetadata') {
+      const row = db.prepare(
+        `SELECT COUNT(*) AS count, COALESCE(MAX(id_sort),0) AS maxId, COALESCE(MAX(updated_at),0) AS maxUpdatedAt FROM ${table}`,
+      ).get();
+      return { count: row.count, maxId: row.maxId, maxUpdatedAt: row.maxUpdatedAt };
+    }
+    if (collection === 'blockchainTransactions') {
+      const row = db.prepare(
+        `SELECT COUNT(*) AS count, COALESCE(MAX(id_sort),0) AS maxId, COALESCE(MAX(block_time),0) AS maxBlockTime FROM ${table}`,
+      ).get();
+      return { count: row.count, maxId: row.maxId, maxBlockTime: row.maxBlockTime };
+    }
+    if (collection === 'transactionParticipants') {
+      const row = db.prepare(
+        `SELECT COUNT(*) AS count, COALESCE(MAX(id_sort),0) AS maxId,
+          COALESCE(SUM(CASE WHEN prev_txid IS NOT NULL AND prev_vout IS NOT NULL THEN 1 ELSE 0 END),0) AS resolvedPrevoutCount
+         FROM ${table}`,
+      ).get();
+      return { count: row.count, maxId: row.maxId, resolvedPrevoutCount: row.resolvedPrevoutCount };
+    }
+    fail();
+  }
   if (operation === 'clear') {
     const result = db.prepare(`DELETE FROM ${table}`).run();
     return { deleted: result.changes };

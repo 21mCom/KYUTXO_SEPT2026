@@ -223,11 +223,16 @@ async function seedEngine(page, fixture) {
 }
 
 async function waitForCard(page, testId, expected) {
-  await page.waitForFunction(
-    ({ testId: id, value }) => document.querySelector(`[data-testid="${id}"]`)?.textContent?.trim() === value,
-    { testId, value: expected },
-    { timeout: 30_000 },
-  );
+  await Promise.race([
+    page.waitForFunction(
+      ({ testId: id, value }) => document.querySelector(`[data-testid="${id}"]`)?.textContent?.trim() === value,
+      { testId, value: expected },
+      { timeout: 30_000 },
+    ),
+    page.getByTestId('coin-origins-load-error').waitFor({ state: 'visible', timeout: 30_000 }).then(async () => {
+      throw new Error(`Coin Origins load failed: ${(await page.getByTestId('coin-origins-load-error').innerText()).trim()}`);
+    }),
+  ]);
 }
 
 async function readScope(page, expected) {

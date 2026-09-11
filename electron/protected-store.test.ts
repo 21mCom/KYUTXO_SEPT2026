@@ -52,6 +52,51 @@ describe("protected store", () => {
     expect(worker).not.toContain("message.sql");
   });
 
+  it("returns fixed mirror fingerprints without exposing renderer-defined queries", async () => {
+    const { client } = makeClient();
+    const call = (collection: string, operation: string, payload: object = {}) =>
+      client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: collection === "blockchainTransactions" || collection === "transactionParticipants"
+          ? "transactions" : "records",
+        collection,
+        operation,
+        ...payload,
+      });
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "mirror fingerprint test password" });
+      await call("records", "saveBatch", { rows: [
+        { id: 2, type: "address", inputString: "a", updatedAt: 11 },
+        { id: 7, type: "address", inputString: "b", updatedAt: 29 },
+      ] });
+      await call("blockchainTransactions", "save", {
+        row: { id: 5, txid: "tx", blockTime: 123 },
+      });
+      await call("transactionParticipants", "saveBatch", { rows: [
+        { id: 3, txid: "tx", role: "input", prevTxid: "prev", prevVout: 0 },
+        { id: 8, txid: "tx", role: "output", vout: 0 },
+      ] });
+      await call("transactionMetadata", "save", {
+        row: { id: 4, txid: "tx", updatedAt: 31 },
+      });
+
+      await expect(call("records", "fingerprint")).resolves.toEqual({
+        count: 2, maxId: 7, maxUpdatedAt: 29,
+      });
+      await expect(call("blockchainTransactions", "fingerprint")).resolves.toEqual({
+        count: 1, maxId: 5, maxBlockTime: 123,
+      });
+      await expect(call("transactionParticipants", "fingerprint")).resolves.toEqual({
+        count: 2, maxId: 8, resolvedPrevoutCount: 1,
+      });
+      await expect(call("transactionMetadata", "fingerprint")).resolves.toEqual({
+        count: 1, maxId: 4, maxUpdatedAt: 31,
+      });
+      await expect(call("owners", "fingerprint")).rejects.toThrow();
+    } finally {
+      await client.close();
+    }
+  });
+
   it("persists encrypted owner pages across unlock and rejects stale protected checkpoints", async () => {
     const { root, client } = makeClient();
     const call = (collection: string, operation: string, payload: object = {}) =>

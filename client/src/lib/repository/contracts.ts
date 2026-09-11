@@ -140,6 +140,10 @@ export interface VaultRepository {
   bulkDelete<T extends VaultTableName>(table: T, keys: VaultKey[]): Promise<void>;
   clear<T extends VaultTableName>(table: T): Promise<void>;
   count<T extends VaultTableName>(table: T): Promise<number>;
+  /** Fixed aggregate used to compare protected source tables with the native read mirror. */
+  mirrorFingerprint?<T extends keyof VaultMirrorFingerprints>(
+    table: T,
+  ): Promise<VaultMirrorFingerprints[T]>;
   list<T extends VaultTableName>(table: T, options: VaultListOptions): Promise<VaultPage<VaultRows[T]>>;
   /** Named record lookup; never a renderer-provided query expression. */
   queryRecords(query: RecordsQuery): Promise<Record[]>;
@@ -172,6 +176,13 @@ export interface VaultRepository {
    * fluent API in the renderer.
    */
   transaction<T>(tables: VaultTableName[], operation: () => Promise<T>): Promise<T>;
+}
+
+export interface VaultMirrorFingerprints {
+  records: { count: number; maxId: number; maxUpdatedAt: number };
+  blockchainTransactions: { count: number; maxId: number; maxBlockTime: number };
+  transactionParticipants: { count: number; maxId: number; resolvedPrevoutCount: number };
+  transactionMetadata: { count: number; maxId: number; maxUpdatedAt: number };
 }
 
 export interface OwnerCostBasisPageRequest {

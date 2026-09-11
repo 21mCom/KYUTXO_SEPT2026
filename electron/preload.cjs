@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       saveBatch: (collection, rows) => repositoryCall(collection, 'saveBatch', { rows }),
       removeBatch: (collection, ids) => repositoryCall(collection, 'removeBatch', { ids }),
       count: (collection) => repositoryCall(collection, 'count'),
+      fingerprint: (collection) => repositoryCall(collection, 'fingerprint'),
       clear: (collection) => repositoryCall(collection, 'clear'),
       batch: (collection, operations) => repositoryCall(collection, 'batch', { operations }),
       query: (collection, name, value, limit) => repositoryCall(collection, 'query', { name, value, limit }),
