@@ -227,12 +227,14 @@ test('legacy in-source CRUD guard fixture is ignored and not tracked', () => {
   const ignored = spawnSync('git', ['check-ignore', '-q', path.join(LEGACY_FIXTURE_DIR, 'violation.ts')], {
     cwd: ROOT,
     encoding: 'utf8',
+    timeout: 30_000,
   });
   assert.equal(ignored.status, 0, `${LEGACY_FIXTURE_DIR} is not covered by .gitignore`);
 
   const tracked = spawnSync('git', ['ls-files', '--', LEGACY_FIXTURE_DIR], {
     cwd: ROOT,
     encoding: 'utf8',
+    timeout: 30_000,
   });
   assert.equal(tracked.status, 0, tracked.stderr);
   assert.equal(tracked.stdout.trim(), '', `${LEGACY_FIXTURE_DIR} must never remain tracked`);
