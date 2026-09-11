@@ -29,6 +29,7 @@ export function extractAvailableAsarTree({ asar, archivePath, destination, onMis
     if (segments.length === 0) continue;
 
     const relativePath = segments.join('/');
+    const archiveEntryPath = path.join(...segments);
     const targetPath = path.join(destinationRoot, ...segments);
 
     if (directoryPaths.has(relativePath)) {
@@ -39,7 +40,7 @@ export function extractAvailableAsarTree({ asar, archivePath, destination, onMis
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     let contents;
     try {
-      contents = asar.extractFile(archivePath, relativePath);
+      contents = asar.extractFile(archivePath, archiveEntryPath);
     } catch (error) {
       if (error?.code === 'ENOENT' || /was not found in this archive/.test(error?.message ?? '')) {
         onMissingEntry?.(relativePath, error);
