@@ -23,8 +23,15 @@ test('extracts available files while tolerating absent unpacked metadata entries
     fs.rmSync(path.join(`${archive}.unpacked`, 'native', 'optional-metadata.yml'));
 
     const missing = [];
+    const guardedAsar = {
+      ...asar,
+      statFile: (...args) => {
+        assert.notEqual(args[1], 'native', 'directories must not be passed to asar.statFile');
+        return asar.statFile(...args);
+      },
+    };
     extractAvailableAsarTree({
-      asar,
+      asar: guardedAsar,
       archivePath: archive,
       destination,
       onMissingUnpacked: (entry) => missing.push(entry),

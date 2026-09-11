@@ -14,19 +14,29 @@ export function extractAvailableAsarTree({ asar, archivePath, destination, onMis
   const destinationRoot = path.resolve(destination);
   fs.mkdirSync(destinationRoot, { recursive: true });
 
-  for (const entry of asar.listPackage(archivePath)) {
-    const segments = entrySegments(entry);
+  const entries = asar.listPackage(archivePath).map((entry) => ({
+    entry,
+    segments: entrySegments(entry),
+  }));
+  const directoryPaths = new Set();
+  for (const { segments } of entries) {
+    for (let length = 1; length < segments.length; length += 1) {
+      directoryPaths.add(segments.slice(0, length).join('/'));
+    }
+  }
+
+  for (const { entry, segments } of entries) {
     if (segments.length === 0) continue;
 
     const relativePath = segments.join('/');
     const targetPath = path.join(destinationRoot, ...segments);
-    const info = asar.statFile(archivePath, relativePath, false);
 
-    if (info.files) {
+    if (directoryPaths.has(relativePath)) {
       fs.mkdirSync(targetPath, { recursive: true });
       continue;
     }
 
+    const info = asar.statFile(archivePath, relativePath, false);
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     if (info.unpacked) {
       const unpackedPath = path.join(`${archivePath}.unpacked`, ...segments);
