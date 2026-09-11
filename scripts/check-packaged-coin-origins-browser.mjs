@@ -350,10 +350,9 @@ async function main() {
       'native page response keeps the unresolved allocation in Alpha and the entire-vault scope only',
     );
 
-    // Reload the packaged route through the real bundle protocol. The native
-    // worker and protected repository remain in the main process across this
-    // renderer navigation.
-    await page.goto('kyutxo-app://bundle/#/coin-origins');
+    // Navigate through the real app link so the deferred route boundary keeps
+    // the authenticated renderer state and observes the lazy-route commit.
+    await page.getByTestId('link-coin-origins').click();
     await page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 60_000 });
 
     const allScope = await readScope(page, { lots: 2, current: 3_500, unknown: 500 });
