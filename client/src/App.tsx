@@ -496,7 +496,7 @@ function SyncStatsBackfill() {
   return null;
 }
 
-function AuthenticatedApp() {
+function AuthenticatedAppContent() {
   const { logout } = useAuth();
   const [location, navigate] = useLocation();
   const [initialRouteCommitted, setInitialRouteCommitted] = useState(false);
@@ -508,7 +508,6 @@ function AuthenticatedApp() {
   };
 
   return (
-    <Router hook={useAdaptiveLocation}>
       <RecordPreviewProvider>
         <SidebarProvider style={style as React.CSSProperties}>
           <DeferredBackgroundServices enabled={initialRouteCommitted} />
@@ -546,6 +545,13 @@ function AuthenticatedApp() {
           </div>
         </SidebarProvider>
       </RecordPreviewProvider>
+  );
+}
+
+function AuthenticatedApp() {
+  return (
+    <Router hook={useAdaptiveLocation}>
+      <AuthenticatedAppContent />
     </Router>
   );
 }

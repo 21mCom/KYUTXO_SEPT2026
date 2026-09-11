@@ -896,6 +896,18 @@ test('the packaged Coin Origins gate is release-wired after the native worker ch
   );
 });
 
+test('authenticated packaged routes consume location inside the adaptive hash router', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'client/src/App.tsx'), 'utf8');
+  assert.match(
+    source,
+    /function AuthenticatedAppContent\(\)[\s\S]*?const \[location, navigate\] = useLocation\(\);/,
+  );
+  assert.match(
+    source,
+    /function AuthenticatedApp\(\)[\s\S]*?<Router hook=\{useAdaptiveLocation\}>[\s\S]*?<AuthenticatedAppContent \/>/,
+  );
+});
+
 test('the packaged protected-vault gate waits for CDP shutdown before cleanup', () => {
   const script = fs.readFileSync(
     path.join(SCRIPTS_DIR, 'check-packaged-vault-migration-browser.mjs'),
