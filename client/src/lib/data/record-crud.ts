@@ -2072,6 +2072,23 @@ export async function getRecordsByTypeAndImportanceTiers(
   tiers: AddressImportance[]
 ): Promise<Record[]> {
   if (tiers.length === 0) return [];
+  const repository = getVaultRepository();
+  if (repository.kind === 'protected') {
+    const records: Record[] = [];
+    let beforeIdExclusive: number | undefined;
+    do {
+      const page = await getRecordsPageByTypeAndImportanceTiersKeyset(type, tiers, {
+        limit: 1000,
+        beforeIdExclusive,
+      });
+      if (page.length === 0) break;
+      records.push(...page);
+      const lastId = page.at(-1)?.id;
+      if (lastId == null) break;
+      beforeIdExclusive = lastId;
+    } while (true);
+    return records;
+  }
   return db.records
     .where('[type+addressImportance]')
     .anyOf(tiers.map(t => [type, t]))

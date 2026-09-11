@@ -193,9 +193,17 @@ async function seedRepository(page, fixture) {
     await save('records', data.records);
     await save('blockchainTransactions', data.transactions);
     await save('transactionParticipants', data.transactionParticipants);
+    const curated = await repository.query('records', 'records.byTypeAndImportanceTiersKeyset', {
+      type: 'address',
+      tiers: ['verified', 'manual', 'wallet-import', 'xpub-derived'],
+    }, 1000);
+    if (!curated?.ok || !Array.isArray(curated.result?.items)) {
+      throw new Error(`curated record query: ${curated?.error || 'missing response'}`);
+    }
     return {
       kind: 'protected',
       records: data.records.length,
+      curatedWalletNames: curated.result.items.map((record) => record.walletName),
       transactions: data.transactions.length,
       participants: data.transactionParticipants.length,
     };
@@ -326,6 +334,11 @@ async function main() {
         repositorySeed.transactions === 3 &&
         repositorySeed.participants === 5,
       'vault repository contains the two-wallet fixture for freshness and wallet options',
+    );
+    assert(
+      repositorySeed.curatedWalletNames.includes('Alpha wallet') &&
+        repositorySeed.curatedWalletNames.includes('Beta wallet'),
+      'protected curated-record query returns both wallet scopes before page rendering',
     );
 
     const seeded = await seedEngine(page, fixture);
