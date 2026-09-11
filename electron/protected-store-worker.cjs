@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 const { PROTECTED_TABLES } = require('./protected-store.cjs');
+const { syncDirectory } = require('./fs-durability.cjs');
 const {
   calculateOwnerCostBasisFromStoredRows,
   ownerCostBasisEditorRows,
@@ -89,6 +90,11 @@ const OWNER_BOOK_CACHE_ID = 'owner-cost-basis';
 try { Database = require('better-sqlite3-multiple-ciphers'); } catch {}
 
 function fail() { throw new Error('Protected store operation failed'); }
+function failAtStage(stage) {
+  const error = new Error('Protected store operation failed');
+  error.diagnosticStage = stage;
+  throw error;
+}
 function locked() { if (!db || !vdk || !keys) fail(); }
 function b64(bytes) { return Buffer.from(bytes).toString('base64'); }
 function fromB64(value, expected) {
@@ -127,7 +133,18 @@ async function derive(password, h) {
   return Buffer.from(result);
 }
 function deriveSubkey(label) {
-  return crypto.hkdfSync('sha256', vdk, Buffer.from(header.vaultId), Buffer.from(`kyutxo/${label}/v1`), 32);
+  // Node 20+ may return an ArrayBuffer here. Normalize it before calling
+  // Buffer-only APIs such as toString('hex'); otherwise SQLCipher receives the
+  // literal string "[object ArrayBuffer]" instead of the derived key.
+  return Buffer.from(
+    crypto.hkdfSync(
+      'sha256',
+      vdk,
+      Buffer.from(header.vaultId),
+      Buffer.from(`kyutxo/${label}/v1`),
+      32,
+    ),
+  );
 }
 function readHeader() {
   let value;
@@ -141,14 +158,17 @@ function readHeader() {
 }
 function loadDatabase() {
   if (!Database) fail();
+  let stage = 'native-open';
   try {
     db = new Database(DB_FILE);
+    stage = 'cipher-setup';
     // Hex key avoids SQL escaping and the VDK-derived key never enters SQL text.
     db.pragma("cipher = 'sqlcipher'");
     db.pragma(`key = "x'${keys.sql.toString('hex')}'"`);
     db.pragma('cipher_memory_security = ON');
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = FULL');
+    stage = 'schema';
     // Upgrade an existing FORMAT 1 vault before creating indexes which refer
     // to the newer projection columns. Fresh tables receive these columns in
     // the CREATE statement below.
@@ -277,6 +297,7 @@ function loadDatabase() {
         `);
       }
     }
+    stage = 'projection-migration';
     // FORMAT 1 shipped before the query projections below. ADD COLUMN is
     // backwards compatible, while the fixed names keep migrations private.
     const projections = projectionMigrations;
@@ -285,12 +306,14 @@ function loadDatabase() {
         try { db.exec(`ALTER TABLE "${collection}" ADD COLUMN ${projection}`); } catch {}
       }
     }
+    stage = 'sentinel';
     db.prepare('INSERT OR IGNORE INTO protected_sentinel(value) VALUES (?)').run(b64(crypto.createHmac('sha256', keys.sql).update('sentinel').digest()));
     const sentinel = db.prepare('SELECT value FROM protected_sentinel LIMIT 1').get();
     if (!sentinel || sentinel.value !== b64(crypto.createHmac('sha256', keys.sql).update('sentinel').digest())) fail();
   } catch {
+    console.error(`[ProtectedStore] database initialization failed during ${stage}`);
     closeUnlocked();
-    fail();
+    failAtStage(`database-${stage}`);
   }
 }
 function closeUnlocked() {
@@ -565,19 +588,29 @@ function objectAad(objectId, index, length) {
 
 async function create({ password }) {
   if (fs.existsSync(HEADER)) fail();
-  await fsp.mkdir(ROOT, { recursive: true, mode: 0o700 });
-  await fsp.mkdir(OBJECTS, { recursive: true, mode: 0o700 });
-  header = { version: FORMAT, vaultId: crypto.randomUUID(), salt: b64(random(16)),
-    kdf: { algorithm: 'argon2id', memoryKiB: 65536, timeCost: 3, parallelism: 1, version: 2 },
-    generation: 1 };
-  const wrappingKey = await derive(password, header);
-  vdk = random(32);
-  header.wrappedVdk = aesEncrypt(wrappingKey, vdk, aadForHeader(header));
-  wrappingKey.fill(0);
-  await atomicWrite(HEADER, Buffer.from(JSON.stringify(header)));
-  keys = { sql: deriveSubkey('sqlcipher'), attachment: deriveSubkey('attachment') };
-  loadDatabase();
-  return { mode: 'protected', verified: true, unlocked: true };
+  let stage = 'directories';
+  try {
+    await fsp.mkdir(ROOT, { recursive: true, mode: 0o700 });
+    await fsp.mkdir(OBJECTS, { recursive: true, mode: 0o700 });
+    stage = 'key-derivation';
+    header = { version: FORMAT, vaultId: crypto.randomUUID(), salt: b64(random(16)),
+      kdf: { algorithm: 'argon2id', memoryKiB: 65536, timeCost: 3, parallelism: 1, version: 2 },
+      generation: 1 };
+    const wrappingKey = await derive(password, header);
+    vdk = random(32);
+    header.wrappedVdk = aesEncrypt(wrappingKey, vdk, aadForHeader(header));
+    wrappingKey.fill(0);
+    stage = 'header-persistence';
+    await atomicWrite(HEADER, Buffer.from(JSON.stringify(header)));
+    stage = 'database-initialization';
+    keys = { sql: deriveSubkey('sqlcipher'), attachment: deriveSubkey('attachment') };
+    loadDatabase();
+    return { mode: 'protected', verified: true, unlocked: true };
+  } catch (error) {
+    console.error(`[ProtectedStore] vault creation failed during ${stage}`);
+    if (error && typeof error.diagnosticStage === 'string') throw error;
+    failAtStage(`create-${stage}`);
+  }
 }
 async function unlock({ password }) {
   if (db) fail();
@@ -688,13 +721,14 @@ async function finishAttachment({ token }) {
   const state = attachmentWrites.get(token);
   if (!state) fail();
   attachmentWrites.delete(token);
+  const published = path.join(OBJECTS, state.name);
+  let renamed = false;
   try {
     await state.handle.sync();
     await state.handle.close();
-    await fsp.rename(state.tmp, path.join(OBJECTS, state.name));
-    const dir = await fsp.open(OBJECTS, 'r');
-    await dir.sync();
-    await dir.close();
+    await fsp.rename(state.tmp, published);
+    renamed = true;
+    await syncDirectory(OBJECTS);
     const old = db.prepare(
       'SELECT object_name FROM protected_attachment_refs WHERE alias=?',
     ).get(state.alias);
@@ -710,7 +744,7 @@ async function finishAttachment({ token }) {
     return { id: state.objectId, name: state.name, alias: state.alias, size: state.size };
   } catch (error) {
     await state.handle.close().catch(() => {});
-    await fsp.unlink(state.tmp).catch(() => {});
+    await fsp.unlink(renamed ? published : state.tmp).catch(() => {});
     throw error;
   }
 }
@@ -1354,8 +1388,15 @@ parentPort.on('message', async (message) => {
   try {
     const result = await handle(message && message.type, message && message.payload || {});
     parentPort.postMessage({ requestId, ok: true, result });
-  } catch {
+  } catch (error) {
     // A single stable error avoids exposing passwords, keys, paths, sqlite text, or object names.
-    parentPort.postMessage({ requestId, ok: false, error: 'Protected store operation failed' });
+    parentPort.postMessage({
+      requestId,
+      ok: false,
+      error: 'Protected store operation failed',
+      diagnosticStage: typeof error?.diagnosticStage === 'string'
+        ? error.diagnosticStage
+        : undefined,
+    });
   }
 });

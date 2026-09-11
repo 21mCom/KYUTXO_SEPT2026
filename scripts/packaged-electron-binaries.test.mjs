@@ -633,6 +633,8 @@ test('the packaged browser gate launches the generated Windows portable renderer
   assert.match(source, /path\.join\(ROOT, 'release', IS_WINDOWS \? 'win-unpacked' : 'linux-unpacked'\)/);
   assert.match(source, /IS_WINDOWS \? 'KYUTXO\.exe' : 'kyutxo'/);
   assert.match(source, /prepareWindowsPortableLaunch/);
+  assert.match(source, /--use-fake-device-for-media-stream/);
+  assert.doesNotMatch(source, new RegExp('--use-fake-' + 'ui-for-media-stream'));
   assert.match(source, /portableSetup\.executable/);
   assert.match(source, /portableSetup\.launchDir/);
   assert.match(source, /taskkill.*args\.push\('\/F'\)/s);
@@ -690,6 +692,12 @@ test('the packaged network activity forced shutdown cannot become graceful', () 
   const forcedHelper = source.match(
     /async function forceStopPackagedProcess\(child\) \{(?<body>[\s\S]*?)\n\}/,
   )?.groups?.body;
+  assert.match(source, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
+  assert.match(
+    source,
+    /fs\.rmSync\(tempHome, \{ recursive: true, force: true, maxRetries: 10, retryDelay: 250 \}\)/,
+    'Windows cleanup must tolerate delayed executable handle release',
+  );
   assert.ok(forcedHelper, 'forced shutdown helper must remain independently testable in source');
 
   assert.match(
@@ -760,6 +768,18 @@ test('the packaged network activity relaunch rejects stale CDP ownership before 
     source.indexOf('const abruptlyTerminatedCdp = cdp;') + freshOwnershipIndex < connectIndex,
     'fresh ownership must be asserted before Playwright connects to the relaunched process',
   );
+  assert.match(
+    source,
+    /activityRows\.nth\(activity\.length\)\.waitFor\(\{ state: 'visible' \}\)[\s\S]*await activityRows\.count\(\)/,
+    'activity labels must be checked only after every asynchronously queried row renders',
+  );
+  assert.doesNotMatch(
+    source,
+    /indexedDB\.open\('KYUTXODatabase'\)/,
+    'packaged activity persistence must not be seeded through the obsolete IndexedDB mirror',
+  );
+  assert.match(source, /repository\.saveBatch\('networkPrivacyActivity', activity\)/);
+  assert.match(source, /repository\.page\('networkPrivacyActivity', after, 1000, 'asc'\)/);
 });
 
 test('the packaged Coin Passport gate is release-wired after the native worker check', () => {
@@ -777,6 +797,9 @@ test('the packaged Coin Passport gate is release-wired after the native worker c
   assert.match(script, /expectedCheckpointKey/);
   assert.match(script, /IPC_PAGE_CAP = 250/);
   assert.match(script, /prepareWindowsPortableLaunch/);
+  assert.match(script, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
+  assert.match(script, /waitForPackagedCdpDown\(cdpPort, 30_000\)/);
+  assert.match(script, /maxRetries: 10, retryDelay: 250/);
   assert.match(script, /portable launch copy/);
   assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
   assert.match(
@@ -801,7 +824,24 @@ test('the forgotten-source gate launches the copied Windows portable artifact an
   const buildScript = fs.readFileSync(path.join(SCRIPTS_DIR, 'electron-build.sh'), 'utf8');
 
   assert.match(script, /prepareWindowsPortableLaunch/);
+  assert.match(script, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
+  assert.match(script, /waitForPackagedCdpDown\(cdp\.port, 30_000\)/);
+  assert.match(script, /maxRetries: 10, retryDelay: 250/);
   assert.match(script, /cwd: IS_WINDOWS \? portableSetup\.launchDir : home/);
+  assert.match(script, /window\.location\.hash = '\/node-settings'/);
+  assert.match(script, /getByRole\('heading', \{ name: 'Node Connection' \}\)\.waitFor/);
+  assert.match(script, /seedConfiguredSourcePrecondition\(page\)/);
+  assert.match(script, /id: 'default'/);
+  assert.match(script, /networkPrivacyMode: 'own-node'/);
+  assert.match(script, /getByTestId\('button-save-settings'\)\.click\(\)/);
+  assert.match(script, /repository\.save\('nodeSettings'/);
+  assert.match(script, /protectedStore\.lock\(\)/);
+  assert.match(script, /readProtectedNodeSettings\(page\)/);
+  assert.match(script, /providerType: retainedSettings\?\.providerType/);
+  assert.doesNotMatch(script, /provider: retainedSettings\?\.provider/);
+  assert.match(script, /waitForFunction\(\(\) => window\.location\.hash === '#\/'\)/);
+  assert.doesNotMatch(script, /import\('\/src\/lib\/data\/node-settings-crud\.ts'\)/);
+  assert.doesNotMatch(script, /page\.goto\('kyutxo-app:\/\/bundle\/#\/node-settings'\)/);
   assert.doesNotMatch(script, /path\.join\(UNPACKED_DIR, 'KYUTXO\.exe'\)/);
   assert.doesNotMatch(script, /'--dir',\s+IS_WINDOWS \? '--win'/);
   assert.match(
@@ -832,6 +872,7 @@ test('the packaged Coin Origins gate is release-wired after the native worker ch
   assert.match(script, /holdingsTotal === 3/);
   assert.match(script, /origin-holding-unknown/);
   assert.match(script, /prepareWindowsPortableLaunch/);
+  assert.match(script, /path\.join\(portableSetup\.launchDir, 'KYUTXO_Data'\)/);
   assert.match(
     workflow,
     /- name: Verify Coin Origins wallet-scoped counts through packaged IPC\s+env:\s+KYUTXO_PACKAGED_SKIP_BUILD: '1'\s+run: node scripts\/check-packaged-coin-origins-browser\.mjs/,
@@ -840,4 +881,18 @@ test('the packaged Coin Origins gate is release-wired after the native worker ch
     buildScript,
     /KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts\/check-packaged-coin-origins-browser\.mjs/,
   );
+});
+
+test('the packaged protected-vault gate waits for CDP shutdown before cleanup', () => {
+  const script = fs.readFileSync(
+    path.join(SCRIPTS_DIR, 'check-packaged-vault-migration-browser.mjs'),
+    'utf8',
+  );
+  assert.match(script, /waitForPackagedCdpDown\(cdpPort, 30_000\)/);
+  assert.match(script, /maxRetries: 10, retryDelay: 250/);
+  assert.match(script, /function readFileWithTransientRetries/);
+  assert.match(script, /\['EBUSY', 'EPERM', 'EACCES'\]/);
+  assert.match(script, /const bytes = readFileWithTransientRetries\(absolutePath\)/);
+  assert.match(script, /for \(const scenario of PROTECTED_VAULT_SCENARIOS\) \{\s+const page = await startPackagedApp\(\)/);
+  assert.match(script, /await stopPackagedApp\(\);\s+const scan = scanDisposableProfile\(tempHome\)/);
 });

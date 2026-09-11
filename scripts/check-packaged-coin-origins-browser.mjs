@@ -26,7 +26,11 @@ import {
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 import { prepareWindowsPortableLaunch } from './packaged-windows-portable.mjs';
-import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';
+import {
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+  waitForPackagedCdpDown,
+} from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -252,14 +256,17 @@ async function main() {
   buildPackage();
   const binaries = IS_WINDOWS ? { electronBin: null, xvfbBin: null } : findPackagedBinaries({ tag: TAG });
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-origins-'));
-  const cdpUserDataDir = path.join(tempHome, 'cdp-profile');
   const portableSetup = IS_WINDOWS ? prepareWindowsPortableLaunch({
     root: ROOT, asarPath: ASAR, home: tempHome, tag: TAG,
   }) : null;
+  const cdpUserDataDir = IS_WINDOWS
+    ? path.join(portableSetup.launchDir, 'KYUTXO_Data')
+    : path.join(tempHome, 'cdp-profile');
   const display = `:${500 + (process.pid % 300)}`;
   let xvfb;
   let child;
   let browser;
+  let cdpPort = null;
 
   try {
     if (!IS_WINDOWS) {
@@ -297,6 +304,7 @@ async function main() {
     child.stderr.on('data', (chunk) => process.stdout.write(`${TAG}[app-err] ${chunk}`));
 
     const cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    cdpPort = cdp.port;
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     const page = await waitForPage(browser);
     await page.waitForFunction(() => Boolean(window.electronAPI?.engine), null, { timeout: 60_000 });
@@ -388,12 +396,15 @@ async function main() {
   } finally {
     await browser?.close().catch(() => {});
     killTree(child);
+    if (cdpPort !== null && !(await waitForPackagedCdpDown(cdpPort, 30_000))) {
+      throw new Error(`${TAG} packaged process still owns CDP port ${cdpPort} after shutdown`);
+    }
     try {
       process.kill(-xvfb?.pid, 'SIGTERM');
     } catch {
       xvfb?.kill?.('SIGTERM');
     }
-    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
   }
 }
 
