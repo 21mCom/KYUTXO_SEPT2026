@@ -181,13 +181,17 @@ function assert(condition, message) {
 
 async function seedRepository(page, fixture) {
   return page.evaluate(async (data) => {
-    const { getVaultRepository } = await import('/src/lib/repository/index.ts');
-    const repository = getVaultRepository();
-    await repository.bulkPut('records', data.records);
-    await repository.bulkPut('blockchainTransactions', data.transactions);
-    await repository.bulkPut('transactionParticipants', data.transactionParticipants);
+    const repository = window.electronAPI?.protectedStore?.repository;
+    if (!repository) throw new Error('protected repository bridge is unavailable');
+    const save = async (collection, rows) => {
+      const envelope = await repository.saveBatch(collection, rows);
+      if (!envelope?.ok) throw new Error(`${collection} saveBatch: ${envelope?.error || 'missing response'}`);
+    };
+    await save('records', data.records);
+    await save('blockchainTransactions', data.transactions);
+    await save('transactionParticipants', data.transactionParticipants);
     return {
-      kind: repository.kind,
+      kind: 'protected',
       records: data.records.length,
       transactions: data.transactions.length,
       participants: data.transactionParticipants.length,
