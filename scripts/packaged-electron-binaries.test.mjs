@@ -342,7 +342,7 @@ test('a future Windows packaged check cannot restore ad hoc portable discovery',
   );
 });
 
-test('shared Windows portable lookup rejects missing, empty, and stale artifacts', (t) => {
+test('shared Windows portable lookup rejects missing/empty artifacts and byte-verifies timestamp skew', (t) => {
   const root = fs.mkdtempSync(path.join(SCRIPTS_DIR, '.portable-helper-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const releaseDir = path.join(root, 'release');
@@ -366,10 +366,22 @@ test('shared Windows portable lookup rejects missing, empty, and stale artifacts
   const fresh = new Date();
   fs.utimesSync(artifactPath, old, old);
   fs.utimesSync(asarPath, fresh, fresh);
-  assert.throws(
-    () => findWindowsPortableArtifact({ root, asarPath, tag: '[test]' }),
-    /portable artifact predates the validated app\.asar/,
+  let verified = false;
+  assert.equal(
+    findWindowsPortableArtifact({
+      root,
+      asarPath,
+      tag: '[test]',
+      verifyBundle: ({ artifactPath: actualArtifact, asarPath: actualAsar }) => {
+        assert.equal(actualArtifact, artifactPath);
+        assert.equal(actualAsar, asarPath);
+        verified = true;
+        return { validatedDigest: 'a'.repeat(64), embeddedDigest: 'a'.repeat(64) };
+      },
+    }),
+    artifactPath,
   );
+  assert.equal(verified, true, 'timestamp-skewed downloads still require byte verification');
 });
 
 test('shared Windows portable verification binds embedded app.asar bytes to the validated package', (t) => {
