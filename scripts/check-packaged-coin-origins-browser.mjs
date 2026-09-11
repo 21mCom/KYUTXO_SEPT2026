@@ -179,30 +179,19 @@ function assert(condition, message) {
   console.log(`${TAG} PASS ${message}`);
 }
 
-async function seedDexie(page, fixture) {
+async function seedRepository(page, fixture) {
   return page.evaluate(async (data) => {
-    const openDb = () => new Promise((resolve, reject) => {
-      const request = indexedDB.open('KYUTXODatabase');
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error || new Error('could not open KYUTXODatabase'));
-    });
-    const db = await openDb();
-    const stores = ['records', 'blockchainTransactions', 'transactionParticipants'];
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(stores, 'readwrite');
-      transaction.onerror = () => reject(transaction.error || new Error('Dexie fixture transaction failed'));
-      for (const row of data.records) transaction.objectStore('records').put(row);
-      for (const row of data.transactions) transaction.objectStore('blockchainTransactions').put(row);
-      for (const row of data.transactionParticipants) transaction.objectStore('transactionParticipants').put(row);
-      transaction.oncomplete = () => {
-        db.close();
-        resolve({
-          records: data.records.length,
-          transactions: data.transactions.length,
-          participants: data.transactionParticipants.length,
-        });
-      };
-    });
+    const { getVaultRepository } = await import('/src/lib/repository/index.ts');
+    const repository = getVaultRepository();
+    await repository.bulkPut('records', data.records);
+    await repository.bulkPut('blockchainTransactions', data.transactions);
+    await repository.bulkPut('transactionParticipants', data.transactionParticipants);
+    return {
+      kind: repository.kind,
+      records: data.records.length,
+      transactions: data.transactions.length,
+      participants: data.transactionParticipants.length,
+    };
   }, fixture);
 }
 
@@ -312,12 +301,12 @@ async function main() {
 
     const fixture = buildFixture();
     const dexieFixture = buildDexieFixture(fixture);
-    const dexieSeed = await seedDexie(page, dexieFixture);
+    const repositorySeed = await seedRepository(page, dexieFixture);
     assert(
-      dexieSeed.records === 2 &&
-        dexieSeed.transactions === 3 &&
-        dexieSeed.participants === 5,
-      'Dexie contains the two-wallet fixture for freshness and wallet options',
+      repositorySeed.records === 2 &&
+        repositorySeed.transactions === 3 &&
+        repositorySeed.participants === 5,
+      'vault repository contains the two-wallet fixture for freshness and wallet options',
     );
 
     const seeded = await seedEngine(page, fixture);
@@ -354,7 +343,7 @@ async function main() {
     );
 
     // Hash routing keeps the existing renderer process and its real bridge while
-    // allowing the page to load the freshly seeded IndexedDB wallet options.
+    // allowing the page to load the freshly seeded repository wallet options.
     await page.evaluate(() => { window.location.hash = '#/coin-origins'; });
     await page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 60_000 });
 
