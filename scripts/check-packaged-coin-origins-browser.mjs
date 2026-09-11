@@ -5,7 +5,7 @@
 // acquisition lots are the known source lots, while holdings also include the
 // synthetic UNKNOWN_ORIGIN_ID holding when an output has an unresolved input.
 // This check launches the real packaged renderer, seeds both the native engine
-// and its matching IndexedDB fingerprints, and verifies that the visible page
+// and its matching repository fingerprints, and verifies that the visible page
 // uses the native getCoinOriginsPage response across the Electron bridge.
 //
 // Usage:
@@ -18,7 +18,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { unlockIfNeeded } from './browser-check-utils.mjs';
+import {
+  completeFreshVaultOnboardingIfPresent,
+  unlockIfNeeded,
+} from './browser-check-utils.mjs';
 import {
   assertPackagedAsarFresh,
   assertPackagedBundleFresh,
@@ -302,6 +305,7 @@ async function main() {
     const page = await waitForPage(browser);
     await page.waitForFunction(() => Boolean(window.electronAPI?.engine), null, { timeout: 60_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000, submitTimeoutMs: 60_000, label: 'packaged-coin-origins' });
+    await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-coin-origins' });
 
     const fixture = buildFixture();
     const dexieFixture = buildDexieFixture(fixture);
