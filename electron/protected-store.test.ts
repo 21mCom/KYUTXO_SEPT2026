@@ -97,6 +97,44 @@ describe("protected store", () => {
     }
   });
 
+  it("pages curated record tiers through the fixed protected keyset query", async () => {
+    const { client } = makeClient();
+    const call = (collection: string, operation: string, payload: object = {}) =>
+      client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records",
+        collection,
+        operation,
+        ...payload,
+      });
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "curated record query test password" });
+      await call("records", "saveBatch", { rows: [
+        { id: 1, type: "address", inputString: "manual-a", addressImportance: "manual" },
+        { id: 2, type: "address", inputString: "discovered", addressImportance: "blockchain-discovered" },
+        { id: 3, type: "transaction", inputString: "tx", addressImportance: "manual" },
+        { id: 4, type: "address", inputString: "manual-b", addressImportance: "critical" },
+      ] });
+
+      await expect(call("records", "query", {
+        name: "records.byTypeAndImportanceTiersKeyset",
+        value: { type: "address", tiers: ["manual", "critical"] },
+        limit: 10,
+      })).resolves.toEqual({ items: [
+        { id: 4, type: "address", inputString: "manual-b", addressImportance: "critical" },
+        { id: 1, type: "address", inputString: "manual-a", addressImportance: "manual" },
+      ] });
+      await expect(call("records", "query", {
+        name: "records.byTypeAndImportanceTiersKeyset",
+        value: { type: "address", tiers: ["manual", "critical"], beforeIdExclusive: 4 },
+        limit: 10,
+      })).resolves.toEqual({ items: [
+        { id: 1, type: "address", inputString: "manual-a", addressImportance: "manual" },
+      ] });
+    } finally {
+      await client.close();
+    }
+  });
+
   it("persists encrypted owner pages across unlock and rejects stale protected checkpoints", async () => {
     const { root, client } = makeClient();
     const call = (collection: string, operation: string, payload: object = {}) =>

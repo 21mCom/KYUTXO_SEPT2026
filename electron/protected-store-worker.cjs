@@ -1281,6 +1281,19 @@ function repositoryImpl(message) {
         message.value.beforeIdExclusive === undefined ? [message.value.type] : [message.value.type, message.value.beforeIdExclusive],
         'id_sort DESC,id_key DESC');
     }
+    else if (name === 'records.byTypeAndImportanceTiersKeyset' && collection === 'records' && message.value &&
+      text(message.value.type, 128) && values(message.value.tiers, (tier) => text(tier, 128)) &&
+      message.value.tiers.length <= 32 &&
+      (message.value.beforeIdExclusive === undefined || Number.isSafeInteger(message.value.beforeIdExclusive))) {
+      const tiers = [...new Set(message.value.tiers)];
+      if (tiers.length === 0) return { items: [] };
+      const before = message.value.beforeIdExclusive;
+      rows = select(
+        `record_type=? AND json_extract(value_json,'$.addressImportance') IN (${tiers.map(() => '?').join(',')})${before === undefined ? '' : ' AND id_sort<?'}`,
+        before === undefined ? [message.value.type, ...tiers] : [message.value.type, ...tiers, before],
+        'id_sort DESC,id_key DESC',
+      );
+    }
     else if (name === 'records.countByType' && collection === 'records' && text(message.value, 128)) {
       return { items: [{ count: db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE record_type=?`).get(message.value).count }] };
     }
