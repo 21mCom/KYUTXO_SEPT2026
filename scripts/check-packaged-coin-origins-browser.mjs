@@ -303,6 +303,12 @@ async function main() {
     cdpPort = cdp.port;
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     const page = await waitForPage(browser);
+    page.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') {
+        console.log(`${TAG}[renderer-${message.type()}] ${message.text().slice(0, 500)}`);
+      }
+    });
+    page.on('pageerror', (error) => console.log(`${TAG}[renderer-error] ${String(error?.stack || error).slice(0, 800)}`));
     await page.waitForFunction(() => Boolean(window.electronAPI?.engine), null, { timeout: 60_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000, submitTimeoutMs: 60_000, label: 'packaged-coin-origins' });
     await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-coin-origins' });
@@ -353,7 +359,17 @@ async function main() {
     // Navigate through the real app link so the deferred route boundary keeps
     // the authenticated renderer state and observes the lazy-route commit.
     await page.getByTestId('link-coin-origins').click();
-    await page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 60_000 });
+    const routeOutcome = await Promise.race([
+      page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'page'),
+      page.getByTestId('route-navigation-error').waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'error'),
+    ]);
+    if (routeOutcome === 'error') {
+      const diagnostic = await page.evaluate(() => ({
+        href: window.location.href,
+        body: document.body.innerText.slice(0, 2_000),
+      }));
+      throw new Error(`Coin Origins route failed: ${JSON.stringify(diagnostic)}`);
+    }
 
     const allScope = await readScope(page, { lots: 2, current: 3_500, unknown: 500 });
     assert(
