@@ -24,6 +24,12 @@ import {
 } from './packaged-bundle-freshness.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 import { prepareWindowsPortableLaunch } from './packaged-windows-portable.mjs';
+import {
+  clearPackagedCdpOwnership,
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+  waitForPackagedCdpDown,
+} from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -31,7 +37,6 @@ const ROOT = repoRootFromModuleUrl(import.meta.url);
 const IS_WINDOWS = process.platform === 'win32';
 const UNPACKED_DIR = path.join(ROOT, 'release', IS_WINDOWS ? 'win-unpacked' : 'linux-unpacked');
 const ASAR = path.join(UNPACKED_DIR, 'resources', 'app.asar');
-const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_OWNERSHIP_CDP_PORT || 9234);
 const TAG = '[packaged-ownership-review]';
 const PASSWORD = 'PackagedOwnershipReview#2026';
 const BUILD_TIMEOUT_MS = 15 * 60_000;
@@ -72,19 +77,6 @@ function buildPackage() {
     ...(IS_WINDOWS ? ['--win'] : ['--dir', '--linux', '-c.npmRebuild=false']),
   ]);
   if (!fs.existsSync(ASAR)) throw new Error(`${TAG} packaging produced no ${ASAR}`);
-}
-
-async function cdpIsUp() {
-  try { return (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).ok; } catch { return false; }
-}
-
-async function waitForCdp(expected, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if ((await cdpIsUp()) === expected) return;
-    await sleep(250);
-  }
-  throw new Error(`${TAG} CDP endpoint did not become ${expected ? 'available' : 'unavailable'}`);
 }
 
 async function rendererPage(browser) {
@@ -251,6 +243,7 @@ async function main() {
   let xvfbBin;
   if (!IS_WINDOWS) ({ electronBin, xvfbBin } = findPackagedBinaries({ tag: TAG }));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-packaged-ownership-'));
+  const cdpUserDataDir = path.join(home, 'cdp-profile');
   const portable = IS_WINDOWS ? prepareWindowsPortableLaunch({ root: ROOT, asarPath: ASAR, home, tag: TAG }) : null;
   const env = {
     ...(portable?.env || process.env), HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'),
@@ -264,11 +257,12 @@ async function main() {
   let child;
   let browser;
   const launch = () => {
+    clearPackagedCdpOwnership(cdpUserDataDir);
     child = spawn(
       executable,
       IS_WINDOWS
-        ? ['--disable-gpu', `--remote-debugging-port=${CDP_PORT}`]
-        : [ASAR, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP_PORT}`],
+        ? ['--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)]
+        : [ASAR, '--no-sandbox', '--disable-gpu', ...packagedCdpLaunchArgs(cdpUserDataDir)],
       {
         cwd: IS_WINDOWS ? portable.launchDir : home,
         env: IS_WINDOWS ? env : { ...env, DISPLAY: display },
@@ -287,8 +281,8 @@ async function main() {
       await sleep(2_000);
     }
     launch();
-    await waitForCdp(true, 90_000);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    let cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     let page = await rendererPage(browser);
     page.on('console', (message) => {
       if (message.type() === 'error' || message.type() === 'warning') {
@@ -372,10 +366,10 @@ async function main() {
     browser = null;
     await stop(child);
     child = null;
-    await waitForCdp(false, 30_000);
+    assert.equal(await waitForPackagedCdpDown(cdp.port, 30_000), true, 'packaged CDP endpoint stayed up');
     launch();
-    await waitForCdp(true, 90_000);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    cdp = await waitForOwnedPackagedCdp({ userDataDir: cdpUserDataDir, timeoutMs: 90_000 });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     page = await rendererPage(browser);
     await unlockIfNeeded(page, PASSWORD, { appearTimeoutMs: 60_000, label: 'packaged-ownership-reopen' });
     await page.goto('kyutxo-app://bundle/#/resolve-ownership');

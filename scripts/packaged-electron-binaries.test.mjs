@@ -27,6 +27,7 @@ const ROOT = path.dirname(SCRIPTS_DIR);
 const PACKAGED_NON_BROWSER_CHECKS = new Set([
   // These validate packaged internals without launching a renderer under
   // Electron/Xvfb, so the browser-check filename convention does not apply.
+  'check-packaged-app-version.mjs',
   'check-packaged-native-engine.mjs',
   'check-packaged-vault-lock-native.mjs',
 ]);
