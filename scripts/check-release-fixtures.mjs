@@ -11,7 +11,7 @@ const DEFAULT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DOCUMENT_GLOBS = ['*.pdf', '*.doc', '*.docx', '*.odt'];
 const GIT_TIMEOUT_MS = 30_000;
 const FAST_TEST_COMMAND_TIMEOUT_MS = 15 * 60_000;
-const FULL_TEST_COMMAND_TIMEOUT_MS = 30 * 60_000;
+const FULL_TEST_COMMAND_TIMEOUT_MS = 60 * 60_000;
 
 function testCommandTimeout(command) {
   return command.some((argument) => argument.includes('test:full'))

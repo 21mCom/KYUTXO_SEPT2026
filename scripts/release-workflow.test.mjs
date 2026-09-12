@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/build.yml'), 'utf8');
 const matrixWorkflow = fs.readFileSync(path.join(ROOT, '.github/workflows/desktop-package-matrix.yml'), 'utf8');
+const releaseFixtureGuard = fs.readFileSync(path.join(ROOT, 'scripts/check-release-fixtures.mjs'), 'utf8');
 const builder = JSON.parse(fs.readFileSync(path.join(ROOT, 'electron-builder.json'), 'utf8'));
 const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
@@ -138,6 +139,34 @@ test('tagged and explicitly requested releases run the full suite before packagi
   assert.match(
     packageJson.scripts['test:protected-owner-book-million'],
     /node --max-old-space-size=4096 .*--maxWorkers=1 .*--testTimeout=720000 .*protected-store-owner-book\.scale\.test\.ts/,
+  );
+});
+
+test('Windows release budgets bound the full suite and preserve downstream headroom', () => {
+  const fullSuiteTimeouts = [
+    ...releaseFixtureGuard.matchAll(
+      /const FULL_TEST_COMMAND_TIMEOUT_MS = (\d+) \* 60_000;/g,
+    ),
+  ];
+  const buildJobTimeouts = [
+    ...workflow.matchAll(
+      /^  build-windows:\r?\n    timeout-minutes: (\d+)$/gm,
+    ),
+  ];
+
+  assert.equal(fullSuiteTimeouts.length, 1, 'expected one full-suite timeout constant');
+  assert.equal(buildJobTimeouts.length, 1, 'expected one build-windows timeout');
+
+  const fullSuiteMinutes = Number(fullSuiteTimeouts[0][1]);
+  const buildJobMinutes = Number(buildJobTimeouts[0][1]);
+  const scaleGateMinutes = 10 + 15;
+  const downstreamReserveMinutes = 60;
+
+  assert.equal(fullSuiteMinutes, 60);
+  assert.equal(buildJobMinutes, 150);
+  assert.ok(
+    buildJobMinutes >= fullSuiteMinutes + scaleGateMinutes + downstreamReserveMinutes,
+    'build-windows must reserve an hour beyond the bounded full and scale gates',
   );
 });
 
