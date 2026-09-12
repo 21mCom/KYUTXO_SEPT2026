@@ -21,12 +21,16 @@ vi.mock("../engine-client", () => ({
   engineGetRecordsFingerprint: vi.fn(),
   engineGetTransactionsFingerprint: vi.fn(),
   engineGetParticipantsFingerprint: vi.fn(),
+  engineGetTransactionMetadataFingerprint: vi.fn(),
 }));
 vi.mock("../engine-core", () => ({ ENGINE_SCHEMA_VERSION: 2 }));
 vi.mock("@/lib/data/record-crud", () => ({ getRecordsFingerprint: vi.fn() }));
 vi.mock("@/lib/data/transaction-crud", () => ({
   getTransactionsFingerprint: vi.fn(),
   getParticipantsFingerprint: vi.fn(),
+}));
+vi.mock("@/lib/repository", () => ({
+  getVaultRepository: vi.fn(() => ({ kind: "dexie" })),
 }));
 
 import { evaluateEngineFreshness } from "../engine-freshness";
@@ -36,9 +40,14 @@ import {
   getEngineStatus,
   engineGetSchemaVersion,
   engineGetRecordsFingerprint,
+  engineGetTransactionsFingerprint,
+  engineGetParticipantsFingerprint,
+  engineGetTransactionMetadataFingerprint,
   type EngineSnapshot,
 } from "../engine-client";
 import { getRecordsFingerprint } from "@/lib/data/record-crud";
+import { getTransactionsFingerprint, getParticipantsFingerprint } from "@/lib/data/transaction-crud";
+import { getVaultRepository } from "@/lib/repository";
 
 const READY_SNAPSHOT = { ready: true } as unknown as EngineSnapshot;
 const recordsFp = { count: 3, maxId: 9, maxUpdatedAt: 100 };
@@ -69,6 +78,34 @@ describe("evaluateEngineFreshness — healthy fast path", () => {
       useEngine: true,
       reason: "ready-fresh",
     });
+  });
+
+  it("compares protected source fingerprints without touching renderer Dexie", async () => {
+    const tx = { count: 2, maxId: 4, maxBlockTime: 200 };
+    const participants = { count: 3, maxId: 8, resolvedPrevoutCount: 1 };
+    const metadata = { count: 1, maxId: 6, maxUpdatedAt: 300 };
+    const mirrorFingerprint = vi.fn(async (table: string) => ({
+      records: recordsFp,
+      blockchainTransactions: tx,
+      transactionParticipants: participants,
+      transactionMetadata: metadata,
+    })[table]);
+    vi.mocked(getVaultRepository).mockReturnValue({
+      kind: "protected",
+      mirrorFingerprint,
+    } as never);
+    vi.mocked(engineGetTransactionsFingerprint).mockResolvedValue(tx);
+    vi.mocked(engineGetParticipantsFingerprint).mockResolvedValue(participants);
+    vi.mocked(engineGetTransactionMetadataFingerprint).mockResolvedValue(metadata);
+
+    await expect(evaluateEngineFreshness("coinOrigins")).resolves.toEqual({
+      useEngine: true,
+      reason: "ready-fresh",
+    });
+    expect(mirrorFingerprint).toHaveBeenCalledTimes(4);
+    expect(getRecordsFingerprint).not.toHaveBeenCalled();
+    expect(getTransactionsFingerprint).not.toHaveBeenCalled();
+    expect(getParticipantsFingerprint).not.toHaveBeenCalled();
   });
 });
 

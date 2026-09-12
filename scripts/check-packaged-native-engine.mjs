@@ -61,6 +61,7 @@ import {
   packagedTargetHelp,
   parsePackagedTargetArgs,
 } from './packaged-targets.mjs';
+import { extractAvailableAsarTree } from './packaged-asar-extract.mjs';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -347,10 +348,18 @@ async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-native-engine-check-'));
   try {
     console.log(`${TAG} extracting asar (+ .unpacked) to ${tmp}/app ...`);
-    // extractAll re-inlines unpacked files from the sibling app.asar.unpacked,
-    // so the extracted tree is byte-for-byte what Electron's asar-aware fs
-    // presents at runtime — including the real .node addon.
-    asar.extractAll(ASAR, path.join(tmp, 'app'));
+    // Electron Builder can leave optional package metadata in the asar header
+    // while omitting its unpacked companion file. Extract every available entry
+    // and report those absent optional files instead of letting extractAll abort
+    // before the shipped worker and native addon can be exercised.
+    extractAvailableAsarTree({
+      asar,
+      archivePath: ASAR,
+      destination: path.join(tmp, 'app'),
+      onMissingEntry: (entry) => {
+        console.warn(`${TAG} skipping unavailable ASAR metadata entry: ${entry}`);
+      },
+    });
     const bundlePath = path.join(tmp, 'app', WORKER_REL);
     const extractedNative = path.join(tmp, 'app', NATIVE_REL);
     if (!fs.existsSync(bundlePath)) throw new Error(`extracted bundle missing: ${bundlePath}`);

@@ -1,5 +1,5 @@
 import { getElectronAPISafe, type EngineEnvelope, type ProtectedStoreBridge } from '../electron';
-import type { OwnerCostBasisPageRequest, OwnerCostBasisProjectionResult, OwnershipReviewCommit, ProtectedRepositoryCommandName, ProtectedRepositoryQueryName, RecordDeleteOrArchiveCommand, RecordsQuery, RestoreVaultCommit, SettingsHistoryCommit, TransactionParticipantsCommit, VaultKey, VaultListOptions, VaultPage, VaultRepository, VaultRows, VaultTableName } from './contracts';
+import type { OwnerCostBasisPageRequest, OwnerCostBasisProjectionResult, OwnershipReviewCommit, ProtectedRepositoryCommandName, ProtectedRepositoryQueryName, RecordDeleteOrArchiveCommand, RecordsQuery, RestoreVaultCommit, SettingsHistoryCommit, TransactionParticipantsCommit, VaultKey, VaultListOptions, VaultMirrorFingerprints, VaultPage, VaultRepository, VaultRows, VaultTableName } from './contracts';
 import type { OwnerCostBasisPage } from '../owner-cost-basis-core';
 import type { Record } from '../db-types';
 
@@ -68,6 +68,12 @@ export class ProtectedVaultRepository implements VaultRepository {
 
   async count<T extends VaultTableName>(table: T): Promise<number> {
     return unwrap(await this.bridge.repository.count(table)).count;
+  }
+
+  async mirrorFingerprint<T extends keyof VaultMirrorFingerprints>(
+    table: T,
+  ): Promise<VaultMirrorFingerprints[T]> {
+    return unwrap(await this.bridge.repository.fingerprint(table)) as VaultMirrorFingerprints[T];
   }
 
   async list<T extends VaultTableName>(table: T, options: VaultListOptions): Promise<VaultPage<VaultRows[T]>> {

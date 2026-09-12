@@ -18,6 +18,10 @@ import {
 } from './packaged-bundle-freshness.mjs';
 import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
+import {
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+} from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -100,6 +104,7 @@ async function main() {
     throw new Error(`${TAG} packaged executable does not exist: ${packagedAppBin}`);
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-backup-picker-check-'));
+  const cdpUserDataDir = path.join(home, 'cdp-profile');
   const selectedDirectory = path.join(home, 'late-backup-folder');
   const releaseMarker = path.join(home, 'release-picker');
   const cdpUserDataDir = path.join(home, 'cdp-profile');

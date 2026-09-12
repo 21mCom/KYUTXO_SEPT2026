@@ -5,7 +5,7 @@
 // acquisition lots are the known source lots, while holdings also include the
 // synthetic UNKNOWN_ORIGIN_ID holding when an output has an unresolved input.
 // This check launches the real packaged renderer, seeds both the native engine
-// and its matching IndexedDB fingerprints, and verifies that the visible page
+// and its matching repository fingerprints, and verifies that the visible page
 // uses the native getCoinOriginsPage response across the Electron bridge.
 //
 // Usage:
@@ -18,7 +18,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireBrowserCheckLock } from './browser-check-lock.mjs';
-import { unlockIfNeeded } from './browser-check-utils.mjs';
+import {
+  completeFreshVaultOnboardingIfPresent,
+  unlockIfNeeded,
+} from './browser-check-utils.mjs';
 import {
   assertPackagedAsarFresh,
   assertPackagedBundleFresh,
@@ -179,30 +182,31 @@ function assert(condition, message) {
   console.log(`${TAG} PASS ${message}`);
 }
 
-async function seedDexie(page, fixture) {
+async function seedRepository(page, fixture) {
   return page.evaluate(async (data) => {
-    const openDb = () => new Promise((resolve, reject) => {
-      const request = indexedDB.open('KYUTXODatabase');
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error || new Error('could not open KYUTXODatabase'));
-    });
-    const db = await openDb();
-    const stores = ['records', 'blockchainTransactions', 'transactionParticipants'];
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(stores, 'readwrite');
-      transaction.onerror = () => reject(transaction.error || new Error('Dexie fixture transaction failed'));
-      for (const row of data.records) transaction.objectStore('records').put(row);
-      for (const row of data.transactions) transaction.objectStore('blockchainTransactions').put(row);
-      for (const row of data.transactionParticipants) transaction.objectStore('transactionParticipants').put(row);
-      transaction.oncomplete = () => {
-        db.close();
-        resolve({
-          records: data.records.length,
-          transactions: data.transactions.length,
-          participants: data.transactionParticipants.length,
-        });
-      };
-    });
+    const repository = window.electronAPI?.protectedStore?.repository;
+    if (!repository) throw new Error('protected repository bridge is unavailable');
+    const save = async (collection, rows) => {
+      const envelope = await repository.saveBatch(collection, rows);
+      if (!envelope?.ok) throw new Error(`${collection} saveBatch: ${envelope?.error || 'missing response'}`);
+    };
+    await save('records', data.records);
+    await save('blockchainTransactions', data.transactions);
+    await save('transactionParticipants', data.transactionParticipants);
+    const curated = await repository.query('records', 'records.byTypeAndImportanceTiersKeyset', {
+      type: 'address',
+      tiers: ['verified', 'manual', 'wallet-import', 'xpub-derived'],
+    }, 1000);
+    if (!curated?.ok || !Array.isArray(curated.result?.items)) {
+      throw new Error(`curated record query: ${curated?.error || 'missing response'}`);
+    }
+    return {
+      kind: 'protected',
+      records: data.records.length,
+      curatedWalletNames: curated.result.items.map((record) => record.walletName),
+      transactions: data.transactions.length,
+      participants: data.transactionParticipants.length,
+    };
   }, fixture);
 }
 
@@ -227,11 +231,16 @@ async function seedEngine(page, fixture) {
 }
 
 async function waitForCard(page, testId, expected) {
-  await page.waitForFunction(
-    ({ testId: id, value }) => document.querySelector(`[data-testid="${id}"]`)?.textContent?.trim() === value,
-    { testId, value: expected },
-    { timeout: 30_000 },
-  );
+  await Promise.race([
+    page.waitForFunction(
+      ({ testId: id, value }) => document.querySelector(`[data-testid="${id}"]`)?.textContent?.trim() === value,
+      { testId, value: expected },
+      { timeout: 30_000 },
+    ),
+    page.getByTestId('coin-origins-load-error').waitFor({ state: 'visible', timeout: 30_000 }).then(async () => {
+      throw new Error(`Coin Origins load failed: ${(await page.getByTestId('coin-origins-load-error').innerText()).trim()}`);
+    }),
+  ]);
 }
 
 async function readScope(page, expected) {
@@ -307,17 +316,29 @@ async function main() {
     cdpPort = cdp.port;
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     const page = await waitForPage(browser);
+    page.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') {
+        console.log(`${TAG}[renderer-${message.type()}] ${message.text().slice(0, 500)}`);
+      }
+    });
+    page.on('pageerror', (error) => console.log(`${TAG}[renderer-error] ${String(error?.stack || error).slice(0, 800)}`));
     await page.waitForFunction(() => Boolean(window.electronAPI?.engine), null, { timeout: 60_000 });
     await unlockIfNeeded(page, SETUP_PASSWORD, { appearTimeoutMs: 60_000, submitTimeoutMs: 60_000, label: 'packaged-coin-origins' });
+    await completeFreshVaultOnboardingIfPresent(page, { label: 'packaged-coin-origins' });
 
     const fixture = buildFixture();
     const dexieFixture = buildDexieFixture(fixture);
-    const dexieSeed = await seedDexie(page, dexieFixture);
+    const repositorySeed = await seedRepository(page, dexieFixture);
     assert(
-      dexieSeed.records === 2 &&
-        dexieSeed.transactions === 3 &&
-        dexieSeed.participants === 5,
-      'Dexie contains the two-wallet fixture for freshness and wallet options',
+      repositorySeed.records === 2 &&
+        repositorySeed.transactions === 3 &&
+        repositorySeed.participants === 5,
+      'vault repository contains the two-wallet fixture for freshness and wallet options',
+    );
+    assert(
+      repositorySeed.curatedWalletNames.includes('Alpha wallet') &&
+        repositorySeed.curatedWalletNames.includes('Beta wallet'),
+      'protected curated-record query returns both wallet scopes before page rendering',
     );
 
     const seeded = await seedEngine(page, fixture);
@@ -353,10 +374,30 @@ async function main() {
       'native page response keeps the unresolved allocation in Alpha and the entire-vault scope only',
     );
 
-    // Hash routing keeps the existing renderer process and its real bridge while
-    // allowing the page to load the freshly seeded IndexedDB wallet options.
-    await page.evaluate(() => { window.location.hash = '#/coin-origins'; });
-    await page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 60_000 });
+    await page.evaluate(() => { window.location.hash = '/coin-origins'; });
+    await page.waitForFunction(() => window.location.hash === '#/coin-origins', null, { timeout: 10_000 });
+    await sleep(2_000);
+    const routeState = await page.evaluate(() => ({
+      href: window.location.href,
+      hash: window.location.hash,
+      testIds: Array.from(document.querySelectorAll('[data-testid]'))
+        .map((element) => element.getAttribute('data-testid'))
+        .filter(Boolean)
+        .slice(0, 100),
+    }));
+    console.log(`${TAG} route state ${JSON.stringify(routeState)}`);
+    const routeOutcome = await Promise.race([
+      page.getByTestId('coin-origins-page').waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'page', () => null),
+      page.getByTestId('route-navigation-error').waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'error', () => null),
+    ]);
+    if (!routeOutcome) throw new Error(`Coin Origins route did not settle: ${JSON.stringify(routeState)}`);
+    if (routeOutcome === 'error') {
+      const diagnostic = await page.evaluate(() => ({
+        href: window.location.href,
+        body: document.body.innerText.slice(0, 2_000),
+      }));
+      throw new Error(`Coin Origins route failed: ${JSON.stringify(diagnostic)}`);
+    }
 
     const allScope = await readScope(page, { lots: 2, current: 3_500, unknown: 500 });
     assert(

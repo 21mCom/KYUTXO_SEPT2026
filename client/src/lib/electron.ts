@@ -469,6 +469,13 @@ export interface ProtectedStoreBridge {
     saveBatch: (collection: string, rows: unknown[]) => Promise<EngineEnvelope<{ ids: Array<string | number> }>>;
     removeBatch: (collection: string, ids: Array<string | number>) => Promise<EngineEnvelope<{ deleted: number }>>;
     count: (collection: string) => Promise<EngineEnvelope<{ count: number }>>;
+    fingerprint: (collection: string) => Promise<EngineEnvelope<{
+      count: number;
+      maxId: number;
+      maxUpdatedAt?: number;
+      maxBlockTime?: number;
+      resolvedPrevoutCount?: number;
+    }>>;
     clear: (collection: string) => Promise<EngineEnvelope<{ deleted: number }>>;
     batch: (
       collection: string,

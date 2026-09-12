@@ -29,6 +29,7 @@ import { withEngineTimeout, EngineProbeTimeoutError } from './engine-timeout';
 import { getRecordsFingerprint } from '@/lib/data/record-crud';
 import { getTransactionsFingerprint, getParticipantsFingerprint } from '@/lib/data/transaction-crud';
 import { db } from '@/lib/database';
+import { getVaultRepository } from '@/lib/repository';
 
 /**
  * Which mirror tables a read depends on:
@@ -73,6 +74,31 @@ async function getTransactionMetadataFingerprint(): Promise<{ count: number; max
   );
 }
 
+function protectedFingerprint<T extends 'records' | 'blockchainTransactions' | 'transactionParticipants' | 'transactionMetadata'>(
+  table: T,
+) {
+  const repository = getVaultRepository();
+  return repository.kind === 'protected'
+    ? repository.mirrorFingerprint!(table)
+    : undefined;
+}
+
+async function getLiveRecordsFingerprint() {
+  return protectedFingerprint('records') ?? getRecordsFingerprint();
+}
+
+async function getLiveTransactionsFingerprint() {
+  return protectedFingerprint('blockchainTransactions') ?? getTransactionsFingerprint();
+}
+
+async function getLiveParticipantsFingerprint() {
+  return protectedFingerprint('transactionParticipants') ?? getParticipantsFingerprint();
+}
+
+async function getLiveTransactionMetadataFingerprint() {
+  return protectedFingerprint('transactionMetadata') ?? getTransactionMetadataFingerprint();
+}
+
 /**
  * Decide whether the caller may read from the engine for the given scope. Never
  * throws: callers treat a false result as "use Dexie". Keep your own version /
@@ -108,7 +134,7 @@ export async function evaluateEngineFreshness(
     if (scope === 'records') {
       const [eng, dex] = await withEngineTimeout(Promise.all([
         engineGetRecordsFingerprint(),
-        getRecordsFingerprint(),
+        getLiveRecordsFingerprint(),
       ]));
       const fresh =
         eng.count === dex.count &&
@@ -124,9 +150,9 @@ export async function evaluateEngineFreshness(
       // uses for these two tables, so a records drift can't disable the tx list.
       const [engTx, dexTx, engPart, dexPart] = await withEngineTimeout(Promise.all([
         engineGetTransactionsFingerprint(),
-        getTransactionsFingerprint(),
+        getLiveTransactionsFingerprint(),
         engineGetParticipantsFingerprint(),
-        getParticipantsFingerprint(),
+        getLiveParticipantsFingerprint(),
       ]));
       const fresh =
         engTx.count === dexTx.count &&
@@ -148,11 +174,11 @@ export async function evaluateEngineFreshness(
       engPart, dexPart,
     ] = await withEngineTimeout(Promise.all([
       engineGetRecordsFingerprint(),
-      getRecordsFingerprint(),
+      getLiveRecordsFingerprint(),
       engineGetTransactionsFingerprint(),
-      getTransactionsFingerprint(),
+      getLiveTransactionsFingerprint(),
       engineGetParticipantsFingerprint(),
-      getParticipantsFingerprint(),
+      getLiveParticipantsFingerprint(),
     ]));
     const fresh =
       engRec.count === dexRec.count &&
@@ -167,7 +193,7 @@ export async function evaluateEngineFreshness(
     if (scope === 'coinOrigins') {
       const [engMetadata, dexMetadata] = await withEngineTimeout(Promise.all([
         engineGetTransactionMetadataFingerprint(),
-        getTransactionMetadataFingerprint(),
+        getLiveTransactionMetadataFingerprint(),
       ]));
       return fresh &&
         engMetadata.count === dexMetadata.count &&

@@ -30,6 +30,12 @@ import {
 } from './packaged-cdp.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 import { prepareWindowsPortableLaunch } from './packaged-windows-portable.mjs';
+import {
+  clearPackagedCdpOwnership,
+  packagedCdpLaunchArgs,
+  waitForOwnedPackagedCdp,
+  waitForPackagedCdpDown,
+} from './packaged-cdp.mjs';
 
 await acquireBrowserCheckLock();
 
@@ -257,6 +263,7 @@ async function main() {
   let child;
   let browser;
   const launch = () => {
+    clearPackagedCdpOwnership(cdpUserDataDir);
     child = spawn(
       executable,
       IS_WINDOWS

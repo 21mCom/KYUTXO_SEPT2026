@@ -342,7 +342,7 @@ test('a future Windows packaged check cannot restore ad hoc portable discovery',
   );
 });
 
-test('shared Windows portable lookup rejects missing, empty, and stale artifacts', (t) => {
+test('shared Windows portable lookup rejects missing/empty artifacts and byte-verifies timestamp skew', (t) => {
   const root = fs.mkdtempSync(path.join(SCRIPTS_DIR, '.portable-helper-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const releaseDir = path.join(root, 'release');
@@ -366,10 +366,22 @@ test('shared Windows portable lookup rejects missing, empty, and stale artifacts
   const fresh = new Date();
   fs.utimesSync(artifactPath, old, old);
   fs.utimesSync(asarPath, fresh, fresh);
-  assert.throws(
-    () => findWindowsPortableArtifact({ root, asarPath, tag: '[test]' }),
-    /portable artifact predates the validated app\.asar/,
+  let verified = false;
+  assert.equal(
+    findWindowsPortableArtifact({
+      root,
+      asarPath,
+      tag: '[test]',
+      verifyBundle: ({ artifactPath: actualArtifact, asarPath: actualAsar }) => {
+        assert.equal(actualArtifact, artifactPath);
+        assert.equal(actualAsar, asarPath);
+        verified = true;
+        return { validatedDigest: 'a'.repeat(64), embeddedDigest: 'a'.repeat(64) };
+      },
+    }),
+    artifactPath,
   );
+  assert.equal(verified, true, 'timestamp-skewed downloads still require byte verification');
 });
 
 test('shared Windows portable verification binds embedded app.asar bytes to the validated package', (t) => {
@@ -881,6 +893,18 @@ test('the packaged Coin Origins gate is release-wired after the native worker ch
   assert.match(
     buildScript,
     /KYUTXO_PACKAGED_SKIP_BUILD=1 node scripts\/check-packaged-coin-origins-browser\.mjs/,
+  );
+});
+
+test('authenticated packaged routes consume location inside the adaptive hash router', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'client/src/App.tsx'), 'utf8');
+  assert.match(
+    source,
+    /function AuthenticatedAppContent\(\)[\s\S]*?const \[location, navigate\] = useLocation\(\);/,
+  );
+  assert.match(
+    source,
+    /function AuthenticatedApp\(\)[\s\S]*?<Router hook=\{useAdaptiveLocation\}>[\s\S]*?<AuthenticatedAppContent \/>/,
   );
 });
 

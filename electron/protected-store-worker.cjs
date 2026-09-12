@@ -62,7 +62,7 @@ const REPOSITORIES = Object.freeze({
   vault: new Set(['settings', 'vault']),
 });
 const REPOSITORY_OPERATIONS = new Set([
-  'save', 'find', 'page', 'remove', 'saveBatch', 'removeBatch', 'batch', 'count', 'clear', 'query', 'command',
+  'save', 'find', 'page', 'remove', 'saveBatch', 'removeBatch', 'batch', 'count', 'fingerprint', 'clear', 'query', 'command',
   // Fixed cross-collection commands.  These are commands, not a renderer
   // transaction callback or a generic multi-table mutation language.
   'deleteOrArchiveRecords', 'saveTransactionWithParticipants', 'saveSettingsWithHistory', 'clearAll', 'restoreCommit', 'commitOwnershipReview',
@@ -972,7 +972,7 @@ function repository(message) {
   const outer = repositoryDepth++ === 0;
   try {
     const result = repositoryImpl(message);
-    if (outer && !['find', 'page', 'count', 'query', 'ownerCostBasisPage', 'ownerCostBasisProjection'].includes(message.operation)) {
+    if (outer && !['find', 'page', 'count', 'fingerprint', 'query', 'ownerCostBasisPage', 'ownerCostBasisProjection'].includes(message.operation)) {
       dataRevision++;
       ownerBookCheckpoint = null;
     }
@@ -1222,6 +1222,29 @@ function repositoryImpl(message) {
     return { deleted };
   }
   if (operation === 'count') return { count: db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count };
+  if (operation === 'fingerprint') {
+    if (collection === 'records' || collection === 'transactionMetadata') {
+      const row = db.prepare(
+        `SELECT COUNT(*) AS count, COALESCE(MAX(id_sort),0) AS maxId, COALESCE(MAX(updated_at),0) AS maxUpdatedAt FROM ${table}`,
+      ).get();
+      return { count: row.count, maxId: row.maxId, maxUpdatedAt: row.maxUpdatedAt };
+    }
+    if (collection === 'blockchainTransactions') {
+      const row = db.prepare(
+        `SELECT COUNT(*) AS count, COALESCE(MAX(id_sort),0) AS maxId, COALESCE(MAX(block_time),0) AS maxBlockTime FROM ${table}`,
+      ).get();
+      return { count: row.count, maxId: row.maxId, maxBlockTime: row.maxBlockTime };
+    }
+    if (collection === 'transactionParticipants') {
+      const row = db.prepare(
+        `SELECT COUNT(*) AS count, COALESCE(MAX(id_sort),0) AS maxId,
+          COALESCE(SUM(CASE WHEN prev_txid IS NOT NULL AND prev_vout IS NOT NULL THEN 1 ELSE 0 END),0) AS resolvedPrevoutCount
+         FROM ${table}`,
+      ).get();
+      return { count: row.count, maxId: row.maxId, resolvedPrevoutCount: row.resolvedPrevoutCount };
+    }
+    fail();
+  }
   if (operation === 'clear') {
     const result = db.prepare(`DELETE FROM ${table}`).run();
     return { deleted: result.changes };
@@ -1257,6 +1280,19 @@ function repositoryImpl(message) {
       rows = select(`record_type=?${message.value.beforeIdExclusive === undefined ? '' : ' AND id_sort<?'} `,
         message.value.beforeIdExclusive === undefined ? [message.value.type] : [message.value.type, message.value.beforeIdExclusive],
         'id_sort DESC,id_key DESC');
+    }
+    else if (name === 'records.byTypeAndImportanceTiersKeyset' && collection === 'records' && message.value &&
+      text(message.value.type, 128) && values(message.value.tiers, (tier) => text(tier, 128)) &&
+      message.value.tiers.length <= 32 &&
+      (message.value.beforeIdExclusive === undefined || Number.isSafeInteger(message.value.beforeIdExclusive))) {
+      const tiers = [...new Set(message.value.tiers)];
+      if (tiers.length === 0) return { items: [] };
+      const before = message.value.beforeIdExclusive;
+      rows = select(
+        `record_type=? AND json_extract(value_json,'$.addressImportance') IN (${tiers.map(() => '?').join(',')})${before === undefined ? '' : ' AND id_sort<?'}`,
+        before === undefined ? [message.value.type, ...tiers] : [message.value.type, ...tiers, before],
+        'id_sort DESC,id_key DESC',
+      );
     }
     else if (name === 'records.countByType' && collection === 'records' && text(message.value, 128)) {
       return { items: [{ count: db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE record_type=?`).get(message.value).count }] };

@@ -5,7 +5,6 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const PORTABLE_NAME_PATTERN = /^KYUTXO-.+-Portable\.exe$/i;
-const MTIME_TOLERANCE_MS = 1_000;
 
 function sha256(filePath, fileSystem = fs) {
   return crypto.createHash('sha256').update(fileSystem.readFileSync(filePath)).digest('hex');
@@ -126,14 +125,11 @@ export function findWindowsPortableArtifact({
     );
   }
 
-  let asarStat;
   try {
-    asarStat = fileSystem.statSync(asarPath);
+    const asarStat = fileSystem.statSync(asarPath);
+    if (!asarStat.isFile() || asarStat.size <= 0) throw new Error('not a non-empty file');
   } catch {
     throw new Error(`${tag} validated app.asar is missing: ${asarPath}`);
-  }
-  if (portableStat.mtimeMs + MTIME_TOLERANCE_MS < asarStat.mtimeMs) {
-    throw new Error(`${tag} portable artifact predates the validated app.asar: ${expected}`);
   }
   const evidence = verifyBundle({ artifactPath: expected, asarPath, tag, fileSystem });
   if (evidence?.validatedDigest) {

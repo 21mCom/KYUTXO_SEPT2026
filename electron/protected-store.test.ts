@@ -52,6 +52,89 @@ describe("protected store", () => {
     expect(worker).not.toContain("message.sql");
   });
 
+  it("returns fixed mirror fingerprints without exposing renderer-defined queries", async () => {
+    const { client } = makeClient();
+    const call = (collection: string, operation: string, payload: object = {}) =>
+      client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: collection === "blockchainTransactions" || collection === "transactionParticipants"
+          ? "transactions" : "records",
+        collection,
+        operation,
+        ...payload,
+      });
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "mirror fingerprint test password" });
+      await call("records", "saveBatch", { rows: [
+        { id: 2, type: "address", inputString: "a", updatedAt: 11 },
+        { id: 7, type: "address", inputString: "b", updatedAt: 29 },
+      ] });
+      await call("blockchainTransactions", "save", {
+        row: { id: 5, txid: "tx", blockTime: 123 },
+      });
+      await call("transactionParticipants", "saveBatch", { rows: [
+        { id: 3, txid: "tx", role: "input", prevTxid: "prev", prevVout: 0 },
+        { id: 8, txid: "tx", role: "output", vout: 0 },
+      ] });
+      await call("transactionMetadata", "save", {
+        row: { id: 4, txid: "tx", updatedAt: 31 },
+      });
+
+      await expect(call("records", "fingerprint")).resolves.toEqual({
+        count: 2, maxId: 7, maxUpdatedAt: 29,
+      });
+      await expect(call("blockchainTransactions", "fingerprint")).resolves.toEqual({
+        count: 1, maxId: 5, maxBlockTime: 123,
+      });
+      await expect(call("transactionParticipants", "fingerprint")).resolves.toEqual({
+        count: 2, maxId: 8, resolvedPrevoutCount: 1,
+      });
+      await expect(call("transactionMetadata", "fingerprint")).resolves.toEqual({
+        count: 1, maxId: 4, maxUpdatedAt: 31,
+      });
+      await expect(call("owners", "fingerprint")).rejects.toThrow();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("pages curated record tiers through the fixed protected keyset query", async () => {
+    const { client } = makeClient();
+    const call = (collection: string, operation: string, payload: object = {}) =>
+      client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "records",
+        collection,
+        operation,
+        ...payload,
+      });
+    try {
+      await client.call(MESSAGE_TYPES.CREATE, { password: "curated record query test password" });
+      await call("records", "saveBatch", { rows: [
+        { id: 1, type: "address", inputString: "manual-a", addressImportance: "manual" },
+        { id: 2, type: "address", inputString: "discovered", addressImportance: "blockchain-discovered" },
+        { id: 3, type: "transaction", inputString: "tx", addressImportance: "manual" },
+        { id: 4, type: "address", inputString: "manual-b", addressImportance: "critical" },
+      ] });
+
+      await expect(call("records", "query", {
+        name: "records.byTypeAndImportanceTiersKeyset",
+        value: { type: "address", tiers: ["manual", "critical"] },
+        limit: 10,
+      })).resolves.toEqual({ items: [
+        { id: 4, type: "address", inputString: "manual-b", addressImportance: "critical" },
+        { id: 1, type: "address", inputString: "manual-a", addressImportance: "manual" },
+      ] });
+      await expect(call("records", "query", {
+        name: "records.byTypeAndImportanceTiersKeyset",
+        value: { type: "address", tiers: ["manual", "critical"], beforeIdExclusive: 4 },
+        limit: 10,
+      })).resolves.toEqual({ items: [
+        { id: 1, type: "address", inputString: "manual-a", addressImportance: "manual" },
+      ] });
+    } finally {
+      await client.close();
+    }
+  });
+
   it("persists encrypted owner pages across unlock and rejects stale protected checkpoints", async () => {
     const { root, client } = makeClient();
     const call = (collection: string, operation: string, payload: object = {}) =>
