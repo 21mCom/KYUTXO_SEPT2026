@@ -72,6 +72,7 @@ const {
 } = await import("@/lib/data/record-crud");
 const { buildRecordsCollection } = await import("@/lib/records-query");
 const { USER_CURATED_TIERS } = await import("@/lib/db-types");
+const { getVaultRepository } = await import("@/lib/repository");
 
 const META = {
   isMultisig: false,
@@ -242,14 +243,15 @@ describe("saveDescriptorAddresses", () => {
   it("a mid-loop write failure is reported per-address and does not abort later addresses", async () => {
     const bad = addr(8);
     const good = addr(9);
-    const originalAdd = testDb.records.add.bind(testDb.records);
+    const repository = getVaultRepository();
+    const originalAdd = repository.add.bind(repository);
     const spy = vi
-      .spyOn(testDb.records, "add")
-      .mockImplementation(async (rec: any, ...rest: any[]) => {
+      .spyOn(repository, "add")
+      .mockImplementation(async (table: any, rec: any) => {
         if (rec.inputString === bad.address) {
           throw new Error("simulated quota failure");
         }
-        return originalAdd(rec, ...rest);
+        return originalAdd(table, rec);
       });
 
     try {

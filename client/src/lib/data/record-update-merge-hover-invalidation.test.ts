@@ -43,6 +43,7 @@ class TestDb extends Dexie {
         "[addressImportance+id], [type+id], [owner+id], [walletName+id], " +
         "flowType, discoveredFromRecordId",
       attachments: "++id, recordId, identifier",
+      recordOrigins: "++id, recordId, originType, createdAt, isEncrypted",
     });
   }
 }

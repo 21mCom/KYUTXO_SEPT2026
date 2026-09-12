@@ -7,6 +7,7 @@ import type {
   RecordSearchIndexFingerprint,
   RecordSearchIndexState,
 } from "./record-search-index";
+import type { RecordOrigin } from "@/lib/db-types";
 
 class TestDb extends Dexie {
   records!: Table<DbRecord, number>;
@@ -17,6 +18,7 @@ class TestDb extends Dexie {
     recordId: number;
   }, number>;
   recordSearchIndexState!: Table<RecordSearchIndexState, string>;
+  recordOrigins!: Table<RecordOrigin, number>;
 
   constructor(name: string) {
     super(name);
@@ -29,6 +31,7 @@ class TestDb extends Dexie {
         "flowType, discoveredFromRecordId",
       recordSearchIndex: "++id, &[gram+kind+recordId], gram, kind, recordId",
       recordSearchIndexState: "id",
+      recordOrigins: "++id, recordId, originType, createdAt, isEncrypted",
     });
   }
 }

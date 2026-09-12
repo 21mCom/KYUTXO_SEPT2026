@@ -45,7 +45,7 @@ import type {
 } from "@/lib/database";
 
 // ---------------------------------------------------------------------------
-// Tiny microtask-only Dexie stand-in
+// Tiny microtask-only repository stand-in
 // ---------------------------------------------------------------------------
 
 /** Records every `.where(field)` call so a test can prove a downstream query
@@ -82,16 +82,29 @@ interface MockDb {
 
 let db: MockDb;
 
-vi.mock("@/lib/database", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/database")>(
-    "@/lib/database",
-  );
+vi.mock("@/lib/data/repository-helpers", () => {
+  const rowsFor = (table: string) =>
+    db[table as keyof MockDb]?.rows ?? [];
   return {
-    ...actual,
-    get db() {
-      return db;
-    },
-    notifyDbChange: vi.fn(),
+    listVaultRows: vi.fn(async (table: string) => rowsFor(table)),
+    queryVaultRows: vi.fn(async (
+      table: string,
+      name: string,
+      value: unknown,
+    ) => {
+      const rows = rowsFor(table);
+      const field =
+        name === "records.byInputStringLower" ? "inputStringLower"
+        : name === "lineage.byCreatedAddress" ? "createdAddress"
+        : name === "lineage.bySpentAddress" ? "spentAddress"
+        : name === "participants.byAddress" ? "address"
+        : name === "participants.byTxid" || name === "transactions.byTxid"
+          ? "txid"
+          : undefined;
+      if (!field) throw new Error(`Unexpected repository query: ${name}`);
+      whereLog.push(`${table}.${field}`);
+      return rows.filter((row) => row[field] === value);
+    }),
   };
 });
 

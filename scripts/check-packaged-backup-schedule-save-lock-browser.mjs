@@ -16,13 +16,13 @@ import {
   assertPackagedBundleFresh,
   repoRootFromModuleUrl,
 } from './packaged-bundle-freshness.mjs';
+import { packagedCdpLaunchArgs, waitForOwnedPackagedCdp } from './packaged-cdp.mjs';
 import { findPackagedBinaries } from './packaged-electron-binaries.mjs';
 
 await acquireBrowserCheckLock();
 
 const ROOT = repoRootFromModuleUrl(import.meta.url);
 const ASAR = path.join(ROOT, 'release', 'linux-unpacked', 'resources', 'app.asar');
-const CDP_PORT = Number(process.env.KYUTXO_PACKAGED_CDP_PORT || 9237);
 const TAG = '[backup-schedule-late-picker-packaged]';
 const PASSWORD = 'backup-schedule-late-picker-check';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,17 +45,6 @@ function buildPackage() {
   run('node', ['scripts/build-native-engine.mjs']);
   run('npx', ['electron-builder', '--config', 'electron-builder.json', '--dir', '--linux', '-c.npmRebuild=false']);
   if (!fs.existsSync(ASAR)) throw new Error(`${TAG} electron-builder did not produce ${ASAR}`);
-}
-
-async function waitForCdp(timeoutMs = 90_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      if ((await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).ok) return;
-    } catch {}
-    await sleep(500);
-  }
-  throw new Error(`${TAG} CDP endpoint did not start`);
 }
 
 async function findPage(browser) {
@@ -113,6 +102,7 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kyutxo-backup-picker-check-'));
   const selectedDirectory = path.join(home, 'late-backup-folder');
   const releaseMarker = path.join(home, 'release-picker');
+  const cdpUserDataDir = path.join(home, 'cdp-profile');
   fs.mkdirSync(selectedDirectory, { recursive: true });
   fs.writeFileSync(releaseMarker, 'release initial picker');
   const display = process.env.KYUTXO_PACKAGED_DISPLAY || ':113';
@@ -139,14 +129,17 @@ async function main() {
     child = spawn(packagedAppBin, [
       '--no-sandbox', '--disable-gpu', '--in-process-gpu',
       '--disable-gpu-compositing', '--disable-software-rasterizer',
-      `--remote-debugging-port=${CDP_PORT}`,
+      ...packagedCdpLaunchArgs(cdpUserDataDir),
     ], {
       cwd: home, env: { ...env, DISPLAY: display }, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
     child.stdout.on('data', (data) => process.stdout.write(`${TAG}[app] ${data}`));
     child.stderr.on('data', (data) => process.stdout.write(`${TAG}[app-err] ${data}`));
-    await waitForCdp();
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    const cdp = await waitForOwnedPackagedCdp({
+      userDataDir: cdpUserDataDir,
+      timeoutMs: 90_000,
+    });
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp.port}`);
     const page = await findPage(browser);
     page.on('console', (message) => {
       if (message.type() === 'error' || message.type() === 'warning') {

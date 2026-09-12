@@ -23,17 +23,17 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
-vi.mock("@/lib/database", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/database")>();
+vi.mock("@/lib/metadata-hover", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/metadata-hover")>();
   return {
     ...actual,
-    db: {
-      attachments: {
-        where: () => ({ anyOf: () => ({ toArray: () => Promise.resolve([]) }) }),
-      },
-    },
+    batchPreloadIdentifiers: vi.fn(),
   };
 });
+
+vi.mock("@/lib/data/attachments-crud", () => ({
+  getAttachmentsByRecordId: vi.fn(async () => []),
+}));
 
 vi.mock("@/hooks/use-settings", () => ({
   useSettings: () => ({

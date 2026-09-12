@@ -70,6 +70,7 @@ vi.mock("@/lib/data/record-crud", () => ({
   getRecordsPageByTypeIdReverseKeyset: vi.fn(async () => []),
   getAddressBalanceRowsForGroup: vi.fn(async () => []),
   getRecordsByIds: vi.fn(async () => []),
+  getRecordsByInputStrings: vi.fn(async () => []),
 }));
 
 vi.mock("@/lib/data/address-stats", () => ({
@@ -98,6 +99,10 @@ vi.mock("@/lib/transaction-sync", () => ({
 // fake regardless of what this hands back.
 vi.mock("@/lib/data/node-settings-crud", () => ({
   getNodeSettings: vi.fn(async () => ({ providerType: "mempool" })),
+}));
+vi.mock("@/lib/tor-proxy-settings-sync", () => ({
+  syncTorProxySettings: vi.fn(async () => {}),
+  torProxySettingsFromNodeSettings: vi.fn(() => ({})),
 }));
 
 // Spend-health numbers that surface the warning banner + import button. Before
@@ -165,13 +170,40 @@ const fakeProvider = {
   testConnection: vi.fn(async () => ({ success: true })),
 };
 
-vi.mock("@/lib/blockchain-api", async (importActual) => {
-  const actual = await importActual<typeof import("@/lib/blockchain-api")>();
-  return {
-    ...actual,
-    createProviderFromSettings: vi.fn(() => fakeProvider),
-  };
-});
+vi.mock("@/lib/blockchain-api", () => ({
+  MINIMUM_CONFIRMATIONS: 5,
+  createProviderFromSettings: vi.fn(() => fakeProvider),
+  parseTransaction: vi.fn((tx: ApiTransaction) => {
+    if (!tx.status.confirmed || !tx.status.block_height || !tx.status.block_time) {
+      return null;
+    }
+    return {
+      txid: tx.txid,
+      blockHeight: tx.status.block_height,
+      blockTime: tx.status.block_time,
+      fee: tx.fee,
+      feeRate: tx.weight > 0 ? Math.round((tx.fee / tx.weight) * 4) : 0,
+      size: tx.size,
+      weight: tx.weight,
+      vsize: tx.weight > 0 ? Math.ceil(tx.weight / 4) : tx.size,
+      inputs: [],
+      outputs: tx.vout
+        .filter((output) => output.scriptpubkey_address)
+        .map((output) => ({
+          address: output.scriptpubkey_address!,
+          amount: output.value,
+          vout: output.n,
+          scriptType: "p2wpkh",
+        })),
+      hasOpReturn: false,
+      opReturnData: [],
+      nVersion: tx.version,
+      nLockTime: tx.locktime,
+      hasCoinbaseInput: false,
+      rawFingerprintCaptured: true,
+    };
+  }),
+}));
 
 import { db } from "@/lib/database";
 import BalanceOverview from "@/pages/BalanceOverview";

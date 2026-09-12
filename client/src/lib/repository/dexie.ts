@@ -208,6 +208,10 @@ export class DexieVaultRepository implements VaultRepository {
           .filter((row: any) => value.txids.includes(row.txid));
         break;
       case 'participants.byAddress': collection = this.table(table).where('address').equals(value); break;
+      case 'participants.byAddressAfterId':
+        collection = this.table(table).where('address').equals(value.address)
+          .and((row: any) => typeof row.id === 'number' && row.id > value.afterId);
+        break;
       case 'participants.byAddresses': collection = this.table(table).where('address').anyOf(value); break;
       case 'participants.byAddressesAfterId': {
         const addresses = new Set(value.addresses);

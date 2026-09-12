@@ -25,7 +25,11 @@ async function craftedZip(
   const writer = new ZipStreamWriter(sink);
   const manifest = {
     formatVersion: BACKUP_FORMAT_VERSION,
-    createdAt: new Date(0).toISOString(),
+    app: "KYUTXO",
+    appVersion: "test",
+    exportDate: new Date(0).toISOString(),
+    encrypted: false,
+    streamedTables: [],
     counts: {
       records: 0,
       attachments: 0,
@@ -126,17 +130,18 @@ describe("restoreV3Backup with a crafted archive", () => {
     expect(writes.size).toBe(0);
   });
 
-  it("rejects an attachment entry above the byte cap before buffering it", async () => {
+  it("skips an attachment entry above the byte cap before buffering it", async () => {
     const { writer, writes } = recordingWriter();
     const blob = await craftedZip([
       [`${ATTACHMENTS_DIR}/dir/big.bin`, new Uint8Array(100).fill(9)],
     ]);
-    const err = await restoreV3Backup({
+    const result = await restoreV3Backup({
       source: blobChunks(blob, 10),
       attachmentWriter: writer,
       maxAttachmentFileBytes: 32,
-    }).catch((e: unknown) => e);
-    expect(chainMessages(err)).toMatch(/maximum size/);
+    });
+    expect(result.counts.skippedOversizedAttachmentFiles).toBe(1);
+    expect(result.skippedOversizedAttachments).toEqual(["dir/big.bin"]);
     expect(writes.size).toBe(0);
   });
 

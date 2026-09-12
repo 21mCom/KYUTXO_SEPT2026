@@ -21,17 +21,9 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
-vi.mock("@/lib/database", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/database")>();
-  return {
-    ...actual,
-    db: {
-      attachments: {
-        where: () => ({ anyOf: () => ({ toArray: () => Promise.resolve([]) }) }),
-      },
-    },
-  };
-});
+vi.mock("@/lib/data/attachments-crud", () => ({
+  getAttachmentsByRecordId: vi.fn(async () => []),
+}));
 
 // Enable the BTC Balance column so its internal sort button is rendered.
 vi.mock("@/hooks/use-settings", () => ({

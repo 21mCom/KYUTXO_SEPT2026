@@ -67,6 +67,7 @@ vi.mock("@/lib/database", async () => {
 });
 
 const { recomputeAddressStats } = await import("./address-stats");
+const { DexieVaultRepository } = await import("../repository");
 
 // ---- Fixtures ---------------------------------------------------------------
 
@@ -122,7 +123,7 @@ async function seedVault(total: number, withData = 10) {
 const idsRange = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
 
 /** Spy that fires only when the streaming scan's row-limit count runs. */
-let participantCountSpy: ReturnType<typeof vi.spyOn>;
+let repositoryCountSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(async () => {
   await testDb.records.clear();
@@ -130,14 +131,17 @@ beforeEach(async () => {
   await testDb.blockchainTransactions.clear();
   await testDb.addressSyncState.clear();
   await testDb.settings.clear();
-  participantCountSpy = vi.spyOn(testDb.transactionParticipants, "count");
+  repositoryCountSpy = vi.spyOn(DexieVaultRepository.prototype, "count");
 });
 
 afterEach(() => {
-  participantCountSpy.mockRestore();
+  repositoryCountSpy.mockRestore();
 });
 
-const scanRan = () => participantCountSpy.mock.calls.length > 0;
+const scanRan = () =>
+  repositoryCountSpy.mock.calls.some(
+    ([table]) => table === "transactionParticipants",
+  );
 
 // ---- Tests ------------------------------------------------------------------
 

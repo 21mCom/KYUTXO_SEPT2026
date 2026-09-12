@@ -5,6 +5,8 @@ import {
   editorRowsFor,
 } from './coin-origins';
 import { db } from './database';
+import { createRecord } from './data/record-crud';
+import { addParticipant, addTransaction } from './data/transaction-crud';
 import { DexieVaultRepository } from './repository/dexie';
 
 describe('owner cost-basis editor leg identity', () => {
@@ -56,12 +58,15 @@ describe('browser owner-book fingerprints', () => {
       db.recordModelMigrationState, db.ownerResidencies];
     try {
       const ownerId = await db.owners.add({ name: 'Alice', createdAt: 1 });
-      await db.records.add({ type: 'address', inputString: 'owned', label: '',
-        tags: [], categories: [], owner: 'Alice', addressImportance: 'manual' });
-      await db.blockchainTransactions.add({ txid: 'buy', blockHeight: 1,
-        blockTime: 1_704_067_200, fee: 0, feeRate: 0, syncedAt: 1 });
-      await db.transactionParticipants.add({ txid: 'buy', role: 'output',
-        address: 'owned', amount: 1, vout: 0 });
+      await createRecord({ type: 'address', inputString: 'owned', label: '',
+        tags: [], categories: [], owner: 'Alice', addressImportance: 'manual' },
+      { skipNotification: true, skipVocabularySync: true });
+      await addTransaction({ txid: 'buy', blockHeight: 1,
+        blockTime: 1_704_067_200, fee: 0, feeRate: 0, syncedAt: 1 },
+      { skipNotification: true });
+      await addParticipant({ txid: 'buy', role: 'output',
+        address: 'owned', amount: 1, vout: 0 },
+      { skipNotification: true });
       const metadataId = await db.transactionMetadata.add({ txid: 'buy', costBasisUsd: 1, updatedAt: 7 });
       const first = await repository.ownerCostBasisPage({ limit: 1 });
       await db.transactionMetadata.put({ id: metadataId, txid: 'buy', costBasisUsd: 2, updatedAt: 7 });

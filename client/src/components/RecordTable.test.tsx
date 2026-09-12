@@ -49,18 +49,17 @@ vi.mock("@/hooks/use-settings", () => ({
   toggleCustomFieldColumn: vi.fn(),
 }));
 
-vi.mock("@/lib/database", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/database")>();
+vi.mock("@/lib/data/attachments-crud", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/data/attachments-crud")>();
   return {
     ...actual,
-    db: {
-      ...actual.db,
-      attachments: {
-        where: () => ({ anyOf: () => ({ toArray: () => mockAttachmentsToArray() }) }),
-      },
-    },
+    getAttachmentsByRecordId: vi.fn(() => mockAttachmentsToArray()),
   };
 });
+vi.mock("@/lib/tor-proxy-settings-sync", () => ({
+  syncTorProxySettings: vi.fn(async () => {}),
+  torProxySettingsFromNodeSettings: vi.fn(() => ({})),
+}));
 
 
 import { RecordTable } from "./RecordTable";

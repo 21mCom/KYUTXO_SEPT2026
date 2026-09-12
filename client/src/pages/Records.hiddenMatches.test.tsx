@@ -249,7 +249,12 @@ vi.mock("@/lib/database", async () => {
           startsWithIgnoreCase: () => ({ limit: () => ({ toArray: () => Promise.resolve([]) }) }),
         }),
       },
-      customFields: { toArray: () => Promise.resolve([]) },
+      customFields: {
+        orderBy: () => ({
+          limit: () => ({ toArray: () => Promise.resolve([]) }),
+        }),
+        toArray: () => Promise.resolve([]),
+      },
     },
   };
 });

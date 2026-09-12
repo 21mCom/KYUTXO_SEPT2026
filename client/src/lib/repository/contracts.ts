@@ -217,6 +217,7 @@ export type ProtectedRepositoryQueryName =
   | 'participants.byTxids'
   | 'participants.byTxidsAfterId'
   | 'participants.byAddress'
+  | 'participants.byAddressAfterId'
   | 'participants.byAddresses'
   | 'participants.byAddressesAfterId'
   | 'participants.byRecordId'

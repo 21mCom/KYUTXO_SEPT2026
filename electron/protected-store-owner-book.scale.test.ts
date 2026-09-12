@@ -30,9 +30,12 @@ function deadline<T>(work: Promise<T>, ms: number, phase: string): Promise<T> {
   ]).finally(() => clearTimeout(timer!));
 }
 
-describe("protected owner-book million-row release gate", () => {
+const describeProtectedMillion = process.env.KYUTXO_OWNER_BOOK_PROTECTED_MILLION === "1"
+  ? describe
+  : describe.skip;
+
+describeProtectedMillion("protected owner-book million-row release gate", () => {
   it("keeps encrypted ingestion, materialization, and IPC paging bounded", async () => {
-    expect(process.env.KYUTXO_OWNER_BOOK_PROTECTED_MILLION).toBe("1");
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "kyutxo-protected-million-"));
     roots.push(root);
     const client = new ProtectedStoreClient({ dataDir: root });

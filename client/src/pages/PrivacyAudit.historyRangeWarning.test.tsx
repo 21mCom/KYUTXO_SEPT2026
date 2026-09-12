@@ -31,6 +31,7 @@ vi.mock("@/lib/privacy-history-export", () => ({
 vi.mock("@/lib/data/privacy-history-crud", () => ({
   addPrivacyAuditHistoryEntry: vi.fn(),
   clearPrivacyAuditHistory: vi.fn(),
+  getPrivacyAuditHistory: vi.fn(async () => mockHistory ?? []),
 }));
 
 import type { PrivacyAuditHistoryEntry } from "@/lib/database";
@@ -62,9 +63,11 @@ const RUN_JAN = makeRun(1, TS_JAN, 70);
 const RUN_MAR = makeRun(2, TS_MAR, 80);
 const RUN_JUN = makeRun(3, TS_JUN, 90);
 
-function renderCard(runs: PrivacyAuditHistoryEntry[]) {
+async function renderCard(runs: PrivacyAuditHistoryEntry[]) {
   mockHistory = runs;
-  return render(<PrivacyHistoryCard />);
+  const rendered = render(<PrivacyHistoryCard />);
+  await screen.findByTestId("input-history-from-date");
+  return rendered;
 }
 
 function setRange(from: string, to: string) {
@@ -100,8 +103,8 @@ afterEach(() => {
 });
 
 describe("PrivacyHistoryCard empty-date-range guard", () => {
-  it("warns and leaves the selection untouched when a range matches zero runs", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("warns and leaves the selection untouched when a range matches zero runs", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // Start from a known, non-default selection: hand-pick the March run.
     fireEvent.click(screen.getByTestId("checkbox-history-select-2"));
@@ -132,8 +135,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(hintText()).toContain("0 runs fall in that date range");
   });
 
-  it("does not fall back to the all-runs default when an empty range is picked with nothing selected", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("does not fall back to the all-runs default when an empty range is picked with nothing selected", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // No runs picked yet — the default hint is shown.
     expect(hintText()).toContain("all stored runs");
@@ -148,8 +151,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(screen.queryByTestId("text-history-selected-count")).toBeNull();
   });
 
-  it("clears the warning back to the normal hint when a date input changes", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("clears the warning back to the normal hint when a date input changes", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     setRange("2026-09-01", "2026-12-31");
     fireEvent.click(screen.getByTestId("button-history-select-range"));
@@ -164,8 +167,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(hintText()).toContain("all stored runs");
   });
 
-  it("clears the warning when the To date input changes", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("clears the warning when the To date input changes", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     setRange("2026-09-01", "2026-12-31");
     fireEvent.click(screen.getByTestId("button-history-select-range"));
@@ -178,8 +181,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(hintText()).not.toContain("0 runs fall in that date range");
   });
 
-  it("confirms before falling back to all runs when exporting after an empty range with nothing selected", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("confirms before falling back to all runs when exporting after an empty range with nothing selected", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // Trigger the empty-range warning with nothing hand-picked.
     setRange("2026-09-01", "2026-12-31");
@@ -198,8 +201,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(buildPrivacyHistoryCsv).toHaveBeenCalledWith([RUN_JAN, RUN_MAR, RUN_JUN]);
   });
 
-  it("cancelling the fallback confirmation aborts the export", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("cancelling the fallback confirmation aborts the export", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     setRange("2026-09-01", "2026-12-31");
     fireEvent.click(screen.getByTestId("button-history-select-range"));
@@ -212,8 +215,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(screen.queryByTestId("dialog-export-fallback-confirm")).toBeNull();
   });
 
-  it("exports directly without confirmation when runs are actually selected", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("exports directly without confirmation when runs are actually selected", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // Hand-pick a run, then trigger an empty range. selectedIds is non-empty so
     // the export targets the selection, not the all-runs fallback.
@@ -228,8 +231,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(buildPrivacyHistoryCsv).toHaveBeenCalledWith([RUN_MAR]);
   });
 
-  it("shows an amber cue beside the export buttons when an empty range is picked with nothing selected", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("shows an amber cue beside the export buttons when an empty range is picked with nothing selected", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // No cue before the empty range is triggered.
     expect(screen.queryByTestId("warning-history-export-empty-range")).toBeNull();
@@ -241,8 +244,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(screen.getByTestId("warning-history-export-empty-range")).toBeTruthy();
   });
 
-  it("hides the export-button cue once a selection is made", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("hides the export-button cue once a selection is made", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     setRange("2026-09-01", "2026-12-31");
     fireEvent.click(screen.getByTestId("button-history-select-range"));
@@ -253,8 +256,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(screen.queryByTestId("warning-history-export-empty-range")).toBeNull();
   });
 
-  it("hides the export-button cue once the date range changes", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("hides the export-button cue once the date range changes", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     setRange("2026-09-01", "2026-12-31");
     fireEvent.click(screen.getByTestId("button-history-select-range"));
@@ -267,8 +270,8 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(screen.queryByTestId("warning-history-export-empty-range")).toBeNull();
   });
 
-  it("selects the matching runs and clears the warning when a range DOES match", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("selects the matching runs and clears the warning when a range DOES match", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // First trigger the warning with an empty range.
     setRange("2026-09-01", "2026-12-31");

@@ -7,7 +7,13 @@ export { createSeedName, updateSeedName, deleteSeedName, getSeedNameUsageCount, 
 export function useSeedNames() {
   const [seedNames, setSeedNames] = useState<Awaited<ReturnType<typeof getSeedNames>>>();
   const signal = useDbChangeSignal(['seedNames']);
-  useEffect(() => { void getSeedNames().then((rows) => setSeedNames(rows.sort((a, b) => a.name.localeCompare(b.name)))); }, [signal]);
+  useEffect(() => {
+    let cancelled = false;
+    void getSeedNames().then((rows) => {
+      if (!cancelled) setSeedNames(rows.sort((a, b) => a.name.localeCompare(b.name)));
+    });
+    return () => { cancelled = true; };
+  }, [signal]);
 
   return {
     seedNames: seedNames ?? [],

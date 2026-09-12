@@ -33,6 +33,9 @@ vi.mock("@/lib/data/record-crud", () => ({
 }));
 vi.mock("@/lib/data/attachments-crud", () => ({ countAttachments: vi.fn(async () => 0) }));
 vi.mock("@/lib/data/evidence-crud", () => ({ countEvidenceAttachments: vi.fn(async () => 0) }));
+vi.mock("@/lib/data/record-model-crud", () => ({
+  runRecordModelMigration: vi.fn(async () => ({ processed: 0, migrated: 0 })),
+}));
 vi.mock("@/lib/attachments", () => ({
   migrateAttachmentPaths: vi.fn(async () => ({ migrated: 0, failed: 0 })),
 }));
@@ -99,6 +102,7 @@ async function seedLegacyVault(password: string): Promise<void> {
     legacyFileDecryptComplete: true,
     inputStringLowerRepaired: true,
     searchVisibilityRepaired: true,
+    canonicalInputStringsRepaired: true,
   });
 }
 

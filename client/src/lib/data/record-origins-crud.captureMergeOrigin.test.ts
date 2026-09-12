@@ -68,6 +68,7 @@ const {
 } = await import("./record-origins-crud");
 const { createRecord, getRecord } = await import("./record-crud");
 const { detectSingularFieldConflicts } = await import("../conflict-detection");
+const { getVaultRepository } = await import("../repository");
 
 let addrCounter = 0;
 function nextAddress(): string {
@@ -200,7 +201,7 @@ describe("captureMergeOrigin — baseline backfill", () => {
   it("is non-fatal: a failing origin write resolves without throwing", async () => {
     const record = await seedRecord();
     const spy = vi
-      .spyOn(testDb.recordOrigins, "add")
+      .spyOn(getVaultRepository(), "add")
       .mockRejectedValue(new Error("disk full"));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

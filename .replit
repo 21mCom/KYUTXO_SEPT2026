@@ -4026,7 +4026,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node scripts/check-focused-validation-tests.mjs && node --test scripts/check-focused-validation-tests.test.mjs scripts/check-packaged-storage-boundary.test.mjs scripts/check-protected-vault-claims.test.mjs scripts/check-release-runner-readiness.test.mjs"
+args = "node scripts/check-focused-validation-tests.mjs && node --test scripts/check-focused-validation-tests.test.mjs scripts/check-github-destination.test.mjs scripts/check-packaged-storage-boundary.test.mjs scripts/check-protected-vault-claims.test.mjs scripts/check-release-runner-readiness.test.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true

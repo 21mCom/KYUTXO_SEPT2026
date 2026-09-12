@@ -1,21 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 
 let mockQueryReturn: unknown = undefined;
-vi.mock("dexie-react-hooks", () => ({
-  useLiveQuery: (fn: () => unknown) => mockQueryReturn,
-}));
-
-vi.mock("@/lib/database", () => ({
-  db: {
-    owners: {
-      orderBy: () => ({ toArray: () => Promise.resolve([]) }),
-    },
-  },
-}));
-
 vi.mock("@/lib/data/vocabulary-crud", () => ({
+  getOwners: vi.fn(() =>
+    mockQueryReturn === undefined ? new Promise(() => {}) : Promise.resolve(mockQueryReturn ?? [])),
   createOwner: vi.fn(),
   updateOwner: vi.fn(),
   deleteOwner: vi.fn(),
@@ -32,17 +22,17 @@ describe("useOwners", () => {
     expect(result.current.isLoading).toBe(true);
   });
 
-  it("returns owners and isLoading false when query resolves", () => {
+  it("returns owners and isLoading false when query resolves", async () => {
     mockQueryReturn = [{ id: 1, name: "Owner A" }];
     const { result } = renderHook(() => useOwners());
-    expect(result.current.owners).toEqual([{ id: 1, name: "Owner A" }]);
+    await waitFor(() => expect(result.current.owners).toEqual([{ id: 1, name: "Owner A" }]));
     expect(result.current.isLoading).toBe(false);
   });
 
-  it("returns empty array when query returns null", () => {
+  it("returns empty array when query returns null", async () => {
     mockQueryReturn = null;
     const { result } = renderHook(() => useOwners());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.owners).toEqual([]);
-    expect(result.current.isLoading).toBe(false);
   });
 });

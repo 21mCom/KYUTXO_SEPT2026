@@ -7,7 +7,13 @@ export { createCategory, updateCategory, deleteCategory, getCategoryUsageCount }
 export function useCategories() {
   const [categories, setCategories] = useState<Awaited<ReturnType<typeof getCategories>>>();
   const signal = useDbChangeSignal(['categories']);
-  useEffect(() => { void getCategories().then((rows) => setCategories(rows.sort((a, b) => a.name.localeCompare(b.name)))); }, [signal]);
+  useEffect(() => {
+    let cancelled = false;
+    void getCategories().then((rows) => {
+      if (!cancelled) setCategories(rows.sort((a, b) => a.name.localeCompare(b.name)));
+    });
+    return () => { cancelled = true; };
+  }, [signal]);
 
   return {
     categories: categories ?? [],

@@ -143,6 +143,7 @@ async function lowerLimitTo(value: string) {
   const select = (await screen.findByTestId(
     "select-privacy-history-limit",
   )) as HTMLSelectElement;
+  await waitFor(() => expect(select.disabled).toBe(false));
   fireEvent.change(select, { target: { value } });
 }
 
@@ -474,12 +475,10 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
     expect(await getPrivacyAuditHistoryCount()).toBe(60);
   });
 
-  it("warns the user (and reverts the Select) when there is no 'default' settings row to save into (Task #944)", async () => {
+  it("restores a missing default settings row before saving the retention limit", async () => {
     // 25 runs, default limit 30. Lowering to 10 removes only 15 (<=20), so the
-    // guard skips the confirm dialog and applies the trim directly. But here the
-    // 'default' settings row is missing entirely, so updatePrivacyHistoryLimit
-    // can persist nothing and trims nothing. The user must be warned rather than
-    // silently told nothing (or falsely told runs were removed).
+    // guard skips the confirm dialog and applies the trim directly. Start with
+    // the canonical row missing to exercise the page's settings recovery path.
     await seedRuns(25);
     // Remove the row that beforeEach seeded.
     const { clearSettings } = await import("@/lib/data/settings-crud");
@@ -497,28 +496,20 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
 
     await lowerLimitTo("10");
 
-    // A destructive error toast tells the user the update failed.
+    // The recovered row accepts the update and the trim reports its exact work.
     await waitFor(() => {
-      const destructive = toastSpy.mock.calls.find(
-        (c) => c[0]?.variant === "destructive",
+      const success = toastSpy.mock.calls.find(
+        (c) => c[0]?.title === "Removed 15 older runs",
       );
-      expect(destructive?.[0]?.description).toBe(
-        "Failed to update retention limit",
+      expect(success?.[0]?.description).toBe(
+        "Older Privacy Audit runs beyond the new limit were deleted.",
       );
     });
 
-    // No toast ever claims runs were removed — the user is not falsely told the
-    // limit took effect when nothing was saved or trimmed.
-    const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
-    expect(titles.some((t) => /run/i.test(t) || /removed/i.test(t))).toBe(false);
+    expect((await getSettings("default"))?.privacyHistoryLimit).toBe(10);
+    expect(await getPrivacyAuditHistoryCount()).toBe(10);
 
-    // The persisted state reflects reality: still no settings row, so nothing
-    // was saved, and every seeded run survives untouched.
-    expect(await getSettings("default")).toBeUndefined();
-    expect(await getPrivacyAuditHistoryCount()).toBe(25);
-
-    // The Select snaps back to the prior (default) limit, not the value that
-    // failed to apply — exactly like a cancel or a rejected trim.
+    // The control reflects the recovered, persisted value.
     await waitFor(() =>
       expect(
         (
@@ -526,7 +517,7 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
             "select-privacy-history-limit",
           ) as HTMLSelectElement
         ).value,
-      ).toBe(priorLimit),
+      ).toBe("10"),
     );
   });
 

@@ -46,6 +46,7 @@ const fakeApi = {
 vi.mock("@/lib/electron", () => ({
   isElectron: () => true,
   getElectronAPI: () => fakeApi,
+  getElectronAPISafe: () => ({ ...fakeApi, isElectron: true }),
 }));
 
 // ---- In-memory DB ----------------------------------------------------------

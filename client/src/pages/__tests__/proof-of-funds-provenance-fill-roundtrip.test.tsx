@@ -71,14 +71,28 @@ vi.mock("@/components/ui/select", async () => {
     return null;
   };
   SelectTrigger.__isTrigger = true;
+  const SelectItem: any = ({ value, children }: any) =>
+    React.createElement("option", { value }, children);
+  SelectItem.__isItem = true;
   return {
     Select: ({ value, onValueChange, children, disabled }: any) => {
       let testid: string | undefined;
-      React.Children.forEach(children, (child: any) => {
-        if (child && child.type && child.type.__isTrigger) {
-          testid = child.props["data-testid"];
-        }
-      });
+      const options: any[] = [];
+      const visit = (nodes: any) => {
+        React.Children.forEach(nodes, (child: any) => {
+          if (!React.isValidElement(child)) return;
+          if ((child.type as any).__isTrigger) {
+            testid = (child.props as any)["data-testid"];
+            return;
+          }
+          if ((child.type as any).__isItem) {
+            options.push(child);
+            return;
+          }
+          visit((child.props as any).children);
+        });
+      };
+      visit(children);
       return React.createElement(
         "select",
         {
@@ -87,15 +101,14 @@ vi.mock("@/components/ui/select", async () => {
           disabled,
           onChange: (e: any) => onValueChange?.(e.target.value),
         },
-        children,
+        options,
       );
     },
     SelectTrigger,
     SelectValue: () => null,
     SelectContent: ({ children }: any) =>
       React.createElement(React.Fragment, null, children),
-    SelectItem: ({ value, children }: any) =>
-      React.createElement("option", { value }, children),
+    SelectItem,
   };
 });
 
@@ -169,6 +182,7 @@ describe("ProofOfFundsDeclaration — provenance 'Fill in missing fields' live r
     // The editor opens, pre-targeting the Acquisition & Provenance section.
     await waitFor(() => {
       expect(screen.getByTestId("section-acquisition")).toBeTruthy();
+      expect((screen.getByTestId("input-address") as HTMLInputElement).value).toBe(ADDR);
     });
 
     // Fill in all four missing provenance fields.

@@ -44,6 +44,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 import { db } from "@/lib/database";
 import { bulkCreateRecords, clearAllRecords } from "@/lib/data/record-crud";
 import { clearSettings } from "@/lib/data/settings-crud";
+import { getVaultRepository } from "@/lib/repository";
 import QuantumRiskScanner from "./QuantumRiskScanner";
 
 // Must stay in sync with the CHUNK_SIZE used by the page's tagging phase.
@@ -85,8 +86,9 @@ describe("QuantumRiskScanner — tagging phase at scale", () => {
       const RECORD_COUNT = 1_200; // 3 chunks
       await bulkCreateRecords(makeAddressSeeds(RECORD_COUNT), { skipVocabularySync: true });
 
-      const putSpy = vi.spyOn(db.records, "put");
-      const bulkPutSpy = vi.spyOn(db.records, "bulkPut");
+      const repository = getVaultRepository();
+      const putSpy = vi.spyOn(repository, "put");
+      const bulkPutSpy = vi.spyOn(repository, "bulkPut");
 
       render(<QuantumRiskScanner />);
       await waitFor(() => {

@@ -255,7 +255,7 @@ test('one verified Windows package supplies packaged checks, checksums, and rele
 });
 
 test('package filenames and workflow artifacts carry the canonical package version', () => {
-  assert.equal(packageJson.version, '1.1.69');
+  assert.equal(packageJson.version, '1.1.70');
   for (const target of ['win', 'mac', 'linux']) {
     assert.match(builder[target].artifactName, /\$\{version\}/);
   }

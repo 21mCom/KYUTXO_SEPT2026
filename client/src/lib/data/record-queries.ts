@@ -50,13 +50,41 @@ export async function getParticipantsByAddress(address: string): Promise<Transac
 }
 
 export async function getRecordParticipantsByAddresses(addresses: string[], signal?: AbortSignal): Promise<TransactionParticipant[]> {
-  if (addresses.length === 0) return [];
+  const uniqueAddresses = [...new Set(addresses)];
+  if (uniqueAddresses.length === 0) return [];
+  const repository = getVaultRepository();
   const results: TransactionParticipant[] = [];
   const batchSize = 500;
   const pageSize = 1000;
-  for (let i = 0; i < addresses.length; i += batchSize) {
+
+  if (repository.kind !== 'protected') {
+    for (let i = 0; i < uniqueAddresses.length; i += 1) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      let afterId = 0;
+      while (true) {
+        const page = await participantRows(
+          'participants.byAddressAfterId',
+          { address: uniqueAddresses[i], afterId },
+          pageSize,
+        );
+        results.push(...page);
+        if (page.length < pageSize) break;
+        const lastId = page[page.length - 1]?.id;
+        if (lastId === undefined || lastId <= afterId) {
+          throw new Error("Participant address query did not advance");
+        }
+        afterId = lastId;
+      }
+      if ((i + 1) % 100 === 0 && i + 1 < uniqueAddresses.length) {
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    return results;
+  }
+
+  for (let i = 0; i < uniqueAddresses.length; i += batchSize) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    const batch = addresses.slice(i, i + batchSize);
+    const batch = uniqueAddresses.slice(i, i + batchSize);
     let afterId = 0;
     while (true) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -73,7 +101,7 @@ export async function getRecordParticipantsByAddresses(addresses: string[], sign
       }
       afterId = lastId;
     }
-    if (i + batchSize < addresses.length) {
+    if (i + batchSize < uniqueAddresses.length) {
       await new Promise(r => setTimeout(r, 0));
     }
   }

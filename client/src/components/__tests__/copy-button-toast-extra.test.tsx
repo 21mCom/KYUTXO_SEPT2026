@@ -31,12 +31,39 @@ vi.mock("@/lib/dataFacade", () => ({
   getParticipantsByAddresses: vi.fn().mockResolvedValue([]),
 }));
 
-const { openRecordPreview, openRecordPreviewByAddress } = vi.hoisted(() => ({
+vi.mock("@/lib/metadata-hover", () => ({
+  DEFAULT_HOVER_TOOLTIP_PREFS: {},
+  isSystemTag: vi.fn(() => false),
+  getHoverLabel: vi.fn(() => ""),
+  getHoverMetadataFields: vi.fn(() => []),
+  hasHoverMetadata: vi.fn(() => false),
+  subscribeCacheEntry: vi.fn(() => () => {}),
+  getCachedRecord: vi.fn(() => null),
+  resolveIdentifier: vi.fn(async () => null),
+  invalidateCachedRecord: vi.fn(),
+  invalidateCachedRecords: vi.fn(),
+  clearCachedRecords: vi.fn(),
+  batchPreloadIdentifiers: vi.fn(),
+}));
+
+const {
+  openRecordPreview,
+  openRecordPreviewByAddress,
+  openTransactionAnnotation,
+  openIdentifierAnnotation,
+} = vi.hoisted(() => ({
   openRecordPreview: vi.fn(() => Promise.resolve()),
   openRecordPreviewByAddress: vi.fn(() => Promise.resolve()),
+  openTransactionAnnotation: vi.fn(),
+  openIdentifierAnnotation: vi.fn(),
 }));
 vi.mock("@/contexts/RecordPreviewContext", () => ({
-  useRecordPreview: () => ({ openRecordPreview, openRecordPreviewByAddress }),
+  useRecordPreview: () => ({
+    openRecordPreview,
+    openRecordPreviewByAddress,
+    openTransactionAnnotation,
+    openIdentifierAnnotation,
+  }),
 }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";

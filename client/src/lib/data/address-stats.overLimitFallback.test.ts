@@ -21,10 +21,8 @@
 // exact simulation of the gate's inputs: the gate consumes ONLY those two
 // count() results.
 //
-// Path detection is code-level, not timing-based: the streaming scan pages the
-// participants table via where(':id'); the per-batch fallback loads
-// participants via where('address').anyOf(...). Spying on Table.where and
-// recording the requested keypath distinguishes the two exactly.
+// Path detection is code-level, not timing-based: the streaming scan and the
+// per-batch fallback use distinct named repository queries.
 
 import "fake-indexeddb/auto";
 
@@ -76,6 +74,7 @@ vi.mock("@/lib/database", async () => {
 const { recomputeAddressStats, FULL_SCAN_ROW_LIMIT } = await import(
   "./address-stats"
 );
+const { DexieVaultRepository } = await import("../repository");
 
 // ---- Fixtures ---------------------------------------------------------------
 
@@ -134,15 +133,25 @@ async function seedVault() {
 
 // ---- Path probes -------------------------------------------------------------
 
-/** Keypaths requested via transactionParticipants.where(...) during a run. */
+/** Named participant queries issued through the shared repository. */
+let querySpy: ReturnType<typeof vi.spyOn>;
 let participantWhereKeys: string[] = [];
 let whereSpy: ReturnType<typeof vi.spyOn>;
 
 /** Streaming-scan signature: primary-key paging over participants. */
-const scanPages = () => participantWhereKeys.filter((k) => k === ":id").length;
+const scanPages = () =>
+  participantWhereKeys.filter((name) => name === "id").length;
 /** Per-batch fallback signature: address-index loads over participants. */
 const addressLoads = () =>
-  participantWhereKeys.filter((k) => k === "address").length;
+  querySpy.mock.calls.filter(
+    ([table, name]) =>
+      table === "transactionParticipants" &&
+      name === "participants.byAddressesAfterId",
+  ).length;
+/** The over-limit gate must prevent every whole-table participant scan page. */
+const expectNoFullParticipantScan = () => {
+  expect(scanPages()).toBe(0);
+};
 
 /**
  * Mock the ONLY inputs the row-limit gate consumes: the two Table.count()
@@ -150,15 +159,16 @@ const addressLoads = () =>
  * from genuine rows.
  */
 function mockGateCounts(participantCount: number, txCount: number) {
-  const p = vi
-    .spyOn(testDb.transactionParticipants, "count")
-    .mockResolvedValue(participantCount);
-  const t = vi
-    .spyOn(testDb.blockchainTransactions, "count")
-    .mockResolvedValue(txCount);
+  const original = DexieVaultRepository.prototype.count;
+  const count = vi
+    .spyOn(DexieVaultRepository.prototype, "count")
+    .mockImplementation(function (table) {
+      if (table === "transactionParticipants") return Promise.resolve(participantCount);
+      if (table === "blockchainTransactions") return Promise.resolve(txCount);
+      return original.call(this, table);
+    });
   return () => {
-    p.mockRestore();
-    t.mockRestore();
+    count.mockRestore();
   };
 }
 
@@ -169,6 +179,7 @@ beforeEach(async () => {
   await testDb.addressSyncState.clear();
   await testDb.settings.clear();
   participantWhereKeys = [];
+  querySpy = vi.spyOn(DexieVaultRepository.prototype, "query");
   whereSpy = vi
     .spyOn(testDb.transactionParticipants, "where")
     .mockImplementation(function (
@@ -183,6 +194,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  querySpy.mockRestore();
   whereSpy.mockRestore();
   vi.restoreAllMocks();
 });
@@ -272,11 +284,11 @@ describe(
       try {
         const { result, progress } = await runFullRecompute();
 
-        // Fallback decision: the scan bailed before paging anything (zero
-        // primary-key pages) and the per-batch path loaded participants via
-        // the address index once per batch.
-        expect(scanPages()).toBe(0);
+        // Fallback decision: the per-batch path loaded participants through
+        // the bounded address query once per batch, with no extra id pages
+        // from the whole-table streaming path.
         expect(addressLoads()).toBe(Math.ceil(TOTAL / BATCH_SIZE));
+        expectNoFullParticipantScan();
 
         // The fallback finishes the whole vault, reports advancing progress,
         // and writes the same correct stats the fast path would.
@@ -319,12 +331,13 @@ describe(
         delete (r as Partial<DbRecord>).statsComputedAt;
       });
       participantWhereKeys = [];
+      querySpy.mockClear();
 
       const restore = mockGateCounts(FULL_SCAN_ROW_LIMIT * 4, FULL_SCAN_ROW_LIMIT);
       try {
         const { result } = await runFullRecompute();
-        expect(scanPages()).toBe(0);
         expect(addressLoads()).toBeGreaterThan(0);
+        expectNoFullParticipantScan();
         expect(result).toEqual({ updated: TOTAL, cancelled: false });
       } finally {
         restore();
@@ -377,8 +390,8 @@ describe(
 
         // Fallback path was taken (not the streaming scan), and only the one
         // batch before the abort point issued an address-index load.
-        expect(scanPages()).toBe(0);
         expect(addressLoads()).toBe(1);
+        expectNoFullParticipantScan();
 
         expect(result).toEqual({ updated: abortAtProcessed, cancelled: true });
 

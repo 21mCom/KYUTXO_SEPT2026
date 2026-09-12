@@ -7,7 +7,13 @@ export { createWalletSoftware, updateWalletSoftware, deleteWalletSoftware, getWa
 export function useWalletSoftware() {
   const [walletSoftware, setWalletSoftware] = useState<Awaited<ReturnType<typeof getWalletSoftware>>>();
   const signal = useDbChangeSignal(['walletSoftware']);
-  useEffect(() => { void getWalletSoftware().then((rows) => setWalletSoftware(rows.sort((a, b) => a.name.localeCompare(b.name)))); }, [signal]);
+  useEffect(() => {
+    let cancelled = false;
+    void getWalletSoftware().then((rows) => {
+      if (!cancelled) setWalletSoftware(rows.sort((a, b) => a.name.localeCompare(b.name)));
+    });
+    return () => { cancelled = true; };
+  }, [signal]);
 
   return {
     walletSoftware: walletSoftware ?? [],

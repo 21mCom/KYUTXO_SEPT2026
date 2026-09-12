@@ -29,6 +29,20 @@ vi.mock("jsqr", () => ({ default: vi.fn(() => ({ data: ADDRESS })) }));
 vi.mock("qrcode", () => ({
   default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,AAAA") },
 }));
+vi.mock("@/lib/metadata-hover", () => ({
+  DEFAULT_HOVER_TOOLTIP_PREFS: {},
+  isSystemTag: vi.fn(() => false),
+  getHoverLabel: vi.fn(() => ""),
+  getHoverMetadataFields: vi.fn(() => []),
+  hasHoverMetadata: vi.fn(() => false),
+  subscribeCacheEntry: vi.fn(() => () => {}),
+  getCachedRecord: vi.fn(() => null),
+  resolveIdentifier: vi.fn(async () => null),
+  invalidateCachedRecord: vi.fn(),
+  invalidateCachedRecords: vi.fn(),
+  clearCachedRecords: vi.fn(),
+  batchPreloadIdentifiers: vi.fn(),
+}));
 
 import QRScanner from "@/pages/QRScanner";
 
@@ -86,10 +100,10 @@ beforeEach(() => {
   });
   HTMLMediaElement.prototype.play = vi.fn(() => Promise.resolve());
 
-  // requestAnimationFrame invokes its callback synchronously. jsQR returns a
-  // code on the first frame, which stops rescheduling (no infinite recursion).
+  // Schedule the first frame after the async camera setup and React effect
+  // commit. jsQR returns a code there, so no second frame is scheduled.
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
-    cb(0);
+    queueMicrotask(() => cb(0));
     return 1;
   });
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});

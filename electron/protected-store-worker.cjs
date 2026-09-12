@@ -1322,6 +1322,10 @@ function repositoryImpl(message) {
       );
     }
     else if (name === 'participants.byAddress' && collection === 'transactionParticipants' && text(message.value)) rows = select('address=?', [message.value]);
+    else if (name === 'participants.byAddressAfterId' && collection === 'transactionParticipants' && message.value &&
+      text(message.value.address) && Number.isSafeInteger(message.value.afterId)) {
+      rows = select('address=? AND id_sort>?', [message.value.address, message.value.afterId]);
+    }
     else if (name === 'participants.byAddresses' && collection === 'transactionParticipants' && values(message.value, (v) => text(v))) rows = inSelect('address', message.value);
     else if (name === 'participants.byAddressesAfterId' && collection === 'transactionParticipants' && message.value &&
       values(message.value.addresses, (v) => text(v)) && Number.isSafeInteger(message.value.afterId)) {

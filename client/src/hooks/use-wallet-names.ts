@@ -7,7 +7,13 @@ export { createWalletName, updateWalletName, deleteWalletName, getWalletNameUsag
 export function useWalletNames() {
   const [walletNames, setWalletNames] = useState<Awaited<ReturnType<typeof getWalletNames>>>();
   const signal = useDbChangeSignal(['walletNames']);
-  useEffect(() => { void getWalletNames().then((rows) => setWalletNames(rows.sort((a, b) => a.name.localeCompare(b.name)))); }, [signal]);
+  useEffect(() => {
+    let cancelled = false;
+    void getWalletNames().then((rows) => {
+      if (!cancelled) setWalletNames(rows.sort((a, b) => a.name.localeCompare(b.name)));
+    });
+    return () => { cancelled = true; };
+  }, [signal]);
 
   return {
     walletNames: walletNames ?? [],

@@ -76,7 +76,15 @@ vi.mock("@/lib/records-query", () => ({
   resolveVisibleTierValues: vi.fn(() =>
     Promise.resolve(["verified", "manual", "wallet-import", "xpub-derived"]),
   ),
-  fetchRecordsPage: vi.fn(() => Promise.resolve({ records: [], total: 0, effectiveTotal: 0, truncated: false })),
+  fetchRecordsPage: vi.fn(async () => {
+    const records = await mockDb.pageFetch();
+    return {
+      records,
+      total: records.length,
+      effectiveTotal: records.length,
+      truncated: false,
+    };
+  }),
 }));
 
 // RecordTable renders the records it was handed so we can assert which rows
@@ -167,6 +175,16 @@ vi.mock("@/lib/database", async () => {
   // AddressLink → RecordPreviewContext → RecordDetailPanel → use-node-settings)
   // still find their re-exported constants without touching Dexie.
   const dbTypes = await import("@/lib/db-types");
+  const recordsCollection = () => ({
+    count: () => mockDb.recordsAnyOfCount(),
+    and: () => recordsCollection(),
+    until: () => ({
+      each: async (visitor: (row: unknown) => void) => {
+        for (const row of await mockDb.pageFetch()) visitor(row);
+      },
+    }),
+    toArray: () => mockDb.pageFetch(),
+  });
   const recordsBetween = () => ({
     reverse: () => ({
       limit: () => ({ toArray: () => mockDb.pageFetch() }),
@@ -175,7 +193,7 @@ vi.mock("@/lib/database", async () => {
   });
   const records = {
     where: (_idx: string) => ({
-      anyOf: (_v: unknown) => ({ count: () => mockDb.recordsAnyOfCount() }),
+      anyOf: (_v: unknown) => recordsCollection(),
       between: recordsBetween,
       equals: () => ({
         reverse: () => ({ limit: () => ({ toArray: () => mockDb.pageFetch() }) }),
@@ -184,6 +202,7 @@ vi.mock("@/lib/database", async () => {
     }),
     count: () => mockDb.recordsCount(),
     orderBy: () => ({
+      uniqueKeys: () => Promise.resolve([]),
       reverse: () => ({
         offset: () => ({ limit: () => ({ toArray: () => mockDb.pageFetch() }) }),
       }),
@@ -198,7 +217,16 @@ vi.mock("@/lib/database", async () => {
       records,
       settings: { get: () => Promise.resolve(undefined) },
       blockchainTransactions: { where: () => ({ startsWithIgnoreCase: () => ({ limit: () => ({ toArray: () => Promise.resolve([]) }) }) }) },
-      customFields: { toArray: () => mockDb.customFieldsToArray() },
+      customFields: {
+        orderBy: () => ({
+          reverse: () => ({
+            limit: () => ({ toArray: () => mockDb.customFieldsToArray() }),
+          }),
+          limit: () => ({ toArray: () => mockDb.customFieldsToArray() }),
+          toArray: () => mockDb.customFieldsToArray(),
+        }),
+        toArray: () => mockDb.customFieldsToArray(),
+      },
     },
   };
 });
@@ -264,11 +292,9 @@ const fixtureRecords = [
 ];
 
 function seedLoadedRecords() {
-  // First tier call returns the fixtures; remaining tiers resolve empty so the
-  // merged page is exactly our three rows.
+  // The current page query reads through the mocked records-query helper.
   mockDb.pageFetch.mockReset();
-  mockDb.pageFetch.mockResolvedValue([]);
-  mockDb.pageFetch.mockResolvedValueOnce(fixtureRecords);
+  mockDb.pageFetch.mockResolvedValue(fixtureRecords);
 }
 
 async function renderLoadedRecordsPage() {

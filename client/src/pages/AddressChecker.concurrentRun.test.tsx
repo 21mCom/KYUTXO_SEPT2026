@@ -55,6 +55,15 @@ vi.mock("@/lib/blockchain-api", async (importOriginal) => ({
 // don't seed a vault, so stub it to an empty result.
 vi.mock("@/lib/data/record-crud", () => ({
   getSavedAddressRecordLookup: async () => new Map(),
+  getRecord: async () => undefined,
+  getRecordsByInputString: async () => [],
+  getRecordsByInputStrings: async () => [],
+  updateRecord: vi.fn(),
+  createRecord: vi.fn(),
+}));
+
+vi.mock("@/lib/network-privacy", () => ({
+  recordNetworkPrivacyActivity: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@/lib/bitcoin", async (importOriginal) => ({

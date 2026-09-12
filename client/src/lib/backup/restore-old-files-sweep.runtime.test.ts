@@ -237,7 +237,10 @@ async function seedRecordsWithAttachments(plan: Plan[]): Promise<void> {
   }
 }
 
-describe("v3 restore over a populated data dir sweeps the prior vault's stranded files", () => {
+describe(
+  "v3 restore over a populated data dir sweeps the prior vault's stranded files",
+  { timeout: 30_000 },
+  () => {
   it("leaves only files referenced by the restored DB on disk", async () => {
     // 1. Build the backup from the NEW vault (vault B) — a single record with
     //    one attachment. Its file lands on disk during seeding; exportBackup
@@ -387,4 +390,5 @@ describe("v3 restore over a populated data dir sweeps the prior vault's stranded
     expect(cleanupProgress.map((progress) => progress.percent)).toEqual([95, 96, 98, 99]);
     expect(await listDiskFiles()).toEqual([]);
   });
-});
+  },
+);

@@ -174,7 +174,16 @@ vi.mock("@/lib/database", async () => {
     db: {
       records,
       blockchainTransactions: { where: () => ({ startsWithIgnoreCase: () => ({ limit: () => ({ toArray: () => Promise.resolve([]) }) }) }) },
-      customFields: { toArray: () => mockDb.customFieldsToArray() },
+      customFields: {
+        orderBy: () => ({
+          reverse: () => ({
+            limit: () => ({ toArray: () => mockDb.customFieldsToArray() }),
+          }),
+          limit: () => ({ toArray: () => mockDb.customFieldsToArray() }),
+          toArray: () => mockDb.customFieldsToArray(),
+        }),
+        toArray: () => mockDb.customFieldsToArray(),
+      },
     },
   };
 });

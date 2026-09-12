@@ -107,6 +107,16 @@ function formatDeviceValue(key: string, settings: any): string | null {
       if (!Array.isArray(views)) return null;
       return `${views.length} ${views.length === 1 ? "view" : "views"}`;
     }
+    case "categoryMappingDraft": {
+      const draft = settings.categoryMappingDraft;
+      if (!draft || typeof draft !== "object") return null;
+      return `${Object.keys(draft).length} decision(s)`;
+    }
+    case "categoryMappingCheckpoints": {
+      const checkpoints = settings.categoryMappingCheckpoints;
+      if (!checkpoints || typeof checkpoints !== "object") return null;
+      return `${Object.keys(checkpoints).length} checkpoint(s)`;
+    }
     default:
       return null;
   }
@@ -198,6 +208,10 @@ describe("settings-preferences preview/restore parity", () => {
       sourceOfFundsTxLimit: 5000,
       quantumTagLevels: ["critical", "medium"],
       entityListSnapshot: { entries: [{ address: "a" }] },
+       categoryMappingDraft: { Income: { kind: "drop" } },
+       categoryMappingCheckpoints: {
+         Income: { status: "applied", appliedAt: 1 },
+       },
       savedInboxViews: [{
         id: "view-1",
         name: "Recent incoming",

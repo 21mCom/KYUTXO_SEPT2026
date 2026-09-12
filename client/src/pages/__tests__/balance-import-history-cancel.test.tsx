@@ -71,6 +71,7 @@ vi.mock("@/lib/data/record-crud", () => ({
   getRecordsPageByTypeIdReverseKeyset: vi.fn(async () => []),
   getAddressBalanceRowsForGroup: vi.fn(async () => []),
   getRecordsByIds: vi.fn(async () => []),
+  getRecordsByInputStrings: vi.fn(async () => []),
 }));
 
 vi.mock("@/lib/data/address-stats", () => ({

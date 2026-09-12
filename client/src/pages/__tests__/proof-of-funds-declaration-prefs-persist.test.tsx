@@ -92,6 +92,13 @@ describe("ProofOfFundsDeclaration — attestation/glossary prefs persist", () =>
       attestationPlaceOfSigning: "London, United Kingdom",
       attestationWitnessLine: "John Smith, Solicitor",
       includeGlossary: true,
+      includeQr: false,
+      qrExplorerId: "mempool",
+      includeProvenance: false,
+      provenanceFiatCurrency: "USD",
+      fiatCurrency: "USD",
+      fiatRate: "",
+      includeAml: false,
     });
   });
 

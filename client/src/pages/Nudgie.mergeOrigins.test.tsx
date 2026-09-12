@@ -134,6 +134,7 @@ async function seedNudgeFixture(): Promise<number> {
     blockHeight: 100,
     blockTime: 1_700_000_000,
     syncedAt: 1,
+    curationState: "new",
   } as unknown as BlockchainTransaction);
 
   return txRecordId;

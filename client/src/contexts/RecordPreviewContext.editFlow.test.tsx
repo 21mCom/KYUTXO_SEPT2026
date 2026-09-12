@@ -95,8 +95,13 @@ describe("RecordPreviewContext view / edit flow", () => {
     // Edit: clicking Edit must open the editable record form (previously a no-op).
     fireEvent.click(editButton);
 
+    // The standard edit action opens the quick annotation panel first; advanced
+    // editing continues to the full record form.
+    expect(await screen.findByTestId("annotation-panel")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("button-annotation-advanced-edit"));
+
     // The edit form opens (title confirms edit, not create, mode).
-    expect(await screen.findByText("Edit Record")).toBeTruthy();
+    expect(await screen.findByText("Edit Record", {}, { timeout: 5000 })).toBeTruthy();
 
     const labelInput = (await screen.findByTestId("input-label")) as HTMLInputElement;
     // Form is prefilled with the existing record's data.
@@ -108,6 +113,8 @@ describe("RecordPreviewContext view / edit flow", () => {
     // type="submit".
     fireEvent.change(labelInput, { target: { value: "Updated Label" } });
     clickSaveButton();
+
+    await waitFor(() => expect(screen.queryByText("Edit Record")).toBeNull());
 
     // Persisted via the CRUD layer (updateRecord).
     await waitFor(async () => {

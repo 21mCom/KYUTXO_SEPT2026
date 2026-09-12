@@ -157,7 +157,7 @@ describe("SettingsPage — legacy backup preference preview (plain)", () => {
   it("blocks malformed plaintext data before confirmation and preserves portable settings", async () => {
     renderWithSettingsProviders(<SettingsPage />);
     await openRestoreWith(
-      await makeLegacyBackup({ settings: [], data: "not-a-vault-payload" }),
+      await makeLegacyBackup({ settings: [], data: { settings: [] } }),
     );
 
     fireEvent.click(await screen.findByTestId("button-continue-restore"));

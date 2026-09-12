@@ -13,6 +13,7 @@ import {
   type RecordRow,
   type TransactionRow,
 } from "../engine-core";
+import { UNASSIGNED_OWNER_VALUE } from "../../owner-constants";
 
 function record(id: number, address: string, walletName: string): RecordRow {
   return {
@@ -82,10 +83,10 @@ describe("native engine coin origins query", () => {
     insertParticipants(db, [output(1, "arrival", "alice", 100), output(2, "other", "blank", 200)]);
     // The legacy owner text remains the current scope identity; empty is a
     // deliberate unassigned scope, not a guessed default owner.
-    expect(getCoinOrigins(db, { owner: "Alice" }).lots[0]).toMatchObject({
+    expect(getCoinOrigins(db, { owners: ["Alice"] }).lots[0]).toMatchObject({
       acquisitionMethod: "purchase", costBasisUsd: 50, costProvenance: "provided",
     });
-    expect(getCoinOriginsPage(db, { owner: "", limit: 10 }).summary.currentSats).toBe(200);
+    expect(getCoinOriginsPage(db, { owners: [UNASSIGNED_OWNER_VALUE], limit: 10 }).summary.currentSats).toBe(200);
     db.close();
   });
 

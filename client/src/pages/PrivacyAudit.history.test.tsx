@@ -11,14 +11,10 @@
 // export builders, and assert exactly which runs are handed to them.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within, act } from "@testing-library/react";
 
-// The card reads its runs through useLiveQuery; feed it a fixed fixture so the
-// test never touches IndexedDB.
+// Feed the card a fixed fixture so the test never touches IndexedDB.
 let mockHistory: unknown = undefined;
-vi.mock("dexie-react-hooks", () => ({
-  useLiveQuery: () => mockHistory,
-}));
 
 // Spy on the export builders — this is the seam the test asserts against. CSV is
 // synchronous and PDF is async, mirroring the real signatures. The scope-label
@@ -40,6 +36,7 @@ vi.mock("@/lib/privacy-history-export", async () => {
 vi.mock("@/lib/data/privacy-history-crud", () => ({
   addPrivacyAuditHistoryEntry: vi.fn(),
   clearPrivacyAuditHistory: vi.fn(),
+  getPrivacyAuditHistory: vi.fn(async () => mockHistory ?? []),
 }));
 
 import { buildPrivacyHistoryCsv, buildPrivacyHistoryPdf } from "@/lib/privacy-history-export";
@@ -74,9 +71,11 @@ const RUN_JAN = makeRun(1, TS_JAN, 70);
 const RUN_MAR = makeRun(2, TS_MAR, 80);
 const RUN_JUN = makeRun(3, TS_JUN, 90);
 
-function renderCard(runs: PrivacyAuditHistoryEntry[]) {
+async function renderCard(runs: PrivacyAuditHistoryEntry[]) {
   mockHistory = runs;
-  return render(<PrivacyHistoryCard />);
+  const result = render(<PrivacyHistoryCard />);
+  await act(async () => {});
+  return result;
 }
 
 /** ids of the entries passed to the most recent CSV export call. */
@@ -112,8 +111,8 @@ afterEach(() => {
 });
 
 describe("PrivacyHistoryCard export selection", () => {
-  it("exports ALL runs when nothing is selected (the default)", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("exports ALL runs when nothing is selected (the default)", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // The hint should reflect the all-runs default.
     expect(screen.getByTestId("text-history-export-hint").textContent).toContain(
@@ -126,8 +125,8 @@ describe("PrivacyHistoryCard export selection", () => {
     expect(lastCsvExportedIds().sort()).toEqual([1, 2, 3]);
   });
 
-  it("passes only the hand-picked subset to the CSV export builder", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("passes only the hand-picked subset to the CSV export builder", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // Pick the Jan and Jun runs, leaving March out.
     fireEvent.click(screen.getByTestId("checkbox-history-select-1"));
@@ -144,7 +143,7 @@ describe("PrivacyHistoryCard export selection", () => {
   });
 
   it("passes the hand-picked subset to the async PDF export builder too", async () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     fireEvent.click(screen.getByTestId("checkbox-history-select-2"));
 
@@ -155,8 +154,8 @@ describe("PrivacyHistoryCard export selection", () => {
     expect(arg.map((e) => e.id)).toEqual([2]);
   });
 
-  it("'Select range' checks only the runs within the chosen date range", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("'Select range' checks only the runs within the chosen date range", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // March 1 → June 30 should capture the March and June runs only.
     fireEvent.change(screen.getByTestId("input-history-from-date"), {
@@ -176,8 +175,8 @@ describe("PrivacyHistoryCard export selection", () => {
     expect(lastCsvExportedIds().sort()).toEqual([2, 3]);
   });
 
-  it("'Select all' selects every run, then exports all of them", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("'Select all' selects every run, then exports all of them", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     fireEvent.click(screen.getByTestId("button-history-select-all"));
     expect(screen.getByTestId("text-history-selected-count").textContent).toContain(
@@ -188,8 +187,8 @@ describe("PrivacyHistoryCard export selection", () => {
     expect(lastCsvExportedIds().sort()).toEqual([1, 2, 3]);
   });
 
-  it("'Clear selection' reverts to the all-runs default", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("'Clear selection' reverts to the all-runs default", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     // Pick a subset, then clear it.
     fireEvent.click(screen.getByTestId("checkbox-history-select-1"));
@@ -240,8 +239,8 @@ describe("PrivacyHistoryCard export download plumbing", () => {
     createElementSpy.mockRestore();
   });
 
-  it("offers a dated .csv file for download and revokes the object URL", () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+  it("offers a dated .csv file for download and revokes the object URL", async () => {
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     fireEvent.click(screen.getByTestId("button-export-history-csv"));
 
@@ -263,7 +262,7 @@ describe("PrivacyHistoryCard export download plumbing", () => {
   });
 
   it("offers a dated .pdf file for download and revokes the object URL", async () => {
-    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+    await renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
 
     fireEvent.click(screen.getByTestId("button-export-history-pdf"));
 
@@ -307,8 +306,8 @@ describe("PrivacyHistoryCard scope badges", () => {
     return within(screen.getByTestId(`row-history-${id}`));
   }
 
-  it("shows an Owner badge (and no wallet/all badges) for an owner-only run", () => {
-    renderCard([RUN_OWNER_ONLY]);
+  it("shows an Owner badge (and no wallet/all badges) for an owner-only run", async () => {
+    await renderCard([RUN_OWNER_ONLY]);
 
     const r = row(10);
     expect(r.getByTestId("badge-history-scope-owner").textContent).toContain(
@@ -318,8 +317,8 @@ describe("PrivacyHistoryCard scope badges", () => {
     expect(r.queryByTestId("badge-history-scope-all")).toBeNull();
   });
 
-  it("shows a Wallet badge (and no owner/all badges) for a wallet-only run", () => {
-    renderCard([RUN_WALLET_ONLY]);
+  it("shows a Wallet badge (and no owner/all badges) for a wallet-only run", async () => {
+    await renderCard([RUN_WALLET_ONLY]);
 
     const r = row(11);
     expect(r.getByTestId("badge-history-scope-wallet").textContent).toContain(
@@ -329,8 +328,8 @@ describe("PrivacyHistoryCard scope badges", () => {
     expect(r.queryByTestId("badge-history-scope-all")).toBeNull();
   });
 
-  it("shows both Owner and Wallet badges (and no all badge) when both are set", () => {
-    renderCard([RUN_BOTH]);
+  it("shows both Owner and Wallet badges (and no all badge) when both are set", async () => {
+    await renderCard([RUN_BOTH]);
 
     const r = row(12);
     expect(r.getByTestId("badge-history-scope-owner").textContent).toContain(
@@ -342,8 +341,8 @@ describe("PrivacyHistoryCard scope badges", () => {
     expect(r.queryByTestId("badge-history-scope-all")).toBeNull();
   });
 
-  it("shows the All badge (and no scope badges) for an unscoped full-vault run", () => {
-    renderCard([RUN_NEITHER]);
+  it("shows the All badge (and no scope badges) for an unscoped full-vault run", async () => {
+    await renderCard([RUN_NEITHER]);
 
     const r = row(13);
     expect(r.getByTestId("badge-history-scope-all").textContent).toContain("All");
@@ -351,35 +350,35 @@ describe("PrivacyHistoryCard scope badges", () => {
     expect(r.queryByTestId("badge-history-scope-wallet")).toBeNull();
   });
 
-  it("shows a report-wide export scope badge when every visible run shares one owner", () => {
+  it("shows a report-wide export scope badge when every visible run shares one owner", async () => {
     const RUN_ALICE_2 = { ...makeRun(14, TS_MAR, 72), owner: "Alice" };
-    renderCard([RUN_OWNER_ONLY, RUN_ALICE_2]);
+    await renderCard([RUN_OWNER_ONLY, RUN_ALICE_2]);
 
     expect(screen.getByTestId("badge-history-export-scope").textContent).toContain(
       "Scope: Owner = Alice",
     );
   });
 
-  it("shows 'Scope: All addresses' when every visible run is full-vault", () => {
+  it("shows 'Scope: All addresses' when every visible run is full-vault", async () => {
     const RUN_NEITHER_2 = makeRun(15, TS_MAR, 88);
-    renderCard([RUN_NEITHER, RUN_NEITHER_2]);
+    await renderCard([RUN_NEITHER, RUN_NEITHER_2]);
 
     expect(screen.getByTestId("badge-history-export-scope").textContent).toContain(
       "Scope: All addresses",
     );
   });
 
-  it("hides the report-wide export scope badge when runs span multiple scopes", () => {
-    renderCard([RUN_OWNER_ONLY, RUN_WALLET_ONLY]);
+  it("hides the report-wide export scope badge when runs span multiple scopes", async () => {
+    await renderCard([RUN_OWNER_ONLY, RUN_WALLET_ONLY]);
 
     expect(screen.queryByTestId("badge-history-export-scope")).toBeNull();
   });
 
-  it("tracks the selection: a mixed history narrowed to one scope shows the badge", () => {
+  it("tracks the selection: a mixed history narrowed to one scope shows the badge", async () => {
     const RUN_ALICE_2 = { ...makeRun(14, TS_MAR, 72), owner: "Alice" };
     // History spans two owners, so with nothing selected the export covers both
     // and there is no single scope.
-    renderCard([RUN_OWNER_ONLY, RUN_ALICE_2, RUN_BOTH]);
+    await renderCard([RUN_OWNER_ONLY, RUN_ALICE_2, RUN_BOTH]);
     expect(screen.queryByTestId("badge-history-export-scope")).toBeNull();
 
     // Pick only the two Alice-owned runs; now the export shares one scope.
@@ -391,8 +390,8 @@ describe("PrivacyHistoryCard scope badges", () => {
     );
   });
 
-  it("labels each row independently when all scope kinds are present at once", () => {
-    renderCard([RUN_OWNER_ONLY, RUN_WALLET_ONLY, RUN_BOTH, RUN_NEITHER]);
+  it("labels each row independently when all scope kinds are present at once", async () => {
+    await renderCard([RUN_OWNER_ONLY, RUN_WALLET_ONLY, RUN_BOTH, RUN_NEITHER]);
 
     // Owner-only row
     expect(row(10).getByTestId("badge-history-scope-owner").textContent).toContain(

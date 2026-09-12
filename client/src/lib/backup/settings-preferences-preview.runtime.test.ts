@@ -21,6 +21,8 @@ const KEYS = [
   "quantumTagLevels",
   "entityListSnapshot",
   "savedInboxViews",
+  "categoryMappingDraft",
+  "categoryMappingCheckpoints",
 ] as const;
 
 function byKey(rows: any[]) {

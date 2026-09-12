@@ -81,6 +81,9 @@ vi.mock("@/hooks/use-settings", () => ({
   useCustomFields: () => ({ customFields: [], enabledCustomFields: [], isLoading: false }),
 }));
 
+vi.mock("@/hooks/use-tags", () => ({ useTags: () => ({ tags: [] }) }));
+vi.mock("@/hooks/use-categories", () => ({ useCategories: () => ({ categories: [] }) }));
+
 vi.mock("@/hooks/use-address-records", () => ({
   useAddressRecords: () => ({ records: [ownedRecord], isLoading: false }),
 }));

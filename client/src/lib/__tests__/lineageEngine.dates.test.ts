@@ -46,6 +46,11 @@ vi.mock('../database', () => ({
   },
 }));
 
+vi.mock('../data/repository-helpers', () => ({
+  queryVaultRows: vi.fn(async (table: string) =>
+    table === 'custodySegments' ? [...state.segments] : []),
+}));
+
 vi.mock('../dataFacade', () => ({
   getParticipantsByTxid: vi.fn(),
   bulkAddUtxoLineage: vi.fn(),

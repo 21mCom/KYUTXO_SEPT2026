@@ -50,6 +50,7 @@ const fakeApi = {
 vi.mock("@/lib/electron", () => ({
   isElectron: () => true,
   getElectronAPI: () => fakeApi,
+  getElectronAPISafe: () => undefined,
 }));
 
 class TestDb extends Dexie {
@@ -62,6 +63,7 @@ class TestDb extends Dexie {
     this.version(1).stores({
       records: "++id, type, inputString, inputStringLower",
       attachments: "++id, recordId, createdAt",
+      recordOrigins: "++id, recordId, originType, createdAt, isEncrypted",
       evidenceAttachments: "++id, evidenceId, createdAt",
       trashedAttachments: "++id, recordId, objectStoragePath, deletedAt",
     });
