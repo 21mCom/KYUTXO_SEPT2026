@@ -1,0 +1,28 @@
+---
+name: .replit validation workflow wiring
+description: How to register a new check script as a completion-validation gate, and what to do when validation only fails on unrelated flaky browser checks.
+---
+
+**Rule:** A new check script only gates task completion when it has BOTH a named workflow entry with `isValidation = true` AND a `workflow.run` entry in the Project workflow list. `configureWorkflow` alone may not persist that wiring — write a full `.replit.new` and apply it via `verifyAndReplaceDotReplit` (direct `.replit` edits are forbidden).
+
+**Why:** A completion review rejected a task because the new browser check existed but never ran in validation; `configureWorkflow` had silently not persisted the validation flag.
+
+**How to apply:** After adding any `scripts/check-*.{js,mjs}` guard, verify it appears in the validation run's command list on the first `markTaskComplete` attempt. `verifyAndReplaceDotReplit` takes `{ tempFilePath }` and it must be an ABSOLUTE path (e.g. `/home/runner/workspace/.replit.new`).
+
+**Browser checks must self-start the dev server:** any `check-*-browser.mjs` that goes straight to `page.goto` without an isServerUp/waitForServer + `npm run dev` spawn fallback will flake in validation with ERR_CONNECTION_REFUSED when it wins the lock while the app workflow is down. Always include the ensure-server preamble.
+
+**Validation flake escape hatch:** When repeated full validation runs each fail only on *different, unrelated* browser checks (chromium `pthread_create EAGAIN`, `input-password` load timeouts, vitest worker-teardown crashes with all tests passing), that is parallel-Chromium contention, not a regression. After several genuinely different attempts with your own check + code review green, `markTaskComplete` with an audited `skip_validation_reason` is acceptable. Also: runs can wedge with hung check processes at 0% CPU — `pkill -9 -f 'check-.*browser'` forces the run to a terminal state so a replacement attempt can start.
+
+**Vitest suites die in the same storm:** in task envs the parallel fan-out also EAGAIN-kills vitest suites at pool start (`pthread_create`, `write EPIPE`, `[vitest-pool-runner]: Timeout waiting for worker to respond`) — a different random ~third of suites each run, unrelated to the change. Wedged vitest stragglers (0% CPU `npx → npm exec → node vitest` chain) keep the run RUNNING forever; `kill -9` that chain to force the terminal state. Confirm contention (not regression) by running the failed suites serially before skipping.
+
+**Hardening new browser checks:** retry `chromium.launch` (EAGAIN under load) and retry the initial goto+first-selector wait with generous timeouts; single-shot 30s waits flake under parallel validation.
+
+**Rebase conflicts in `.replit`:** when two tasks each append a validation workflow block, the rebase conflicts at the append point — resolve by keeping BOTH full blocks (the `workflow.run` list entries usually merge cleanly on their own). Direct edits stay blocked mid-rebase: splice the merged TOML into a temp file and apply via `verifyAndReplaceDotReplit`, then `continueMergeResolution`. Gotcha: while `.replit` is conflicted the env config is not applied and `node`/`python3` vanish from PATH — call the `/nix/store/*nodejs*/bin/node` binary directly. Also don't string-match "conflict" on `continueMergeResolution`'s result to decide success (`conflictFiles: []` matches); check `status === "rebase_complete"`. Second gotcha: the FIRST `continueMergeResolution` after replacing `.replit` throws at its internal `git add -A` with a stale env parse of the old conflicted file (`REPLIT_RUN_ENV_ERROR ... got '<'`); it also *throws* rather than returning an error object, so try/catch it. Fix: `cp` the clean `.replit` to another temp file, call `verifyAndReplaceDotReplit` on that copy again (forces the env parser cache to refresh), then retry `continueMergeResolution` — succeeds on the retry.
+
+**Completion review covers the whole post-rebase diff:** the completion code review evaluates everything in the branch after rebasing onto main, including other tasks' merged work — pre-existing main breakage (failing typecheck from an untyped dynamic import, an accidentally committed transient test-canary file) can get YOUR task rejected even when your own changes are approved. Fix or clean such breakage in-branch and re-request the review (`request_fresh_code_review`), noting the extra scope in `drift_reason`.
+
+**Completion review can misread routing:** a review rejected a passing browser check by statically inspecting the wrong page file (assumed "/" = Records.tsx when it's Dashboard.tsx). When a check's target route/file mapping is non-obvious, put a short "NOTE for reviewers" in the script header naming the exact consumer file, and re-request review — the same evidence then passes.
+
+**RUN_LOST before any check executes:** repeated `markTaskComplete` failures with `RUN_LOST: validation run <id> could not be read before code review` + `SERVER unexpectedly disconnected` mean the validation run is lost at infrastructure level, not failing. After ~4-5 attempts, verify the task's own checks + directly-related suites + typecheck serially, then complete with an audited `skip_validation_reason` citing that serial evidence.
+
+**Finding the last clean revision of a corrupted file:** a commit titled "repair X" can itself still be broken (splice damage compounds across merges). Locate the last good version by transpiling each historical revision (`git show <rev>:<file>` → esbuild `transformSync`), rebuild from that base, and re-apply the newer commits' *intent* (their diffs show it) rather than their mangled hunks.

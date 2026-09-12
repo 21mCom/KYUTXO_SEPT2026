@@ -1,0 +1,2276 @@
+/**
+ * Database Doctor (Task #325).
+ *
+ * The health CHECK is a strictly READ-ONLY diagnostic that reads raw rows
+ * straight from IndexedDB via Dexie (`db`), bypassing the native read-engine
+ * and every normal read hook. Its single job is to answer, in plain language,
+ * the question every other screen has been failing to answer: "Is my data
+ * actually there and readable, or is it still locked/blank?"
+ *
+ * The check writes NOTHING to vault data. It never decrypts (so it needs no
+ * password) — it only observes which fields are populated, which rows still
+ * carry the legacy encryption markers left behind when the v27 migration
+ * stripped the encryption flags without decrypting, and whether the one-time
+ * login decrypt + search index repair ever completed.
+ *
+ * Separate, clearly-labeled REPAIR actions (Task #1740) are the explicit
+ * exceptions, and only run when the user clicks them:
+ *   - "Rebuild search keys" re-runs repairInputStringLower on demand, so rows
+ *     whose lowercase search key drifted AFTER the once-only login repair
+ *     already ran (its done-flag blocks re-runs) become searchable again.
+ *   - "Normalize importance tiers" repairs rows whose addressImportance is
+ *     missing or an unrecognized legacy value (restored verbatim from old
+ *     backups), which index-narrowed tier queries silently skip.
+ * (The Balance Integrity card's optional "Recompute" is the other explicit
+ * write; its check additionally spools a report to a separate, local scratch
+ * store — never the vault — see BalanceIntegrityCard below.)
+ *
+ * Reads are done in id-keyset batches with a yield between each so it stays
+ * responsive even on very large vaults.
+ */
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "wouter";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  Stethoscope,
+  Play,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Lock,
+  Database,
+  ArrowLeft,
+  Scale,
+  RefreshCw,
+  Ban,
+  ExternalLink,
+  ListChecks,
+  Download,
+} from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/hooks/use-toast";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
+import { db } from "@/lib/database";
+import { isValidImportanceTier, isHiddenDiscoveryTier } from "@/lib/db-types";
+import {
+  repairInputStringLower,
+  repairAddressImportanceTiers,
+  repairCanonicalInputStrings,
+  repairStaleTypeSpecificFields,
+  getRecordsByIds,
+  deleteRecord,
+} from "@/lib/data/record-crud";
+import { getStaleTypeSpecificFields } from "@/lib/record-type-clears";
+import type { Record as VaultRecord } from "@/lib/db-types";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
+import {
+  isLegacyDecryptComplete,
+  getLegacyDecryptCompletedTables,
+  isInputStringLowerRepaired,
+  setInputStringLowerRepaired,
+  setCanonicalInputStringsRepaired,
+} from "@/lib/vault";
+import { canonicalizeRecordIdentifier } from "@/lib/bitcoin";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
+import { useWindowedRows } from "@/hooks/use-windowed-rows";
+import { isEncryptedPlaceholder } from "@/lib/legacy-decrypt";
+import {
+  detectStaleCachedBalances,
+  recomputeAddressStats,
+  type StaleBalanceCheckResult,
+  type StaleAddressDetail,
+} from "@/lib/data/address-stats";
+import {
+  clearStaleReport,
+  appendStaleReportRows,
+  getStaleReportWindow,
+  exportStaleReport,
+} from "@/lib/data/stale-balance-report-store";
+
+// The markers the v27 migration left on rows whose ciphertext was preserved.
+// These are kept on a row even AFTER a successful decrypt (the strip/cleanup step
+// removes them later), so presence alone does not mean the row is unreadable —
+// it only means cleanup is still pending. The "still locked" case is a marker
+// present together with a blank real field (see isLockedUnreadable).
+const LEGACY_MARKER_KEYS = ["_legacyEncryptedPayload", "isEncrypted", "encryptedPayload"] as const;
+
+const BATCH_SIZE = 1000;
+const SAMPLE_SIZE = 20;
+
+type Phase = "idle" | "scanning" | "done" | "error";
+
+interface TableCount {
+  name: string;
+  count: number;
+  error: boolean;
+}
+
+interface RecordStats {
+  total: number;
+  blankInputString: number;
+  placeholderInputString: number; // inputString === "[encrypted]" — value never restored
+  populatedInputString: number;
+  blankInputStringLower: number;
+  blankLabel: number;
+  lockedUnreadable: number; // payload present AND inputString blank/placeholder — the true "locked" signature
+  markersRemaining: number; // rows carrying any leftover marker key (harmless cleanup candidates)
+  // inputStringLower !== lowercase(inputString) — the EXACT predicate the
+  // "Rebuild search keys" repair fixes. Superset of blank-lower-with-populated-
+  // input; excludes healthy blank/blank rows (unlike blankInputStringLower).
+  searchKeyDesynced: number;
+  missingTier: number; // no addressImportance at all (pre-tier legacy rows)
+  invalidTier: number; // unrecognized tier string (e.g. restored from an old backup)
+  // Hidden discovery-tier rows (blockchain-discovered/pending-review) that carry
+  // user metadata (label/tags/notes) — healthy, but invisible in the default
+  // Records view, which is the #1 "my old tagged record vanished" cause.
+  hiddenTierTagged: number;
+  // Stored inputString is NOT in canonical form (padded / uppercase bech32 /
+  // uppercase-hex txid). Such rows are invisible to the case-sensitive
+  // exact-match lookups sync and import merges use. The EXACT predicate the
+  // canonical-identifier repair fixes.
+  nonCanonicalIdentifier: number;
+  // Subset of nonCanonicalIdentifier: rows the repair SKIPS because rewriting
+  // them would collide with another record that claims the same canonical key
+  // (i.e. a true duplicate pair). Surfaced so the user knows they exist — the
+  // repair reports, never merges.
+  canonicalIdentifierCollision: number;
+  // Rows still carrying type-specific metadata their CURRENT type can no
+  // longer show/edit (per getStaleTypeSpecificFields — e.g. flowType left on
+  // an address after a Type switch predating the automatic clearing). The
+  // EXACT predicate the "Clear stale type fields" repair fixes.
+  staleTypeFields: number;
+}
+
+// One record participating in a canonical-identifier collision, as listed in
+// the "Duplicate identifier records" card. Lightweight on purpose — the full
+// record opens in the shared detail panel on click.
+export interface CollisionRow {
+  id: number;
+  inputString: string;
+  label: string;
+  type: string;
+  /** True when this row's stored value differs from the canonical form. */
+  nonCanonical: boolean;
+}
+
+export interface CollisionGroup {
+  /** The canonical identifier every row in this group resolves to. */
+  canonical: string;
+  rows: CollisionRow[];
+}
+
+// Bounds for the collision-detail pass so a pathological vault can't blow up
+// memory: collisions are normally a handful of rows.
+const MAX_COLLISION_GROUPS = 500;
+const MAX_ROWS_PER_GROUP = 25;
+
+interface SampleRow {
+  id: number | string;
+  type: string;
+  inputStringBlank: boolean;
+  lockedUnreadable: boolean;
+  hasMarker: boolean;
+  raw: RawRow;
+}
+
+interface MigrationFlags {
+  legacyDecryptComplete: boolean;
+  completedTables: string[];
+  inputStringLowerRepaired: boolean;
+}
+
+interface DoctorResult {
+  tableCounts: TableCount[];
+  recordStats: RecordStats;
+  samples: SampleRow[];
+  flags: MigrationFlags;
+  /** Detail behind canonicalIdentifierCollision: the actual colliding groups. */
+  collisionGroups: CollisionGroup[];
+  /** True when the group/row caps trimmed the collected detail. */
+  collisionGroupsTruncated: boolean;
+}
+
+type RawRow = globalThis.Record<string, unknown>;
+
+function isBlank(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
+}
+
+// Dump a raw record exactly as it is stored, untruncated, for forensic viewing.
+function formatRaw(row: RawRow): string {
+  try {
+    return JSON.stringify(row, (_key, value) => (typeof value === "bigint" ? value.toString() : value), 2);
+  } catch {
+    return String(row);
+  }
+}
+
+// True when the row still carries ANY active encryption marker. IMPORTANT: the
+// decrypt flow deliberately KEEPS these markers after successfully restoring the
+// plaintext fields — they are the only recoverable copy until the separate
+// strip/cleanup step removes them. So a marker alone does NOT mean the row is
+// unreadable. The real "still locked" signature is a marker present AND a blank
+// inputString (see isLockedUnreadable).
+function hasActiveEncryptionMarker(row: RawRow): boolean {
+  const legacy = row["_legacyEncryptedPayload"];
+  if (typeof legacy === "string" && legacy.length > 0) return true;
+  const payload = row["encryptedPayload"];
+  if (typeof payload === "string" && payload.length > 0) return true;
+  if (row["isEncrypted"] === true) return true;
+  return false;
+}
+
+// The real value is unreadable when inputString is blank OR still holds the
+// literal "[encrypted]" placeholder. A past migration blanked most fields but
+// left inputString set to "[encrypted]", so treating placeholder as readable is
+// exactly what made locked vaults look falsely healthy.
+function isInputUnreadable(row: RawRow): boolean {
+  const value = row["inputString"];
+  return isBlank(value) || isEncryptedPlaceholder(value);
+}
+
+// The genuine "still locked" case: an encryption marker is present but the real
+// value was never restored (inputString blank or "[encrypted]"). These are the
+// records that make every screen look empty.
+function isLockedUnreadable(row: RawRow): boolean {
+  return hasActiveEncryptionMarker(row) && isInputUnreadable(row);
+}
+
+function hasAnyMarker(row: RawRow): boolean {
+  for (const key of LEGACY_MARKER_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) {
+      const v = row[key];
+      // A leftover `false`/empty marker still counts as "present" — it tells us
+      // the strip pass touched this row.
+      if (v !== undefined) return true;
+    }
+  }
+  return false;
+}
+
+export default function DatabaseDoctor() {
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [progress, setProgress] = useState("");
+  const [result, setResult] = useState<DoctorResult | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const isScanning = phase === "scanning";
+
+  const runCheck = useCallback(async () => {
+    setPhase("scanning");
+    setProgress("Reading migration status…");
+    setErrorMessage(null);
+    setResult(null);
+
+    try {
+      // 1. Migration flags (from the separate vault settings DB).
+      const [legacyDecryptComplete, completedTables, inputStringLowerRepaired] = await Promise.all([
+        isLegacyDecryptComplete().catch(() => false),
+        getLegacyDecryptCompletedTables().catch(() => [] as string[]),
+        isInputStringLowerRepaired().catch(() => false),
+      ]);
+
+      // 2. Per-table counts for every table in the vault.
+      setProgress("Counting rows in every table…");
+      const tableCounts: TableCount[] = [];
+      for (const table of db.tables) {
+        try {
+          const count = await table.count();
+          tableCounts.push({ name: table.name, count, error: false });
+        } catch {
+          tableCounts.push({ name: table.name, count: 0, error: true });
+        }
+      }
+      tableCounts.sort((a, b) => a.name.localeCompare(b.name));
+
+      // 3. Deep scan of the records table in id-keyset batches.
+      const recordStats: RecordStats = {
+        total: 0,
+        blankInputString: 0,
+        placeholderInputString: 0,
+        populatedInputString: 0,
+        blankInputStringLower: 0,
+        blankLabel: 0,
+        lockedUnreadable: 0,
+        markersRemaining: 0,
+        searchKeyDesynced: 0,
+        missingTier: 0,
+        invalidTier: 0,
+        hiddenTierTagged: 0,
+        nonCanonicalIdentifier: 0,
+        canonicalIdentifierCollision: 0,
+        staleTypeFields: 0,
+      };
+      const samples: SampleRow[] = [];
+      // Canonical-identifier health needs whole-table key multiplicity (the
+      // same tradeoff the repair makes): one map of canonical key → row count,
+      // plus the canonical keys of the (normally tiny) set of non-canonical
+      // rows so collisions can be counted after the scan.
+      const canonicalKeyCounts = new Map<string, number>();
+      const nonCanonicalKeys: string[] = [];
+
+      let lastId = 0;
+      let hasMore = true;
+      while (hasMore) {
+        let chunk: RawRow[];
+        try {
+          chunk = (await db.records
+            .where("id")
+            .above(lastId)
+            .limit(BATCH_SIZE)
+            .toArray()) as unknown as RawRow[];
+        } catch (err) {
+          throw new Error(
+            `Failed reading the records table: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+
+        if (chunk.length === 0) break;
+        lastId = Number(chunk[chunk.length - 1].id);
+
+        for (const row of chunk) {
+          recordStats.total += 1;
+
+          const inputBlank = isBlank(row["inputString"]);
+          const inputPlaceholder = isEncryptedPlaceholder(row["inputString"]);
+          const inputUnreadable = inputBlank || inputPlaceholder;
+          if (inputBlank) recordStats.blankInputString += 1;
+          else if (inputPlaceholder) recordStats.placeholderInputString += 1;
+          else recordStats.populatedInputString += 1;
+
+          if (isBlank(row["inputStringLower"])) recordStats.blankInputStringLower += 1;
+          if (isBlank(row["label"])) recordStats.blankLabel += 1;
+
+          // Search-key desync: the exact predicate repairInputStringLower uses.
+          // (A blank lower on a row whose inputString is also blank is healthy
+          // and does NOT count.)
+          const inputVal = row["inputString"];
+          const expectedLower =
+            typeof inputVal === "string" && inputVal ? inputVal.toLowerCase() : "";
+          if (row["inputStringLower"] !== expectedLower) recordStats.searchKeyDesynced += 1;
+
+          // Canonical-identifier health: the EXACT predicate the
+          // canonical-identifier repair fixes (stored value ≠ its canonical
+          // form), plus the key-multiplicity bookkeeping needed to count how
+          // many of those rows the repair would SKIP as collisions.
+          if (typeof inputVal === "string" && inputVal) {
+            const canonical = canonicalizeRecordIdentifier(inputVal);
+            canonicalKeyCounts.set(canonical, (canonicalKeyCounts.get(canonical) ?? 0) + 1);
+            if (canonical !== inputVal) {
+              recordStats.nonCanonicalIdentifier += 1;
+              nonCanonicalKeys.push(canonical);
+            }
+          }
+
+          // Tier health: missing or unrecognized tiers silently drop out of
+          // index-narrowed tier queries; hidden-tier rows carrying user
+          // metadata explain "my old tagged record doesn't show up".
+          const tierVal = row["addressImportance"];
+          if (tierVal === undefined || tierVal === null || tierVal === "") {
+            recordStats.missingTier += 1;
+          } else if (!isValidImportanceTier(tierVal)) {
+            recordStats.invalidTier += 1;
+          }
+          if (isHiddenDiscoveryTier(typeof tierVal === "string" ? tierVal : undefined)) {
+            const tagsVal = row["tags"];
+            const hasUserMeta =
+              !isBlank(row["label"]) ||
+              !isBlank(row["notes"]) ||
+              (Array.isArray(tagsVal) && tagsVal.length > 0);
+            if (hasUserMeta) recordStats.hiddenTierTagged += 1;
+          }
+
+          // Stale type-specific metadata: fields the row's current type can
+          // no longer show/edit (left behind by a Type switch predating the
+          // automatic clearing). Same predicate as the repair.
+          if (getStaleTypeSpecificFields(row as never).length > 0) {
+            recordStats.staleTypeFields += 1;
+          }
+
+          const lockedUnreadable = isLockedUnreadable(row);
+          const marker = hasAnyMarker(row);
+          if (lockedUnreadable) recordStats.lockedUnreadable += 1;
+          // "Markers remaining" is the harmless, readable bucket: a marker is
+          // still present but the real field was restored (inputString holds a
+          // genuine value — not blank and not the "[encrypted]" placeholder).
+          // Locked-unreadable rows are tracked separately above.
+          else if (marker && !inputUnreadable) recordStats.markersRemaining += 1;
+
+          if (samples.length < SAMPLE_SIZE) {
+            samples.push({
+              id: (row["id"] as number | undefined) ?? "—",
+              type: typeof row["type"] === "string" ? (row["type"] as string) : "—",
+              inputStringBlank: inputBlank,
+              lockedUnreadable,
+              hasMarker: marker,
+              raw: row,
+            });
+          }
+        }
+
+        setProgress(`Checked ${recordStats.total.toLocaleString()} records…`);
+        if (chunk.length < BATCH_SIZE) hasMore = false;
+        // Yield so the UI stays responsive on large vaults.
+        await new Promise((r) => setTimeout(r, 0));
+      }
+
+      // A non-canonical row collides when ANOTHER record also claims its
+      // canonical key — the repair leaves those rows untouched (it reports,
+      // never merges), so surface exactly that skipped count.
+      recordStats.canonicalIdentifierCollision = nonCanonicalKeys.filter(
+        (key) => (canonicalKeyCounts.get(key) ?? 0) > 1,
+      ).length;
+
+      // Second bounded pass (only when collisions exist — normally never):
+      // collect the actual colliding rows per canonical key so the user can
+      // open and merge them, instead of dead-ending on a bare count.
+      const collisionKeys = new Set(
+        nonCanonicalKeys.filter((key) => (canonicalKeyCounts.get(key) ?? 0) > 1),
+      );
+      const groupMap = new Map<string, CollisionRow[]>();
+      let collisionGroupsTruncated = false;
+      if (collisionKeys.size > 0) {
+        setProgress("Collecting duplicate identifier details…");
+        let collisionLastId = 0;
+        for (;;) {
+          const chunk = (await db.records
+            .where("id")
+            .above(collisionLastId)
+            .limit(BATCH_SIZE)
+            .toArray()) as unknown as RawRow[];
+          if (chunk.length === 0) break;
+          collisionLastId = Number(chunk[chunk.length - 1].id);
+
+          for (const row of chunk) {
+            const inputVal = row["inputString"];
+            if (typeof inputVal !== "string" || !inputVal) continue;
+            const canonical = canonicalizeRecordIdentifier(inputVal);
+            if (!collisionKeys.has(canonical)) continue;
+            let rows = groupMap.get(canonical);
+            if (!rows) {
+              if (groupMap.size >= MAX_COLLISION_GROUPS) {
+                collisionGroupsTruncated = true;
+                continue;
+              }
+              rows = [];
+              groupMap.set(canonical, rows);
+            }
+            if (rows.length >= MAX_ROWS_PER_GROUP) {
+              collisionGroupsTruncated = true;
+              continue;
+            }
+            rows.push({
+              id: Number(row["id"]),
+              inputString: inputVal,
+              label: typeof row["label"] === "string" ? (row["label"] as string) : "",
+              type: typeof row["type"] === "string" ? (row["type"] as string) : "—",
+              nonCanonical: canonical !== inputVal,
+            });
+          }
+
+          if (chunk.length < BATCH_SIZE) break;
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
+      const collisionGroups: CollisionGroup[] = Array.from(
+        groupMap,
+        ([canonical, rows]) => ({ canonical, rows }),
+      );
+
+      setResult({
+        tableCounts,
+        recordStats,
+        samples,
+        flags: { legacyDecryptComplete, completedTables, inputStringLowerRepaired },
+        collisionGroups,
+        collisionGroupsTruncated,
+      });
+      setPhase("done");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+      setPhase("error");
+    } finally {
+      setProgress("");
+    }
+  }, []);
+
+  return (
+    <div className="flex-1 overflow-auto">
+      <div className="max-w-4xl mx-auto p-6 space-y-6">
+        <div className="space-y-2">
+          <Link href="/settings">
+            <Button variant="ghost" size="sm" data-testid="link-back-settings">
+              <ArrowLeft className="h-4 w-4" />
+              Back to Settings
+            </Button>
+          </Link>
+          <h1
+            className="text-2xl font-semibold flex items-center gap-2"
+            data-testid="text-page-title"
+          >
+            <Stethoscope className="h-6 w-6" />
+            Database Doctor
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            A safe health check. It looks directly at your stored data and tells you, in plain
+            language, whether your records are actually there and readable — or whether they are
+            still locked from an unfinished migration. The check itself never changes, deletes, or
+            unlocks anything; the only writes are the clearly-labeled repair buttons, which run
+            only when you click them.
+          </p>
+        </div>
+
+        <Card data-testid="card-run-check">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="h-5 w-5" />
+              Run the health check
+            </CardTitle>
+            <CardDescription>
+              No password needed. This reads your data exactly as it is stored, without decrypting
+              anything.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Button onClick={runCheck} disabled={isScanning} data-testid="button-run-check">
+              {isScanning ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+              {isScanning ? "Checking…" : "Run health check"}
+            </Button>
+            {isScanning && progress && (
+              <p className="text-sm text-muted-foreground" data-testid="text-progress">
+                {progress}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <BalanceIntegrityCard />
+
+        {phase === "error" && errorMessage && (
+          <div
+            className="rounded-md border border-destructive/40 bg-destructive/10 p-4 flex items-start gap-2"
+            data-testid="banner-error"
+          >
+            <XCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+            <div className="text-sm text-destructive">{errorMessage}</div>
+          </div>
+        )}
+
+        {phase === "done" && result && <Verdict result={result} />}
+
+        {phase === "done" && result && (
+          <>
+            <RecordHealthCard stats={result.recordStats} flags={result.flags} />
+            <RepairToolsCard stats={result.recordStats} onRepairComplete={runCheck} />
+            {result.collisionGroups.length > 0 && (
+              <DuplicateIdentifierCard
+                groups={result.collisionGroups}
+                truncated={result.collisionGroupsTruncated}
+              />
+            )}
+            <SamplesCard samples={result.samples} />
+            <TableCountsCard tableCounts={result.tableCounts} />
+            <MigrationStatusCard flags={result.flags} />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Verdict({ result }: { result: DoctorResult }) {
+  const { recordStats, flags } = result;
+
+  let tone: "good" | "bad" | "warn" = "good";
+  let title = "Your data looks healthy and readable.";
+  const lines: string[] = [];
+
+  if (recordStats.total === 0) {
+    tone = "warn";
+    title = "Your vault has no records at all.";
+    lines.push(
+      "The records table is empty. If you expected data here, it may be stored in a different vault file, or it was never imported.",
+    );
+  } else if (
+    recordStats.lockedUnreadable > 0 ||
+    recordStats.blankInputString > 0 ||
+    recordStats.placeholderInputString > 0
+  ) {
+    tone = "bad";
+    title = "Some records are present but their contents are missing.";
+    if (recordStats.lockedUnreadable > 0) {
+      lines.push(
+        `${recordStats.lockedUnreadable.toLocaleString()} of ${recordStats.total.toLocaleString()} records still hold locked (encrypted) data that was never unlocked — their visible fields are blank or show "[encrypted]", which is why those records appear empty everywhere.`,
+      );
+      lines.push(
+        'Good news: this locked data is recoverable. Open Settings → "Restore Locked Data", enter your vault password, and let it finish to unlock these records. (Just logging out and back in may not be enough — a past migration can be wrongly marked finished, which is exactly this situation.)',
+      );
+    }
+    const unreadableNoPayload =
+      recordStats.blankInputString +
+      recordStats.placeholderInputString -
+      recordStats.lockedUnreadable;
+    if (unreadableNoPayload > 0) {
+      lines.push(
+        `${unreadableNoPayload.toLocaleString()} records have a blank or "[encrypted]" address/transaction with no recoverable encrypted data (blank or incomplete).`,
+      );
+    }
+  } else if (
+    recordStats.searchKeyDesynced > 0 ||
+    recordStats.invalidTier > 0 ||
+    recordStats.missingTier > 0 ||
+    recordStats.nonCanonicalIdentifier > 0 ||
+    recordStats.staleTypeFields > 0
+  ) {
+    tone = "warn";
+    title = "Your records are readable, but some may not show up in search or lists.";
+    if (recordStats.searchKeyDesynced > 0) {
+      lines.push(
+        `${recordStats.searchKeyDesynced.toLocaleString()} records have an out-of-date search key, so typing their address or transaction ID into search may not find them. Use "Rebuild search keys" below to fix this now — the automatic login-time repair only ever runs once, so it will not fix these on its own.`,
+      );
+    }
+    if (recordStats.nonCanonicalIdentifier > 0) {
+      lines.push(
+        `${recordStats.nonCanonicalIdentifier.toLocaleString()} records store their address/transaction ID with stray whitespace or non-standard casing (usually typed or pasted that way before identifiers were normalized on save). Blockchain sync and wallet imports may not match them, which can create duplicate "discovered" records for the same address. Use "Rebuild search keys" below to normalize them.`,
+      );
+      if (recordStats.canonicalIdentifierCollision > 0) {
+        lines.push(
+          `${recordStats.canonicalIdentifierCollision.toLocaleString()} of those records were left untouched because normalizing them would duplicate another record that already stores the same address/transaction ID. The repair never merges records on its own — see the "Duplicate identifier records" list below to review and merge each pair yourself.`,
+        );
+      }
+    }
+    if (recordStats.invalidTier > 0 || recordStats.missingTier > 0) {
+      lines.push(
+        `${(recordStats.invalidTier + recordStats.missingTier).toLocaleString()} records have a missing or unrecognized importance tier (often restored from an older backup), which can make them invisible to some filtered views. Use "Normalize importance tiers" below to fix them.`,
+      );
+    }
+    if (recordStats.staleTypeFields > 0) {
+      lines.push(
+        `${recordStats.staleTypeFields.toLocaleString()} records carry leftover metadata from a previous Type (for example, a transaction flow type still saved on a record now marked as an address). These values are invisible in the edit form but can surface in reports and exports. Use "Clear stale type fields" below to remove them.`,
+      );
+    }
+  } else {
+    lines.push(
+      `All ${recordStats.total.toLocaleString()} records have their data populated and none are locked.`,
+    );
+    if (!flags.legacyDecryptComplete) {
+      tone = "warn";
+      lines.push(
+        "Note: the migration is not yet marked complete, even though the data looks readable. It will be confirmed on your next login.",
+      );
+    }
+  }
+
+  // Leftover markers are NORMAL after a successful unlock — the decrypt step keeps
+  // them until the separate cleanup tool removes them. Only mention them (as a
+  // harmless note) when the data is actually readable, so we never imply locked
+  // data when there is none.
+  if (
+    recordStats.markersRemaining > 0 &&
+    recordStats.lockedUnreadable === 0 &&
+    recordStats.blankInputString === 0 &&
+    recordStats.placeholderInputString === 0
+  ) {
+    lines.push(
+      `${recordStats.markersRemaining.toLocaleString()} records still carry leftover migration markers. This is harmless — your data is readable — but you can tidy them up with the cleanup tool in Settings.`,
+    );
+  }
+
+  // Tagged-but-hidden discovered rows are healthy data, but they are the #1
+  // reason an old tagged record "disappears": the default Records view hides
+  // discovery-tier rows. Surface the explanation whatever the overall tone.
+  if (recordStats.hiddenTierTagged > 0) {
+    lines.push(
+      `${recordStats.hiddenTierTagged.toLocaleString()} blockchain-discovered records carry your labels, tags, or notes. They are healthy but hidden from the default Records view — turn on "Include blockchain-discovered" there, or use the "Show hidden matches" button that now appears under search results.`,
+    );
+  }
+
+  const styles: globalThis.Record<typeof tone, string> = {
+    good: "border-green-600/40 bg-green-600/10 dark:border-green-400/40 dark:bg-green-400/10",
+    warn: "border-yellow-600/40 bg-yellow-600/10 dark:border-yellow-400/40 dark:bg-yellow-400/10",
+    bad: "border-destructive/40 bg-destructive/10",
+  };
+
+  const Icon = tone === "good" ? CheckCircle2 : tone === "warn" ? AlertTriangle : XCircle;
+  const iconColor =
+    tone === "good"
+      ? "text-green-600 dark:text-green-400"
+      : tone === "warn"
+        ? "text-yellow-600 dark:text-yellow-400"
+        : "text-destructive";
+
+  return (
+    <div className={`rounded-md border p-4 flex items-start gap-3 ${styles[tone]}`} data-testid="banner-verdict">
+      <Icon className={`h-5 w-5 mt-0.5 shrink-0 ${iconColor}`} />
+      <div className="space-y-1">
+        <div className="font-medium" data-testid="text-verdict-title">
+          {title}
+        </div>
+        {lines.map((line, i) => (
+          <p key={i} className="text-sm text-muted-foreground">
+            {line}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatLine({
+  label,
+  value,
+  testid,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  testid: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-1.5">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <span
+        className={`text-sm font-medium tabular-nums ${highlight ? "text-destructive" : ""}`}
+        data-testid={testid}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function RecordHealthCard({ stats, flags }: { stats: RecordStats; flags: MigrationFlags }) {
+  return (
+    <Card data-testid="card-record-health">
+      <CardHeader>
+        <CardTitle>Records breakdown</CardTitle>
+        <CardDescription>
+          A detailed look at the records table — the one that feeds nearly every screen.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <StatLine label="Total records" value={stats.total.toLocaleString()} testid="stat-total" />
+        <StatLine
+          label="With a populated address/transaction"
+          value={stats.populatedInputString.toLocaleString()}
+          testid="stat-populated-input"
+        />
+        <StatLine
+          label="With a blank address/transaction"
+          value={stats.blankInputString.toLocaleString()}
+          testid="stat-blank-input"
+          highlight={stats.blankInputString > 0}
+        />
+        <StatLine
+          label={'Showing "[encrypted]" placeholder'}
+          value={stats.placeholderInputString.toLocaleString()}
+          testid="stat-placeholder-input"
+          highlight={stats.placeholderInputString > 0}
+        />
+        <StatLine
+          label="Missing lowercase search key"
+          value={stats.blankInputStringLower.toLocaleString()}
+          testid="stat-blank-input-lower"
+          highlight={stats.blankInputStringLower > 0}
+        />
+        <StatLine
+          label="Search key out of date (repairable)"
+          value={stats.searchKeyDesynced.toLocaleString()}
+          testid="stat-search-key-desynced"
+          highlight={stats.searchKeyDesynced > 0}
+        />
+        <StatLine
+          label="Missing importance tier"
+          value={stats.missingTier.toLocaleString()}
+          testid="stat-missing-tier"
+          highlight={stats.missingTier > 0}
+        />
+        <StatLine
+          label="Unrecognized importance tier (repairable)"
+          value={stats.invalidTier.toLocaleString()}
+          testid="stat-invalid-tier"
+          highlight={stats.invalidTier > 0}
+        />
+        <StatLine
+          label="Hidden discovered records with your labels/tags"
+          value={stats.hiddenTierTagged.toLocaleString()}
+          testid="stat-hidden-tier-tagged"
+        />
+        <StatLine
+          label="Address/txid not in canonical form (repairable)"
+          value={stats.nonCanonicalIdentifier.toLocaleString()}
+          testid="stat-non-canonical-identifier"
+          highlight={stats.nonCanonicalIdentifier > 0}
+        />
+        <StatLine
+          label="Normalization skipped (would duplicate another record)"
+          value={stats.canonicalIdentifierCollision.toLocaleString()}
+          testid="stat-canonical-identifier-collision"
+          highlight={stats.canonicalIdentifierCollision > 0}
+        />
+        <StatLine
+          label="Leftover metadata from a previous Type (repairable)"
+          value={stats.staleTypeFields.toLocaleString()}
+          testid="stat-stale-type-fields"
+          highlight={stats.staleTypeFields > 0}
+        />
+        <StatLine
+          label="With a blank label"
+          value={stats.blankLabel.toLocaleString()}
+          testid="stat-blank-label"
+        />
+        <Separator className="my-2" />
+        <StatLine
+          label="Locked & unreadable (encrypted, never unlocked)"
+          value={stats.lockedUnreadable.toLocaleString()}
+          testid="stat-locked-unreadable"
+          highlight={stats.lockedUnreadable > 0}
+        />
+        <StatLine
+          label="Carrying leftover cleanup markers (harmless)"
+          value={stats.markersRemaining.toLocaleString()}
+          testid="stat-markers-remaining"
+        />
+        {stats.lockedUnreadable > 0 && (
+          <p className="text-xs text-muted-foreground mt-2">
+            {flags.legacyDecryptComplete
+              ? 'The migration is marked complete, but these records are still locked — a past run finished early. Use Settings → "Restore Locked Data" to unlock them.'
+              : 'The login-time unlock has not finished, so the locked records above are not recovered yet. Use Settings → "Restore Locked Data" to unlock them.'}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The Doctor's only vault-writing tools (besides the Balance card's recompute),
+ * and both are idempotent, batch-yielding repairs:
+ *
+ * - "Rebuild search keys": re-runs repairInputStringLower on demand, then
+ *   repairCanonicalInputStrings (normalizes padded / differently-cased
+ *   identifiers; collision rows are skipped and reported, never merged). The
+ *   login-time runs are gated by once-only vault flags, so rows that drifted
+ *   AFTER those flags were set are otherwise never repaired — this button is
+ *   the escape hatch. On success it (re)arms the flags so the login path
+ *   stays skipped.
+ * - "Normalize importance tiers": re-derives addressImportance for rows whose
+ *   stored tier is missing or unrecognized (e.g. restored verbatim from an old
+ *   backup), using the row's own provenance — sync/discovery provenance maps
+ *   back to a hidden discovery tier, user-created rows to a user tier. It
+ *   deliberately does NOT blanket-promote rows to "manual": that would leak
+ *   sync-discovered rows into curated balance totals.
+ */
+function RepairToolsCard({
+  stats,
+  onRepairComplete,
+}: {
+  stats: RecordStats;
+  onRepairComplete: () => void;
+}) {
+  const { toast } = useToast();
+  const [running, setRunning] = useState<null | "searchKeys" | "tiers" | "typeFields">(null);
+  const [repairProgress, setRepairProgress] = useState("");
+  // Confirmation gate for the type-field repair: on a large vault this
+  // rewrites many records at once, so above the threshold the button opens a
+  // confirm dialog showing the affected count instead of running immediately.
+  const [typeFieldConfirmOpen, setTypeFieldConfirmOpen] = useState(false);
+
+  const runSearchKeyRepair = async () => {
+    setRunning("searchKeys");
+    setRepairProgress("");
+    try {
+      const res = await repairInputStringLower((scanned, fixed) => {
+        setRepairProgress(
+          `Checked ${scanned.toLocaleString()} records — rebuilt ${fixed.toLocaleString()}…`,
+        );
+      });
+      let allOk = res.ok;
+      // Chain the canonical-identifier repair: a padded / differently-cased
+      // stored identifier is invisible to the same exact-match and fast-path
+      // lookups, and its login-time run is once-only too.
+      let canonicalRes: Awaited<ReturnType<typeof repairCanonicalInputStrings>> | null = null;
+      if (res.ok) {
+        canonicalRes = await repairCanonicalInputStrings((scanned, fixed, skipped) => {
+          setRepairProgress(
+            `Normalizing identifiers — ${scanned.toLocaleString()} checked, ${fixed.toLocaleString()} normalized` +
+              (skipped > 0 ? `, ${skipped.toLocaleString()} skipped (would duplicate)` : "") +
+              "…",
+          );
+        });
+        if (!canonicalRes.ok) allOk = false;
+      }
+      if (allOk) {
+        // (Re)arm the once-only login flags: the on-demand runs just did the
+        // work, so the login path can keep skipping.
+        await setInputStringLowerRepaired(true).catch(() => {});
+        await setCanonicalInputStringsRepaired(true).catch(() => {});
+        toast({
+          title: "Search keys rebuilt",
+          description:
+            `Rebuilt ${res.fixed.toLocaleString()} of ${res.scanned.toLocaleString()} checked records.` +
+            (canonicalRes && (canonicalRes.fixed > 0 || canonicalRes.skippedCollisions > 0)
+              ? ` Normalized ${canonicalRes.fixed.toLocaleString()} identifier(s)` +
+                (canonicalRes.skippedCollisions > 0
+                  ? `; ${canonicalRes.skippedCollisions.toLocaleString()} left untouched because normalizing would duplicate another record — review them yourself.`
+                  : ".")
+              : ""),
+        });
+      } else {
+        toast({
+          title: "Search key rebuild did not finish",
+          description: "The vault changed or an error occurred mid-run. Nothing was harmed — run it again to finish.",
+          variant: "destructive",
+        });
+      }
+      onRepairComplete();
+    } catch (err) {
+      toast({
+        title: "Search key rebuild failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setRunning(null);
+      setRepairProgress("");
+    }
+  };
+
+  const runTierRepair = async () => {
+    setRunning("tiers");
+    setRepairProgress("");
+    try {
+      const res = await repairAddressImportanceTiers((scanned, fixed) => {
+        setRepairProgress(
+          `Checked ${scanned.toLocaleString()} records — fixed ${fixed.toLocaleString()}…`,
+        );
+      });
+      if (res.ok) {
+        toast({
+          title: "Importance tiers normalized",
+          description: `Fixed ${res.fixed.toLocaleString()} of ${res.scanned.toLocaleString()} checked records.`,
+        });
+      } else {
+        toast({
+          title: "Tier repair did not finish",
+          description: "An error occurred mid-run. Repaired rows were kept — run it again to finish.",
+          variant: "destructive",
+        });
+      }
+      onRepairComplete();
+    } catch (err) {
+      toast({
+        title: "Tier repair failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setRunning(null);
+      setRepairProgress("");
+    }
+  };
+
+  // Above this many affected records the repair asks for confirmation first —
+  // a mass rewrite (e.g. after a bulk import) shouldn't happen on a single
+  // unguarded click. At or below it the click runs immediately, as before.
+  const TYPE_FIELD_CONFIRM_THRESHOLD = 25;
+
+  const handleTypeFieldRepairClick = () => {
+    if (stats.staleTypeFields > TYPE_FIELD_CONFIRM_THRESHOLD) {
+      setTypeFieldConfirmOpen(true);
+      return;
+    }
+    void runTypeFieldRepair();
+  };
+
+  const runTypeFieldRepair = async () => {
+    setRunning("typeFields");
+    setRepairProgress("");
+    try {
+      const res = await repairStaleTypeSpecificFields((scanned, fixed) => {
+        setRepairProgress(
+          `Checked ${scanned.toLocaleString()} records — cleaned ${fixed.toLocaleString()}…`,
+        );
+      });
+      if (res.ok) {
+        toast({
+          title: "Stale type fields cleared",
+          description: `Cleaned ${res.fixed.toLocaleString()} of ${res.scanned.toLocaleString()} checked records.`,
+        });
+      } else {
+        toast({
+          title: "Type-field cleanup did not finish",
+          description:
+            "An error occurred mid-run. Cleaned rows were kept — run it again to finish.",
+          variant: "destructive",
+        });
+      }
+      onRepairComplete();
+    } catch (err) {
+      toast({
+        title: "Type-field cleanup failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setRunning(null);
+      setRepairProgress("");
+    }
+  };
+
+  return (
+    <Card data-testid="card-repair-tools">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <RefreshCw className="h-5 w-5" />
+          Repair tools
+        </CardTitle>
+        <CardDescription>
+          These are the only buttons on this page that change stored data. Both are safe to run any
+          time: they only rewrite the affected bookkeeping fields (search keys and importance
+          tiers) — never your addresses, labels, tags, or notes — and running them twice is
+          harmless.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Rebuild search keys</p>
+            <p className="text-xs text-muted-foreground max-w-md">
+              {stats.searchKeyDesynced > 0
+                ? `${stats.searchKeyDesynced.toLocaleString()} records currently have an out-of-date search key.`
+                : "No out-of-date search keys detected right now."}{" "}
+              {stats.nonCanonicalIdentifier > 0
+                ? `${stats.nonCanonicalIdentifier.toLocaleString()} records store a non-canonical address/transaction ID` +
+                  (stats.canonicalIdentifierCollision > 0
+                    ? ` (${stats.canonicalIdentifierCollision.toLocaleString()} of them can't be auto-normalized without duplicating another record).`
+                    : ".")
+                  : "No non-canonical identifiers detected right now."}{" "}
+              The automatic login-time repair runs only once ever, so drift that happened later is
+              only fixed here.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={runSearchKeyRepair}
+            disabled={running !== null}
+            data-testid="button-repair-search-keys"
+          >
+            {running === "searchKeys" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Rebuild search keys
+          </Button>
+        </div>
+        <Separator />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Normalize importance tiers</p>
+            <p className="text-xs text-muted-foreground max-w-md">
+              {stats.missingTier + stats.invalidTier > 0
+                ? `${(stats.missingTier + stats.invalidTier).toLocaleString()} records currently have a missing or unrecognized tier.`
+                : "No missing or unrecognized tiers detected right now."}{" "}
+              Each affected record is re-classified from its own origin (imported, manual, or
+              discovered during sync) — discovered records stay out of your curated balances.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={runTierRepair}
+            disabled={running !== null}
+            data-testid="button-repair-tiers"
+          >
+            {running === "tiers" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Normalize tiers
+          </Button>
+        </div>
+        <Separator />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Clear stale type fields</p>
+            <p className="text-xs text-muted-foreground max-w-md">
+              {stats.staleTypeFields > 0
+                ? `${stats.staleTypeFields.toLocaleString()} records currently carry metadata left over from a previous Type.`
+                : "No leftover type-specific metadata detected right now."}{" "}
+              Removes only fields the record's current Type can no longer show or edit (for
+              example, a transaction flow type still saved on an address) — the same fields the
+              edit form clears automatically when you switch a record's Type today.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={handleTypeFieldRepairClick}
+            disabled={running !== null}
+            data-testid="button-repair-type-fields"
+          >
+            {running === "typeFields" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Clear stale type fields
+          </Button>
+        </div>
+        <AlertDialog open={typeFieldConfirmOpen} onOpenChange={setTypeFieldConfirmOpen}>
+          <AlertDialogContent data-testid="dialog-confirm-type-field-repair">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Clear stale type fields on {stats.staleTypeFields.toLocaleString()} records?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will rewrite {stats.staleTypeFields.toLocaleString()} records at once, removing
+                only fields their current Type can no longer show or edit. Your addresses, labels,
+                tags, and notes are never touched, but the removed values cannot be restored
+                afterwards.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="button-cancel-type-field-repair">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="button-confirm-type-field-repair"
+                onClick={() => {
+                  setTypeFieldConfirmOpen(false);
+                  void runTypeFieldRepair();
+                }}
+              >
+                Clear fields
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        {running !== null && repairProgress && (
+          <p className="text-sm text-muted-foreground" data-testid="text-repair-progress">
+            {repairProgress}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Duplicate identifier records (Task #1869): the detail behind the
+ * "Normalization skipped (would duplicate another record)" count. Each group
+ * is one canonical identifier claimed by 2+ records — the canonical-identifier
+ * repair deliberately skips these (report, never merge). Every row opens in
+ * the shared record detail panel so the user can compare, copy metadata across,
+ * and delete the redundant record; the list is paginated for large vaults.
+ */
+export function DuplicateIdentifierCard({
+  groups: allGroups,
+  truncated,
+}: {
+  groups: CollisionGroup[];
+  truncated: boolean;
+}) {
+  const { openRecordPreview } = useRecordPreview();
+  const [page, setPage] = useState(0);
+  // Groups the guided Resolve flow already cleared this session — hidden
+  // immediately so the user sees progress without re-running the whole scan.
+  const [resolvedCanonicals, setResolvedCanonicals] = useState<Set<string>>(new Set());
+  const [resolvingGroup, setResolvingGroup] = useState<CollisionGroup | null>(null);
+  const groups = allGroups.filter((g) => !resolvedCanonicals.has(g.canonical));
+  const GROUPS_PER_PAGE = 10;
+  const pageCount = Math.max(1, Math.ceil(groups.length / GROUPS_PER_PAGE));
+  const clampedPage = Math.min(page, pageCount - 1);
+  const visible = groups.slice(
+    clampedPage * GROUPS_PER_PAGE,
+    (clampedPage + 1) * GROUPS_PER_PAGE,
+  );
+
+  return (
+    <Card data-testid="card-duplicate-identifiers">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ListChecks className="h-5 w-5" />
+          Duplicate identifier records
+        </CardTitle>
+        <CardDescription>
+          Each group below is one address or transaction ID stored by more than one record. The
+          normalization repair skipped these on purpose — it never merges records. To resolve a
+          group: open each record, pick the one to keep, copy over any labels, tags, or notes you
+          want from the others, then delete the redundant record(s) from their detail view. Once a
+          group has a single record left, run "Rebuild search keys" again — the survivor is
+          normalized automatically and this list empties.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {truncated && (
+          <p className="text-xs text-muted-foreground" data-testid="text-duplicates-truncated">
+            The list was trimmed to keep this page responsive — resolve the groups shown, then
+            re-run the health check to see the rest.
+          </p>
+        )}
+        <div className="space-y-3">
+          {visible.map((group, i) => (
+            <div
+              key={group.canonical}
+              className="rounded-md border p-3 space-y-2"
+              data-testid={`duplicate-group-${clampedPage * GROUPS_PER_PAGE + i}`}
+            >
+              <div className="text-xs text-muted-foreground">
+                Canonical form:{" "}
+                <span className="font-mono break-all text-foreground">{group.canonical}</span>
+              </div>
+              <div className="space-y-1">
+                {group.rows.map((row) => (
+                  <button
+                    key={row.id}
+                    type="button"
+                    onClick={() => void openRecordPreview(row.id)}
+                    className="w-full flex items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-left text-sm hover-elevate"
+                    data-testid={`button-open-duplicate-${row.id}`}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="font-mono text-xs break-all">{row.inputString}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        #{row.id} · {row.type}
+                        {row.label ? ` · ${row.label}` : ""}
+                        {row.nonCanonical ? " · stored non-canonically" : ""}
+                      </span>
+                    </span>
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  </button>
+                ))}
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setResolvingGroup(group)}
+                  data-testid={`button-resolve-duplicate-${clampedPage * GROUPS_PER_PAGE + i}`}
+                >
+                  Resolve…
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+        {resolvingGroup && (
+          <ResolveDuplicateDialog
+            group={resolvingGroup}
+            onClose={() => setResolvingGroup(null)}
+            onResolved={(canonical) => {
+              setResolvedCanonicals((prev) => {
+                const next = new Set(prev);
+                next.add(canonical);
+                return next;
+              });
+              setResolvingGroup(null);
+            }}
+          />
+        )}
+        {pageCount > 1 && (
+          <div className="flex items-center justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={clampedPage === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              data-testid="button-duplicates-prev"
+            >
+              Previous
+            </Button>
+            <span className="text-xs text-muted-foreground" data-testid="text-duplicates-page">
+              Page {clampedPage + 1} of {pageCount} · {groups.length.toLocaleString()} groups
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={clampedPage >= pageCount - 1}
+              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+              data-testid="button-duplicates-next"
+            >
+              Next
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Guided keep-and-delete flow for one duplicate identifier group (Task #1880).
+ *
+ * Still user-driven end to end — the "report, never merge" rule only forbids
+ * AUTOMATIC merging. The user explicitly picks the record to keep, sees exactly
+ * which labels/tags/notes the other record(s) carry (i.e. what would be lost —
+ * nothing is copied over automatically), and confirms before the redundant
+ * records are deleted through the normal CRUD layer (deleteRecord archives
+ * attachments recoverably, never destroys files). Afterwards the group is
+ * hidden and the user is prompted to re-run "Rebuild search keys" so the
+ * surviving record is normalized to its canonical form.
+ */
+function ResolveDuplicateDialog({
+  group,
+  onClose,
+  onResolved,
+}: {
+  group: CollisionGroup;
+  onClose: () => void;
+  onResolved: (canonical: string) => void;
+}) {
+  const { toast } = useToast();
+  const [records, setRecords] = useState<VaultRecord[] | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [keeperId, setKeeperId] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = await getRecordsByIds(group.rows.map((r) => r.id));
+        if (cancelled) return;
+        if (rows.length < 2) {
+          // Someone already deleted the redundant record(s) elsewhere (e.g. via
+          // the detail panel). Nothing left to resolve — report it stale.
+          setLoadError(true);
+          setRecords(rows);
+          return;
+        }
+        setRecords(rows);
+        setKeeperId(rows[0]?.id ?? null);
+      } catch {
+        if (!cancelled) setLoadError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [group]);
+
+  const keeper = records?.find((r) => r.id === keeperId);
+  const losers = records?.filter((r) => r.id !== keeperId) ?? [];
+
+  // Metadata the redundant record(s) carry, shown so the user can copy anything
+  // they care about BEFORE confirming. Values also present verbatim on the
+  // keeper are not "lost", so they are filtered out of the warning.
+  // NOTE: rows written by older code paths can lack `label`/`tags`/`notes`
+  // entirely (createRecord spreads the input as-is), so every field access
+  // here must tolerate undefined — this crashed in a real browser before.
+  function lostMetadata(loser: VaultRecord): { field: string; value: string }[] {
+    if (!keeper) return [];
+    const lost: { field: string; value: string }[] = [];
+    const loserLabel = (loser.label ?? "").trim();
+    if (loserLabel && loserLabel !== (keeper.label ?? "").trim()) {
+      lost.push({ field: "Label", value: loserLabel });
+    }
+    const keeperTags = new Set((keeper.tags ?? []).map((t) => t.toLowerCase()));
+    const missingTags = (loser.tags ?? []).filter((t) => !keeperTags.has(t.toLowerCase()));
+    if (missingTags.length > 0) {
+      lost.push({ field: "Tags", value: missingTags.join(", ") });
+    }
+    const loserNotes = (loser.notes ?? "").trim();
+    if (loserNotes && loserNotes !== (keeper.notes ?? "").trim()) {
+      lost.push({ field: "Notes", value: loserNotes });
+    }
+    return lost;
+  }
+
+  async function confirmDelete() {
+    if (!keeper || losers.length === 0 || deleting) return;
+    setDeleting(true);
+    try {
+      for (const loser of losers) {
+        if (loser.id === undefined) continue;
+        await deleteRecord(loser.id);
+      }
+      toast({
+        title: "Duplicate resolved",
+        description:
+          `Deleted ${losers.length === 1 ? "1 redundant record" : `${losers.length} redundant records`}. ` +
+          `Run "Rebuild search keys" to normalize the kept record's identifier.`,
+      });
+      onResolved(group.canonical);
+    } catch (err) {
+      setDeleting(false);
+      toast({
+        title: "Could not delete record",
+        description: err instanceof Error ? err.message : "Deletion failed — no records were merged.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !deleting && onClose()}>
+      <DialogContent className="max-w-lg" data-testid="dialog-resolve-duplicate">
+        <DialogHeader>
+          <DialogTitle>Resolve duplicate</DialogTitle>
+          <DialogDescription>
+            Pick the record to keep. The other record(s) will be deleted — nothing is merged
+            automatically, so copy over any metadata you want to keep first (their attachments stay
+            recoverable under Settings → Deleted Attachments).
+          </DialogDescription>
+        </DialogHeader>
+        {loadError ? (
+          <p className="text-sm text-muted-foreground" data-testid="text-resolve-load-error">
+            This group could not be loaded — it may already have been resolved. Re-run the health
+            check to refresh the list.
+          </p>
+        ) : !records ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading records…
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="text-xs text-muted-foreground">
+              Canonical form:{" "}
+              <span className="font-mono break-all text-foreground">{group.canonical}</span>
+            </div>
+            <RadioGroup
+              value={keeperId !== null ? String(keeperId) : undefined}
+              onValueChange={(v) => setKeeperId(Number(v))}
+              className="space-y-2"
+            >
+              {records.map((r) => (
+                <div key={r.id} className="flex items-start gap-2 rounded-md border p-2">
+                  <RadioGroupItem
+                    value={String(r.id)}
+                    id={`keeper-${r.id}`}
+                    data-testid={`radio-keeper-${r.id}`}
+                  />
+                  <Label htmlFor={`keeper-${r.id}`} className="min-w-0 flex-1 cursor-pointer font-normal">
+                    <span className="block font-mono text-xs break-all">{r.inputString}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      #{r.id} · {r.type}
+                      {(r.label ?? "").trim() ? ` · ${r.label}` : ""}
+                      {(r.tags ?? []).length > 0 ? ` · tags: ${(r.tags ?? []).join(", ")}` : ""}
+                      {(r.notes ?? "").trim() ? " · has notes" : ""}
+                    </span>
+                  </Label>
+                </div>
+              ))}
+            </RadioGroup>
+            {keeper && (
+              <div className="space-y-2">
+                {losers.some((l) => lostMetadata(l).length > 0) ? (
+                  <div
+                    className="rounded-md border border-destructive/50 p-2 space-y-2"
+                    data-testid="text-resolve-lost-metadata"
+                  >
+                    <p className="text-xs font-medium text-destructive">
+                      Metadata on the record(s) to be deleted that the kept record does not have:
+                    </p>
+                    {losers.map((l) =>
+                      lostMetadata(l).length > 0 ? (
+                        <div key={l.id} className="text-xs space-y-0.5">
+                          <p className="text-muted-foreground">#{l.id}:</p>
+                          {lostMetadata(l).map((m) => (
+                            <p key={m.field} className="break-all">
+                              <span className="text-muted-foreground">{m.field}: </span>
+                              {m.value}
+                            </p>
+                          ))}
+                        </div>
+                      ) : null,
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground" data-testid="text-resolve-no-loss">
+                    The record(s) to be deleted carry no labels, tags, or notes the kept record
+                    doesn't already have.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={onClose}
+            disabled={deleting}
+            data-testid="button-resolve-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => void confirmDelete()}
+            disabled={loadError || !keeper || losers.length === 0 || deleting}
+            data-testid="button-resolve-confirm"
+          >
+            {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Delete {losers.length === 1 ? "1 record" : `${losers.length} records`}, keep #
+            {keeper?.id ?? "—"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SamplesCard({ samples }: { samples: SampleRow[] }) {
+  return (
+    <Card data-testid="card-samples">
+      <CardHeader>
+        <CardTitle>First {samples.length} records (raw)</CardTitle>
+        <CardDescription>
+          The complete raw record exactly as stored in the database, untruncated. A "Locked" tag
+          means the real values are still encrypted and the fields are blank. A "Recovered · marker"
+          tag means the data was unlocked but a harmless leftover marker remains.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {samples.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic" data-testid="text-no-samples">
+            No records found.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {samples.map((s) => (
+              <div
+                key={String(s.id)}
+                className="rounded-md border p-3 space-y-1"
+                data-testid={`sample-row-${s.id}`}
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="font-mono text-xs text-muted-foreground">
+                    #{s.id} · {s.type}
+                  </span>
+                  {s.lockedUnreadable ? (
+                    <Badge variant="destructive" className="gap-1">
+                      <Lock className="h-3 w-3" />
+                      Locked
+                    </Badge>
+                  ) : s.hasMarker && !s.inputStringBlank ? (
+                    <Badge variant="outline" className="gap-1" data-testid={`badge-recovered-${s.id}`}>
+                      Recovered · marker
+                    </Badge>
+                  ) : null}
+                </div>
+                <pre
+                  className="mt-1 max-h-72 overflow-auto rounded-md bg-muted/50 p-2 text-xs font-mono whitespace-pre-wrap break-all"
+                  data-testid={`sample-raw-${s.id}`}
+                >
+                  {formatRaw(s.raw)}
+                </pre>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TableCountsCard({ tableCounts }: { tableCounts: TableCount[] }) {
+  return (
+    <Card data-testid="card-table-counts">
+      <CardHeader>
+        <CardTitle>All tables</CardTitle>
+        <CardDescription>How many rows are stored in each part of your vault.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-1">
+          {tableCounts.map((t) => (
+            <div
+              key={t.name}
+              className="flex items-center justify-between gap-4 py-1"
+              data-testid={`table-count-${t.name}`}
+            >
+              <span className="text-sm font-mono">{t.name}</span>
+              {t.error ? (
+                <Badge variant="destructive" className="gap-1">
+                  <AlertTriangle className="h-3 w-3" />
+                  read error
+                </Badge>
+              ) : (
+                <span className="text-sm tabular-nums text-muted-foreground">
+                  {t.count.toLocaleString()}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MigrationStatusCard({ flags }: { flags: MigrationFlags }) {
+  return (
+    <Card data-testid="card-migration-status">
+      <CardHeader>
+        <CardTitle>Migration status</CardTitle>
+        <CardDescription>
+          Whether the one-time data unlock and search-index repair have finished.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="flex items-center justify-between gap-4 py-1.5">
+          <span className="text-sm text-muted-foreground">Data unlock complete</span>
+          {flags.legacyDecryptComplete ? (
+            <Badge variant="secondary" className="gap-1" data-testid="badge-decrypt-complete">
+              <CheckCircle2 className="h-3 w-3" />
+              yes
+            </Badge>
+          ) : (
+            <Badge variant="destructive" className="gap-1" data-testid="badge-decrypt-incomplete">
+              <XCircle className="h-3 w-3" />
+              not finished
+            </Badge>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-4 py-1.5">
+          <span className="text-sm text-muted-foreground">Search index repaired</span>
+          {flags.inputStringLowerRepaired ? (
+            <Badge variant="secondary" className="gap-1" data-testid="badge-search-repaired">
+              <CheckCircle2 className="h-3 w-3" />
+              yes
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="gap-1" data-testid="badge-search-not-repaired">
+              not yet
+            </Badge>
+          )}
+        </div>
+        <div className="flex items-start justify-between gap-4 py-1.5">
+          <span className="text-sm text-muted-foreground shrink-0">Tables already unlocked</span>
+          <span className="text-sm text-right break-words" data-testid="text-completed-tables">
+            {flags.completedTables.length > 0 ? flags.completedTables.join(", ") : "none"}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Balance Integrity check (Task #374). Unlike the rest of this page, the *check*
+// never modifies vault data — it samples (or, in "Check all addresses" mode,
+// fully scans) synced address records and compares each one's cached balance
+// against a value freshly computed from its participant rows (via
+// detectStaleCachedBalances). The only thing it writes is a separate, local
+// IndexedDB scratch store (see stale-balance-report-store.ts) holding the
+// streamed stale-address report so the full set need not live in memory; the
+// vault itself is untouched, and the scratch store is cleared on each run and on
+// unmount. The check is cancellable. The optional "Recompute" action is the one
+// explicit, user-initiated write to vault data on this page: it rebuilds the
+// stale caches and then re-runs the check to confirm.
+type BalanceCheckState =
+  | { status: "idle" }
+  | { status: "checking"; sampled: number; total?: number; checkAll: boolean }
+  | { status: "done"; result: StaleBalanceCheckResult }
+  | { status: "recomputing"; processed: number; total: number }
+  | { status: "error"; message: string };
+
+function formatSats(sats: number): string {
+  return sats.toLocaleString() + " sats";
+}
+
+// Virtualized list of the specific addresses whose cached balance disagreed with
+// a fresh recompute. Each row shows the cached vs. computed balance side by side
+// and links to that address record on the Records page.
+//
+// The full stale set lives in a local IndexedDB scratch store (see
+// stale-balance-report-store.ts), NOT in memory. This component only ever holds
+// the rows for the windows the user has actually scrolled into view, so it stays
+// bounded even when a full-table scan finds hundreds of thousands of stale
+// addresses. Windows are fetched on demand and cached by row index.
+const STALE_ROW_HEIGHT = 56;
+const STALE_WINDOW_SIZE = 100;
+
+export function StaleAddressList({
+  count,
+  selectedIds,
+  onToggleRow,
+  onSetManySelected,
+}: {
+  count: number;
+  selectedIds: Set<number>;
+  onToggleRow: (recordId: number) => void;
+  onSetManySelected: (recordIds: number[], select: boolean) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  // Shared windowed loader: rows keyed by absolute index, fetched in
+  // 100-row windows from the scratch store; a count reset clears the cache.
+  const { rowCacheRef, setRange, cacheVersion } = useWindowedRows<StaleAddressDetail>(
+    count,
+    getStaleReportWindow,
+    STALE_WINDOW_SIZE,
+  );
+
+  const virtualizer = useVirtualizer({
+    count,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => STALE_ROW_HEIGHT,
+    overscan: 12,
+  });
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const firstIndex = virtualItems.length ? virtualItems[0].index : 0;
+  const lastIndex = virtualItems.length ? virtualItems[virtualItems.length - 1].index : 0;
+
+  // Record ids of every row whose window has been loaded into the cache. The
+  // header "select all" checkbox acts on exactly these — the rows the user has
+  // actually scrolled into view — never the unloaded remainder. Reading the ref
+  // during render is safe because cacheVersion bumps re-render it after a load.
+  const loadedIds: number[] = [];
+  rowCacheRef.current.forEach((row) => loadedIds.push(row.recordId));
+  const allLoadedSelected = loadedIds.length > 0 && loadedIds.every((id) => selectedIds.has(id));
+  const someLoadedSelected = loadedIds.some((id) => selectedIds.has(id));
+  const headerChecked = allLoadedSelected ? true : someLoadedSelected ? "indeterminate" : false;
+
+  // Feed the visible range to the shared loader. setRange is stable;
+  // virtualItems identity changes per scroll frame, so key off the boundary
+  // indices instead. virtualItems.length must also be a dep: the pre-mount
+  // render (before parentRef attaches) has zero items and these indices
+  // default to 0, which is indistinguishable from a genuine single-item list
+  // starting at index 0 — without the length in the array, React sees
+  // identical deps across that transition and never re-runs the effect, so
+  // `range` stays null and the window never loads (reproduced with exactly
+  // one stale address).
+  useEffect(() => {
+    if (virtualItems.length === 0) return;
+    setRange({ first: firstIndex, last: lastIndex });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [virtualItems.length, firstIndex, lastIndex]);
+
+  return (
+    <div className="border rounded-md" data-testid="list-stale-addresses">
+      <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-3 px-3 py-2 bg-muted/50 border-b text-xs font-medium text-muted-foreground items-center">
+        <Checkbox
+          checked={headerChecked}
+          onCheckedChange={(v) => onSetManySelected(loadedIds, v === true)}
+          aria-label="Select all loaded addresses"
+          title="Select all loaded rows"
+          data-testid="checkbox-stale-select-all"
+        />
+        <span>Address</span>
+        <span className="text-right">Cached</span>
+        <span className="text-right">Computed</span>
+        <span className="text-right">View</span>
+      </div>
+      <div
+        ref={parentRef}
+        className="h-[260px] overflow-auto"
+        data-testid="scroll-stale-addresses"
+      >
+        <div
+          className="relative w-full"
+          style={{ height: `${virtualizer.getTotalSize()}px` }}
+          data-cache-version={cacheVersion}
+        >
+          {virtualItems.map((virtualRow) => {
+            const row = rowCacheRef.current.get(virtualRow.index);
+            if (!row) {
+              return (
+                <div
+                  key={`loading-${virtualRow.index}`}
+                  className="absolute left-0 right-0 flex items-center px-3 border-b last:border-b-0"
+                  style={{
+                    height: `${STALE_ROW_HEIGHT}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                  data-testid={`row-stale-loading-${virtualRow.index}`}
+                >
+                  <span className="text-xs text-muted-foreground">Loading…</span>
+                </div>
+              );
+            }
+            return (
+              <div
+                key={row.recordId}
+                className="absolute left-0 right-0 grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-3 px-3 border-b last:border-b-0"
+                style={{
+                  height: `${STALE_ROW_HEIGHT}px`,
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+                data-testid={`row-stale-address-${row.recordId}`}
+              >
+                <Checkbox
+                  checked={selectedIds.has(row.recordId)}
+                  onCheckedChange={() => onToggleRow(row.recordId)}
+                  aria-label={`Select ${row.address}`}
+                  data-testid={`checkbox-stale-${row.recordId}`}
+                />
+                <span
+                  className="font-mono text-xs truncate"
+                  title={row.address}
+                  data-testid={`text-stale-address-${row.recordId}`}
+                >
+                  {row.address}
+                </span>
+                <span
+                  className="text-right text-xs font-mono tabular-nums text-muted-foreground"
+                  data-testid={`text-stale-cached-${row.recordId}`}
+                >
+                  {formatSats(row.cachedSats)}
+                </span>
+                <span
+                  className="text-right text-xs font-mono tabular-nums"
+                  data-testid={`text-stale-computed-${row.recordId}`}
+                >
+                  {formatSats(row.computedSats)}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  asChild
+                  data-testid={`link-stale-address-${row.recordId}`}
+                >
+                  <Link href={`/records?id=${row.recordId}`}>
+                    <ExternalLink className="h-4 w-4" />
+                    Open
+                  </Link>
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function BalanceIntegrityCard() {
+  const { toast } = useToast();
+  const [state, setState] = useState<BalanceCheckState>({ status: "idle" });
+  const abortRef = useRef<AbortController | null>(null);
+  // Stale rows stream batch-by-batch into a local IndexedDB scratch store rather
+  // than into a React array, so a full-table scan never holds the whole stale
+  // set in memory. `staleRowsCount` tracks how many have been spooled so the
+  // virtualized list (which reads windows back on demand) knows its row count.
+  const [staleRowsCount, setStaleRowsCount] = useState(0);
+  // Remembers whether the last run was a full-table scan, so the post-recompute
+  // re-check repeats the same scope the user chose.
+  const lastCheckAllRef = useRef(false);
+  // Record ids the user has ticked in the stale list, so they can rebuild just
+  // those addresses instead of every cached stat. Reset on each new check.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  const toggleRow = useCallback((recordId: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(recordId)) next.delete(recordId);
+      else next.add(recordId);
+      return next;
+    });
+  }, []);
+
+  const setManySelected = useCallback((recordIds: number[], select: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (select) recordIds.forEach((id) => next.add(id));
+      else recordIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, []);
+
+  // Drop the scratch store when this card unmounts so diagnostic data does not
+  // linger after the user leaves the page.
+  useEffect(() => {
+    return () => {
+      void clearStaleReport();
+    };
+  }, []);
+
+  const isChecking = state.status === "checking";
+  const isRecomputing = state.status === "recomputing";
+  const isBusy = isChecking || isRecomputing;
+
+  const runCheck = useCallback(async (checkAll: boolean) => {
+    abortRef.current?.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
+    lastCheckAllRef.current = checkAll;
+    await clearStaleReport();
+    setStaleRowsCount(0);
+    setSelectedIds(new Set());
+    setState({ status: "checking", sampled: 0, checkAll });
+    try {
+      const result = await detectStaleCachedBalances({
+        signal: abort.signal,
+        collectDetails: true,
+        checkAll,
+        // Awaited inside the scan: each batch is persisted before the next is
+        // gathered, giving backpressure and keeping peak memory bounded.
+        onStaleBatch: async (batch) => {
+          await appendStaleReportRows(batch);
+          setStaleRowsCount((c) => c + batch.length);
+        },
+        onProgress: (sampled, total) => setState({ status: "checking", sampled, total, checkAll }),
+      });
+      if (abort.signal.aborted) {
+        setState({ status: "idle" });
+        return;
+      }
+      setState({ status: "done", result });
+    } catch (err) {
+      if (abort.signal.aborted) {
+        setState({ status: "idle" });
+        return;
+      }
+      setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  }, []);
+
+  // Rebuild cached stats and re-run the check. With no `recordIds` this rebuilds
+  // every address (the original "Recompute"); with `recordIds` it rebuilds only
+  // the rows the user picked from the stale list. Both share the same progress
+  // and cancellation handling.
+  const runRecompute = useCallback(async (recordIds?: number[]) => {
+    abortRef.current?.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
+    setState({ status: "recomputing", processed: 0, total: 0 });
+
+    // ── Recompute pass ────────────────────────────────────────────────────────
+    // recomputeAddressStats returns { cancelled: true } when the signal is
+    // aborted (user clicked Cancel) — it never *throws* for a cancellation.
+    // Any throw here is therefore a genuine mid-rebuild error and must surface
+    // the error banner, not silently reset to idle.
+    let recomputeResult: { updated: number; cancelled: boolean };
+    try {
+      recomputeResult = await recomputeAddressStats({
+        origin: "user",
+        signal: abort.signal,
+        ...(recordIds && recordIds.length > 0 ? { recordIds } : {}),
+        onProgress: ({ processed, total }) => setState({ status: "recomputing", processed, total }),
+      });
+    } catch (err) {
+      // If the user cancelled while recomputeAddressStats was running, it may
+      // reject instead of returning { cancelled: true }. Treat an aborted
+      // signal as a clean cancellation, not an error.
+      if (abort.signal.aborted) {
+        setState({ status: "idle" });
+        return;
+      }
+      setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+
+    if (abort.signal.aborted || recomputeResult?.cancelled) {
+      setState({ status: "idle" });
+      return;
+    }
+
+    // ── Post-recompute re-check ───────────────────────────────────────────────
+    // Re-run the read-only check so the user sees the now-corrected count at
+    // the same scope (sample vs. full-table) as the original run. runCheck
+    // handles its own internal errors, but wrap it as a safety net so that any
+    // unexpected throw (e.g. the stale-report store is unavailable) surfaces the
+    // error banner rather than propagating unhandled or silently resetting to idle.
+    try {
+      await runCheck(lastCheckAllRef.current);
+    } catch (err) {
+      setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  }, [runCheck]);
+
+  const recompute = useCallback(() => runRecompute(), [runRecompute]);
+  const recomputeSelected = useCallback(
+    () => runRecompute(Array.from(selectedIds)),
+    [runRecompute, selectedIds],
+  );
+
+  const cancel = useCallback(() => {
+    abortRef.current?.abort();
+    setState({ status: "idle" });
+  }, []);
+
+  // Streamed export of the full stale-address report (CSV/JSON). Reads the rows
+  // back from the local scratch store window-by-window so even a very large set
+  // never lives in a single in-memory array; stays fully offline.
+  const [exporting, setExporting] = useState<null | "csv" | "json">(null);
+
+  const exportReport = useCallback(async (format: "csv" | "json") => {
+    setExporting(format);
+    try {
+      const { blob, rowCount } = await exportStaleReport(format);
+      if (rowCount === 0) return;
+      const url = URL.createObjectURL(blob);
+      try {
+        const link = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 10);
+        link.href = url;
+        link.download = `stale-addresses-${stamp}.${format}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      toast({
+        title: "Export complete",
+        description: `Exported ${rowCount.toLocaleString()} stale ${
+          rowCount === 1 ? "address" : "addresses"
+        }.`,
+      });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Export failed",
+        description:
+          err instanceof Error ? err.message : "Could not export the stale-address report.",
+      });
+    } finally {
+      setExporting(null);
+    }
+  }, [toast]);
+
+  const hasStale = state.status === "done" && state.result.staleCount > 0;
+  const allGood = state.status === "done" && state.result.staleCount === 0;
+
+  return (
+    <Card data-testid="card-balance-integrity">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Scale className="h-5 w-5" />
+          Balance integrity
+        </CardTitle>
+        <CardDescription>
+          A read-only check that compares each synced address's cached balance against a value
+          freshly recomputed from its transaction rows. "Run balance check" samples up to 2,000
+          synced addresses for a quick read; "Check all addresses" scans every synced address (slower
+          on large vaults). Neither changes anything — use the optional Recompute button to fix any
+          that disagree.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button onClick={() => runCheck(false)} disabled={isBusy} data-testid="button-run-balance-check">
+            {isChecking && !state.checkAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {isChecking && !state.checkAll ? "Checking…" : "Run balance check"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => runCheck(true)}
+            disabled={isBusy}
+            data-testid="button-check-all-balances"
+          >
+            {isChecking && state.checkAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+            {isChecking && state.checkAll ? "Checking all…" : "Check all addresses"}
+          </Button>
+          {hasStale && (
+            <Button
+              variant="outline"
+              onClick={recompute}
+              disabled={isBusy}
+              data-testid="button-recompute-balances"
+            >
+              {isRecomputing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {isRecomputing ? "Recomputing…" : "Recompute"}
+            </Button>
+          )}
+          {hasStale && selectedIds.size > 0 && (
+            <Button
+              variant="outline"
+              onClick={recomputeSelected}
+              disabled={isBusy}
+              data-testid="button-recompute-selected"
+            >
+              {isRecomputing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {isRecomputing
+                ? "Recomputing…"
+                : `Recompute selected (${selectedIds.size.toLocaleString()})`}
+            </Button>
+          )}
+          {hasStale && selectedIds.size > 0 && (
+            <Button
+              variant="ghost"
+              onClick={() => setSelectedIds(new Set())}
+              data-testid="button-clear-selection"
+            >
+              <XCircle className="h-4 w-4" />
+              {`Clear selection (${selectedIds.size.toLocaleString()})`}
+            </Button>
+          )}
+          {isBusy && (
+            <Button
+              variant="ghost"
+              onClick={cancel}
+              data-testid="button-cancel-balance-check"
+            >
+              <Ban className="h-4 w-4" />
+              Cancel
+            </Button>
+          )}
+        </div>
+
+        {state.status === "idle" && (
+          <p className="text-sm text-muted-foreground" data-testid="text-balance-idle">
+            Click "Run balance check" to start. The check is safe to cancel at any time.
+          </p>
+        )}
+
+        {state.status === "checking" && (
+          <p className="text-sm text-muted-foreground" data-testid="text-balance-progress">
+            {state.checkAll
+              ? `Checking all addresses… ${state.sampled.toLocaleString()}${
+                  state.total != null ? ` of ${state.total.toLocaleString()}` : ""
+                } scanned so far.`
+              : `Checking… ${state.sampled.toLocaleString()} addresses sampled so far.`}
+          </p>
+        )}
+
+        {state.status === "recomputing" && (
+          <p className="text-sm text-muted-foreground" data-testid="text-balance-recompute-progress">
+            Recomputing balances… {state.processed.toLocaleString()}
+            {state.total > 0 ? ` of ${state.total.toLocaleString()}` : ""} addresses.
+          </p>
+        )}
+
+        {state.status === "error" && (
+          <div
+            className="rounded-md border border-destructive/40 bg-destructive/10 p-3 flex items-start gap-3"
+            data-testid="banner-balance-error"
+          >
+            <XCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+            <div className="space-y-2 flex-1">
+              <div className="text-sm text-destructive">{state.message}</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => runCheck(lastCheckAllRef.current)}
+                  disabled={isBusy}
+                  data-testid="button-retry-balance-check"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setState({ status: "idle" })}
+                  disabled={isBusy}
+                  data-testid="button-dismiss-balance-error"
+                >
+                  <XCircle className="h-4 w-4" />
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {state.status === "done" && (
+          <div
+            className={`rounded-md border p-3 flex items-start gap-3 ${
+              hasStale
+                ? "border-yellow-600/40 bg-yellow-600/10 dark:border-yellow-400/40 dark:bg-yellow-400/10"
+                : "border-green-600/40 bg-green-600/10 dark:border-green-400/40 dark:bg-green-400/10"
+            }`}
+            data-testid="banner-balance-result"
+          >
+            {hasStale ? (
+              <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
+            ) : (
+              <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5 shrink-0" />
+            )}
+            <div className="space-y-1">
+              <div className="font-medium" data-testid="text-balance-verdict">
+                {hasStale
+                  ? `${state.result.staleCount.toLocaleString()} of ${state.result.sampled.toLocaleString()} ${
+                      state.result.checkedAll ? "synced" : "sampled"
+                    } addresses have a stale cached balance.`
+                  : `All ${state.result.sampled.toLocaleString()} ${
+                      state.result.checkedAll ? "synced" : "sampled"
+                    } addresses have up-to-date cached balances.`}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {hasStale
+                  ? 'These addresses have a cached balance that differs from a fresh recompute. Click "Recompute" above to rebuild them from your local transaction data.'
+                  : state.result.sampled === 0
+                    ? "No synced addresses were found to check."
+                    : "Cached balances match the values computed from your transaction rows."}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {state.status === "done" && hasStale && staleRowsCount > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-end justify-between gap-2 flex-wrap">
+              <p className="text-sm text-muted-foreground" data-testid="text-stale-list-caption">
+                {staleRowsCount < state.result.staleCount
+                  ? `Showing the first ${staleRowsCount.toLocaleString()} of ${state.result.staleCount.toLocaleString()} stale addresses. Tick rows to rebuild just those with "Recompute selected", or open a record on the Records page.`
+                  : 'Tick rows to rebuild just those with "Recompute selected", or open a record on the Records page.'}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => exportReport("csv")}
+                  disabled={exporting !== null}
+                  data-testid="button-export-stale-csv"
+                >
+                  {exporting === "csv" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  {exporting === "csv" ? "Exporting…" : "Export CSV"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => exportReport("json")}
+                  disabled={exporting !== null}
+                  data-testid="button-export-stale-json"
+                >
+                  {exporting === "json" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  {exporting === "json" ? "Exporting…" : "Export JSON"}
+                </Button>
+              </div>
+            </div>
+            <StaleAddressList
+              count={staleRowsCount}
+              selectedIds={selectedIds}
+              onToggleRow={toggleRow}
+              onSetManySelected={setManySelected}
+            />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

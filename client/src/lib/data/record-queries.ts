@@ -53,11 +53,26 @@ export async function getRecordParticipantsByAddresses(addresses: string[], sign
   if (addresses.length === 0) return [];
   const results: TransactionParticipant[] = [];
   const batchSize = 500;
+  const pageSize = 1000;
   for (let i = 0; i < addresses.length; i += batchSize) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const batch = addresses.slice(i, i + batchSize);
-    const raw = await participantRows('participants.byAddresses', batch, batch.length);
-    results.push(...raw);
+    let afterId = 0;
+    while (true) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const page = await participantRows(
+        'participants.byAddressesAfterId',
+        { addresses: batch, afterId },
+        pageSize,
+      );
+      results.push(...page);
+      if (page.length < pageSize) break;
+      const lastId = page[page.length - 1]?.id;
+      if (lastId === undefined || lastId <= afterId) {
+        throw new Error("Participant address query did not advance");
+      }
+      afterId = lastId;
+    }
     if (i + batchSize < addresses.length) {
       await new Promise(r => setTimeout(r, 0));
     }

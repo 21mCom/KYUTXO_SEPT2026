@@ -56,6 +56,28 @@ vi.mock("@/components/ui/select", async () => {
   };
 });
 
+vi.mock("@/components/ui/multi-select-combobox", async () => {
+  const React = await import("react");
+  return {
+    MultiSelectCombobox: ({ values, onChange, options, testId }: any) =>
+      React.createElement(
+        "select",
+        {
+          "data-testid": testId,
+          value: values[0] ?? "",
+          onChange: (event: any) =>
+            onChange(event.target.value ? [event.target.value] : []),
+        },
+        [
+          React.createElement("option", { key: "all", value: "" }, "All Owners"),
+          ...options.map((option: string) =>
+            React.createElement("option", { key: option, value: option }, option),
+          ),
+        ],
+      ),
+  };
+});
+
 // One owner/wallet pair carries HTML-special characters so we can prove the
 // printable scope line escapes them (see the escaping test below).
 const SPECIAL_OWNER = `A & <B>`;

@@ -1,0 +1,303 @@
+// @vitest-environment jsdom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { BackupScheduleSettings } from "@/lib/db-types";
+
+const mocks = vi.hoisted(() => ({
+  getSettings: vi.fn(),
+  mutateSettings: vi.fn(),
+  cancelActiveScheduledBackup: vi.fn(),
+  chooseBackupFolder: vi.fn(),
+  toast: vi.fn(),
+}));
+
+vi.mock("@/lib/electron", () => ({
+  getElectronAPISafe: () => ({
+    chooseBackupFolder: mocks.chooseBackupFolder,
+  }),
+  isElectron: () => true,
+}));
+
+vi.mock("@/lib/data/settings-crud", () => ({
+  getSettings: mocks.getSettings,
+  mutateSettings: mocks.mutateSettings,
+}));
+
+vi.mock("@/lib/backup/scheduled", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/backup/scheduled")>();
+  return {
+    ...actual,
+    cancelActiveScheduledBackup: mocks.cancelActiveScheduledBackup,
+  };
+});
+
+vi.mock("@/hooks/use-toast", () => ({
+  useToast: () => ({ toast: mocks.toast, dismiss: vi.fn(), toasts: [] }),
+}));
+
+const { BackupScheduleSection } = await import("./backup-schedule-section");
+
+const DESTINATION = {
+  token: "a".repeat(32),
+  label: "Primary drive",
+  path: "/backups/primary",
+};
+const RETAINED_DESTINATION = {
+  token: "b".repeat(32),
+  label: "Secondary drive",
+  path: "/backups/secondary",
+};
+
+const configuredSchedule: BackupScheduleSettings = {
+  enabled: true,
+  cadenceDays: 7,
+  retentionCount: 5,
+  promptBehavior: "automatic",
+  compact: false,
+  encrypted: false,
+  destinations: [DESTINATION, RETAINED_DESTINATION],
+};
+
+beforeEach(() => {
+  mocks.getSettings.mockReset().mockResolvedValue({
+    id: "default",
+    backupSchedule: configuredSchedule,
+  });
+  mocks.mutateSettings.mockReset();
+  mocks.cancelActiveScheduledBackup.mockReset();
+  mocks.chooseBackupFolder.mockReset();
+  mocks.toast.mockReset();
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+async function renderConfiguredSchedule() {
+  render(<BackupScheduleSection />);
+  await screen.findByText(DESTINATION.path);
+}
+
+function expectScheduleControlsDisabled(disabled: boolean) {
+  for (const control of [
+    screen.getByTestId("switch-scheduled-backups"),
+    screen.getByRole("button", { name: `Remove ${DESTINATION.label}` }),
+    screen.getByTestId("select-backup-cadence"),
+    screen.getByTestId("input-backup-retention"),
+    screen.getByTestId("select-backup-prompt"),
+    screen.getByTestId("switch-scheduled-compact"),
+    screen.getByTestId("switch-scheduled-encrypted"),
+    screen.getByTestId("button-save-backup-schedule"),
+  ]) {
+    expect((control as HTMLButtonElement | HTMLInputElement).disabled).toBe(disabled);
+  }
+}
+
+function rapidlyActivateSaveTwice() {
+  const button = screen.getByTestId("button-save-backup-schedule");
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+describe("backup destination cancellation", () => {
+  it("ignores a folder picker opened before Save when it resolves during or just after persistence", async () => {
+    let finishPicker!: (value: {
+      canceled: false;
+      success: true;
+      token: string;
+      label: string;
+      path: string;
+    }) => void;
+    let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
+    mocks.chooseBackupFolder.mockImplementation(() => new Promise((resolve) => {
+      finishPicker = resolve;
+    }));
+    const oneDestinationSchedule = {
+      ...configuredSchedule,
+      destinations: [DESTINATION],
+    };
+    mocks.getSettings.mockResolvedValue({
+      id: "default",
+      backupSchedule: oneDestinationSchedule,
+    });
+    mocks.mutateSettings.mockImplementation(() => new Promise((resolve) => {
+      finishSave = resolve;
+    }));
+
+    await renderConfiguredSchedule();
+    fireEvent.click(screen.getByTestId("button-add-backup-folder"));
+    expect(mocks.chooseBackupFolder).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByTestId("input-backup-retention"), { target: { value: "12" } });
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+    await waitFor(() => expectScheduleControlsDisabled(true));
+
+    const savedSchedule = { ...oneDestinationSchedule, retentionCount: 12 };
+    finishSave({ backupSchedule: savedSchedule });
+    await waitFor(() => expectScheduleControlsDisabled(false));
+
+    finishPicker({
+      canceled: false,
+      success: true,
+      token: "c".repeat(32),
+      label: "Late drive",
+      path: "/backups/late",
+    });
+    await act(async () => {});
+
+    expect(screen.queryByText("/backups/late")).toBeNull();
+    expect(screen.getByText(DESTINATION.path)).toBeTruthy();
+    expect((screen.getByTestId("input-backup-retention") as HTMLInputElement).value).toBe("12");
+  });
+
+  it("prevents schedule edits while a successful write is pending and shows the persisted result", async () => {
+    let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
+    const changedSchedule = { ...configuredSchedule, retentionCount: 12 };
+    mocks.mutateSettings.mockImplementation(() => new Promise((resolve) => {
+      finishSave = resolve;
+    }));
+
+    await renderConfiguredSchedule();
+    fireEvent.change(screen.getByTestId("input-backup-retention"), { target: { value: "12" } });
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+
+    await waitFor(() => expectScheduleControlsDisabled(true));
+
+    finishSave({ backupSchedule: changedSchedule });
+
+    await waitFor(() => expectScheduleControlsDisabled(false));
+    expect((screen.getByTestId("input-backup-retention") as HTMLInputElement).value).toBe("12");
+  });
+
+  it("prevents schedule edits while a failed write is pending and preserves the unsaved form", async () => {
+    let failSave!: (error: Error) => void;
+    mocks.mutateSettings.mockImplementation(() => new Promise((_resolve, reject) => {
+      failSave = reject;
+    }));
+
+    await renderConfiguredSchedule();
+    fireEvent.change(screen.getByTestId("input-backup-retention"), { target: { value: "12" } });
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+
+    await waitFor(() => expectScheduleControlsDisabled(true));
+
+    failSave(new Error("settings write failed"));
+
+    await waitFor(() => expectScheduleControlsDisabled(false));
+    expect((screen.getByTestId("input-backup-retention") as HTMLInputElement).value).toBe("12");
+  });
+
+  it("ignores a repeated Save activation while persistence is pending, then cancels each removed active backup exactly once", async () => {
+    let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
+    const saveHeld = new Promise<{ backupSchedule: BackupScheduleSettings }>((resolve) => {
+      finishSave = resolve;
+    });
+
+    mocks.mutateSettings.mockImplementation(async (_id, updater) => {
+      const update = updater({ backupSchedule: configuredSchedule });
+      const backupSchedule = update.backupSchedule as BackupScheduleSettings;
+      return saveHeld.then(() => ({ backupSchedule }));
+    });
+
+    await renderConfiguredSchedule();
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${DESTINATION.label}` }));
+
+    expect(screen.queryByText(DESTINATION.path)).toBeNull();
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+    expect(mocks.mutateSettings).not.toHaveBeenCalled();
+
+    rapidlyActivateSaveTwice();
+
+    await waitFor(() => expect(mocks.mutateSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+
+    finishSave({
+      backupSchedule: { ...configuredSchedule, destinations: [RETAINED_DESTINATION] },
+    });
+
+    await waitFor(() => {
+      expect(mocks.cancelActiveScheduledBackup).toHaveBeenCalledTimes(1);
+      expect(mocks.cancelActiveScheduledBackup).toHaveBeenCalledWith(DESTINATION.token);
+    });
+  });
+
+  it("ignores a repeated Save activation while failed persistence is pending and cancels none", async () => {
+    let failSave!: (error: Error) => void;
+    const saveHeld = new Promise<never>((_resolve, reject) => {
+      failSave = reject;
+    });
+    mocks.mutateSettings.mockImplementation(async (_id, updater) => {
+      updater({ backupSchedule: configuredSchedule });
+      return saveHeld;
+    });
+
+    await renderConfiguredSchedule();
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${DESTINATION.label}` }));
+    rapidlyActivateSaveTwice();
+
+    await waitFor(() => expect(mocks.mutateSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+
+    failSave(new Error("settings write failed"));
+    await waitFor(() => expect(screen.getByTestId("button-save-backup-schedule").textContent).toBe("Save backup schedule"));
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+  });
+
+  it("cancels each active backup exactly once after disabling and saving removal of every destination", async () => {
+    let finishSave!: (value: { backupSchedule: BackupScheduleSettings }) => void;
+    const disabledSchedule = { ...configuredSchedule, enabled: false, destinations: [] };
+    const saveHeld = new Promise<{ backupSchedule: BackupScheduleSettings }>((resolve) => {
+      finishSave = resolve;
+    });
+
+    mocks.mutateSettings.mockImplementation(async (_id, updater) => {
+      const update = updater({ backupSchedule: configuredSchedule });
+      expect(update.backupSchedule).toEqual(disabledSchedule);
+      expect(updater({ backupSchedule: configuredSchedule }).backupSchedule).toEqual(disabledSchedule);
+      return saveHeld;
+    });
+
+    await renderConfiguredSchedule();
+    fireEvent.click(screen.getByTestId("switch-scheduled-backups"));
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${DESTINATION.label}` }));
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${RETAINED_DESTINATION.label}` }));
+
+    expect(screen.getByText("No folder selected.")).toBeTruthy();
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+    expect(mocks.mutateSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+
+    await waitFor(() => expect(mocks.mutateSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+
+    finishSave({ backupSchedule: disabledSchedule });
+
+    await waitFor(() => expect(mocks.cancelActiveScheduledBackup).toHaveBeenCalledTimes(2));
+    expect(mocks.cancelActiveScheduledBackup.mock.calls).toEqual([
+      [DESTINATION.token],
+      [RETAINED_DESTINATION.token],
+    ]);
+  });
+
+  it("cancels neither active backup when saving disabled removal of every destination fails", async () => {
+    const disabledSchedule = { ...configuredSchedule, enabled: false, destinations: [] };
+    mocks.mutateSettings.mockImplementation(async (_id, updater) => {
+      const update = updater({ backupSchedule: configuredSchedule });
+      expect(update.backupSchedule).toEqual(disabledSchedule);
+      throw new Error("settings write failed");
+    });
+
+    await renderConfiguredSchedule();
+    fireEvent.click(screen.getByTestId("switch-scheduled-backups"));
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${DESTINATION.label}` }));
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${RETAINED_DESTINATION.label}` }));
+    fireEvent.click(screen.getByTestId("button-save-backup-schedule"));
+
+    await waitFor(() => expect(mocks.mutateSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.cancelActiveScheduledBackup).not.toHaveBeenCalled();
+  });
+});

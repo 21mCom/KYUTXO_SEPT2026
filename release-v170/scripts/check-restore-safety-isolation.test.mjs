@@ -1,0 +1,646 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const guard = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'check-restore-safety-isolation.js',
+);
+
+function validReplit() {
+  return `
+[[workflows.workflow]]
+name = "Project"
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "restore-safety-isolation-guard"
+
+[[workflows.workflow]]
+name = "encrypted-backup-restore-safety-browser-check"
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-encrypted-backup-restore-safety-browser.mjs"
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "restore-safety-isolation-guard"
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-stable-backup-fixture-privacy.mjs && node scripts/check-restore-safety-isolation.js && node --test scripts/check-restore-safety-isolation.test.mjs scripts/stable-backup-fixture.test.mjs"
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-encrypted-backup-restore-safety-browser-check"
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "KYUTXO_PACKAGED_RESTORE_SAFETY=1 node scripts/check-encrypted-backup-restore-safety-browser.mjs"
+[workflows.workflow.metadata]
+isValidation = true
+`;
+}
+
+function runFixture({
+  inbox = '// inbox-only journey\n',
+  focused = validFocusedProof(),
+  helpers = {},
+  replit = validReplit(),
+} = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'restore-isolation-'));
+  fs.mkdirSync(path.join(root, 'scripts'));
+  fs.writeFileSync(
+    path.join(root, 'scripts/check-transaction-inbox-saved-view-snooze-browser.mjs'),
+    inbox,
+  );
+  fs.writeFileSync(
+    path.join(root, 'scripts/check-encrypted-backup-restore-safety-browser.mjs'),
+    focused,
+  );
+  for (const [relative, source] of Object.entries(helpers)) {
+    const absolute = path.join(root, relative);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, source);
+  }
+  fs.writeFileSync(path.join(root, '.replit'), replit);
+  try {
+    return spawnSync(process.execPath, [guard], {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, CHECK_RESTORE_SAFETY_ROOT: root },
+      timeout: 5_000,
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function validFocusedProof() {
+  return `
+page.getByTestId('button-open-restore');
+page.getByTestId('input-restore-file');
+page.getByTestId('radio-replace');
+page.getByTestId('input-restore-password');
+page.getByTestId('button-continue-restore');
+page.getByTestId('restore-preferences-preview');
+page.getByTestId('button-confirm-restore');
+record(
+  'malformed-plaintext-non-destructive',
+  !malformedConfirmVisible &&
+    JSON.stringify(afterMalformed) === JSON.stringify(beforeMalformed),
+);
+record(
+  \`\${label}-wrong-password-non-destructive\`,
+  !previewVisible && JSON.stringify(afterWrong) === JSON.stringify(beforeWrong),
+);
+record(
+  \`\${label}-corrupt-ciphertext-non-destructive\`,
+  failureMessageVisible &&
+    !corruptPreviewVisible &&
+    JSON.stringify(afterCorrupt) === JSON.stringify(beforeWrong),
+);
+record(
+  \`\${label}-correct-password-retry\`,
+  verification.passed,
+  verification.detail,
+);
+proveWrongThenCorrect({ label: 'v3' });
+proveWrongThenCorrect({
+  label: 'legacy',
+  corruptBackupBuffer: corruptLegacyBackup,
+});
+readVerifiedStableBackupFixture();
+proveWrongThenCorrect({
+  label: 'stable-v1.1.24',
+  verifyReopen: (reopened) => verifyStableFixture(reopened),
+});
+const failed = steps.filter((step) => !step.passed);
+if (failed.length) {
+  throw new Error('focused proof failed');
+}
+`;
+}
+
+test('accepts an isolated inbox check and complete validation wiring', () => {
+  const result = runFixture();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OK/);
+});
+
+test('rejects required focused proof fragments that exist only in comments', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: focused.replace(fragment, `// ${fragment}`),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('rejects required focused proof fragments in a statically unreachable branch', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: focused.replace(fragment, `if (false) {\n  ${fragment}\n}`),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('rejects required focused proof fragments in an unused helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: focused.replace(
+      fragment,
+      `function deadRestoreProof() {\n  ${fragment}\n}`,
+    ),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('rejects required focused proof fragments in an unused arrow helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: focused.replace(
+      fragment,
+      `const deadRestoreProof = () => {\n  ${fragment}\n};`,
+    ),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('rejects required focused proof fragments in an imported but unused helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { deadRestoreProof } from './restore-helper.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export function deadRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('accepts required focused proof fragments reached through an imported helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helper.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('accepts required focused proof fragments reached through a default-imported helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import runRestoreProof from './restore-helper.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export default function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('accepts required focused proof fragments reached through a local barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects an imported but unused focused helper behind a local barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { deadRestoreProof } from './restore-helpers/index.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { deadRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function deadRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('accepts required focused proof fragments reached through an aliased named barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { proveRestore as runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function proveRestore(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects an imported but unused focused helper behind an aliased named barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { proveRestore as runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function proveRestore(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('accepts required focused proof fragments reached through a default-as-named barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { default as runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export default function proveRestore(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects an imported but unused focused helper behind a default-as-named barrel re-export', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { default as runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export default function proveRestore(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('accepts required focused proof fragments reached through multiple local barrels', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs':
+        "export { runRestoreProof } from './public.mjs';\n",
+      'scripts/restore-helpers/public.mjs':
+        "export { runRestoreProof } from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('export-star barrel chains preserve reached focused helpers', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/index.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs': [
+        "export * from './unrelated.mjs';",
+        "export * from './public.mjs';",
+      ].join('\n'),
+      'scripts/restore-helpers/unrelated.mjs': 'export function unrelated() {}\n',
+      'scripts/restore-helpers/public.mjs': "export * from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('export-star barrel chains preserve unused focused helpers', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { deadRestoreProof } from './restore-helpers/index.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/index.mjs': "export * from './public.mjs';\n",
+      'scripts/restore-helpers/public.mjs': "export * from './restore-proof.mjs';\n",
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function deadRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('cyclic export-star barrel chains terminate and resolve a reached focused helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import { runRestoreProof } from './restore-helpers/first.mjs';\nrunRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helpers/first.mjs': "export * from './second.mjs';\n",
+      'scripts/restore-helpers/second.mjs': [
+        "export * from './first.mjs';",
+        "export * from './restore-proof.mjs';",
+      ].join('\n'),
+      'scripts/restore-helpers/restore-proof.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('accepts required focused proof fragments reached through a namespace-imported helper', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import * as restoreHelpers from './restore-helper.mjs';\nrestoreHelpers.runRestoreProof(page);\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export function runRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects an imported but unused focused helper behind a namespace import', () => {
+  const focused = validFocusedProof();
+  const fragment = "page.getByTestId('button-open-restore');";
+  const result = runFixture({
+    focused: `import * as restoreHelpers from './restore-helper.mjs';\n${
+      focused.replace(fragment, '')
+    }`,
+    helpers: {
+      'scripts/restore-helper.mjs': [
+        'export function deadRestoreProof(page) {',
+        `  ${fragment}`,
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing its required restore selector button-open-restore/);
+});
+
+test('rejects backup imports and restore selectors in the inbox check', () => {
+  const result = runFixture({
+    inbox: [
+      "import JSZip from 'jszip';",
+      "await import('/src/lib/backup/export.ts');",
+      "page.getByTestId('input-restore-file');",
+    ].join('\n'),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /check-transaction-inbox-saved-view-snooze-browser\.mjs:1/);
+  assert.match(result.stderr, /check-transaction-inbox-saved-view-snooze-browser\.mjs:2/);
+  assert.match(result.stderr, /check-transaction-inbox-saved-view-snooze-browser\.mjs:3/);
+});
+
+test('accepts a clean local helper imported by the inbox check', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './inbox-helpers.mjs';\nawait openInbox();\n",
+    helpers: {
+      'scripts/inbox-helpers.mjs': 'export function openInbox() {}\n',
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OK/);
+});
+
+test('rejects restore coupling reached through transitive local helpers', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './inbox-helpers.mjs';\nawait openInbox();\n",
+    helpers: {
+      'scripts/inbox-helpers.mjs': "export { openInbox } from './journeys/open-inbox.js';\n",
+      'scripts/journeys/open-inbox.js': [
+        'export async function openInbox() {',
+        "  await import('../../client/src/lib/backup/export.ts');",
+        '}',
+      ].join('\n'),
+      'client/src/lib/backup/export.ts':
+        "export const openRestore = (page) => page.getByTestId('input-restore-file');\n",
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /scripts\/journeys\/open-inbox\.js:2/);
+  assert.match(result.stderr, /client\/src\/lib\/backup\/export\.ts:1/);
+});
+
+test('rejects restore coupling reached through an extensionless local import', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './inbox-helpers';\nawait openInbox();\n",
+    helpers: {
+      'scripts/inbox-helpers.ts': [
+        'export function openInbox(page) {',
+        "  return page.getByTestId('button-open-restore');",
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /scripts\/inbox-helpers\.ts:2/);
+});
+
+test('rejects restore coupling reached through a directory index import', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './inbox-helpers';\nawait openInbox();\n",
+    helpers: {
+      'scripts/inbox-helpers/index.tsx': [
+        'export function openInbox() {',
+        "  return 'backup journey';",
+        '}',
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /scripts\/inbox-helpers\/index\.tsx:2/);
+});
+
+test('cyclic local helper imports terminate and still reject restore coupling', () => {
+  const result = runFixture({
+    inbox: "import { openInbox } from './helpers/first';\nawait openInbox();\n",
+    helpers: {
+      'scripts/helpers/first.js': [
+        "import { second } from './second';",
+        'export function openInbox() { return second(); }',
+      ].join('\n'),
+      'scripts/helpers/second.js': [
+        "import { openInbox } from './first';",
+        "export function second() { return 'restore flow'; }",
+      ].join('\n'),
+    },
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /scripts\/helpers\/second\.js:2/);
+});
+
+test('rejects a focused restore check that is no longer validation', () => {
+  const result = runFixture({
+    replit: validReplit().replace(
+      /(\[\[workflows\.workflow\]\]\nname = "encrypted-backup-restore-safety-browser-check"[\s\S]*?)isValidation = true/,
+      '$1isValidation = false',
+    ),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /encrypted-backup-restore-safety-browser-check is no longer marked/);
+});
+
+test('rejects a guard that no longer runs the stable fixture privacy audit', () => {
+  const result = runFixture({
+    replit: validReplit().replace(
+      'node scripts/check-stable-backup-fixture-privacy.mjs && ',
+      '',
+    ),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /must run the fixture privacy audit, guard, and script tests/);
+});
+
+const requiredFocusedFragments = [
+  ['restore selector button-open-restore', "page.getByTestId('button-open-restore');"],
+  ['restore selector input-restore-file', "page.getByTestId('input-restore-file');"],
+  ['restore selector radio-replace', "page.getByTestId('radio-replace');"],
+  ['restore selector input-restore-password', "page.getByTestId('input-restore-password');"],
+  ['restore selector button-continue-restore', "page.getByTestId('button-continue-restore');"],
+  ['restore selector restore-preferences-preview', "page.getByTestId('restore-preferences-preview');"],
+  ['restore selector button-confirm-restore', "page.getByTestId('button-confirm-restore');"],
+  ['malformed plaintext non-destructive assertion', "'malformed-plaintext-non-destructive'"],
+  ['wrong-password non-destructive assertion', '`${label}-wrong-password-non-destructive`'],
+  ['corrupt-ciphertext non-destructive assertion', '`${label}-corrupt-ciphertext-non-destructive`'],
+  ['successful intact-backup retry assertion', '`${label}-correct-password-retry`'],
+  ['pinned stable-release checksum verification', 'readVerifiedStableBackupFixture();'],
+  ['pinned stable-release restore proof invocation', "label: 'stable-v1.1.24'"],
+  ['pinned stable-release reopen assertion', 'verifyReopen: (reopened)'],
+  ['v3 restore proof invocation', "label: 'v3'"],
+  ['legacy restore proof invocation', "label: 'legacy'"],
+  ['corrupt legacy ciphertext proof input', 'corruptBackupBuffer: corruptLegacyBackup'],
+  ['failed-step enforcement', 'const failed = steps.filter((step) => !step.passed);'],
+];
+
+for (const [description, fragment] of requiredFocusedFragments) {
+  test(`rejects a focused restore check missing its ${description}`, () => {
+    const focused = validFocusedProof();
+    assert.ok(focused.includes(fragment), `fixture is missing ${fragment}`);
+    const result = runFixture({ focused: focused.replace(fragment, '') });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, new RegExp(`missing its required ${description}`));
+  });
+}
+
+test('rejects a guard omitted from the normal validation set', () => {
+  const result = runFixture({
+    replit: validReplit().replace(
+      'args = "restore-safety-isolation-guard"',
+      'args = "some-other-check"',
+    ),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing from the normal Project validation set/);
+});
+
+test('the real repository passes the guard', () => {
+  const result = spawnSync(process.execPath, [guard], { encoding: 'utf8', timeout: 30_000 });
+  assert.equal(result.status, 0, result.stderr);
+});

@@ -1,0 +1,329 @@
+{
+  "totals": {
+    "records": 4495,
+    "transactions": 705,
+    "participants": 31600,
+    "combined": 5200,
+    "inRange": true
+  },
+  "fundTrail": {
+    "lineageRows": 742,
+    "custodySegments": 75,
+    "multiHopSegments": 21,
+    "deepOwnedSegments": 9,
+    "deepOwnedSegmentsMin": 5,
+    "timeSpanDays": 4348,
+    "pass": true
+  },
+  "entityScreening": {
+    "bundledEntitiesPresent": 11,
+    "demoEntities": 12,
+    "directOwnedContact": true,
+    "pass": true
+  },
+  "addressReuse": {
+    "maxReceiptsOnOwned": 64,
+    "pass": true
+  },
+  "dusted": {
+    "dustOutputToOwned": true,
+    "pass": true
+  },
+  "quantumRisk": {
+    "spentFromOwnedP2pkh": true,
+    "pass": true
+  },
+  "lightning": {
+    "p2wshOutputs": 25,
+    "pass": true
+  },
+  "vaults": {
+    "vaultRecords": 10,
+    "pass": true
+  },
+  "adversaryClustering": {
+    "ownedCoSpendTxs": 315,
+    "pass": true
+  },
+  "httpRequests": 433,
+  "highlights": {
+    "personas": [
+      {
+        "owner": "Avery Stone",
+        "walletName": "Glacier Cold Storage",
+        "addresses": [
+          {
+            "address": "13JQcJT6f1waCbDeaYozUyUtzutHtSFFn6",
+            "label": "Cold storage #1"
+          },
+          {
+            "address": "1JxUu8MBcBbKgo16uBBAuqzrnUgnEb4MdR",
+            "label": "Cold storage #2"
+          },
+          {
+            "address": "14f82ZcYBfgsj9j6pd8ps1Gt5XvRM7tZsa",
+            "label": "Cold storage #3"
+          },
+          {
+            "address": "1GiEk1wYLUocRLTC5u7WuS9U1MpyT6Nakx",
+            "label": "Internal transfer hop #4"
+          },
+          {
+            "address": "bc1qekndkf8hpjc9fltuut7j6xree3d7px5xgewknl",
+            "label": "Internal transfer hop #5"
+          },
+          {
+            "address": "bc1qlc9ef35hfkl6dal38wplkwwkkvqu0nvejr2txp",
+            "label": "Internal transfer hop #6"
+          },
+          {
+            "address": "bc1qwnmek7fex40lhaw03lkszmg6sk0fvkvkddxutc",
+            "label": "Internal transfer hop #7"
+          },
+          {
+            "address": "bc1qwdcgftjjmxmdw6h206706hleadg7hnsp0pndjt",
+            "label": "Internal transfer hop #8"
+          },
+          {
+            "address": "bc1qdzvdevf5me3tef0dcd0fep0kgnk9nla4w7uft3",
+            "label": "Internal transfer hop #9"
+          }
+        ]
+      },
+      {
+        "owner": "Blake Rivera",
+        "walletName": "Trading Hot Wallet",
+        "addresses": [
+          {
+            "address": "1KsCB7H72C3CYCEenBpuMe5BRBMDuHta6g",
+            "label": "Exchange withdrawal #1"
+          },
+          {
+            "address": "1P2gJuKorixxMZnAYHsXLj4kk2NPVrWk7x",
+            "label": "Exchange withdrawal #2"
+          },
+          {
+            "address": "1PGX1ZxMQEBNErjo1sfupBe8FLX4ynsMMw",
+            "label": "Exchange withdrawal #3"
+          },
+          {
+            "address": "196Xq73XBX9rZkxuvuWwoXPDPu9DjZ3CyU",
+            "label": "Exchange withdrawal #4"
+          },
+          {
+            "address": "bc1qxv8n4ttgvz9xhwawc2ckrvgs9cjpwhpn7c9j2h",
+            "label": "Exchange withdrawal #5"
+          },
+          {
+            "address": "1FgGikzH8f2PqCTxemp1aQbGtaWcxQkeLa",
+            "label": "Exchange withdrawal #6"
+          },
+          {
+            "address": "197LQ2fD8oXvr5nzwetZLNj7atX76qy9Ta",
+            "label": "Exchange withdrawal #7"
+          },
+          {
+            "address": "1NvXAMknsUraciZbRnvhahYTUX5DfE8mMe",
+            "label": "Exchange withdrawal #8"
+          },
+          {
+            "address": "163Dy91HiVGkd9yWQMGktMEaRYLv5C15Jt",
+            "label": "Exchange withdrawal #9"
+          },
+          {
+            "address": "1GqJVciE18Ubp3J8L4WdtmVJ43xqKL88Ar",
+            "label": "Exchange withdrawal #10"
+          },
+          {
+            "address": "1KvWfL2jofm4wmngcp2L8FQZYeHXnCnAMy",
+            "label": "Exchange withdrawal #11"
+          },
+          {
+            "address": "13otTdiKSgwG2uN5JNnM96eqwDzkbnJAVV",
+            "label": "Exchange withdrawal #12"
+          },
+          {
+            "address": "1GGipLMhpHvVhJQCtp6dPeJuSR1sx3okoj",
+            "label": "Exchange withdrawal #13"
+          },
+          {
+            "address": "1LTcouaqeUMQesJtrWp1G1cuK6bXHsj7q2",
+            "label": "Exchange withdrawal #14"
+          },
+          {
+            "address": "16LmxqAnoudmK6oE4NedJkcmsVVLShDuE3",
+            "label": "Exchange withdrawal #15"
+          },
+          {
+            "address": "1E5h4yDttgHtCuWn9ovS2LSXpsaecszPfR",
+            "label": "Exchange withdrawal #16"
+          },
+          {
+            "address": "1HQRxiq3nAoRCfPrMSp3UHpNG4rQRppXgA",
+            "label": "Exchange withdrawal #17"
+          },
+          {
+            "address": "15XFNHYgZg2kuwDNuv5c8FiNkucZANuyB2",
+            "label": "Exchange withdrawal #18"
+          },
+          {
+            "address": "15zhHecvkVWhzTudAUDuRQ8FmZwMCK3DTS",
+            "label": "Internal transfer hop #19"
+          },
+          {
+            "address": "16Z2CDtfuwAo27p8Rf7L7WFgFdRSQ36dAk",
+            "label": "Internal transfer hop #20"
+          },
+          {
+            "address": "1DdMdJMQ7F35WHwW7QYB9jbbPdZRZowjAT",
+            "label": "Internal transfer hop #21"
+          },
+          {
+            "address": "bc1qd3swfa9yr0rue373rdh6jsare2r0c3qqyf0l20",
+            "label": "Internal transfer hop #22"
+          },
+          {
+            "address": "bc1q790wdqzkjenfw7vwh85axahutmytjd02gr5r4a",
+            "label": "Internal transfer hop #23"
+          }
+        ]
+      },
+      {
+        "owner": "Casey Mora",
+        "walletName": "Shop Register",
+        "addresses": [
+          {
+            "address": "1Ez4aPHX1RBdPdoPmHQnRzHzVjix37Tv1S",
+            "label": "Shop payment address #1"
+          },
+          {
+            "address": "1NbNfVdLB3UAVcBDVc9K4RPoAMwDStVrpx",
+            "label": "Shop payment address #2"
+          },
+          {
+            "address": "bc1qshhr7ductvh9wk5n4sq6q47cvy3cnptjhw3y86",
+            "label": "Internal transfer hop #3"
+          },
+          {
+            "address": "bc1q0v986j2hmj74lk6chzp2n37j45f89xd7jalhdf",
+            "label": "Internal transfer hop #4"
+          }
+        ]
+      },
+      {
+        "owner": "Dana & Eli Family Trust",
+        "walletName": "Meridian Vault 2-of-3",
+        "addresses": [
+          {
+            "address": "3K1DNumpDvo7bHsrHi8pk3i2XsZUnBomFi",
+            "label": "Vault address #1"
+          },
+          {
+            "address": "32iTwCxykN8McvQJvVJZreAJxYAXyj9h3h",
+            "label": "Vault address #2"
+          },
+          {
+            "address": "3Hu4vWeZ4SKKCRjg6dxJ9jDfVzrbmPjxhp",
+            "label": "Vault address #3"
+          },
+          {
+            "address": "3Ni3fvVXWeZsRHprvc9L88cgErJxkJ9x92",
+            "label": "Vault address #4"
+          },
+          {
+            "address": "3LfpsDsjGsJ4o7KpFnfiTxc5WJCCbkeZXU",
+            "label": "Vault address #5"
+          },
+          {
+            "address": "3PhKxzPv77Ri79PS2KpXDwFsG7RycPZbE8",
+            "label": "Vault address #6"
+          },
+          {
+            "address": "35vZmghTtHZ6A4xz6j9wRU5hKEXuqiR1yo",
+            "label": "Vault address #7"
+          },
+          {
+            "address": "3NdFgZZeakt6hGdF4DYnLgqzZR9xRSz5eS",
+            "label": "Internal transfer hop #8"
+          },
+          {
+            "address": "33kcGwNjfduEYoKucFKZrJQTD6oZhkFz14",
+            "label": "Internal transfer hop #9"
+          },
+          {
+            "address": "32uSfb9UxXoPfCzAjjB4kJpt85vhhU637B",
+            "label": "Internal transfer hop #10"
+          }
+        ]
+      }
+    ],
+    "entityContactTxids": [
+      "7809e54ec6c746add450b3b31653e74d59112f0aa10d3374bd1a1df2a1325e44",
+      "b367a0916294963b3515969bb713a398bc5775d1d58e8decd0c6111ca2221035",
+      "ce7ee023c5d6fa87ab4c0c038883d3750cc83636d02708328d0b5ce77ddf65d1",
+      "82fda9dd5eb0a8ecda777eab6dc32f58a8d0576b03306bbda2788ef5db50bfae",
+      "69b0ca6c778030b6999c4dacec6f2f57d9765a8066d796c3d498509b33f28013"
+    ],
+    "dustExample": {
+      "id": 55,
+      "txid": "7809e54ec6c746add450b3b31653e74d59112f0aa10d3374bd1a1df2a1325e44",
+      "role": "output",
+      "address": "14f82ZcYBfgsj9j6pd8ps1Gt5XvRM7tZsa",
+      "amount": 1000,
+      "vout": 48,
+      "recordId": 22,
+      "scriptType": "p2pkh"
+    },
+    "quantumAddress": "14f82ZcYBfgsj9j6pd8ps1Gt5XvRM7tZsa",
+    "reuseAddress": {
+      "addr": "197LQ2fD8oXvr5nzwetZLNj7atX76qy9Ta",
+      "receipts": 64
+    },
+    "deepSegments": [
+      {
+        "origin": "1KsCB7H72C3CYCEenBpuMe5BRBMDuHta6g",
+        "txids": [
+          "ee09a6cb3f361c255c9a1e3c522657d198a414ac511572cf7f7b1ea14b6c059b",
+          "93214e62cd4cff85b193a3d6767ccb3cf539350c4fdac384f8166a339eb34630",
+          "3d9e47470cdc2d9efbefa55ac33ec660269424f17952d1692c1bb31c39491761",
+          "fe3ed96e321aebc88e4c80ee028e14f44d32e4a95f31db3a27130a8f26e55154",
+          "42ffc8d5e062028bd2441073e3931208561bed2dd533694e267dff25a4d96e94"
+        ]
+      },
+      {
+        "origin": "1KsCB7H72C3CYCEenBpuMe5BRBMDuHta6g",
+        "txids": [
+          "7f96e063b422913db9adb4d3f1acdcb4cb5e17ee68d6523d5439a84931a78c9f",
+          "49b72ec4d6e0036eb96e4326f1779587dd77cbd68d5cba3fc5d1cf6cfe72edb1",
+          "a02a1457eccfd4665ae0546e3e3e732d0523caa1bad307403a8313114626b537",
+          "21ba111a0ac5cc5c438ec43b2973dccd4e1bf437c5b63224b75ce5922362a705",
+          "2e199f7dc908f3cec7250b76bb8cd6390f761a23368a01bb9af795d0e7cb8d48"
+        ]
+      },
+      {
+        "origin": "3K1DNumpDvo7bHsrHi8pk3i2XsZUnBomFi",
+        "txids": [
+          "9d915b94396c87499d89fe37fbf89c44a9c05fed3368a8ecff8f8051397d69f2",
+          "624617cec7bb8bc6adccbd3dd528d868d7037008ec12046d834222aaf6aa1665"
+        ]
+      },
+      {
+        "origin": "3K1DNumpDvo7bHsrHi8pk3i2XsZUnBomFi",
+        "txids": [
+          "e2a1dceccf13a9dd0977b7bb29cbf18590bc705ad704d6a25ba04e82c9ddad4e",
+          "7d2b699093f84ef42d29ae0a3e899ee01cda69292c517faecec95dc5da26b34d"
+        ]
+      },
+      {
+        "origin": "1P2gJuKorixxMZnAYHsXLj4kk2NPVrWk7x",
+        "txids": [
+          "ba930109cfd5d19210c024d73e0e31fc828febe8e803a255758f261e96942197",
+          "9f7035a8bfeb0ab925efe9e08e0be26486209ce277e5fb8631d2be0e67c7e022",
+          "ad2122ccbde55d8a00f7f8fbea416dffc9e1af19602f66a1f68ba411bbab0aab",
+          "5452116d4d036348cf3e5f5a792e24f6df1476d59574c50b8babcc0bddc9db55",
+          "369e03375f000a5076f026148168153b3b892815c6c3e5b87d7218e4596c7659"
+        ]
+      }
+    ]
+  }
+}

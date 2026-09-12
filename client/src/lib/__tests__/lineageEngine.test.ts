@@ -11,6 +11,14 @@ vi.mock('../database', () => ({
   db: {
     custodySegments: {
       where: () => ({
+        equals: (segmentId: string) => ({
+          limit: (limit: number) => ({
+            toArray: () =>
+              Promise.resolve(
+                state.segments.filter((segment) => segment.segmentId === segmentId).slice(0, limit),
+              ),
+          }),
+        }),
         anyOf: () => ({
           toArray: () => Promise.resolve([...state.segments]),
         }),

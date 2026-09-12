@@ -65,13 +65,37 @@ const { ALL_PARTICIPANTS, TX_RECORDS } = vi.hoisted(() => {
   };
 });
 
+function mockCollection<T>(rows: T[]) {
+  return {
+    limit: (limit: number) => ({
+      toArray: () => Promise.resolve(rows.slice(0, limit)),
+    }),
+    toArray: () => Promise.resolve(rows),
+  };
+}
+
 vi.mock('../database', () => ({
   db: {
+    records: {
+      where: () => ({
+        anyOf: () => mockCollection([]),
+      }),
+    },
     transactionParticipants: {
-      where: () => ({ anyOf: () => ({ toArray: () => Promise.resolve([...ALL_PARTICIPANTS]) }) }),
+      where: () => ({
+        equals: (txid: string) =>
+          mockCollection(ALL_PARTICIPANTS.filter((participant) => participant.txid === txid)),
+        anyOf: (txids: string[]) =>
+          mockCollection(ALL_PARTICIPANTS.filter((participant) => txids.includes(participant.txid))),
+      }),
     },
     blockchainTransactions: {
-      where: () => ({ anyOf: () => ({ toArray: () => Promise.resolve([...TX_RECORDS]) }) }),
+      where: () => ({
+        equals: (txid: string) =>
+          mockCollection(TX_RECORDS.filter((transaction) => transaction.txid === txid)),
+        anyOf: (txids: string[]) =>
+          mockCollection(TX_RECORDS.filter((transaction) => txids.includes(transaction.txid))),
+      }),
     },
     dustFlags: {
       toArray: () => Promise.resolve([]),

@@ -1,0 +1,1496 @@
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { Droplets, Loader2, X, RefreshCw, Flag, FlagOff, ChevronRight, ChevronDown, Link2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { markOutpointsAsDust, unmarkDustOutpoints, getAllDustFlags, toOutpoint } from "@/lib/data/dust-flags-crud";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
+import { AddressLink } from "@/components/AddressLink";
+import { TxidLink } from "@/components/TxidLink";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useOwners } from "@/hooks/use-owners";
+import { useSeedNames } from "@/hooks/use-seed-names";
+import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
+import { getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
+import { getParticipantsByPrevOutKeys, getParticipantsByTxids } from "@/lib/data/transaction-crud";
+import { db, type Record as DbRecord, type TransactionParticipant } from "@/lib/database";
+import { getGroupKeys, type GroupBy } from "@/lib/balance-grouping";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
+import { FilterChips } from "@/components/FilterChips";
+import {
+  formatSatsWithUnit,
+  satsToUnitInput,
+  type AmountUnit,
+  unitInputToSats,
+  unitLabel,
+} from "@/lib/amount-units";
+
+const DEFAULT_DUST_THRESHOLD = 1000;
+const AGG_BATCH = 500;
+const PARTICIPANT_BATCH = 500;
+const MARK_ALL_CHUNK = 1000;
+
+/**
+ * One spent dust output and what it was combined with. The privacy damage of
+ * spending dust is the common-input-ownership linkage: every address that was
+ * a co-input of the spending transaction is publicly tied to the dust address.
+ */
+export interface DustSpendEvent {
+  /** The dust output that was spent (outpoint + sats). */
+  txid: string;
+  vout: number;
+  amountSats: number;
+  /** Txid of the transaction that spent the dust (null when not synced locally). */
+  spendingTxid: string | null;
+  /** Owned co-input addresses inside the scan's scope. */
+  ownedInScope: Array<{ address: string; recordId: number }>;
+  /** Owned co-input addresses outside the scan's scope (still user records). */
+  ownedOutOfScope: Array<{ address: string; recordId: number }>;
+  /** Co-input addresses with no record in the vault. */
+  external: string[];
+}
+
+/** Page-level damage rollup across all spent dust outputs of a scan. */
+export interface SpendDamageSummary {
+  spentOutputCount: number;
+  /** Distinct transactions that spent dust outputs. */
+  spendingTxCount: number;
+  /**
+   * Distinct owned addresses linked together by dust spends — i.e. addresses
+   * that shared a spending transaction with at least one other owned address.
+   */
+  linkedAddressCount: number;
+}
+
+interface DustingResult {
+  recordId: number;
+  address: string;
+  totalCount: number;
+  spentCount: number;
+  unspentCount: number;
+  /** Unspent dust outputs for this address, used by the "Mark as dust" action. */
+  unspentOutputs: Array<{ txid: string; vout: number; amountSats: number }>;
+  /** Spent dust outputs with their spending-tx linkage detail. */
+  spentOutputs: DustSpendEvent[];
+}
+
+type ScopeType = "all" | GroupBy;
+
+/**
+ * Two-pass dusting computation so spent/unspent classification is always correct.
+ *
+ * Pass 1 — address gathering: page through every address record and collect
+ * those matching the chosen scope. Yields between batches for responsiveness.
+ *
+ * Pass 2 — participant scan: for each batch of in-scope addresses, fetch ALL
+ * their participant rows (inputs + outputs) and accumulate them. After ALL
+ * batches are done, build the complete spent-outpoints set from inputs, then
+ * classify dust outputs against that complete set. This guarantees that a spend
+ * seen in a later batch cannot misclassify an output that was seen in an earlier
+ * batch.
+ *
+ * Returns null when cancelled.
+ */
+interface DustScanOutcome {
+  results: DustingResult[];
+  /** Every address that was in scope for this scan (used for stale-flag detection). */
+  scannedAddresses: Set<string>;
+  /** Rollup of the linkage damage caused by spent dust. */
+  spendDamage: SpendDamageSummary;
+}
+
+export async function computeDustings(
+  scopeType: ScopeType,
+  scopeValues: string[],
+  threshold: number,
+  signal: AbortSignal,
+  onProgress: (processed: number, phase: "addresses" | "participants" | "spends") => void,
+): Promise<DustScanOutcome | null> {
+  // ── Pass 1: collect in-scope address strings + their record ids ──────────
+  const addressMap = new Map<string, { recordId: number }>();
+  let beforeIdExclusive: number | undefined = undefined;
+  let addrProcessed = 0;
+
+  while (true) {
+    if (signal.aborted) return null;
+    const batch = await getRecordsPageByTypeIdReverseKeyset("address", {
+      limit: AGG_BATCH,
+      beforeIdExclusive,
+    });
+    if (batch.length === 0) break;
+
+    for (const rec of batch) {
+      if (rec.id == null) continue;
+      const addr = rec.inputString;
+      if (!addr) continue;
+
+      if (scopeType === "all") {
+        addressMap.set(addr, { recordId: rec.id });
+      } else {
+        const keys = getGroupKeys(rec as DbRecord, scopeType as GroupBy);
+        if (keys.some((key) => scopeValues.includes(key))) {
+          addressMap.set(addr, { recordId: rec.id });
+        }
+      }
+    }
+
+    addrProcessed += batch.length;
+    onProgress(addrProcessed, "addresses");
+
+    beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
+    if (batch.length < AGG_BATCH || beforeIdExclusive == null) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  if (signal.aborted) return null;
+  const scannedAddresses = new Set(addressMap.keys());
+  if (addressMap.size === 0) {
+    return {
+      results: [],
+      scannedAddresses,
+      spendDamage: { spentOutputCount: 0, spendingTxCount: 0, linkedAddressCount: 0 },
+    };
+  }
+
+  // ── Pass 2: gather ALL participant rows for in-scope addresses ───────────
+  //
+  // We accumulate every participant row before doing any classification so that
+  // the full spent-outpoints set is available before we look at any output.
+  const addresses = Array.from(addressMap.keys());
+  const allInputs: Array<{ prevTxid: string; prevVout: number }> = [];
+  const allDustOutputs: Array<{ address: string; txid: string; vout: number; amountSats: number }> = [];
+  let partProcessed = 0;
+
+  for (let i = 0; i < addresses.length; i += PARTICIPANT_BATCH) {
+    if (signal.aborted) return null;
+    const batch = addresses.slice(i, i + PARTICIPANT_BATCH);
+
+    const participants = await db.transactionParticipants
+      .where("address")
+      .anyOf(batch)
+      .toArray();
+
+    for (const p of participants) {
+      if (p.role === "input") {
+        if (p.prevTxid !== undefined && p.prevVout !== undefined) {
+          allInputs.push({ prevTxid: p.prevTxid, prevVout: p.prevVout });
+        }
+      } else {
+        // output — only accumulate if it's a dust candidate
+        const sats = Math.round(p.amount);
+        if (sats > 0 && sats < threshold) {
+          allDustOutputs.push({ address: p.address, txid: p.txid, vout: p.vout ?? 0, amountSats: sats });
+        }
+      }
+    }
+
+    partProcessed += batch.length;
+    onProgress(partProcessed, "participants");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  if (signal.aborted) return null;
+
+  // ── Classify: build complete spent set, then count ───────────────────────
+  const spentOutpoints = new Set<string>();
+  for (const inp of allInputs) {
+    spentOutpoints.add(`${inp.prevTxid}:${inp.prevVout}`);
+  }
+
+  const dustByAddress = new Map<
+    string,
+    {
+      spent: number;
+      unspent: number;
+      unspentOutputs: Array<{ txid: string; vout: number; amountSats: number }>;
+      spentOutputs: Array<{ txid: string; vout: number; amountSats: number }>;
+    }
+  >();
+  for (const out of allDustOutputs) {
+    if (!addressMap.has(out.address)) continue;
+    const outpoint = `${out.txid}:${out.vout}`;
+    const isSpent = spentOutpoints.has(outpoint);
+    const entry =
+      dustByAddress.get(out.address) ?? { spent: 0, unspent: 0, unspentOutputs: [], spentOutputs: [] };
+    if (isSpent) {
+      entry.spent += 1;
+      entry.spentOutputs.push({ txid: out.txid, vout: out.vout, amountSats: out.amountSats });
+    } else {
+      entry.unspent += 1;
+      entry.unspentOutputs.push({ txid: out.txid, vout: out.vout, amountSats: out.amountSats });
+    }
+    dustByAddress.set(out.address, entry);
+  }
+
+  // ── Pass 3: resolve what each spent dust output was combined WITH ────────
+  //
+  // Spending dust is where the real privacy damage happens: every address that
+  // was a co-input of the spending transaction is publicly linked to the dust
+  // address (common-input-ownership heuristic). For each spent dust output we
+  // find the spending transaction via the [prevTxid+prevVout] index, then load
+  // that transaction's inputs and split the co-input addresses into owned
+  // in-scope, owned out-of-scope (still a user record), and external.
+  const allSpentOutputs: Array<{ address: string; txid: string; vout: number; amountSats: number }> = [];
+  for (const [address, counts] of dustByAddress) {
+    for (const o of counts.spentOutputs) {
+      allSpentOutputs.push({ address, ...o });
+    }
+  }
+
+  const spendEventsByOutpoint = new Map<string, DustSpendEvent>();
+  const spendDamage: SpendDamageSummary = {
+    spentOutputCount: allSpentOutputs.length,
+    spendingTxCount: 0,
+    linkedAddressCount: 0,
+  };
+
+  if (allSpentOutputs.length > 0) {
+    // 3a — locate the spending txid for every spent dust outpoint.
+    const spendingTxidsByOutpoint = new Map<string, Set<string>>();
+    let spendProcessed = 0;
+    for (let i = 0; i < allSpentOutputs.length; i += PARTICIPANT_BATCH) {
+      if (signal.aborted) return null;
+      const chunk = allSpentOutputs.slice(i, i + PARTICIPANT_BATCH);
+      const spendingInputs = await getParticipantsByPrevOutKeys(
+        chunk.map((o) => [o.txid, o.vout] as [string, number]),
+      );
+      for (const inp of spendingInputs) {
+        if (inp.prevTxid === undefined || inp.prevVout === undefined) continue;
+        const key = `${inp.prevTxid}:${inp.prevVout}`;
+        const set = spendingTxidsByOutpoint.get(key) ?? new Set<string>();
+        set.add(inp.txid);
+        spendingTxidsByOutpoint.set(key, set);
+      }
+      spendProcessed += chunk.length;
+      onProgress(spendProcessed, "spends");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    if (signal.aborted) return null;
+
+    // 3b — batch-load every input participant of the spending transactions.
+    const spendingTxids = Array.from(
+      new Set(Array.from(spendingTxidsByOutpoint.values()).flatMap((s) => Array.from(s))),
+    );
+    const inputsByTxid = new Map<string, TransactionParticipant[]>();
+    for (let i = 0; i < spendingTxids.length; i += PARTICIPANT_BATCH) {
+      if (signal.aborted) return null;
+      const chunk = spendingTxids.slice(i, i + PARTICIPANT_BATCH);
+      const parts = await getParticipantsByTxids(chunk);
+      for (const p of parts) {
+        if (p.role !== "input") continue;
+        const arr = inputsByTxid.get(p.txid) ?? [];
+        arr.push(p);
+        inputsByTxid.set(p.txid, arr);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    if (signal.aborted) return null;
+
+    // 3c — co-input addresses not in scope may still be user records (e.g. a
+    // scoped scan over one wallet whose dust was spent with another wallet's
+    // address). Batch-resolve them against the records table.
+    const outOfScopeCandidates = new Set<string>();
+    for (const inputs of inputsByTxid.values()) {
+      for (const p of inputs) {
+        const addr = (p.address ?? "").trim();
+        if (!addr || addressMap.has(addr)) continue;
+        outOfScopeCandidates.add(addr);
+      }
+    }
+    const recordIdByAddress = new Map<string, number>();
+    const candidates = Array.from(outOfScopeCandidates);
+    for (let i = 0; i < candidates.length; i += PARTICIPANT_BATCH) {
+      if (signal.aborted) return null;
+      const chunk = candidates.slice(i, i + PARTICIPANT_BATCH);
+      const recs = await getRecordsByInputStrings(chunk);
+      for (const rec of recs) {
+        if (rec.type === "address" && rec.id != null && rec.inputString) {
+          recordIdByAddress.set(rec.inputString, rec.id);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    if (signal.aborted) return null;
+
+    // 3d — build one event per spent dust output + the page-level summary.
+    const ownedBySpendingTx = new Map<string, Set<string>>();
+    for (const out of allSpentOutputs) {
+      const outpoint = `${out.txid}:${out.vout}`;
+      const txids = spendingTxidsByOutpoint.get(outpoint);
+      const spendingTxid = txids && txids.size > 0 ? Array.from(txids).sort()[0] : null;
+
+      const inScope = new Map<string, number>();
+      const outScope = new Map<string, number>();
+      const external = new Set<string>();
+      if (spendingTxid) {
+        for (const p of inputsByTxid.get(spendingTxid) ?? []) {
+          // Skip the input that spends this very dust output, and any other
+          // input from the same address — those aren't "combined with" it.
+          if (p.prevTxid === out.txid && p.prevVout === out.vout) continue;
+          const addr = (p.address ?? "").trim();
+          if (!addr || addr === out.address) continue; // coinbase / unresolved inputs have no address
+          const inScopeMeta = addressMap.get(addr);
+          if (inScopeMeta) {
+            inScope.set(addr, inScopeMeta.recordId);
+          } else {
+            const rid = recordIdByAddress.get(addr);
+            if (rid != null) outScope.set(addr, rid);
+            else external.add(addr);
+          }
+        }
+      }
+
+      spendEventsByOutpoint.set(outpoint, {
+        txid: out.txid,
+        vout: out.vout,
+        amountSats: out.amountSats,
+        spendingTxid,
+        ownedInScope: Array.from(inScope, ([address, recordId]) => ({ address, recordId })),
+        ownedOutOfScope: Array.from(outScope, ([address, recordId]) => ({ address, recordId })),
+        external: Array.from(external).sort(),
+      });
+
+      if (spendingTxid) {
+        const owned = ownedBySpendingTx.get(spendingTxid) ?? new Set<string>();
+        owned.add(out.address);
+        for (const a of inScope.keys()) owned.add(a);
+        for (const a of outScope.keys()) owned.add(a);
+        ownedBySpendingTx.set(spendingTxid, owned);
+      }
+    }
+
+    // A transaction "links" addresses when at least two OWNED addresses were
+    // combined in it; every owned address in such a tx counts as linked.
+    const linkedAddresses = new Set<string>();
+    for (const owned of ownedBySpendingTx.values()) {
+      if (owned.size >= 2) {
+        for (const a of owned) linkedAddresses.add(a);
+      }
+    }
+    spendDamage.spendingTxCount = ownedBySpendingTx.size;
+    spendDamage.linkedAddressCount = linkedAddresses.size;
+  }
+
+  const results: DustingResult[] = [];
+  for (const [address, counts] of dustByAddress) {
+    const meta = addressMap.get(address);
+    if (!meta) continue;
+    const total = counts.spent + counts.unspent;
+    if (total === 0) continue;
+    results.push({
+      recordId: meta.recordId,
+      address,
+      totalCount: total,
+      spentCount: counts.spent,
+      unspentCount: counts.unspent,
+      unspentOutputs: counts.unspentOutputs,
+      spentOutputs: counts.spentOutputs
+        .map((o) => spendEventsByOutpoint.get(`${o.txid}:${o.vout}`))
+        .filter((e): e is DustSpendEvent => e !== undefined),
+    });
+  }
+
+  results.sort((a, b) => b.totalCount - a.totalCount || a.address.localeCompare(b.address));
+  return { results, scannedAddresses, spendDamage };
+}
+
+export default function DustedPage() {
+  const [scopeType, setScopeType] = useState<ScopeType>("all");
+  const [scopeValues, setScopeValues] = useState<string[]>([]);
+  const [threshold, setThreshold] = useState<number>(DEFAULT_DUST_THRESHOLD);
+  const [unit, setUnit] = useState<AmountUnit>("sats");
+  const [sortBy, setSortBy] = useState("most-dust");
+
+  const [phase, setPhase] = useState<"idle" | "computing" | "done">("idle");
+  const [scanOutcome, setScanOutcome] = useState<DustScanOutcome | null>(null);
+  const results = scanOutcome?.results ?? null;
+  const [progressMsg, setProgressMsg] = useState<string>("");
+  const [cancelling, setCancelling] = useState(false);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
+
+  // Live set of already-flagged outpoints so each row can show Mark vs Unmark.
+  const dustFlags = useLiveQuery(() => getAllDustFlags());
+  const flaggedOutpoints = useMemo(
+    () => new Set((dustFlags ?? []).map((f) => f.outpoint)),
+    [dustFlags],
+  );
+  const [flagBusyAddress, setFlagBusyAddress] = useState<string | null>(null);
+  const [markingAll, setMarkingAll] = useState(false);
+  const [unmarkingAll, setUnmarkingAll] = useState(false);
+  const [cleaningStale, setCleaningStale] = useState(false);
+  const [flagBusyOutpoint, setFlagBusyOutpoint] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+
+  const toggleExpanded = useCallback((recordId: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(recordId)) {
+        next.delete(recordId);
+      } else {
+        next.add(recordId);
+      }
+      return next;
+    });
+  }, []);
+
+  // ── Stale-flag detection ───────────────────────────────────────────────────
+  //
+  // A dust flag is "stale" when its address was covered by the last scan but
+  // its outpoint is no longer an unspent dust output under the current
+  // threshold/scope (e.g. it got spent, or the threshold was lowered). Flags on
+  // addresses OUTSIDE the scanned scope are never considered stale — we simply
+  // don't know their status.
+  const staleFlags = useMemo(() => {
+    if (!scanOutcome || !dustFlags) return [];
+    const liveOutpoints = new Set<string>();
+    for (const row of scanOutcome.results) {
+      for (const o of row.unspentOutputs) {
+        liveOutpoints.add(toOutpoint(o.txid, o.vout));
+      }
+    }
+    return dustFlags.filter(
+      (f) => scanOutcome.scannedAddresses.has(f.address) && !liveOutpoints.has(f.outpoint),
+    );
+  }, [scanOutcome, dustFlags]);
+
+  const handleCleanStaleFlags = useCallback(async () => {
+    if (staleFlags.length === 0) return;
+    setCleaningStale(true);
+    try {
+      const removed = await unmarkDustOutpoints(staleFlags.map((f) => f.outpoint));
+      toast({
+        title: "Stale dust flags removed",
+        description: `${removed} flag${removed !== 1 ? "s" : ""} no longer matching an unspent dust output ${removed !== 1 ? "were" : "was"} removed.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to remove stale flags",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setCleaningStale(false);
+    }
+  }, [staleFlags, toast]);
+
+  // ── Bulk "mark all" ───────────────────────────────────────────────────────
+  //
+  // Every unspent dust output from the current scan that isn't already flagged.
+  // Recomputed live from the flag subscription, so the bulk button disappears
+  // as soon as there is nothing left to mark.
+  const markableOutputs = useMemo(() => {
+    if (!results) return [];
+    const out: Array<{ txid: string; vout: number; address: string; amountSats: number }> = [];
+    for (const row of results) {
+      for (const o of row.unspentOutputs) {
+        if (!flaggedOutpoints.has(toOutpoint(o.txid, o.vout))) {
+          out.push({ txid: o.txid, vout: o.vout, address: row.address, amountSats: o.amountSats });
+        }
+      }
+    }
+    return out;
+  }, [results, flaggedOutpoints]);
+
+  // ── Bulk "unmark all" ─────────────────────────────────────────────────────
+  //
+  // Every unspent dust output from the current scan that IS currently flagged.
+  // The bulk unmark button appears whenever the scan has any flags to clear —
+  // including partially flagged scans, where it renders alongside Mark all.
+  const unmarkableOutpoints = useMemo(() => {
+    if (!results) return [];
+    const out: string[] = [];
+    for (const row of results) {
+      for (const o of row.unspentOutputs) {
+        const outpoint = toOutpoint(o.txid, o.vout);
+        if (flaggedOutpoints.has(outpoint)) {
+          out.push(outpoint);
+        }
+      }
+    }
+    return out;
+  }, [results, flaggedOutpoints]);
+
+  const handleMarkAllAsDust = useCallback(async () => {
+    if (markingAll || markableOutputs.length === 0) return;
+    setMarkingAll(true);
+    try {
+      let added = 0;
+      // Chunk the CRUD calls (and yield between chunks) so the anyOf lookups
+      // and bulkAdds never block the UI on huge scans.
+      for (let i = 0; i < markableOutputs.length; i += MARK_ALL_CHUNK) {
+        added += await markOutpointsAsDust(markableOutputs.slice(i, i + MARK_ALL_CHUNK));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      toast({
+        title: "Marked all as dust",
+        description:
+          added > 0
+            ? `${added.toLocaleString()} unspent output${added !== 1 ? "s" : ""} flagged as dust across all scanned addresses.`
+            : "All unspent dust outputs were already flagged.",
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to mark all as dust",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setMarkingAll(false);
+    }
+  }, [markingAll, markableOutputs, toast]);
+
+  const handleUnmarkAll = useCallback(async () => {
+    if (unmarkingAll || unmarkableOutpoints.length === 0) return;
+    setUnmarkingAll(true);
+    try {
+      let removed = 0;
+      // Chunk the CRUD calls (and yield between chunks) so the anyOf deletes
+      // never block the UI on huge scans — mirrors the mark-all path.
+      for (let i = 0; i < unmarkableOutpoints.length; i += MARK_ALL_CHUNK) {
+        removed += await unmarkDustOutpoints(unmarkableOutpoints.slice(i, i + MARK_ALL_CHUNK));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      toast({
+        title: "Dust flags removed",
+        description:
+          removed > 0
+            ? `${removed.toLocaleString()} dust flag${removed !== 1 ? "s" : ""} removed across all scanned addresses.`
+            : "No dust flags were left to remove.",
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to remove dust flags",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setUnmarkingAll(false);
+    }
+  }, [unmarkingAll, unmarkableOutpoints, toast]);
+
+  const handleMarkAsDust = useCallback(
+    async (row: DustingResult) => {
+      setFlagBusyAddress(row.address);
+      try {
+        const added = await markOutpointsAsDust(
+          row.unspentOutputs.map((o) => ({
+            txid: o.txid,
+            vout: o.vout,
+            address: row.address,
+            amountSats: o.amountSats,
+          })),
+        );
+        toast({
+          title: "Marked as dust",
+          description:
+            added > 0
+              ? `${added} unspent output${added !== 1 ? "s" : ""} flagged as dust for this address.`
+              : "All unspent dust outputs for this address were already flagged.",
+        });
+      } catch (err) {
+        toast({
+          title: "Failed to mark as dust",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setFlagBusyAddress(null);
+      }
+    },
+    [toast],
+  );
+
+  const handleUnmarkDust = useCallback(
+    async (row: DustingResult) => {
+      setFlagBusyAddress(row.address);
+      try {
+        const removed = await unmarkDustOutpoints(
+          row.unspentOutputs.map((o) => toOutpoint(o.txid, o.vout)),
+        );
+        toast({
+          title: "Dust flags removed",
+          description: `${removed} output${removed !== 1 ? "s" : ""} unflagged for this address.`,
+        });
+      } catch (err) {
+        toast({
+          title: "Failed to remove dust flags",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setFlagBusyAddress(null);
+      }
+    },
+    [toast],
+  );
+
+  const handleMarkOutput = useCallback(
+    async (row: DustingResult, output: { txid: string; vout: number; amountSats: number }) => {
+      const outpoint = toOutpoint(output.txid, output.vout);
+      setFlagBusyOutpoint(outpoint);
+      try {
+        const added = await markOutpointsAsDust([
+          { txid: output.txid, vout: output.vout, address: row.address, amountSats: output.amountSats },
+        ]);
+        toast({
+          title: "Marked as dust",
+          description:
+            added > 0
+              ? "Output flagged as dust."
+              : "This output was already flagged as dust.",
+        });
+      } catch (err) {
+        toast({
+          title: "Failed to mark as dust",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setFlagBusyOutpoint(null);
+      }
+    },
+    [toast],
+  );
+
+  const handleUnmarkOutput = useCallback(
+    async (output: { txid: string; vout: number }) => {
+      const outpoint = toOutpoint(output.txid, output.vout);
+      setFlagBusyOutpoint(outpoint);
+      try {
+        const removed = await unmarkDustOutpoints([outpoint]);
+        toast({
+          title: removed > 0 ? "Dust flag removed" : "Nothing to remove",
+          description:
+            removed > 0
+              ? "Output unflagged."
+              : "This output was not flagged as dust.",
+        });
+      } catch (err) {
+        toast({
+          title: "Failed to remove dust flag",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setFlagBusyOutpoint(null);
+      }
+    },
+    [toast],
+  );
+
+  const { walletNames } = useWalletNames();
+  const { owners } = useOwners();
+  const { seedNames } = useSeedNames();
+  const { tags } = useTags();
+  const { categories } = useCategories();
+
+  const dbSignal = useDbChangeSignal(["records", "transactionParticipants"]);
+
+  const scopeOptions: Record<GroupBy, { label: string; values: string[] }> = {
+    wallet: { label: "Wallet", values: walletNames.map((w) => w.name) },
+    seed: { label: "Seed", values: seedNames.map((s) => s.name) },
+    owner: { label: "Owner", values: owners.map((o) => o.name) },
+    tag: { label: "Tag", values: tags.map((t) => t.name) },
+    category: { label: "Category", values: categories.map((c) => c.name) },
+  };
+
+  const scopeValuesOptions =
+    scopeType !== "all" ? scopeOptions[scopeType as GroupBy].values : [];
+
+  const handleScopeTypeChange = (val: string) => {
+    setScopeType(val as ScopeType);
+    setScopeValues([]);
+  };
+
+  const handleThresholdChange = (raw: string) => {
+    const sats = unitInputToSats(raw, unit);
+    if (sats !== null && sats > 0) {
+      setThreshold(sats);
+    }
+  };
+
+  // ── Core computation runner ────────────────────────────────────────────────
+  const runComputation = useCallback(
+    async (scopeTypeArg: ScopeType, scopeValuesArg: string[], thresholdArg: number) => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
+      setPhase("computing");
+      setProgressMsg("");
+      setCancelling(false);
+
+      const result = await computeDustings(
+        scopeTypeArg,
+        scopeValuesArg,
+        thresholdArg,
+        ctrl.signal,
+        (count, phaseLabel) => {
+          if (!ctrl.signal.aborted) {
+            setProgressMsg(
+              phaseLabel === "addresses"
+                ? `Scanning addresses… ${count.toLocaleString()} checked`
+                : phaseLabel === "participants"
+                  ? `Scanning transactions… ${count.toLocaleString()} participant rows loaded`
+                  : `Resolving spent dust… ${count.toLocaleString()} outputs checked`,
+            );
+          }
+        },
+      );
+
+      if (ctrl.signal.aborted) {
+        setPhase("idle");
+        setCancelling(false);
+        return;
+      }
+
+      setScanOutcome(result);
+      setPhase("done");
+    },
+    [],
+  );
+
+  // ── Auto-recompute when threshold, scope, or underlying data changes ──────
+  //
+  // We always kick off a scan so the list stays in sync without the user
+  // needing to press a button each time a filter changes.
+  useEffect(() => {
+    // Don't compute when a scoped filter has no value selected yet.
+    if (scopeType !== "all" && scopeValues.length === 0) return;
+    runComputation(scopeType, scopeValues, threshold);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeType, scopeValues.join(","), threshold, dbSignal]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const handleCancel = () => {
+    setCancelling(true);
+    abortRef.current?.abort();
+  };
+
+  const handleManualRescan = () => {
+    if (scopeType !== "all" && scopeValues.length === 0) return;
+    runComputation(scopeType, scopeValues, threshold);
+  };
+
+  const sortedResults = useMemo(() => {
+    if (!results) return null;
+    return [...results].sort((a, b) => {
+      switch (sortBy) {
+        case "fewest-dust":
+          return a.totalCount - b.totalCount || a.address.localeCompare(b.address);
+        case "most-unspent":
+          return b.unspentCount - a.unspentCount || a.address.localeCompare(b.address);
+        case "address-asc":
+          return a.address.localeCompare(b.address);
+        case "address-desc":
+          return b.address.localeCompare(a.address);
+        default:
+          return b.totalCount - a.totalCount || a.address.localeCompare(b.address);
+      }
+    });
+  }, [results, sortBy]);
+
+  type FlatRow =
+    | { type: "address"; row: DustingResult }
+    | { type: "output"; row: DustingResult; output: { txid: string; vout: number; amountSats: number } }
+    | { type: "spentHeader"; row: DustingResult }
+    | { type: "spend"; row: DustingResult; spend: DustSpendEvent };
+
+  const flatRows = useMemo<FlatRow[]>(() => {
+    if (!sortedResults) return [];
+    const rows: FlatRow[] = [];
+    for (const row of sortedResults) {
+      rows.push({ type: "address", row });
+      if (expandedIds.has(row.recordId)) {
+        for (const output of row.unspentOutputs) {
+          rows.push({ type: "output", row, output });
+        }
+        if (row.spentOutputs.length > 0) {
+          rows.push({ type: "spentHeader", row });
+          for (const spend of row.spentOutputs) {
+            rows.push({ type: "spend", row, spend });
+          }
+        }
+      }
+    }
+    return rows;
+  }, [sortedResults, expandedIds]);
+
+  const virtualizer = useVirtualizer({
+    count: flatRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: (index) => {
+      const t = flatRows[index]?.type;
+      if (t === "output") return 44;
+      if (t === "spentHeader") return 28;
+      if (t === "spend") return 64;
+      return 56;
+    },
+    overscan: 10,
+  });
+
+  const isRunDisabled = phase === "computing" || (scopeType !== "all" && scopeValues.length === 0);
+
+  const filterChips = [
+    ...(scopeType !== "all" && scopeValues.length > 0
+      ? [{
+          key: "scope",
+          label: `${scopeOptions[scopeType].label}: ${scopeValues.join(", ")}`,
+          onRemove: () => {
+            setScopeType("all");
+            setScopeValues([]);
+          },
+        }]
+      : []),
+    ...(threshold !== DEFAULT_DUST_THRESHOLD
+      ? [{
+          key: "threshold",
+          label: `Dust threshold: ${formatSatsWithUnit(threshold, unit)}`,
+          onRemove: () => setThreshold(DEFAULT_DUST_THRESHOLD),
+        }]
+      : []),
+  ];
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex-none p-4 pb-2 border-b">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Droplets className="h-5 w-5 text-[hsl(var(--primary))]" />
+            <h1 className="text-lg font-semibold" data-testid="text-page-title">Dusted</h1>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={scopeType} onValueChange={handleScopeTypeChange}>
+              <SelectTrigger className="w-[160px]" data-testid="select-scope-type">
+                <SelectValue placeholder="Scope" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="wallet">Wallet</SelectItem>
+                <SelectItem value="seed">Seed</SelectItem>
+                <SelectItem value="owner">Owner</SelectItem>
+                <SelectItem value="tag">Tag</SelectItem>
+                <SelectItem value="category">Category</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {scopeType !== "all" && (
+              <MultiSelectCombobox
+                className="w-[180px]"
+                values={scopeValues}
+                onChange={setScopeValues}
+                options={scopeValuesOptions}
+                placeholder={`Select ${scopeOptions[scopeType as GroupBy].label}`}
+                testId="select-scope-value"
+              />
+            )}
+
+            <div className="flex items-center gap-1">
+              <label htmlFor="input-dust-threshold" className="text-sm text-muted-foreground whitespace-nowrap">
+                Dust threshold
+              </label>
+              <Input
+                id="input-dust-threshold"
+                data-testid="input-dust-threshold"
+                className="w-[120px]"
+                value={satsToUnitInput(threshold, unit)}
+                onChange={(e) => handleThresholdChange(e.target.value)}
+                type="number"
+                min={1}
+                step={unit === "btc" ? "0.00000001" : "1"}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setUnit((u) => u === "sats" ? "btc" : "sats")}
+                data-testid="button-toggle-unit"
+              >
+                {unitLabel(unit)}
+              </Button>
+            </div>
+
+            <Select value={sortBy} onValueChange={setSortBy}>
+              <SelectTrigger className="w-[150px]" data-testid="select-sort-results">
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="most-dust">Most dust</SelectItem>
+                <SelectItem value="fewest-dust">Fewest dust</SelectItem>
+                <SelectItem value="most-unspent">Most unspent</SelectItem>
+                <SelectItem value="address-asc">Address A–Z</SelectItem>
+                <SelectItem value="address-desc">Address Z–A</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {phase === "computing" ? (
+              <Button
+                variant="outline"
+                size="default"
+                onClick={handleCancel}
+                disabled={cancelling}
+                data-testid="button-cancel-scan"
+              >
+                {cancelling ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <X className="h-4 w-4 mr-1" />
+                )}
+                {cancelling ? "Cancelling…" : "Cancel"}
+              </Button>
+            ) : (
+              <Button
+                size="default"
+                onClick={handleManualRescan}
+                disabled={isRunDisabled}
+                data-testid="button-run-scan"
+              >
+                <RefreshCw className="h-4 w-4 mr-1" />
+                {phase === "done" ? "Re-scan" : "Scan"}
+              </Button>
+            )}
+          </div>
+        </div>
+          <FilterChips
+            chips={filterChips}
+            onClearAll={() => {
+              setScopeType("all");
+              setScopeValues([]);
+              setThreshold(DEFAULT_DUST_THRESHOLD);
+            }}
+            testIdPrefix="dusted"
+            className="mt-3"
+          />
+
+        {phase === "computing" && (
+          <div className="mt-3">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="flex-1">{progressMsg || "Scanning…"}</span>
+            </div>
+            <Progress value={undefined} className="h-1" />
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 min-h-0 flex flex-col">
+        {phase === "idle" && (
+          <div
+            className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground"
+            data-testid="state-idle"
+          >
+            <Droplets className="h-10 w-10 opacity-30" />
+            <p className="text-sm">
+              Select a scope and threshold, then click <strong>Scan</strong> to detect dusting attempts.
+            </p>
+          </div>
+        )}
+
+        {phase === "computing" && results === null && (
+          <div
+            className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground"
+            data-testid="state-computing"
+          >
+            <Loader2 className="h-8 w-8 animate-spin opacity-40" />
+            <p className="text-sm">Computing dustings…</p>
+          </div>
+        )}
+
+        {phase === "done" && results !== null && results.length === 0 && (
+          <div
+            className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground"
+            data-testid="state-empty"
+          >
+            <Droplets className="h-10 w-10 opacity-30" />
+            <p className="text-sm font-medium">No dusting detected for this scope.</p>
+            <p className="text-xs">
+              No tracked address received an output strictly below{" "}
+              {threshold.toLocaleString()} sats.
+            </p>
+          </div>
+        )}
+
+        {phase === "done" && staleFlags.length > 0 && (
+          <div
+            className="flex-none mx-4 mt-3 px-3 py-2 rounded-md border flex items-center gap-3 flex-wrap"
+            data-testid="banner-stale-flags"
+          >
+            <FlagOff className="h-4 w-4 text-muted-foreground flex-none" />
+            <span className="text-sm flex-1 min-w-0" data-testid="text-stale-flags-summary">
+              <span className="font-medium">{staleFlags.length.toLocaleString()}</span> dust flag
+              {staleFlags.length !== 1 ? "s" : ""} no longer match{staleFlags.length === 1 ? "es" : ""} an
+              unspent dust output under the current threshold and scope.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={cleaningStale}
+              onClick={handleCleanStaleFlags}
+              data-testid="button-clean-stale-flags"
+            >
+              {cleaningStale ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              ) : (
+                <FlagOff className="h-3 w-3 mr-1" />
+              )}
+              Remove stale flags
+            </Button>
+          </div>
+        )}
+
+        {phase === "done" && results !== null && results.length > 0 && (
+          <div className="flex flex-col flex-1 min-h-0">
+            <div
+              className="flex-none px-4 py-2 border-b text-xs text-muted-foreground flex items-center gap-2"
+              data-testid="text-results-summary"
+            >
+              <span className="flex-1 min-w-0">
+                <span className="font-medium text-foreground">
+                  {results.length.toLocaleString()}
+                </span>{" "}
+                address{results.length !== 1 ? "es" : ""} with dustings strictly below{" "}
+                <span className="font-medium text-foreground">
+                  {threshold.toLocaleString()}
+                </span>{" "}
+                sats
+              </span>
+              {markableOutputs.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={markingAll}
+                  onClick={handleMarkAllAsDust}
+                  data-testid="button-mark-all-dust"
+                >
+                  {markingAll ? (
+                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                  ) : (
+                    <Flag className="h-3 w-3 mr-1" />
+                  )}
+                  Mark all as dust ({markableOutputs.length.toLocaleString()})
+                </Button>
+              )}
+              {unmarkableOutpoints.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={unmarkingAll}
+                  onClick={handleUnmarkAll}
+                  data-testid="button-unmark-all-dust"
+                >
+                  {unmarkingAll ? (
+                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                  ) : (
+                    <FlagOff className="h-3 w-3 mr-1" />
+                  )}
+                  Unmark all ({unmarkableOutpoints.length.toLocaleString()})
+                </Button>
+              )}
+            </div>
+
+            {scanOutcome && scanOutcome.spendDamage.spentOutputCount > 0 && (
+              <div
+                className="flex-none px-4 py-2 border-b text-xs flex items-center gap-2"
+                data-testid="banner-spend-damage"
+              >
+                <Link2 className="h-3.5 w-3.5 text-amber-500 flex-none" />
+                <span className="flex-1 min-w-0" data-testid="text-spend-damage-summary">
+                  <span className="font-medium text-foreground">
+                    {scanOutcome.spendDamage.spentOutputCount.toLocaleString()}
+                  </span>{" "}
+                  spent dust output{scanOutcome.spendDamage.spentOutputCount !== 1 ? "s" : ""} across{" "}
+                  <span className="font-medium text-foreground">
+                    {scanOutcome.spendDamage.spendingTxCount.toLocaleString()}
+                  </span>{" "}
+                  transaction{scanOutcome.spendDamage.spendingTxCount !== 1 ? "s" : ""}
+                  {scanOutcome.spendDamage.linkedAddressCount > 0 ? (
+                    <>
+                      {" "}linked{" "}
+                      <span className="font-medium text-foreground">
+                        {scanOutcome.spendDamage.linkedAddressCount.toLocaleString()}
+                      </span>{" "}
+                      of your addresses together.
+                    </>
+                  ) : (
+                    <> — none combined your addresses with each other.</>
+                  )}
+                </span>
+              </div>
+            )}
+
+            <div className="flex-none px-4 py-2 border-b grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <span>Address</span>
+              <span className="w-20 text-right">Total</span>
+              <span className="w-20 text-right">Unspent</span>
+              <span className="w-20 text-right">Spent</span>
+              <span className="w-32 text-right">Action</span>
+            </div>
+
+            <div
+              ref={parentRef}
+              className="flex-1 min-h-0 overflow-y-auto"
+              data-testid="list-dusted-results"
+            >
+              <div
+                style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}
+              >
+                {virtualizer.getVirtualItems().map((vItem) => {
+                  const flatRow = flatRows[vItem.index];
+                  if (!flatRow) return null;
+
+                  if (flatRow.type === "output") {
+                    const { row, output } = flatRow;
+                    const outpoint = toOutpoint(output.txid, output.vout);
+                    const isFlagged = flaggedOutpoints.has(outpoint);
+                    const busy = flagBusyOutpoint === outpoint || flagBusyAddress === row.address;
+                    return (
+                      <div
+                        key={`${row.recordId}-${outpoint}`}
+                        data-testid={`row-dust-output-${row.recordId}-${output.txid}-${output.vout}`}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: `${vItem.size}px`,
+                          transform: `translateY(${vItem.start}px)`,
+                        }}
+                        className="flex items-center gap-4 pl-12 pr-4 border-b last:border-b-0 bg-muted/30"
+                      >
+                        <span
+                          className="flex-1 min-w-0 truncate font-mono text-xs text-muted-foreground"
+                          data-testid={`text-outpoint-${row.recordId}-${output.txid}-${output.vout}`}
+                          title={outpoint}
+                        >
+                          {output.txid}:{output.vout}
+                        </span>
+                        <span
+                          className="text-xs tabular-nums text-muted-foreground whitespace-nowrap"
+                          data-testid={`text-output-sats-${row.recordId}-${output.txid}-${output.vout}`}
+                        >
+                          {output.amountSats.toLocaleString()} sats
+                        </span>
+                        <div className="w-32 flex justify-end">
+                          {isFlagged ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleUnmarkOutput(output)}
+                              data-testid={`button-unmark-output-${row.recordId}-${output.txid}-${output.vout}`}
+                            >
+                              {flagBusyOutpoint === outpoint ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <FlagOff className="h-3 w-3 mr-1" />
+                              )}
+                              Unmark
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleMarkOutput(row, output)}
+                              data-testid={`button-mark-output-${row.recordId}-${output.txid}-${output.vout}`}
+                            >
+                              {flagBusyOutpoint === outpoint ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <Flag className="h-3 w-3 mr-1" />
+                              )}
+                              Mark
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (flatRow.type === "spentHeader") {
+                    const { row } = flatRow;
+                    return (
+                      <div
+                        key={`${row.recordId}-spent-header`}
+                        data-testid={`header-spent-${row.recordId}`}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: `${vItem.size}px`,
+                          transform: `translateY(${vItem.start}px)`,
+                        }}
+                        className="flex items-center pl-12 pr-4 border-b last:border-b-0 bg-muted/10"
+                      >
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Spent — what the dust was combined with
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  if (flatRow.type === "spend") {
+                    const { row, spend } = flatRow;
+                    const ownedCoInputs = [...spend.ownedInScope, ...spend.ownedOutOfScope];
+                    const harmful = ownedCoInputs.length > 0;
+                    return (
+                      <div
+                        key={`${row.recordId}-spent-${spend.txid}-${spend.vout}`}
+                        data-testid={`row-spend-${row.recordId}-${spend.txid}-${spend.vout}`}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: `${vItem.size}px`,
+                          transform: `translateY(${vItem.start}px)`,
+                        }}
+                        className={`flex flex-col justify-center gap-0.5 pl-12 pr-4 border-b last:border-b-0 ${
+                          harmful ? "bg-red-500/5" : "bg-muted/30"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className="truncate font-mono text-xs text-muted-foreground"
+                            data-testid={`text-spend-outpoint-${row.recordId}-${spend.txid}-${spend.vout}`}
+                            title={`${spend.txid}:${spend.vout}`}
+                          >
+                            {spend.txid}:{spend.vout}
+                          </span>
+                          <span
+                            className="flex-none text-xs tabular-nums text-muted-foreground"
+                            data-testid={`text-spend-sats-${row.recordId}-${spend.txid}-${spend.vout}`}
+                          >
+                            {spend.amountSats.toLocaleString()} sats
+                          </span>
+                          {harmful && (
+                            <Badge
+                              variant="destructive"
+                              className="no-default-hover-elevate no-default-active-elevate flex-none"
+                              data-testid={`badge-links-owned-${row.recordId}-${spend.txid}-${spend.vout}`}
+                            >
+                              Links your addresses
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 min-w-0 overflow-hidden text-xs text-muted-foreground">
+                          <span className="flex-none">Spent in</span>
+                          {spend.spendingTxid ? (
+                            <TxidLink txid={spend.spendingTxid} showCopy={false} />
+                          ) : (
+                            <span
+                              className="italic"
+                              data-testid={`text-spend-unknown-tx-${row.recordId}-${spend.txid}-${spend.vout}`}
+                            >
+                              an unsynced transaction
+                            </span>
+                          )}
+                          {ownedCoInputs.length > 0 && (
+                            <>
+                              <span className="flex-none">· combined with</span>
+                              {ownedCoInputs.map((c) => (
+                                <AddressLink
+                                  key={c.address}
+                                  address={c.address}
+                                  recordId={c.recordId}
+                                  truncate
+                                  showCopy={false}
+                                />
+                              ))}
+                            </>
+                          )}
+                          {spend.external.length > 0 && (
+                            <span
+                              className="flex-none"
+                              title={spend.external.join(", ")}
+                              data-testid={`text-spend-external-${row.recordId}-${spend.txid}-${spend.vout}`}
+                            >
+                              · {spend.external.length} external address
+                              {spend.external.length !== 1 ? "es" : ""} (
+                              <span className="font-mono">
+                                {spend.external[0].slice(0, 8)}…
+                                {spend.external.length > 1 ? ", …" : ""}
+                              </span>
+                              )
+                            </span>
+                          )}
+                          {!harmful && spend.external.length === 0 && spend.spendingTxid && (
+                            <span className="flex-none italic">
+                              · no other known inputs — dust spent alone
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  const row = flatRow.row;
+                  const isExpanded = expandedIds.has(row.recordId);
+                  return (
+                    <div
+                      key={row.recordId}
+                      data-testid={`row-dusted-${row.recordId}`}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        height: `${vItem.size}px`,
+                        transform: `translateY(${vItem.start}px)`,
+                      }}
+                      className="flex items-center px-4 border-b last:border-b-0"
+                    >
+                      <div className="flex-1 min-w-0 flex items-center gap-1">
+                        {row.unspentOutputs.length > 0 || row.spentOutputs.length > 0 ? (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => toggleExpanded(row.recordId)}
+                            data-testid={`button-toggle-outputs-${row.recordId}`}
+                            aria-label={isExpanded ? "Collapse outputs" : "Expand outputs"}
+                          >
+                            {isExpanded ? (
+                              <ChevronDown className="h-4 w-4" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4" />
+                            )}
+                          </Button>
+                        ) : (
+                          <span className="w-9 flex-none" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <AddressLink
+                            address={row.address}
+                            recordId={row.recordId}
+                            truncate
+                            showCopy={false}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="w-20 text-right">
+                        <Badge
+                          variant="secondary"
+                          className="no-default-hover-elevate no-default-active-elevate tabular-nums"
+                          data-testid={`badge-total-${row.recordId}`}
+                        >
+                          {row.totalCount}
+                        </Badge>
+                      </div>
+
+                      <div className="w-20 text-right">
+                        {row.unspentCount > 0 ? (
+                          <Badge
+                            className="no-default-hover-elevate no-default-active-elevate tabular-nums bg-orange-500 text-white"
+                            data-testid={`badge-unspent-${row.recordId}`}
+                          >
+                            {row.unspentCount}
+                          </Badge>
+                        ) : (
+                          <span
+                            className="text-xs text-muted-foreground"
+                            data-testid={`badge-unspent-${row.recordId}`}
+                          >
+                            —
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="w-20 text-right">
+                        {row.spentCount > 0 ? (
+                          <span
+                            className="text-sm text-muted-foreground tabular-nums"
+                            data-testid={`badge-spent-${row.recordId}`}
+                          >
+                            {row.spentCount}
+                          </span>
+                        ) : (
+                          <span
+                            className="text-xs text-muted-foreground"
+                            data-testid={`badge-spent-${row.recordId}`}
+                          >
+                            —
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="w-32 flex justify-end">
+                        {(() => {
+                          if (row.unspentOutputs.length === 0) {
+                            return (
+                              <span
+                                className="text-xs text-muted-foreground"
+                                data-testid={`text-no-action-${row.recordId}`}
+                              >
+                                —
+                              </span>
+                            );
+                          }
+                          const flaggedCount = row.unspentOutputs.filter((o) =>
+                            flaggedOutpoints.has(toOutpoint(o.txid, o.vout)),
+                          ).length;
+                          const allFlagged = flaggedCount === row.unspentOutputs.length;
+                          const busy = flagBusyAddress === row.address;
+                          return allFlagged ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleUnmarkDust(row)}
+                              data-testid={`button-unmark-dust-${row.recordId}`}
+                            >
+                              {busy ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <FlagOff className="h-3 w-3 mr-1" />
+                              )}
+                              Unmark
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleMarkAsDust(row)}
+                              data-testid={`button-mark-dust-${row.recordId}`}
+                            >
+                              {busy ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <Flag className="h-3 w-3 mr-1" />
+                              )}
+                              Mark as dust
+                            </Button>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

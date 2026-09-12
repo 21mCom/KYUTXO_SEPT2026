@@ -56,6 +56,7 @@ vi.mock("@/lib/database", async () => {
 const { detectStaleCachedBalances, recomputeAddressStats } = await import(
   "./address-stats"
 );
+const { getVaultRepository } = await import("@/lib/repository");
 type StaleAddressDetail = import("./address-stats").StaleAddressDetail;
 
 // ---- Fixture helpers --------------------------------------------------------
@@ -1562,17 +1563,33 @@ describe("recomputeAddressStats full-vault scan fast path", () => {
   // (≥50% and ≥1000 rows), the recompute must reuse the streaming scan for
   // COMPUTATION while still WRITING only the requested subset.
 
-  /** Spy on participant-table where() calls to detect which read path ran. */
-  function spyParticipantIndexes() {
-    const indexes: unknown[] = [];
-    const orig = testDb.transactionParticipants.where.bind(testDb.transactionParticipants);
-    const spy = vi
-      .spyOn(testDb.transactionParticipants, "where")
-      .mockImplementation(((arg: any) => {
-        indexes.push(arg);
-        return orig(arg);
+  /** Spy on backend-neutral repository queries to detect which read path ran. */
+  function spyRepositoryQueries() {
+    const queries: Array<{ table: string; name: string }> = [];
+    const repository = getVaultRepository();
+    const origQuery = repository.query.bind(repository);
+    const repositorySpy = vi
+      .spyOn(repository, "query")
+      .mockImplementation((async (table: any, name: any, value: any, limit?: number) => {
+        queries.push({ table, name });
+        return origQuery(table, name, value, limit);
       }) as any);
-    return { indexes, spy };
+    const participantIndexes: unknown[] = [];
+    const origWhere = testDb.transactionParticipants.where.bind(testDb.transactionParticipants);
+    const participantSpy = vi
+      .spyOn(testDb.transactionParticipants, "where")
+      .mockImplementation(((index: any) => {
+        participantIndexes.push(index);
+        return origWhere(index);
+      }) as any);
+    return {
+      queries,
+      participantIndexes,
+      restore() {
+        repositorySpy.mockRestore();
+        participantSpy.mockRestore();
+      },
+    };
   }
 
   it("a large filtered recompute (≥50% of vault, ≥1000 rows) uses the scan path and writes only the requested subset", async () => {
@@ -1596,19 +1613,22 @@ describe("recomputeAddressStats full-vault scan fast path", () => {
 
     // Request all but the last 100 records → 1100/1200 ≈ 92% of the vault.
     const requestedIds = Array.from({ length: N - 100 }, (_, i) => i + 1);
-    const { indexes, spy } = spyParticipantIndexes();
+    const path = spyRepositoryQueries();
     const res = await recomputeAddressStats({
       recordIds: requestedIds,
       skipNotification: true,
     });
-    spy.mockRestore();
+    path.restore();
     expect(res.cancelled).toBe(false);
     expect(res.updated).toBe(requestedIds.length);
 
-    // The scan path streams the primary key (':id'); the per-batch path would
-    // have issued where('address').anyOf(...) lookups.
-    expect(indexes).toContain(":id");
-    expect(indexes).not.toContain("address");
+    // The scan path streams all participants by keyset; the per-batch path
+    // would issue bounded address-scoped repository queries.
+    expect(path.participantIndexes).toContain("id");
+    expect(path.queries).not.toContainEqual({
+      table: "transactionParticipants",
+      name: "participants.byAddressesAfterId",
+    });
 
     // Requested rows match the full-recompute reference exactly...
     const after = await testDb.records.orderBy("id").toArray();
@@ -1625,16 +1645,19 @@ describe("recomputeAddressStats full-vault scan fast path", () => {
 
   it("a small filtered recompute keeps the targeted per-batch path", async () => {
     await seedMixedVault(1200);
-    const { indexes, spy } = spyParticipantIndexes();
+    const path = spyRepositoryQueries();
     const res = await recomputeAddressStats({
       recordIds: [1, 2, 5],
       skipNotification: true,
     });
-    spy.mockRestore();
+    path.restore();
     expect(res.cancelled).toBe(false);
-    // Targeted anyOf lookups, no full-table primary-key stream.
-    expect(indexes).toContain("address");
-    expect(indexes).not.toContain(":id");
+    // Targeted address queries, no full-table participant stream.
+    expect(path.queries).toContainEqual({
+      table: "transactionParticipants",
+      name: "participants.byAddressesAfterId",
+    });
+    expect(path.participantIndexes).not.toContain("id");
   }, 60_000);
 
   it("a large filtered recompute cancels cleanly, persisting only pre-abort batches", async () => {

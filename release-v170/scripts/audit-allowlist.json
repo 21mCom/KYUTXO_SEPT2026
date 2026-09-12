@@ -1,0 +1,4 @@
+{
+  "$comment": "Advisories that cannot be fixed today, each with a documented reason. Entries match on npm package name + GHSA id (from the advisory URL). Keep this list empty whenever possible.",
+  "allowlist": []
+}

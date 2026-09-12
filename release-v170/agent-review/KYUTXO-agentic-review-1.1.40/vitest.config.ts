@@ -1,0 +1,44 @@
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+import path from "path";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const { version: pkgVersion } = require("./package.json") as { version: string };
+
+export default defineConfig({
+  plugins: [react()],
+  oxc: {
+    jsx: "automatic",
+  },
+  define: {
+    // Keep Vitest aligned with Vite so modules that consume build-time
+    // constants can be imported by tests.
+    __APP_VERSION__: JSON.stringify(pkgVersion),
+  },
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "client", "src"),
+      "@shared": path.resolve(__dirname, "shared"),
+    },
+  },
+  test: {
+    // Fork workers can be slow to shut down when the machine is loaded (e.g.
+    // several validation suites running in parallel). The default 10s teardown
+    // budget then trips "[vitest-pool]: Timeout terminating forks worker",
+    // which makes vitest exit 1 even though every test passed. Give teardown a
+    // generous budget so load never turns a green run into a spurious failure.
+    // 120s: 60s still tripped when ~38 validation commands ran concurrently.
+    teardownTimeout: 120_000,
+    // Fails tests on hidden Dexie/database error noise (unhandled rejections,
+    // DatabaseClosedError console output). Guarded by
+    // scripts/check-db-noise-guard.js — do not remove without updating it.
+    setupFiles: ["client/src/test/failOnDbErrorNoise.ts"],
+    include: [
+      "client/src/**/*.test.ts",
+      "client/src/**/*.test.tsx",
+      "server/**/*.test.ts",
+      "electron/**/*.test.ts",
+    ],
+  },
+});

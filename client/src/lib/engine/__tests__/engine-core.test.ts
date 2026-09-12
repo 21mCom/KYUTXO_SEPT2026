@@ -239,7 +239,7 @@ describe("engine-core: seedMeta state-machine + no-partial-complete", () => {
     expect(isTableReady(db, "records")).toBe(true);
   });
 
-  it("engine is ready only when all three tables are complete", () => {
+  it("engine is ready only when all four tables are complete", () => {
     insertRecords(db, [rec({ id: 1 })]);
     insertTransactions(db, [tx(1, "tx1", 1000)]);
     insertParticipants(db, [out("tx1", "addr1", 0, 100)]);
@@ -247,6 +247,8 @@ describe("engine-core: seedMeta state-machine + no-partial-complete", () => {
     markSeedCompleteIfDone(db, "blockchainTransactions", 1);
     expect(isEngineReady(db)).toBe(false);
     markSeedCompleteIfDone(db, "transactionParticipants", 1);
+    expect(isEngineReady(db)).toBe(false);
+    markSeedCompleteIfDone(db, "transactionMetadata", 0);
     expect(isEngineReady(db)).toBe(true);
   });
 

@@ -1,0 +1,459 @@
+name: Validate and build KYUTXO for Windows
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish a GitHub release after the full suite and packaged checks pass
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  verify-desktop-package-matrix:
+    uses: ./.github/workflows/desktop-package-matrix.yml
+
+  # RELEASE GATE: native power events must be exercised by release-like
+  # packages on dedicated, logged-in desktop runners. This job never runs for
+  # pull requests or ordinary branch pushes because it locks and suspends the
+  # host operating system.
+  native-power-smoke:
+    timeout-minutes: 45
+    needs: verify-desktop-package-matrix
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    name: native-power-${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win
+            arch: x64
+            runner_label: desktop-release-win-x64
+            builder_flag: --win
+    runs-on:
+      - self-hosted
+      - "${{ matrix.runner_label }}"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Verify September repository destination
+        run: node scripts/check-github-destination.mjs
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v5.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build release-like package and run native power smoke check
+        shell: bash
+        env:
+          KYUTXO_NATIVE_POWER_SMOKE: '1'
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: |
+          set -euo pipefail
+          rm -rf release
+          mkdir -p release
+          LOG="release/native-power-smoke-${{ matrix.platform }}-${{ matrix.arch }}.log"
+          touch "$LOG"
+          set +e
+          (
+            set -euo pipefail
+            echo "target=${{ matrix.platform }}/${{ matrix.arch }}"
+            echo "runner=${{ matrix.runner_label }}"
+            echo "sha=${GITHUB_SHA}"
+            echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            npx vite build --config vite.config.electron.ts
+            node scripts/build-native-engine.mjs
+            npx electron-builder \
+              --config electron-builder.json \
+              --dir \
+              ${{ matrix.builder_flag }} \
+              --${{ matrix.arch }} \
+              --publish never
+            node scripts/check-packaged-vault-lock-native.mjs \
+              --platform ${{ matrix.platform }} \
+              --arch ${{ matrix.arch }}
+            echo "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ) 2>&1 | tee "$LOG"
+          STATUSES=("${PIPESTATUS[@]}")
+          set -e
+          if (( STATUSES[0] != 0 || STATUSES[1] != 0 )); then
+            echo "Native power smoke pipeline failed: command=${STATUSES[0]} tee=${STATUSES[1]}"
+            exit 1
+          fi
+          node -e '
+            const text = require("node:fs").readFileSync(process.argv[1], "utf8");
+            const passes = text.match(/^  PASS  /gm) || [];
+            const fails = text.match(/^  FAIL  /gm) || [];
+            if (passes.length !== 5 || fails.length !== 0) {
+              throw new Error(`Expected 5 PASS results and no FAIL results; got PASS=${passes.length} FAIL=${fails.length}`);
+            }
+          ' "$LOG"
+
+      - name: Upload native power smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: KYUTXO-native-power-smoke-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.run_id }}
+          path: release/native-power-smoke-${{ matrix.platform }}-${{ matrix.arch }}.log
+          if-no-files-found: error
+          retention-days: 90
+
+  build-windows:
+    timeout-minutes: 90
+    needs: verify-desktop-package-matrix
+    if: >-
+      github.event_name != 'push' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      !contains(github.event.head_commit.message, '[skip ci]')
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    # Pinned to windows-2022: the newer windows-latest (windows-2025) image is not
+    # detected by the @electron/node-gyp fork's Visual Studio finder, breaking the
+    # native better-sqlite3 compile during both `npm ci` and the Electron rebuild.
+    #
+    # Last reviewed: 2026-08-17. Both available PATs (GITHUB_PERSONAL_ACCESS_TOKEN
+    # → 403 "Write access to repository not granted"; GITHUB_PERSONAL_ACCESS_TOKEN2
+    # → invalid credentials) still lack push access to this repository. The
+    # windows-2025 VS-finder regression is therefore NOT yet verified as resolved.
+    # Keep this pin until a token with contents write access is configured, then:
+    #   1. Change runs-on to windows-latest on a PR branch.
+    #   2. If npm ci + electron-builder + check-packaged-native-engine.mjs all
+    #      pass with no ABI mismatch or node-gyp errors → commit the change.
+    #   3. If the VS finder still fails → restore this pin and update the date.
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Verify September repository destination
+        run: node scripts/check-github-destination.mjs
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v5.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Check lockfile for internal Replit URLs
+        run: node scripts/check-lockfile-urls.js
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fail on high/critical npm audit findings
+        run: node scripts/check-audit.js
+
+      - name: Type-check
+        run: npm run check
+
+      - name: Run fast test tier
+        run: npm run test:fast
+
+      - name: Run full required suite for releases
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        run: npm run test:full
+
+      - name: Run million-row owner report release gate
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        timeout-minutes: 10
+        env:
+          KYUTXO_OWNER_BOOK_SCALE_ROWS: '1000000'
+        run: npm run test:owner-book-million
+
+      - name: Run million-row encrypted owner report release gate
+        id: protected_owner_book_million
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          KYUTXO_OWNER_BOOK_PROTECTED_MILLION: '1'
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          npm run test:protected-owner-book-million 2>&1 |
+            Tee-Object -FilePath release/protected-owner-book-million.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Summarize encrypted owner report release gate
+        if: >-
+          always() &&
+          (startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release))
+        shell: pwsh
+        env:
+          GATE_OUTCOME: ${{ steps.protected_owner_book_million.outcome }}
+        run: |
+          "## Million-row encrypted owner report" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "**Outcome:** $env:GATE_OUTCOME" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          if (Test-Path release/protected-owner-book-million.log) {
+            '```text' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+            Get-Content release/protected-owner-book-million.log -Tail 40 |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append
+            '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          } else {
+            "The gate produced no log." | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          }
+
+      - name: Upload encrypted owner report evidence
+        if: >-
+          always() &&
+          (startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release))
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: KYUTXO-protected-owner-book-million-${{ github.run_id }}
+          path: release/protected-owner-book-million.log
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Read package version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Bind release tag to the validated commit
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        shell: bash
+        run: |
+          PACKAGE_VERSION="${{ steps.version.outputs.version }}"
+          RELEASE_TAG="v$PACKAGE_VERSION"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && [ "$GITHUB_REF_NAME" != "$RELEASE_TAG" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PACKAGE_VERSION"
+            exit 1
+          fi
+          if ! git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "::error::Release tag $RELEASE_TAG must already exist"
+            exit 1
+          fi
+          TAG_COMMIT=$(git rev-list -n 1 "$RELEASE_TAG")
+          if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+            echo "::error::Release tag $RELEASE_TAG points to $TAG_COMMIT, not validated commit $GITHUB_SHA"
+            exit 1
+          fi
+
+      # The reusable matrix job is the sole Windows packager. Download its
+      # verified Portable.exe, win-unpacked bundle, and renderer output so every
+      # packaged check, checksum, and release upload consumes the same bytes.
+      - name: Download verified Windows package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.verify-desktop-package-matrix.outputs.windows-artifact-name }}
+          path: .
+
+      - name: Reverify downloaded package filename and installed app version
+        shell: bash
+        run: |
+          node scripts/packaged-build-provenance.mjs --verify
+          node scripts/check-packaged-app-version.mjs --platform win --arch x64
+          echo "KYUTXO_PACKAGED_PROVENANCE=release/verified-package-provenance.json" >> "$GITHUB_ENV"
+
+      # RELEASE GATE: prove the native better-sqlite3 read-engine survives real
+      # packaging on a full runner. npmRebuild is ON here, so the addon is built
+      # for the Electron ABI — the check must run the extracted worker under the
+      # packaged KYUTXO.exe itself (ELECTRON_RUN_AS_NODE), never a system-Node
+      # stand-in. KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON=1 disables the fallback
+      # so an ABI/load regression fails the release instead of being masked.
+      # Reuses the verified release/win-unpacked output downloaded above.
+      - name: Verify packaged native read-engine under shipping Electron ABI
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+          KYUTXO_NATIVE_ENGINE_REQUIRE_ELECTRON: '1'
+        run: >-
+          node scripts/check-packaged-native-engine.mjs
+          --platform win
+          --arch x64
+          --require-electron
+
+      # RELEASE GATE: launch the exact generated Portable.exe release asset
+      # from a disposable directory, create a vault, stop the full process
+      # tree, relaunch the same wrapper, and drive both renderer sessions over
+      # CDP. This catches wrapper/extraction regressions, portable data being
+      # written to the runner profile, and packaged Electron blank windows.
+      # The shared launch helper first extracts the NSIS payload with 7-Zip and
+      # requires its app.asar SHA-256 to match the validated win-unpacked bundle.
+      - name: Confirm 7-Zip is available for portable bundle integrity checks
+        shell: pwsh
+        run: |
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
+            throw "7z is required to verify that Portable.exe embeds the validated app.asar"
+          }
+
+      - name: Verify packaged Windows renderer and portable restart persistence
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-electron-browser.mjs
+
+      # RELEASE GATE: create and lock a vault inside one isolated packaged
+      # session, then prove a wrong password remains visibly rejected. Avoiding
+      # a relaunch removes the single-instance/profile-flush race.
+      - name: Verify packaged wrong-password lock handling
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-wrong-password-browser.mjs
+
+      # RELEASE GATE: seed an oversized consolidation through the real
+      # preload/main/native-worker path and prove all four Coin Passport windows
+      # are independent, bounded, and tied to the displayed mirror checkpoint.
+      - name: Verify oversized Coin Passport paging through packaged IPC
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-coin-passport-browser.mjs
+
+      # RELEASE GATE: the Coin Origins renderer must preserve separate
+      # acquisition-lot and holding-row counts for the entire vault and wallet
+      # scopes through the packaged native engine bridge.
+      - name: Verify Coin Origins wallet-scoped counts through packaged IPC
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-coin-origins-browser.mjs
+
+      # RELEASE GATE: the exact packaged app must prove protected-store
+      # migration, crash recovery, tamper rejection, password re-wrap, and
+      # encrypted-backup recovery before the artifact can be uploaded.
+      - name: Verify protected-vault migration recovery
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-vault-migration-browser.mjs
+
+      # RELEASE GATE: the device-local network activity log must survive a
+      # full Portable.exe process restart without persisting addresses/provider
+      # URLs, and clearing it must leave the configured provider untouched.
+      - name: Verify packaged network activity restart persistence
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-network-privacy-activity-browser.mjs
+
+      # RELEASE GATE: forgetting a configured source must remain offline across
+      # a restart of the exact Portable.exe asset while preserving the source
+      # details for later re-enable and issuing no provider-test IPC.
+      - name: Verify forgotten source stays offline in Windows portable app
+        env:
+          KYUTXO_PACKAGED_SKIP_BUILD: '1'
+        run: node scripts/check-packaged-forgotten-network-source-browser.mjs
+
+      - name: Generate SHA-256 checksums
+        run: npm run release:checksums
+
+      - name: Upload executable and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: KYUTXO-${{ steps.version.outputs.version }}-Portable-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.exe.sha256
+
+  publish-release:
+    timeout-minutes: 20
+    needs: [build-windows, native-power-smoke]
+    if: >-
+      always() &&
+      needs.build-windows.result == 'success' &&
+      needs.native-power-smoke.result == 'success' &&
+      (
+        startsWith(github.ref, 'refs/tags/v') ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout checksum verifier
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Verify September repository destination
+        run: node scripts/check-github-destination.mjs
+
+      - name: Download validated release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: KYUTXO-*-Portable-${{ github.run_id }}
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download native power smoke evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: KYUTXO-native-power-smoke-*-${{ github.run_id }}
+          path: native-power-smoke
+          merge-multiple: true
+
+      - name: Verify all native power smoke evidence before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const evidenceDir = 'native-power-smoke';
+          const expected = [
+            'native-power-smoke-win-x64.log',
+          ];
+          for (const filename of expected) {
+            const filePath = path.join(evidenceDir, filename);
+            if (!fs.existsSync(filePath)) {
+              throw new Error(`Missing required native power smoke evidence: ${filename}`);
+            }
+            const text = fs.readFileSync(filePath, 'utf8');
+            const passes = text.match(/^  PASS  /gm) || [];
+            const fails = text.match(/^  FAIL  /gm) || [];
+            if (passes.length !== 5 || fails.length !== 0) {
+              throw new Error(
+                `Invalid native power smoke evidence ${filename}: ` +
+                `PASS=${passes.length} FAIL=${fails.length}`,
+              );
+            }
+          }
+          console.log(`Verified ${expected.length} native power smoke evidence logs`);
+          NODE
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ needs.build-windows.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/generate-sha256.mjs --verify release-assets
+          mapfile -t EXES < <(find release-assets -maxdepth 1 -type f -name '*.exe' -print)
+          mapfile -t SUMS < <(find release-assets -maxdepth 1 -type f -name '*.exe.sha256' -print)
+          mapfile -t SMOKE_LOGS < <(find native-power-smoke -maxdepth 1 -type f -name '*.log' -print)
+          if [ "${#EXES[@]}" -eq 0 ] || [ "${#EXES[@]}" -ne "${#SUMS[@]}" ] || [ "${#SMOKE_LOGS[@]}" -ne 1 ]; then
+            echo "::error::Validated executable, SHA-256 sidecar, or native power evidence is missing"
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" "${EXES[@]}" "${SUMS[@]}" "${SMOKE_LOGS[@]}" \
+            --verify-tag --generate-notes --title "KYUTXO $RELEASE_TAG"

@@ -45,7 +45,7 @@ class TestDb extends Dexie {
     super(name);
     // Mirrors the real schemas for the tables buildCustodySegment touches.
     this.version(1).stores({
-      records: "++id, inputString, type, addressImportance",
+      records: "++id, inputString, inputStringLower, type, addressImportance",
       blockchainTransactions: "++id, &txid, blockHeight",
       transactionParticipants: "++id, txid, address, [txid+role]",
       utxoLineage:

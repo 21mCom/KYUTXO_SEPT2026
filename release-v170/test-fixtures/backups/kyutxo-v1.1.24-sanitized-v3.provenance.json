@@ -1,0 +1,10 @@
+{
+  "fixture": "kyutxo-v1.1.24-sanitized-v3.zip",
+  "sha256": "d583b117775cb567bf59558704c86bce6ab4db19741ca1e3b4241d175c7b2fa6",
+  "sourceTag": "v1.1.24",
+  "sourceRevision": "b4021938b4c258a894e77698976cf28aa20d23c5",
+  "sourceDate": "2026-07-29T13:15:58Z",
+  "password": "stable-release-fixture-v1.1.24",
+  "sanitization": "Generated in an isolated checkout with synthetic address, transaction, label, note, tag, timestamps, and settings only. Contains no user data.",
+  "generation": "Seeded fake-indexeddb, then called the unmodified v1.1.24 client/src/lib/backup/export.ts exportBackup function with encryption enabled and appVersion 1.1.24."
+}

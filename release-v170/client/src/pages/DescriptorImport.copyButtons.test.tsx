@@ -1,0 +1,334 @@
+// @vitest-environment jsdom
+//
+// Guard test for Task #940: the inline copy buttons on DescriptorImport step 2
+// (receive + change derived addresses) MUST both write to navigator.clipboard
+// AND fire the correct success / destructive "Copy failed" toast (wired by
+// Task #538 via the inline `copyAddress` helper).
+//
+// The page pulls in many Dexie-backed hooks and the heavy xpub / descriptor
+// derivation modules at import time, so we mock:
+//   - @/hooks/* vocabulary hooks      -> empty lists (no IndexedDB)
+//   - @/lib/descriptor-parser         -> a fixed, valid parsed descriptor
+//   - @/lib/xpub                      -> deriveTaprootDualChain resolves fixed
+//                                        receive/change address arrays
+//   - @/hooks/use-toast               -> hoisted toastMock
+// This keeps the render cheap and isolates the copy-button-to-toast wiring.
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
+
+const { toastMock } = vi.hoisted(() => ({ toastMock: vi.fn() }));
+vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: toastMock }) }));
+
+const RECEIVE_ADDRESS = "bc1qreceive0000000000000000000000000000000q";
+const CHANGE_ADDRESS = "bc1qchange00000000000000000000000000000000q";
+
+vi.mock("@/lib/descriptor-parser", () => ({
+  parseDescriptor: vi.fn(() => ({
+    success: true,
+    descriptor: {
+      scriptType: "p2tr",
+      threshold: 1,
+      keys: [
+        {
+          fingerprint: "deadbeef",
+          derivationPath: "86'/0'/0'",
+          xpub: "xpubFAKE000000000000000000000000000000000000",
+          chainPath: "/0/*",
+          rawChainPath: "/0/*",
+        },
+      ],
+      network: "mainnet",
+      isMultisig: false,
+      isSortedMulti: false,
+      isTaproot: true,
+      rawDescriptor: "tr(xpubFAKE.../0/*)",
+      chainType: "dual-chain",
+    },
+  })),
+  parseSparrowExport: vi.fn(() => ({ error: "not a sparrow export" })),
+  descriptorKeysToXpubEntries: vi.fn(() => []),
+  getDescriptorSummary: vi.fn(() => "Taproot Singlesig"),
+  isSparrowWalletFile: vi.fn(() => false),
+  SPARROW_WALLET_FILE_MESSAGE: "sparrow wallet file message",
+}));
+
+vi.mock("@/lib/bsms-parser", () => ({
+  parseBSMS: vi.fn(() => ({ success: false })),
+  isBSMSFile: vi.fn(() => false),
+}));
+
+vi.mock("@/lib/xpub", () => ({
+  deriveTaprootDualChain: vi.fn(async () => ({
+    receive: [{ index: 0, address: RECEIVE_ADDRESS }],
+    change: [{ index: 0, address: CHANGE_ADDRESS }],
+  })),
+  deriveMultisigDualChain: vi.fn(async () => ({ receive: [], change: [] })),
+  hasNonStandardHeader: vi.fn(() => false),
+}));
+
+vi.mock("@/hooks/use-tags", () => ({ useTags: () => ({ tags: [] }), createTag: vi.fn() }));
+vi.mock("@/hooks/use-categories", () => ({ useCategories: () => ({ categories: [] }), createCategory: vi.fn() }));
+vi.mock("@/hooks/use-owners", () => ({ useOwners: () => ({ owners: [] }), createOwner: vi.fn() }));
+vi.mock("@/hooks/use-wallet-names", () => ({ useWalletNames: () => ({ walletNames: [] }), createWalletName: vi.fn() }));
+vi.mock("@/hooks/use-seed-names", () => ({
+  useSeedNames: () => ({ seedNames: [] }),
+  createSeedName: vi.fn(),
+  SEED_NAME_MAX_LENGTH: 50,
+}));
+vi.mock("@/hooks/use-wallet-software", () => ({
+  useWalletSoftware: () => ({ walletSoftware: [] }),
+  createWalletSoftware: vi.fn(),
+}));
+vi.mock("@/hooks/use-records", () => ({
+  createRecord: vi.fn(),
+  updateRecord: vi.fn(),
+  lookupRecordsByInputStrings: vi.fn(async () => new Map()),
+}));
+vi.mock("@/lib/dataFacade", () => ({
+  syncTagsToMaster: vi.fn(),
+  syncCategoriesToMaster: vi.fn(),
+  createRecordOrigin: vi.fn(),
+}));
+vi.mock("@/lib/database", () => ({
+  beginBulkOperation: vi.fn(),
+  endBulkOperation: vi.fn(),
+}));
+
+import DescriptorImport from "./DescriptorImport";
+// These imports resolve to the vi.fn mocks declared above, so the multisig
+// describe block can override their behaviour per-test.
+import { parseDescriptor } from "@/lib/descriptor-parser";
+import { deriveMultisigDualChain } from "@/lib/xpub";
+
+const MS_RECEIVE_ADDRESS = "bc1qmsreceive000000000000000000000000000000q";
+const MS_CHANGE_ADDRESS = "bc1qmschange0000000000000000000000000000000q";
+
+let writeText: ReturnType<typeof vi.fn>;
+
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+beforeEach(() => {
+  writeText = vi.fn(() => Promise.resolve());
+  Object.defineProperty(navigator, "clipboard", {
+    value: { writeText },
+    configurable: true,
+    writable: true,
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+async function renderAndDerive() {
+  render(<DescriptorImport />);
+  // Step 1: paste a descriptor (mocked parser accepts anything non-empty).
+  fireEvent.change(screen.getByTestId("textarea-descriptor"), {
+    target: { value: "tr(xpubFAKE.../0/*)" },
+  });
+  await flush();
+  // Advance to step 2 by deriving addresses (deriveTaprootDualChain is mocked).
+  fireEvent.click(screen.getByTestId("button-derive-addresses"));
+  await waitFor(() => screen.getByTestId("button-copy-receive-0"));
+}
+
+describe("DescriptorImport copy buttons toast", () => {
+  it("copies a receive address and shows the success toast", async () => {
+    await renderAndDerive();
+
+    fireEvent.click(screen.getByTestId("button-copy-receive-0"));
+    await flush();
+
+    expect(writeText).toHaveBeenCalledWith(RECEIVE_ADDRESS);
+    expect(toastMock).toHaveBeenCalledWith({
+      description: "Address copied",
+    });
+  });
+
+  it("copies a change address and shows the success toast", async () => {
+    await renderAndDerive();
+
+    // Change addresses are hidden until the "Show" toggle is clicked.
+    fireEvent.click(screen.getByTestId("button-toggle-change"));
+    await waitFor(() => screen.getByTestId("button-copy-change-0"));
+
+    fireEvent.click(screen.getByTestId("button-copy-change-0"));
+    await flush();
+
+    expect(writeText).toHaveBeenCalledWith(CHANGE_ADDRESS);
+    expect(toastMock).toHaveBeenCalledWith({
+      description: "Address copied",
+    });
+  });
+
+  it("shows the destructive 'Copy failed' toast when the clipboard write rejects", async () => {
+    await renderAndDerive();
+
+    writeText.mockImplementation(() => Promise.reject(new Error("denied")));
+    fireEvent.click(screen.getByTestId("button-copy-receive-0"));
+    await flush();
+
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Copy failed",
+        description: "Could not copy the address to your clipboard.",
+        variant: "destructive",
+      }),
+    );
+  });
+});
+
+// Task #2137: each address row has both a row-level onClick and the row's own
+// Checkbox onCheckedChange, both wired to the same toggle function. Clicking
+// the checkbox bubbles the click up to the row's onClick too, so a naive fix
+// can leave the two handlers cancelling each other out (toggles twice, looks
+// like a no-op). Guard that a direct checkbox click toggles selection exactly
+// once, and that clicking elsewhere in the row still works.
+function checkboxState(testId: string) {
+  return screen.getByTestId(testId).getAttribute("data-state");
+}
+
+describe("DescriptorImport row selection checkbox", () => {
+  it("toggles a receive row exactly once when the checkbox itself is clicked", async () => {
+    await renderAndDerive();
+
+    // Freshly derived addresses start selected.
+    expect(checkboxState("checkbox-receive-0")).toBe("checked");
+
+    // A real click on the checkbox bubbles up to the row's onClick handler
+    // too. If both handlers fire the toggle, the net effect is zero change
+    // (double-toggle) -- this must flip state exactly once instead.
+    fireEvent.click(screen.getByTestId("checkbox-receive-0"));
+    await flush();
+
+    expect(checkboxState("checkbox-receive-0")).toBe("unchecked");
+
+    fireEvent.click(screen.getByTestId("checkbox-receive-0"));
+    await flush();
+
+    expect(checkboxState("checkbox-receive-0")).toBe("checked");
+  });
+
+  it("still toggles a receive row when clicking elsewhere in the row (not the checkbox)", async () => {
+    await renderAndDerive();
+
+    expect(checkboxState("checkbox-receive-0")).toBe("checked");
+
+    fireEvent.click(screen.getByTestId("button-copy-receive-0").closest("div")!);
+    await flush();
+
+    expect(checkboxState("checkbox-receive-0")).toBe("unchecked");
+  });
+
+  it("toggles a change row exactly once when the checkbox itself is clicked", async () => {
+    await renderAndDerive();
+
+    fireEvent.click(screen.getByTestId("button-toggle-change"));
+    await waitFor(() => screen.getByTestId("checkbox-change-0"));
+
+    expect(checkboxState("checkbox-change-0")).toBe("checked");
+
+    fireEvent.click(screen.getByTestId("checkbox-change-0"));
+    await flush();
+
+    expect(checkboxState("checkbox-change-0")).toBe("unchecked");
+
+    fireEvent.click(screen.getByTestId("checkbox-change-0"));
+    await flush();
+
+    expect(checkboxState("checkbox-change-0")).toBe("checked");
+  });
+});
+
+// Task #1038: the multisig derivation path (deriveMultisigDualChain) renders the
+// SAME receive/change copy buttons as the taproot path, so it needs equivalent
+// coverage of the clipboard + toast wiring. We override the parser to return a
+// multisig descriptor (isTaproot: false) and point deriveMultisigDualChain at
+// fixed address arrays.
+describe("DescriptorImport copy buttons toast (multisig path)", () => {
+  beforeEach(() => {
+    vi.mocked(parseDescriptor).mockReturnValue({
+      success: true,
+      descriptor: {
+        scriptType: "p2wsh",
+        threshold: 2,
+        keys: [
+          {
+            fingerprint: "deadbeef",
+            derivationPath: "48'/0'/0'/2'",
+            xpub: "xpubFAKE0000000000000000000000000000000000A",
+            chainPath: "/0/*",
+            rawChainPath: "/0/*",
+          },
+          {
+            fingerprint: "feedface",
+            derivationPath: "48'/0'/0'/2'",
+            xpub: "xpubFAKE0000000000000000000000000000000000B",
+            chainPath: "/0/*",
+            rawChainPath: "/0/*",
+          },
+        ],
+        network: "mainnet",
+        isMultisig: true,
+        isSortedMulti: true,
+        isTaproot: false,
+        rawDescriptor: "wsh(sortedmulti(2,xpubFAKE...A/0/*,xpubFAKE...B/0/*))",
+        chainType: "dual-chain",
+      },
+    } as ReturnType<typeof parseDescriptor>);
+
+    vi.mocked(deriveMultisigDualChain).mockResolvedValue({
+      receive: [{ index: 0, address: MS_RECEIVE_ADDRESS }],
+      change: [{ index: 0, address: MS_CHANGE_ADDRESS }],
+    } as Awaited<ReturnType<typeof deriveMultisigDualChain>>);
+  });
+
+  it("copies a multisig receive address and shows the success toast", async () => {
+    await renderAndDerive();
+
+    fireEvent.click(screen.getByTestId("button-copy-receive-0"));
+    await flush();
+
+    expect(writeText).toHaveBeenCalledWith(MS_RECEIVE_ADDRESS);
+    expect(toastMock).toHaveBeenCalledWith({
+      description: "Address copied",
+    });
+  });
+
+  it("copies a multisig change address and shows the success toast", async () => {
+    await renderAndDerive();
+
+    fireEvent.click(screen.getByTestId("button-toggle-change"));
+    await waitFor(() => screen.getByTestId("button-copy-change-0"));
+
+    fireEvent.click(screen.getByTestId("button-copy-change-0"));
+    await flush();
+
+    expect(writeText).toHaveBeenCalledWith(MS_CHANGE_ADDRESS);
+    expect(toastMock).toHaveBeenCalledWith({
+      description: "Address copied",
+    });
+  });
+
+  it("shows the destructive 'Copy failed' toast when the multisig clipboard write rejects", async () => {
+    await renderAndDerive();
+
+    writeText.mockImplementation(() => Promise.reject(new Error("denied")));
+    fireEvent.click(screen.getByTestId("button-copy-receive-0"));
+    await flush();
+
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Copy failed",
+        description: "Could not copy the address to your clipboard.",
+        variant: "destructive",
+      }),
+    );
+  });
+});

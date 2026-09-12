@@ -9,6 +9,7 @@ export { DexieVaultRepository } from './dexie';
 export { ProtectedVaultRepository } from './protected';
 
 let browserRepository: VaultRepository | undefined;
+let browserRepositoryDatabase: typeof db | undefined;
 let protectedRepository: VaultRepository | undefined;
 
 /** Select exactly one live backend. Desktop never selects the Dexie adapter. */
@@ -18,7 +19,11 @@ export function getVaultRepository(): VaultRepository {
   if (getElectronAPISafe()?.isElectron && !import.meta.env.DEV) {
     return protectedRepository ??= new ProtectedVaultRepository();
   }
-  return browserRepository ??= new DexieVaultRepository(db);
+  if (!browserRepository || browserRepositoryDatabase !== db) {
+    browserRepository = new DexieVaultRepository(db);
+    browserRepositoryDatabase = db;
+  }
+  return browserRepository;
 }
 
 /** Startup callers can use this to prove the selected packaged store is open. */

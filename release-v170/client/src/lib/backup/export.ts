@@ -1,0 +1,543 @@
+// Streaming backup export (v3). Walks each of the five large tables with bounded
+// id-keyset pages, serializes every page as one NDJSON line, deflates it into a
+// ZIP entry, and drains to the sink before the next page — so the whole vault is
+// never held in memory. Attachment files are streamed one at a time. The small
+// tables ride inline in the manifest, which is written first.
+//
+// This module is UI-agnostic and fully injectable (sink, attachment IO, inline
+// reader, progress, abort) so it can be exercised by the runtime memory test.
+
+import type { BackupSink } from "./sink";
+import { BackupCancelledError } from "./sink";
+import { ZipStreamWriter } from "./zip-stream";
+import {
+  BACKUP_FORMAT_VERSION,
+  MANIFEST_FILENAME,
+  ATTACHMENTS_DIR,
+  STREAMED_TABLES,
+  CHECK_SENTINEL,
+  ndjsonPath,
+  serializeBatchLine,
+  serializeInline,
+  type BackupManifest,
+  type BackupCounts,
+  type StreamedTable,
+} from "./format";
+import {
+  deriveKeyWithParams,
+  generateSalt,
+  bufferToBase64,
+  encrypt,
+  CURRENT_KDF_PARAMS,
+} from "@/lib/crypto";
+import { getRecordsAfterId, countRecords } from "@/lib/data/record-crud";
+import { getAttachmentsAfterId, countAttachments, sumAttachmentSizes } from "@/lib/data/attachments-crud";
+import {
+  getTransactionsAfterId,
+  countTransactions,
+  getTransactionParticipantsAfterId,
+  countTransactionParticipants,
+} from "@/lib/data/transaction-crud";
+import {
+  getAddressSyncStateAfterId,
+  countAddressSyncState,
+} from "@/lib/data/address-sync-crud";
+import {
+  getUtxoLineageAfterId,
+  getCustodySegmentsAfterId,
+  getLineageSnapshotsAfterId,
+  countUtxoLineage,
+  countCustodySegments,
+  countLineageSnapshots,
+} from "@/lib/data/lineage-crud";
+import { readInlineTables } from "./inline-tables";
+import { compactRowFilters, type CompactPlan, type CompactRowFilters } from "./compact";
+
+export interface AttachmentFileIO {
+  // Preferred bounded enumeration contract. The opaque cursor resumes one
+  // streaming traversal; the first page also returns exact count and bytes.
+  listPage?(cursor: string | null, limit: number): Promise<{
+    files: string[];
+    cursor: string | null;
+    total?: number;
+    totalBytes?: number;
+    fingerprint?: string;
+  }>;
+  summary?(): Promise<{ total: number; totalBytes: number | null; fingerprint?: string }>;
+  closeListing?(cursor: string): Promise<void>;
+  // Legacy compatibility for injected/runtime implementations. Production
+  // browser and Electron exporters use listPage.
+  listAll?(): Promise<string[]>;
+  read(relPath: string): Promise<ArrayBuffer | null>;
+  // Optional: the exact total bytes of every attachment FILE on disk — i.e. the
+  // bytes that will be stored UNCOMPRESSED in the ZIP. Preferred over the DB
+  // metadata sum because it reflects the archive's true attachment footprint,
+  // including legacy root-level files that have no `db.attachments` row. Returns
+  // null (or is absent) when the IO impl cannot provide it, in which case the
+  // export falls back to summing the attachment metadata `size`.
+  totalBytes?(): Promise<number | null>;
+}
+
+export interface ExportProgress {
+  percent: number; // 0..100
+  phase: string;
+}
+
+export class AttachmentSnapshotChangedError extends Error {
+  constructor() {
+    super(
+      "Attachment files changed while the backup was being created. No backup was saved; try again.",
+    );
+    this.name = "AttachmentSnapshotChangedError";
+  }
+}
+
+async function attachmentFileToken(relPath: string, bytes: Uint8Array): Promise<Uint8Array> {
+  const contentDigest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", bytes as BufferSource),
+  );
+  const pathBytes = new TextEncoder().encode(relPath);
+  const framed = new Uint8Array(pathBytes.length + 1 + contentDigest.length);
+  framed.set(pathBytes);
+  framed.set(contentDigest, pathBytes.length + 1);
+  return new Uint8Array(
+    await crypto.subtle.digest("SHA-256", framed as BufferSource),
+  );
+}
+
+function fingerprintHex(bytes: Uint8Array): string {
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export interface ExportOptions {
+  sink: BackupSink;
+  encrypted: boolean;
+  password?: string;
+  appVersion?: string;
+  batchSize?: number;
+  attachmentIO: AttachmentFileIO;
+  readInline?: () => Promise<Record<string, unknown[]>>;
+  onProgress?: (p: ExportProgress) => void;
+  signal?: AbortSignal;
+  // Compact backup: pre-computed drop plan (see compact.ts computeCompactPlan).
+  // When present, the stream omits the planned rows, the manifest carries the
+  // FILTERED counts (so restore progress/size estimates match the archive), and
+  // manifest.compact/compactDropped are set. Callers compute the plan first so
+  // memory-safety gates and disk estimates can use the filtered counts too.
+  compactPlan?: CompactPlan;
+}
+
+// Rough per-row disk allowance for the streamed DB tables in the backup ZIP.
+// Those NDJSON tables are deflate-compressed, so this is a conservative upper
+// bound on a row's on-disk footprint rather than its raw serialized size.
+// Attachment files (stored UNCOMPRESSED in the ZIP) usually dominate the total.
+export const EXPORT_BYTES_PER_ROW = 256;
+
+export interface ExportSizeEstimateInput {
+  // Total byte size of all attachment files (stored uncompressed in the ZIP).
+  attachmentBytes: number;
+  // Combined row count of every streamed DB table (records, transactions,
+  // participants, sync state, lineage, custody segments).
+  rowCount: number;
+  // Override the per-row allowance (defaults to EXPORT_BYTES_PER_ROW).
+  bytesPerRow?: number;
+}
+
+// Estimates the bytes an Electron streaming export will write to disk: the sum
+// of attachment file sizes plus a per-row allowance for the compressed NDJSON
+// tables. Used for a pre-flight disk-space check so the user can free space
+// BEFORE a partial/truncated archive is written, instead of discovering a
+// disk-full failure only after the export aborts mid-stream.
+export function estimateExportBytes(input: ExportSizeEstimateInput): number {
+  const attach = Number.isFinite(input.attachmentBytes)
+    ? Math.max(0, input.attachmentBytes)
+    : 0;
+  const rows = Number.isFinite(input.rowCount) ? Math.max(0, input.rowCount) : 0;
+  const perRow = Number.isFinite(input.bytesPerRow ?? NaN)
+    ? Math.max(0, input.bytesPerRow as number)
+    : EXPORT_BYTES_PER_ROW;
+  return Math.ceil(attach + rows * perRow);
+}
+
+type Row = { id?: number };
+type PageReader = (afterId: number, limit: number) => Promise<Row[]>;
+
+const STREAM_READERS: Record<StreamedTable, PageReader> = {
+  records: getRecordsAfterId as unknown as PageReader,
+  attachments: getAttachmentsAfterId as unknown as PageReader,
+  transactionParticipants: getTransactionParticipantsAfterId as unknown as PageReader,
+  addressSyncState: getAddressSyncStateAfterId as unknown as PageReader,
+  blockchainTransactions: getTransactionsAfterId as unknown as PageReader,
+  utxoLineage: getUtxoLineageAfterId as unknown as PageReader,
+  custodySegments: getCustodySegmentsAfterId as unknown as PageReader,
+  lineageSnapshots: getLineageSnapshotsAfterId as unknown as PageReader,
+};
+
+const DEFAULT_BATCH = 1000;
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new BackupCancelledError();
+}
+
+// Applies the compact plan's per-table drop/scrub rules to one raw page.
+// Tables without a rule (attachments, lineageSnapshots) pass through untouched.
+function applyCompactFilters(
+  table: StreamedTable,
+  batch: Row[],
+  filters: CompactRowFilters,
+): Row[] {
+  switch (table) {
+    case "records":
+      return (batch as Parameters<CompactRowFilters["dropRecord"]>[0][])
+        .filter((r) => !filters.dropRecord(r))
+        .map((r) => filters.scrubRecord(r));
+    case "transactionParticipants":
+      return (batch as Parameters<CompactRowFilters["dropParticipant"]>[0][]).filter(
+        (r) => !filters.dropParticipant(r),
+      );
+    case "blockchainTransactions":
+      return (batch as Parameters<CompactRowFilters["dropTransaction"]>[0][]).filter(
+        (r) => !filters.dropTransaction(r),
+      );
+    case "addressSyncState":
+      return (batch as Parameters<CompactRowFilters["dropSyncState"]>[0][]).filter(
+        (r) => !filters.dropSyncState(r),
+      );
+    case "utxoLineage":
+      return (batch as Parameters<CompactRowFilters["dropLineage"]>[0][]).filter(
+        (r) => !filters.dropLineage(r),
+      );
+    case "custodySegments":
+      return (batch as Parameters<CompactRowFilters["dropSegment"]>[0][]).filter(
+        (r) => !filters.dropSegment(r),
+      );
+    default:
+      return batch;
+  }
+}
+
+// Normalized model rows ride in the small inline manifest tables.  Compact
+// exports must apply the same retained-record/transaction boundary as the
+// streamed tables, then retain only the parent rows those annotations use.
+function compactInlineRecordModel(
+  inline: Record<string, unknown[]>,
+  plan: CompactPlan,
+): Record<string, unknown[]> {
+  const rows = (name: string): any[] => Array.isArray(inline[name]) ? inline[name] as any[] : [];
+  const ownership = rows("addressOwnership")
+    .filter(row => typeof row.recordId === "number" && !plan.droppedRecordIds.has(row.recordId))
+    .map(row => ({ ...row }));
+  const metadata = rows("transactionMetadata")
+    .filter(row => typeof row.txid === "string" && !plan.droppedTxids.has(row.txid));
+  const legs = rows("transactionLegMetadata")
+    .filter(row => typeof row.txid === "string" && !plan.droppedTxids.has(row.txid))
+    .map(row => ({ ...row }));
+  // Decisions are evidence records. Retain only evidence that still has a
+  // retained target record, and apply the same boundary to undo payload ids.
+  const decisions = rows("ownershipReviewDecisions").map(row => {
+    const keepRecord = (id: unknown): id is number =>
+      typeof id === "number" && !plan.droppedRecordIds.has(id);
+    const recordIds = Array.isArray(row.recordIds) ? row.recordIds.filter(keepRecord) : [];
+    if (!recordIds.length) return null;
+    const previousOwnership = Array.isArray(row.previousOwnership)
+      ? row.previousOwnership
+        .filter((prior: any) => keepRecord(prior?.recordId))
+        .map((prior: any) => ({ ...prior }))
+      : undefined;
+    const createdOwnershipRecordIds = Array.isArray(row.createdOwnershipRecordIds)
+      ? row.createdOwnershipRecordIds.filter(keepRecord)
+      : undefined;
+    return {
+      ...row, recordIds,
+      ...(previousOwnership === undefined ? {} : { previousOwnership }),
+      ...(createdOwnershipRecordIds === undefined ? {} : { createdOwnershipRecordIds }),
+    };
+  }).filter((row): row is any => row !== null);
+  const walletIds = new Set<number>();
+  const entityIds = new Set<number>();
+  for (const row of [...ownership, ...legs, ...metadata, ...decisions]) {
+    if (typeof row.walletId === "number") walletIds.add(row.walletId);
+    if (typeof row.entityId === "number") entityIds.add(row.entityId);
+    if (typeof row.counterpartyEntityId === "number") entityIds.add(row.counterpartyEntityId);
+    for (const prior of Array.isArray(row.previousOwnership) ? row.previousOwnership : []) {
+      if (typeof prior.entityId === "number") entityIds.add(prior.entityId);
+      if (typeof prior.counterpartyEntityId === "number") entityIds.add(prior.counterpartyEntityId);
+      if (typeof prior.walletId === "number") walletIds.add(prior.walletId);
+    }
+  }
+  const wallets = rows("wallets").filter(row => typeof row.id === "number" && walletIds.has(row.id));
+  for (const wallet of wallets) if (typeof wallet.entityId === "number") entityIds.add(wallet.entityId);
+  const entities = rows("entities").filter(row => typeof row.id === "number" && entityIds.has(row.id));
+  const keptEntityIds = new Set(entities.map(row => row.id));
+  const keptWalletIds = new Set(wallets.map(row => row.id));
+  for (const row of [...ownership, ...legs]) {
+    if (typeof row.entityId === "number" && !keptEntityIds.has(row.entityId)) delete row.entityId;
+    if (typeof row.walletId === "number" && !keptWalletIds.has(row.walletId)) delete row.walletId;
+  }
+  for (const row of [...ownership, ...metadata]) {
+    if (typeof row.counterpartyEntityId === "number" && !keptEntityIds.has(row.counterpartyEntityId)) {
+      delete row.counterpartyEntityId;
+    }
+  }
+  for (const row of decisions) {
+    if (typeof row.entityId === "number" && !keptEntityIds.has(row.entityId)) delete row.entityId;
+    for (const prior of Array.isArray(row.previousOwnership) ? row.previousOwnership : []) {
+      if (typeof prior.entityId === "number" && !keptEntityIds.has(prior.entityId)) delete prior.entityId;
+      if (typeof prior.counterpartyEntityId === "number" && !keptEntityIds.has(prior.counterpartyEntityId)) delete prior.counterpartyEntityId;
+      if (typeof prior.walletId === "number" && !keptWalletIds.has(prior.walletId)) delete prior.walletId;
+    }
+  }
+  return { ...inline, entities, wallets, addressOwnership: ownership, transactionMetadata: metadata, transactionLegMetadata: legs, ownershipReviewDecisions: decisions };
+}
+
+export async function exportBackup(opts: ExportOptions): Promise<void> {
+  const batchSize = opts.batchSize ?? DEFAULT_BATCH;
+  const readInline = opts.readInline ?? readInlineTables;
+  const signal = opts.signal;
+
+  throwIfAborted(signal);
+
+  // Encryption setup (key + salt + password check sentinel).
+  let key: CryptoKey | null = null;
+  let salt: Uint8Array | null = null;
+  let check: string | undefined;
+  if (opts.encrypted) {
+    if (!opts.password) throw new Error("Password required for encrypted backup");
+    salt = generateSalt();
+    key = await deriveKeyWithParams(opts.password, salt, CURRENT_KDF_PARAMS);
+    check = await encrypt(CHECK_SENTINEL, key);
+  }
+
+  // Counts (cheap, indexed) for the manifest + progress denominator.
+  const [
+    recordsCount,
+    attachmentsCount,
+    participantsCount,
+    addressSyncCount,
+    transactionsCount,
+    utxoLineageCount,
+    custodySegmentsCount,
+    lineageSnapshotsCount,
+  ] = await Promise.all([
+    countRecords(),
+    countAttachments(),
+    countTransactionParticipants(),
+    countAddressSyncState(),
+    countTransactions(),
+    countUtxoLineage(),
+    countCustodySegments(),
+    countLineageSnapshots(),
+  ]);
+
+  opts.onProgress?.({ percent: 2, phase: "Listing attachment files..." });
+  const attachmentSummary = opts.attachmentIO.summary
+    ? await opts.attachmentIO.summary()
+    : null;
+  const legacyAttachmentFiles = !opts.attachmentIO.listPage
+    ? await opts.attachmentIO.listAll?.() ?? []
+    : null;
+  const attachmentFileCount = attachmentSummary?.total ?? legacyAttachmentFiles?.length ?? 0;
+
+  // Exact total bytes of the attachment FILES written into the ZIP (stored
+  // uncompressed), recorded in the manifest so the restore pre-flight can size
+  // disk space precisely rather than inferring it from the compressed backup
+  // file. Prefer the IO's on-disk total (which reflects the true archive
+  // footprint, including legacy root-level files with no DB row); fall back to
+  // summing the attachment metadata `size` when the IO can't report it.
+  let totalAttachmentBytes: number;
+  const ioTotal = typeof attachmentSummary?.totalBytes === "number"
+    ? attachmentSummary.totalBytes
+    : opts.attachmentIO.totalBytes
+      ? await opts.attachmentIO.totalBytes()
+      : null;
+  const hasExactAttachmentByteTotal =
+    typeof ioTotal === "number" && Number.isFinite(ioTotal) && ioTotal >= 0;
+  if (hasExactAttachmentByteTotal) {
+    totalAttachmentBytes = ioTotal;
+  } else {
+    totalAttachmentBytes = await sumAttachmentSizes(batchSize);
+  }
+
+  // Manifest counts: with a compact plan, the six filtered tables use the
+  // plan's exact post-filter counts (computed by the same predicates the
+  // stream below applies) so restore progress, the memory-export OOM guard,
+  // and disk estimates all describe the rows actually in the archive.
+  // Attachments and lineage snapshots are never filtered.
+  const plan = opts.compactPlan;
+  const counts: BackupCounts = {
+    records: plan ? plan.counts.records : recordsCount,
+    attachments: attachmentsCount,
+    transactionParticipants: plan
+      ? plan.counts.transactionParticipants
+      : participantsCount,
+    addressSyncState: plan ? plan.counts.addressSyncState : addressSyncCount,
+    blockchainTransactions: plan
+      ? plan.counts.blockchainTransactions
+      : transactionsCount,
+    utxoLineage: plan ? plan.counts.utxoLineage : utxoLineageCount,
+    custodySegments: plan ? plan.counts.custodySegments : custodySegmentsCount,
+    lineageSnapshots: lineageSnapshotsCount,
+    attachmentFiles: attachmentFileCount,
+  };
+
+  // Progress denominator uses the RAW table sizes: a compact export still
+  // walks every row (dropping some), so raw units keep the bar honest.
+  const totalUnits =
+    recordsCount +
+    attachmentsCount +
+    participantsCount +
+    addressSyncCount +
+    transactionsCount +
+    utxoLineageCount +
+    custodySegmentsCount +
+    lineageSnapshotsCount +
+    attachmentFileCount || 1;
+  let processedUnits = 0;
+  const reportUnits = (phase: string) => {
+    // Reserve 5% head (counts/inline) and 5% tail (finalize).
+    const pct = 5 + Math.min(90, Math.round((processedUnits / totalUnits) * 90));
+    opts.onProgress?.({ percent: pct, phase });
+  };
+
+  // Inline (small) tables → manifest.
+  opts.onProgress?.({ percent: 4, phase: "Gathering metadata..." });
+  const inlineData = await readInline();
+  const backupInlineData = opts.compactPlan
+    ? compactInlineRecordModel(inlineData, opts.compactPlan)
+    : inlineData;
+  const inlineEnvelope = await serializeInline(backupInlineData, key);
+
+  const manifest: BackupManifest = {
+    formatVersion: BACKUP_FORMAT_VERSION,
+    app: "KYUTXO",
+    appVersion: opts.appVersion ?? "3.0.0",
+    exportDate: new Date().toISOString(),
+    encrypted: opts.encrypted,
+    salt: salt ? bufferToBase64(salt) : undefined,
+    // Record the KDF parameters alongside the salt so restore can re-derive
+    // the key even after the app's defaults move again.
+    kdf: key ? CURRENT_KDF_PARAMS : undefined,
+    check,
+    counts,
+    totalAttachmentBytes,
+    streamedTables: [...STREAMED_TABLES],
+    ...(plan
+      ? { compact: true, compactDropped: { ...plan.dropped } }
+      : {}),
+    ...inlineEnvelope,
+  };
+
+  const writer = new ZipStreamWriter(opts.sink);
+  let attachmentCursor: string | null = null;
+  try {
+    // 1) Manifest first (so restore can read it + clear before any data rows).
+    throwIfAborted(signal);
+    await writer.addBytes(
+      MANIFEST_FILENAME,
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
+
+    // 2) The five big tables as NDJSON (one batch per line). With a compact
+    // plan, each table's rows pass through the plan's drop predicates — the
+    // same functions that produced the manifest counts — and kept records get
+    // dangling `discoveredFromRecordId` pointers scrubbed. Keyset paging
+    // advances on the RAW batch (filtering must never stall the cursor), and
+    // fully-dropped batches simply emit no line.
+    const filters: CompactRowFilters | null = plan ? compactRowFilters(plan) : null;
+    for (const table of STREAMED_TABLES) {
+      const reader = STREAM_READERS[table];
+      const lines = (async function* () {
+        let afterId = 0;
+        for (;;) {
+          throwIfAborted(signal);
+          const batch = await reader(afterId, batchSize);
+          if (batch.length === 0) break;
+          const outRows = filters ? applyCompactFilters(table, batch, filters) : batch;
+          if (outRows.length > 0) {
+            yield await serializeBatchLine(outRows, key);
+          }
+          processedUnits += batch.length;
+          reportUnits(`Exporting ${table}...`);
+          const last = batch[batch.length - 1];
+          if (last.id == null) break;
+          afterId = last.id;
+        }
+      })();
+      await writer.addFile(ndjsonPath(table), lines);
+    }
+
+    // 3) Attachment files, one bounded filename page at a time. Each file's
+    // bytes are still read and written individually.
+    let attachmentOffset = 0;
+    let archivedAttachmentFiles = 0;
+    let archivedAttachmentBytes = 0;
+    const archivedAttachmentFingerprint = new Uint8Array(32);
+    let attachmentPage = legacyAttachmentFiles ?? [];
+    if (legacyAttachmentFiles === null && opts.attachmentIO.listPage) {
+      const firstPage = await opts.attachmentIO.listPage(null, batchSize);
+      attachmentPage = firstPage.files;
+      attachmentCursor = firstPage.cursor;
+    }
+    while (attachmentPage.length > 0) {
+      for (const relPath of attachmentPage) {
+        throwIfAborted(signal);
+        const data = await opts.attachmentIO.read(relPath);
+        if (data) {
+          const bytes = new Uint8Array(data);
+          const fileToken = await attachmentFileToken(relPath, bytes);
+          for (let index = 0; index < archivedAttachmentFingerprint.length; index++) {
+            archivedAttachmentFingerprint[index] ^= fileToken[index];
+          }
+          await writer.addBytes(`${ATTACHMENTS_DIR}/${relPath}`, bytes, {
+            compress: false,
+          });
+          archivedAttachmentFiles += 1;
+          archivedAttachmentBytes += bytes.byteLength;
+        }
+        attachmentOffset += 1;
+        processedUnits += 1;
+        reportUnits(`Exporting attachment ${attachmentOffset} of ${attachmentFileCount}...`);
+      }
+      if (!opts.attachmentIO.listPage || !attachmentCursor) break;
+      const nextPage = await opts.attachmentIO.listPage(attachmentCursor, batchSize);
+      attachmentPage = nextPage.files;
+      attachmentCursor = nextPage.cursor;
+    }
+
+    const finalAttachmentSummary = opts.attachmentIO.summary
+      ? await opts.attachmentIO.summary()
+      : null;
+
+    // The manifest must remain first for restore pre-flight, so it cannot be
+    // rewritten after streaming. Instead, fail closed if the independent
+    // pre-stream summary, archived bytes, and final filesystem traversal
+    // observed different attachment contents.
+    // Count/bytes catch additions and size changes; the bounded content
+    // fingerprint also catches same-sized in-place rewrites.
+    if (
+      archivedAttachmentFiles !== attachmentFileCount ||
+      (hasExactAttachmentByteTotal && archivedAttachmentBytes !== totalAttachmentBytes) ||
+      (typeof attachmentSummary?.fingerprint === "string" &&
+        fingerprintHex(archivedAttachmentFingerprint) !== attachmentSummary.fingerprint) ||
+      (finalAttachmentSummary !== null &&
+        (finalAttachmentSummary.total !== attachmentFileCount ||
+          (hasExactAttachmentByteTotal &&
+            finalAttachmentSummary.totalBytes !== totalAttachmentBytes) ||
+          (typeof attachmentSummary?.fingerprint === "string" &&
+            finalAttachmentSummary.fingerprint !== attachmentSummary.fingerprint)))
+    ) {
+      throw new AttachmentSnapshotChangedError();
+    }
+
+    throwIfAborted(signal);
+    opts.onProgress?.({ percent: 97, phase: "Finalizing archive..." });
+    await writer.finalize();
+    opts.onProgress?.({ percent: 100, phase: "Export complete" });
+  } catch (err) {
+    if (typeof attachmentCursor === "string") {
+      await opts.attachmentIO.closeListing?.(attachmentCursor).catch(() => undefined);
+    }
+    await opts.sink.abort();
+    throw err;
+  }
+}

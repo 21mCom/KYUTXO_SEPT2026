@@ -1,0 +1,10 @@
+---
+name: Export date-range filter uses on-chain blockTime, not last-edited time
+description: For transaction/UTXO export rows, date-range scoping must resolve the underlying transaction's blockTime via a batched txid lookup rather than the record's updatedAt/createdAt — and the two must never silently mix.
+---
+
+`matchesExportFilter` in `client/src/lib/bip329.ts` branches its date-range check on `target.kind`: `'transaction'`/`'utxo'` rows are scoped **only** by the underlying transaction's `blockTime` (Unix seconds, already in the right units — no `/1000`); `'address'`/`'other'` rows have no associated transaction and keep the old `updatedAt ?? createdAt` (ms, needs `/1000`) fallback. There is deliberately **no fallback to updatedAt/createdAt for tx/UTXO kinds** — an unsynced/unknown blockTime means the row simply doesn't match a date filter, since a stale last-edited timestamp is exactly the wrong signal a user scoping "transactions from March" is trying to avoid.
+
+**Why:** the bip329/csv-export libs are pure/DB-free by design (unit-testable without Dexie). blockTime lives in a separate `blockchainTransactions` table, so it can't be baked into the record-shaped `ExportFilterTarget` — it has to be resolved externally and passed in as an optional parameter.
+
+**How to apply:** `exportRowTxid(ref)` extracts a txid from either a bare txid or a `txid:vout` outpoint ref. `loadExportBlockTimes(refs, fetchByTxids)` batches distinct txids into one bulk lookup (real caller: `getTransactionsByTxids` from `transaction-crud.ts`) and returns a `Map<txid, blockTime>` — call it once per keyset batch, gated on `filter?.dateRange` being set (skip the DB round trip entirely otherwise), then look up each record's blockTime via `exportRowTxid` before calling `matchesBip329ExportFilter`/`matchesRecordExportFilter`. Any new consumer of the date-range filter (e.g. a live match-count effect) must follow the same batched pattern — a single-cursor `eachRecord` walk can't do the per-batch bulk lookup and will need converting to a keyset (`getRecordsAfterId`) loop instead.

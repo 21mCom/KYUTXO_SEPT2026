@@ -1,0 +1,40 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "gbOTxQFnQAww4U_Y6EH-6"
+uri = "file://screenshots/utxo-provenance-overview.png"
+type = "image"
+title = "UTXO Provenance — overview with expanded hop trail"
+description = "Demo vault with 11 unspent UTXOs: stats cards, filters, hop-depth column, pattern badges, and the deep wallet-reorg row expanded showing 5 dated hops with the hover tooltip."
+logical_id = "02b02d00-ee72-4639-a422-7812498e7620"
+
+[[outputs]]
+id = "pKUvQ0sa5I53B062mci8S"
+uri = "file://screenshots/utxo-provenance-hop-dialog.png"
+type = "image"
+title = "UTXO Provenance — hop detail popup"
+description = "Clicking a hop chip opens the transaction detail dialog: date, block, fee, net through wallet, and full input/output sides with owned badges."
+logical_id = "d4bf431d-5219-454d-9e3b-b9ec76e3afac"
+
+[[outputs]]
+id = "0aoq5cG2ANnYpzA2SqcId"
+uri = "file://client/public/downloads/utxo-provenance-wallet-dust.png"
+type = "image"
+title = "UTXO Provenance — wallet and dust controls"
+description = "Fresh populated screenshot showing the wallet selector, Ignore flagged dust toggle, and scoped UTXO results."
+logical_id = "7e83e6a4-1ace-492d-95aa-accbb07c0df8"
+
+[[outputs]]
+id = "5ry1j8HeRe9uDDFsG6EVb"
+uri = "file://agent-review/KYUTXO-agentic-review-1.1.40.zip"
+type = "unspecified"
+title = "KYUTXO agentic review bundle"
+description = "Source-only review bundle with application code, tests, Electron/React/server files, security and release checks, reviewer scope, and agent instructions. Excludes secrets, vaults, backups, attachments, keys, certificates, generated binaries, dependencies, logs, and private workspace metadata."
+logical_id = "da53d183-1594-4340-a14a-a5d19032d52b"
+content_hash = "sha256:2dbad2c7db86aca25b0ad1c30727c3e74796170c5dd0121c3ed64d5c1e7bf893"
+size = 7212548
+mtime_ms = 1788342271506
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:63ebd98e-fd50-4c32-a367-58f9ec62787c/da53d183-1594-4340-a14a-a5d19032d52b/76bd5046-70b0-4a6c-92d8-8964ddf759b0"
+storage_version_token = "1788342279055768"
+content_type = "application/octet-stream"

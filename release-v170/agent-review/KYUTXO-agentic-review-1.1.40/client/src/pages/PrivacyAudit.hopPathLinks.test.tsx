@@ -1,0 +1,664 @@
+// @vitest-environment jsdom
+//
+// Covers the FindingCard hop-path rendering for proximity findings. The
+// privacy-audit engine records a connecting txid for each hop, and FindingCard
+// renders those between consecutive addresses as a clickable transaction link
+// (TxidLink) plus a deep-dive button (DeepDiveDialog). The engine side is
+// unit-tested elsewhere; this verifies the component wiring:
+//   - one connecting transaction link AND one deep-dive button per consecutive
+//     address pair (i.e. hopPath.length - 1 of each),
+//   - each link/button is wired to the correct hop txid,
+//   - the fallback where hopTxids is missing/empty still renders the path
+//     (the addresses) without throwing and without any tx links/buttons.
+//
+// TxidLink and AddressLink are leaf components with their own IndexedDB /
+// context dependencies that are tested independently, so they are stubbed here
+// to keep this focused on FindingCard's per-hop rendering logic. The stubs
+// preserve the real data-testid shape (link-txid-<first8>) so the assertions
+// still prove FindingCard passes the right txid to each link. DeepDiveDialog is
+// the real component from PrivacyAudit (when closed it only renders its trigger
+// button, data-testid button-deep-dive-<first8>).
+// renderWithProviders mounts RecordPreviewProvider, whose vocabulary hooks query
+// the real Dexie database at mount; provide an in-memory IndexedDB for jsdom.
+import "fake-indexeddb/auto";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import {
+  screen,
+  fireEvent,
+  cleanup,
+  within,
+  waitFor,
+  act,
+} from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
+import type { PrivacyFinding } from "@/lib/privacy-audit";
+
+vi.mock("@/components/TxidLink", () => ({
+  TxidLink: ({ txid }: { txid: string }) => (
+    <span data-testid={`link-txid-${txid.slice(0, 8)}`}>{txid}</span>
+  ),
+}));
+
+vi.mock("@/components/AddressLink", () => ({
+  AddressLink: ({ address }: { address: string }) => (
+    <span data-testid={`address-${address}`}>{address}</span>
+  ),
+}));
+
+// Clicking a hop's deep-dive button opens DeepDiveDialog, which mounts the real
+// TransactionDeepDive and auto-runs its analysis. Stub the two data loaders it
+// calls (so there's no IndexedDB) and the Boltzmann Worker (so no real module
+// worker is spun up under jsdom), exactly as PrivacyAudit.deepDive.test.tsx does.
+vi.mock("@/lib/data/transaction-crud", () => ({
+  getTransactionByTxid: vi.fn(),
+  getParticipantsByTxids: vi.fn(),
+}));
+
+import { getTransactionByTxid } from "@/lib/data/transaction-crud";
+import { getParticipantsByTxids } from "@/lib/data/transaction-crud";
+import { FindingCard } from "./PrivacyAudit";
+
+const mockedGetTx = vi.mocked(getTransactionByTxid);
+const mockedGetParticipants = vi.mocked(getParticipantsByTxids);
+
+// A minimal Worker stub so the deep-dive's lazy Boltzmann worker can be created
+// under jsdom without loading the real module worker. A captured handle to the
+// most recently constructed worker lets a test drive worker.onmessage by hand.
+let lastWorker: MockWorker | null = null;
+
+class MockWorker {
+  onmessage: ((e: MessageEvent) => void) | null = null;
+  onerror: ((e: { message: string }) => void) | null = null;
+  postMessage = vi.fn();
+  terminate = vi.fn();
+  constructor() {
+    lastWorker = this;
+  }
+}
+
+// Distinct 64-hex txids whose first 8 chars differ so every link/button gets a
+// unique data-testid.
+const TX = (n: number) => `${String(n).repeat(8)}${"0".repeat(56)}`;
+
+function proximityFinding(overrides: Partial<PrivacyFinding> = {}): PrivacyFinding {
+  return {
+    type: "PROXIMITY",
+    severity: "MEDIUM",
+    description: "Funds sit close to a flagged entity.",
+    details: {},
+    correction: "Add a hop before spending.",
+    txids: [],
+    addresses: [],
+    ...overrides,
+  };
+}
+
+function renderCard(finding: PrivacyFinding) {
+  return renderWithProviders(
+    <FindingCard finding={finding} coinjoinTxids={new Set<string>()} />,
+  );
+}
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("FindingCard proximity hop-path connecting transactions", () => {
+  it("renders one tx link and one deep-dive button per consecutive address pair, wired to the right txid", () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC", "bc1qhopD"];
+    const hopTxids = [TX(1), TX(2), TX(3)]; // one per pair → 3
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+
+    // The hop path lives inside the collapsed details section.
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    const container = screen.getByTestId("container-hop-path");
+
+    // Every address in the path is rendered.
+    for (const addr of hopPath) {
+      expect(within(container).getByTestId(`address-${addr}`)).toBeTruthy();
+    }
+
+    // Exactly one connecting tx link AND one deep-dive button per pair.
+    const pairs = hopPath.length - 1;
+    expect(within(container).getAllByTestId(/^link-txid-/)).toHaveLength(pairs);
+    expect(within(container).getAllByTestId(/^button-deep-dive-/)).toHaveLength(pairs);
+
+    // Each is wired to the matching hop txid (in order).
+    for (const txid of hopTxids) {
+      const first8 = txid.slice(0, 8);
+      expect(within(container).getByTestId(`link-txid-${first8}`)).toBeTruthy();
+      expect(within(container).getByTestId(`button-deep-dive-${first8}`)).toBeTruthy();
+    }
+  });
+
+  it("renders fewer links than pairs when some hop txids are absent (sparse array)", () => {
+    const hopPath = ["bc1qa", "bc1qb", "bc1qc"];
+    // Only the first hop has a connecting txid; the second is undefined.
+    const hopTxids = [TX(7)];
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    const container = screen.getByTestId("container-hop-path");
+
+    // Path still fully renders.
+    for (const addr of hopPath) {
+      expect(within(container).getByTestId(`address-${addr}`)).toBeTruthy();
+    }
+
+    // Only the hop that has a txid gets a link + deep-dive button.
+    expect(within(container).getAllByTestId(/^link-txid-/)).toHaveLength(1);
+    expect(within(container).getAllByTestId(/^button-deep-dive-/)).toHaveLength(1);
+    expect(within(container).getByTestId(`link-txid-${TX(7).slice(0, 8)}`)).toBeTruthy();
+  });
+
+  it("renders the hop path without any tx links when hopTxids is missing entirely", () => {
+    const hopPath = ["bc1qx", "bc1qy", "bc1qz"];
+
+    // No hopTxids key at all — fallback arrows are shown instead.
+    expect(() =>
+      renderCard(proximityFinding({ details: { hopPath } })),
+    ).not.toThrow();
+
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    const container = screen.getByTestId("container-hop-path");
+
+    // Addresses still render…
+    for (const addr of hopPath) {
+      expect(within(container).getByTestId(`address-${addr}`)).toBeTruthy();
+    }
+
+    // …but no connecting transaction links or deep-dive buttons appear.
+    expect(within(container).queryAllByTestId(/^link-txid-/)).toHaveLength(0);
+    expect(within(container).queryAllByTestId(/^button-deep-dive-/)).toHaveLength(0);
+  });
+
+  it("does not render a hop-path section for a single-address path", () => {
+    renderCard(proximityFinding({ details: { hopPath: ["bc1qonly"], hopTxids: [] } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    expect(screen.queryByTestId("container-hop-path")).toBeNull();
+  });
+});
+
+// Rendering the per-hop deep-dive button proves it's present, but the most useful
+// user action — clicking it to open the transaction deep-dive — was previously
+// untested. This drives the real DeepDiveDialog: clicking a hop's button must
+// open the deep-dive dialog (data-testid dialog-deep-dive) for that hop's txid.
+describe("FindingCard proximity hop-path deep-dive interaction", () => {
+  beforeEach(() => {
+    // The dialog auto-runs analysis on open; resolve the loaders and provide a
+    // Worker so nothing throws while we assert the dialog itself opened.
+    lastWorker = null;
+    mockedGetTx.mockResolvedValue({ txid: TX(2), fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue([
+      { txid: TX(2), role: "input", address: "bc1qin", amount: 100_000, vout: 0 },
+      { txid: TX(2), role: "output", address: "bc1qout", amount: 99_000, vout: 0 },
+    ] as any);
+    vi.stubGlobal("Worker", MockWorker as unknown as typeof Worker);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("opens the deep-dive dialog for the clicked hop's txid", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // The dialog is closed initially — only the per-hop trigger buttons exist.
+    expect(screen.queryByTestId("dialog-deep-dive")).toBeNull();
+
+    // Click the second hop's deep-dive button.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    // The deep-dive dialog opens, scoped to that hop's txid.
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // It auto-analyses the clicked txid (and only that one).
+    await waitFor(() => {
+      expect(mockedGetTx).toHaveBeenCalledWith(TX(2));
+    });
+    expect(mockedGetTx).not.toHaveBeenCalledWith(TX(1));
+  });
+
+  it("renders the deep-dive results once the worker returns for the clicked hop's txid", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The dialog auto-runs analysis: data loads and the worker is posted to.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive a valid worker result back using the id from the latest postMessage
+    // so the handler's pendingIdRef guard accepts it.
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // The user actually sees results inside the dialog: both the summary and the
+    // Boltzmann result render for the clicked hop's txid.
+    const summary = await within(dialog).findByTestId("container-deep-dive-summary");
+    expect(summary).toBeTruthy();
+    expect(within(dialog).getByTestId("container-boltzmann-result")).toBeTruthy();
+
+    // The summary reflects the loaded participants (1 input, 1 output).
+    expect(within(dialog).getByTestId("text-deep-dive-inputs").textContent).toBe("1");
+    expect(within(dialog).getByTestId("text-deep-dive-outputs").textContent).toBe("1");
+  });
+
+  it("renders the numeric Boltzmann figures when the worker returns a full result for the clicked hop", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The dialog auto-runs analysis: data loads and the worker is posted to.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive a full (non-tooComplex) result back, mirroring a normal transaction:
+    // entropy 2 bits, 4 interpretations, efficiency 0.5 against maxEntropy 4.
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: {
+          id,
+          result: {
+            entropy: 2,
+            entropyLabel: "Low",
+            interpretationCount: 4,
+            tooComplex: false,
+            linkMatrix: [],
+            efficiency: 0.5,
+            maxEntropy: 4,
+          },
+        },
+      } as MessageEvent);
+    });
+
+    // The user sees the actual privacy numbers (not the "too complex" notice):
+    // entropy, interpretation count and efficiency for the clicked hop's txid.
+    const boltzmann = await within(dialog).findByTestId("container-boltzmann-result");
+    expect(within(boltzmann).getByTestId("text-boltzmann-entropy").textContent).toBe(
+      "2.00 bits",
+    );
+    expect(
+      within(boltzmann).getByTestId("text-boltzmann-interpretations").textContent,
+    ).toBe("4");
+    expect(within(boltzmann).getByTestId("text-boltzmann-efficiency").textContent).toBe(
+      "50%",
+    );
+  });
+
+  it("shows a dash (not a fake 0%) for efficiency when the transaction can't be meaningfully scored", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The dialog auto-runs analysis: data loads and the worker is posted to.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive a full result whose maxEntropy is 0 — a transaction that can't be
+    // meaningfully scored. Efficiency is 0 too, but the UI must NOT print "0%"
+    // (which would falsely imply the worst possible privacy); it shows "—".
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: {
+          id,
+          result: {
+            entropy: 0,
+            entropyLabel: "None",
+            interpretationCount: 1,
+            tooComplex: false,
+            linkMatrix: [],
+            efficiency: 0,
+            maxEntropy: 0,
+          },
+        },
+      } as MessageEvent);
+    });
+
+    // Entropy and interpretation count still render their figures…
+    const boltzmann = await within(dialog).findByTestId("container-boltzmann-result");
+    expect(within(boltzmann).getByTestId("text-boltzmann-entropy").textContent).toBe(
+      "0.00 bits",
+    );
+    expect(
+      within(boltzmann).getByTestId("text-boltzmann-interpretations").textContent,
+    ).toBe("1");
+
+    // …but efficiency shows a dash rather than a misleading 0%.
+    const efficiency = within(boltzmann).getByTestId("text-boltzmann-efficiency");
+    expect(efficiency.textContent).toBe("—");
+    expect(efficiency.textContent).not.toBe("0%");
+  });
+
+  it("surfaces a visible error and Retry affordance (not a stuck loading state) when the worker errors", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The dialog auto-runs analysis: data loads and the worker is posted to.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive the worker's failure path instead of onmessage — the calculation
+    // crashed (e.g. the worker threw and reported via onerror).
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+
+    // The user sees a clear error notice rather than an empty/hung dialog…
+    const message = await within(dialog).findByTestId("text-deep-dive-message");
+    expect(message.textContent).toMatch(/couldn't analyse this transaction/i);
+
+    // …and is offered a Retry affordance to try again.
+    expect(within(dialog).getByTestId("button-retry-deep-dive")).toBeTruthy();
+
+    // The dialog is no longer stuck loading: neither the inline loading status
+    // nor the spinning Analyse button remain, and no results were rendered.
+    expect(within(dialog).queryByTestId("status-deep-dive-loading")).toBeNull();
+    expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
+  });
+
+  it("surfaces a clear error and Retry affordance (not a stuck loading state) when the transaction's data fails to load", async () => {
+    // The data-load failure path: fetching the transaction throws before the
+    // worker is ever reached (the `catch (err)` block in analyse). The user
+    // must see a clear error rather than a dialog stuck loading forever.
+    mockedGetTx.mockRejectedValue(new Error("IndexedDB read failed"));
+
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The loader is invoked and rejects — no worker is ever posted to.
+    await waitFor(() => {
+      expect(mockedGetTx).toHaveBeenCalledWith(TX(2));
+    });
+
+    // The user sees the data-load error notice rather than an empty/hung dialog…
+    const message = await within(dialog).findByTestId("text-deep-dive-message");
+    expect(message.textContent).toMatch(/couldn't load this transaction's data/i);
+
+    // …and is offered a Retry affordance to try again.
+    expect(within(dialog).getByTestId("button-retry-deep-dive")).toBeTruthy();
+
+    // The dialog is no longer stuck loading and no results were rendered.
+    expect(within(dialog).queryByTestId("status-deep-dive-loading")).toBeNull();
+    expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
+    // The failure happened before the worker stage, so it was never created.
+    expect(lastWorker).toBeNull();
+  });
+
+  it("surfaces the same error when loading the transaction's participants fails", async () => {
+    // The other half of the data-load path: the transaction loads but its
+    // participants reject. This also lands in the `catch (err)` block.
+    mockedGetParticipants.mockRejectedValue(new Error("participant query failed"));
+
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    await waitFor(() => {
+      expect(mockedGetParticipants).toHaveBeenCalledWith([TX(2)]);
+    });
+
+    const message = await within(dialog).findByTestId("text-deep-dive-message");
+    expect(message.textContent).toMatch(/couldn't load this transaction's data/i);
+    expect(within(dialog).getByTestId("button-retry-deep-dive")).toBeTruthy();
+    expect(within(dialog).queryByTestId("status-deep-dive-loading")).toBeNull();
+    expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
+    expect(lastWorker).toBeNull();
+  });
+
+  // A third, distinct outcome: the transaction loads fine but has no input or
+  // output participant data (e.g. it was discovered but never fully synced). The
+  // analyse function short-circuits with guidance to re-sync — and crucially does
+  // NOT offer Retry, because retrying won't help until the address is re-synced.
+  it("tells the user to re-sync (and offers no Retry) when the transaction has no inputs or outputs", async () => {
+    // The transaction record loads, but its participants come back empty.
+    mockedGetParticipants.mockResolvedValue([] as any);
+
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // Both loaders are consulted before the branch decides there's nothing to show.
+    await waitFor(() => {
+      expect(mockedGetParticipants).toHaveBeenCalledWith([TX(2)]);
+    });
+
+    // The user sees the re-sync guidance, not an empty/hung dialog.
+    const message = await within(dialog).findByTestId("text-deep-dive-message");
+    expect(message.textContent).toMatch(/no participant data available/i);
+    expect(message.textContent).toMatch(/re-sync the address/i);
+
+    // The dialog is not stuck loading and no Boltzmann results were rendered.
+    expect(within(dialog).queryByTestId("status-deep-dive-loading")).toBeNull();
+    expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
+    expect(within(dialog).queryByTestId("container-deep-dive-summary")).toBeNull();
+
+    // This branch must NOT offer Retry — retrying is pointless until a re-sync.
+    expect(within(dialog).queryByTestId("button-retry-deep-dive")).toBeNull();
+
+    // No worker is ever spun up for this short-circuit path.
+    expect(lastWorker).toBeNull();
+  });
+
+  // A single failure shows the error + Retry. But if the analysis keeps failing
+  // (failCount >= 2), the dialog escalates to extra recovery guidance ("try
+  // re-syncing the address…") and offers an expandable "Show details" panel with
+  // the condensed underlying reason. Drive the worker's onerror twice for the
+  // same txid and prove both the guidance and the details toggle appear.
+  it("shows extra recovery guidance and an expandable error detail after the analysis fails twice", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // First auto-run: wait for the worker, then fail it.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+
+    // After a single failure: the error shows and Retry is offered, but the
+    // repeated-failure guidance has NOT appeared yet.
+    await within(dialog).findByTestId("text-deep-dive-message");
+    expect(within(dialog).queryByTestId("text-deep-dive-next-steps")).toBeNull();
+    const retry = within(dialog).getByTestId("button-retry-deep-dive");
+
+    // Retry re-runs the analysis for the same txid; wait for the worker to be
+    // posted to a second time, then fail it again.
+    const callsBefore = lastWorker!.postMessage.mock.calls.length;
+    fireEvent.click(retry);
+    await waitFor(() => {
+      expect(lastWorker!.postMessage.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+
+    // Now that it has failed more than once, the extra recovery guidance appears.
+    const nextSteps = await within(dialog).findByTestId("text-deep-dive-next-steps");
+    expect(nextSteps.textContent).toMatch(/failed more than once/i);
+    expect(nextSteps.textContent).toMatch(/re-syncing the address/i);
+
+    // The condensed error reason is hidden until the user expands "Show details".
+    expect(within(dialog).queryByTestId("text-deep-dive-error-detail")).toBeNull();
+
+    fireEvent.click(within(dialog).getByTestId("button-toggle-deep-dive-detail"));
+
+    const detail = await within(dialog).findByTestId("text-deep-dive-error-detail");
+    expect(detail.textContent).toMatch(/out of memory/i);
+  });
+
+  // The escalation above shows the alarming "failed more than once" guidance and
+  // an expanded error-detail panel. If a later retry finally succeeds, all of
+  // that recovery state must clear — otherwise the user would see a valid result
+  // sitting underneath stale failure guidance, undermining trust in the result.
+  it("clears the repeated-failure guidance and error detail once a later analysis succeeds", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // First auto-run: wait for the worker, then fail it.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+    await within(dialog).findByTestId("text-deep-dive-message");
+
+    // Second run (Retry) also fails — escalating to the repeated-failure state.
+    const callsBeforeSecond = lastWorker!.postMessage.mock.calls.length;
+    fireEvent.click(within(dialog).getByTestId("button-retry-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker!.postMessage.mock.calls.length).toBeGreaterThan(callsBeforeSecond);
+    });
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+
+    // The full recovery state is now on screen: guidance + expandable detail.
+    await within(dialog).findByTestId("text-deep-dive-next-steps");
+    fireEvent.click(within(dialog).getByTestId("button-toggle-deep-dive-detail"));
+    await within(dialog).findByTestId("text-deep-dive-error-detail");
+
+    // Third run (Retry) finally succeeds — drive a valid worker result back.
+    const callsBeforeThird = lastWorker!.postMessage.mock.calls.length;
+    fireEvent.click(within(dialog).getByTestId("button-retry-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker!.postMessage.mock.calls.length).toBeGreaterThan(callsBeforeThird);
+    });
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // The user now sees a valid result, and every trace of the failure state is
+    // gone: the error message, the repeated-failure guidance and the error
+    // detail (both the panel and its toggle) have all cleared.
+    const summary = await within(dialog).findByTestId("container-deep-dive-summary");
+    expect(summary).toBeTruthy();
+    expect(within(dialog).getByTestId("container-boltzmann-result")).toBeTruthy();
+
+    expect(within(dialog).queryByTestId("text-deep-dive-message")).toBeNull();
+    expect(within(dialog).queryByTestId("text-deep-dive-next-steps")).toBeNull();
+    expect(within(dialog).queryByTestId("text-deep-dive-error-detail")).toBeNull();
+    expect(within(dialog).queryByTestId("button-toggle-deep-dive-detail")).toBeNull();
+  });
+});

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Pre-push hook: blocks pushes to any repository except the September product,
+# then blocks pushes when package-lock.json contains firewall proxy URLs.
+# The npm postinstall hook normally rewrites these, but it is skipped with
+# --ignore-scripts or when the lockfile is edited without an install.
+# Bypass deliberately with: git push --no-verify
+node scripts/check-github-destination.mjs "$2" || {
+  echo ""
+  echo "Push blocked: this project may only push to 21mCom/KYUTXO_SEPT2026."
+  exit 1
+}
+
+node scripts/check-lockfile-urls.js || {
+  echo ""
+  echo "Push blocked: package-lock.json contains firewall URLs."
+  echo "Fix with: node scripts/fix-lockfile-urls.mjs"
+  echo "Bypass deliberately with: git push --no-verify"
+  exit 1
+}

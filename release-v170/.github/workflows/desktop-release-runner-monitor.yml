@@ -1,0 +1,31 @@
+name: Monitor desktop release runner readiness
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: desktop-release-runner-monitor
+  cancel-in-progress: true
+
+jobs:
+  detect-stale-queued-jobs:
+    name: Detect stale queued release desktops
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout monitor
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Alert for stale queued readiness jobs
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const monitor = require('./.github/scripts/monitor-release-runner-readiness.cjs');
+            await monitor.run({ github, context, core });

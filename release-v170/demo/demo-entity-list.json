@@ -1,0 +1,76 @@
+{
+  "entries": [
+    {
+      "address": "18niMBf4a5tak5e8Sh53mzEnKHsmXRjiu1",
+      "name": "Demo OTC Desk 1",
+      "category": "exchange",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "3LguMyojocArdSbnNHcscjQogxR1ZSCqak",
+      "name": "Demo Mixing Service 1",
+      "category": "mixer",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "37eTLLjLLBuuKkroh3kqmR4icSDgDMj3EK",
+      "name": "Demo HYIP Collector 1",
+      "category": "scam",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "1MoYyajsjhVJE5BfDviFF8UbuefziGeDJy",
+      "name": "Demo OTC Desk 2",
+      "category": "exchange",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "33TtJYnSrhG5JpySthwkFPjaVrVNaEfpvu",
+      "name": "Demo Mixing Service 2",
+      "category": "mixer",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "332CfH6LbfR99r3gWGS5jVLU8qh52g5oyd",
+      "name": "Demo HYIP Collector 2",
+      "category": "scam",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "3C9V2WJ5457eVP868hjYjCBAAyX7NUqSQN",
+      "name": "Demo OTC Desk 3",
+      "category": "exchange",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "1Q8YA7J5Nvpw5QH6FGNaUMeqkfiYG2eTFg",
+      "name": "Demo Mixing Service 3",
+      "category": "mixer",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "34KK69XpHfF3mZi9p5VVkXfYPwy9ZumxjT",
+      "name": "Demo HYIP Collector 3",
+      "category": "scam",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "1D7ZzCLZiAxDSuWW7PswiSHko8p2fj2WLn",
+      "name": "Demo OTC Desk 4",
+      "category": "exchange",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "3K7u7Ezk6JzFErfXUkMGC3R6KmnZc3fTXU",
+      "name": "Demo Mixing Service 4",
+      "category": "mixer",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    },
+    {
+      "address": "3BygHtNwQSbCfsgaGy44W15knsq83Dkfg8",
+      "name": "Demo HYIP Collector 4",
+      "category": "scam",
+      "sourceNote": "KYUTXO demo dataset — fictional attribution applied to a real address for demonstration only"
+    }
+  ]
+}

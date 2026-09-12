@@ -1,0 +1,4054 @@
+modules = ["web", "postgresql-16", "python-3.11", "nodejs-22"]
+run = "npm run dev"
+hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+deploymentTarget = "autoscale"
+build = ["npm", "run", "build"]
+run = ["npm", "run", "start"]
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[[ports]]
+localPort = 23636
+externalPort = 3000
+
+[env]
+PORT = "5000"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "focused-validation-tests-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "workflow-schedules-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dormant-coins-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "utxo-provenance-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "continuity-proof-all-segments-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "continuity-proof-export-pdf-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dormant-coins-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dusted-spend-damage-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dormant-coins-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dormant-live-check-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dormant-resync-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dormant-live-check-electrum-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "sparse-record-fixtures-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "merge-preview-rows-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "wallet-overview-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "wallet-overview-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "wallet-import-reattribution-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "private-key-file-reject-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "private-key-scan-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "psbt-builder-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "quantum-scanner-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "quantum-scan-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-poisoning-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "electrum-sent-nudge-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "tor-proxy-settings-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "forgotten-network-source-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-forgotten-network-source-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "electrum-cert-trust-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "psbt-builder-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "transactions-entity-filter-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "transactions-entity-filter-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "transactions-utxos-filter-controls-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "crud-guards"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "crud-guards-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "network-policy-write-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "network-policy-write-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "boolean-where-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "waitforfunction-options-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "waitforfunction-options-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "lineage-owned-origin-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "input-string-canonicalization"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "lockfile-urls"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "no-external-resources"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "version-literal"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "entity-list"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-poisoning-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-poisoning-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "poisoning-copy-guard-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-reuse-copy-guard-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dusted-mark-all-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bulk-editor-text-join-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "typecheck"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bip329-export-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bip329-export-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "v3-merge-restore-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "attachment-hardening-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "note-rendering"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "test-providers"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "no-buffer-global"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "proof-verify-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "proof-verify-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pdf-glyph-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pdf-glyph-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pdf-text-sanitized"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "sample-pdf-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-addons-pdf-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-offline-lastsynced-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-live-anchor-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-live-anchor-fallback-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-cancel-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-electrum-cancel-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-cancel-history-all-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-cancel-batch-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-reset-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-electrum-reset-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "op-return-fallback-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "declaration-prefs-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "declaration-prefs-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-empty-exclusion-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-empty-exclusion-live-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-node-unreachable-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "adversary-view-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "adversary-scenario-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "adversary-scenario-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "notarization-restore-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "notarization-handoff-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "evidence-package-streaming-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "evidence-package-streaming-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "notarization-merge-restore-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "utxos-notarization-banner-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dust-badge-audit-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "privacy-audit-flows-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-page-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "aml-participant-cap-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "op-return-fallback-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "demo-vault-loader-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "restore-mode-guard-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "merge-analysis-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "merge-analysis-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "metadata-sources-dedup-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "edit-attachments-toast-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "conflict-resolution-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "privacy-audit-interrupted-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "deep-dive-worker-error-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-empty-exclusion-vault-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "block-hash-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "electrum-transport-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "external-open-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "batch-history-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "block-validation"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "sparrow-mvdb-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-import-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "canonical-identifiers-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-bsms-import-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-deriver-paste-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-empty-exclusion-vault-live-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "recently-added-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "wallet-drilldown-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "trusted-types-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "trusted-types-allowlist"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "trusted-types-csp-sync"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "add-metadata-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "quick-tagger-duplicate-tag-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "vocab-combobox-duplicate-select-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "wallet-import-value-updater-add-new-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "mobile-import-kept-metadata-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "heuristic-resync-progress-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "heuristic-list-virtualized-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "group-address-rows-virtualized-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-import-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "db-noise-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "browser-check-lock-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "engine-bridge-shared-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "engine-bridge-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-freshness-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-freshness-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "saved-template-derive-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bulk-editor-notes-append-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bulk-editor-counterparty-set-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bulk-editor-undo-skip-preview-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "rebuild-toast-details-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "utxo-balance-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "database-doctor-recompute-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "database-doctor-recompute-ui-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "database-doctor-recompute-selected-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "database-doctor-select-all-loaded-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "database-doctor-stale-single-row-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "filtered-scan-gate-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "balance-backfill-overlimit-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "utxo-resync-affected-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "electrum-spend-discovery-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-import-scroll-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "calendar-dropdown-caption-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "descriptor-singlesig-handoff-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "demo-custody-chain-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "custody-segment-build-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "continuity-proof-all-segments-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "custody-segment-export-pdf-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "continuity-proof-export-all-pdf-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "lineage-build-segments-refresh-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-5k-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-cancel-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-cancel-history-all-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-cancel-batch-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-reset-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-electrum-reset-history-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-deep-scroll-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dependency-audit"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dependency-audit-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "install-hooks-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-bundle-freshness-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "legacy-upgrade-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "legacy-upgrade-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "compact-backup-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "records-search-visibility-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "search-visibility-repair-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "records-search-visibility-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "record-search-index-recovery-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "behavior-hidden-matches-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dashboard-hidden-matches-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "poisoning-copy-guard-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "canonical-identifiers-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dashboard-hidden-matches-engine-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-poisoning-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "server-response-hygiene-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "prod-response-hygiene-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "launch-token-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "launch-token-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "launch-token-cross-origin-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "launch-token-cross-origin-prod-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "launch-token-prod-static-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "tor-proxy-hardening-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dashboard-hidden-matches-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "legacy-restore-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "restore-oversized-attachment-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "vault-kdf-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "argon2-kdf-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "kdf-upgrade-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-deriver-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ipc-error-sanitization"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "node-settings-cert-revoke-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "failed-unlock-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ipc-sanitization-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "trusted-types-csp-sync-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "duplicate-identifiers-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "database-doctor-duplicates-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "database-doctor-resolve-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "database-doctor-type-fields-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-invault-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "address-checker-invault-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "transactions-entity-filter-engine-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "vocab-ensure-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "vocab-combobox-add-new-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backup-compare-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backup-compare-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backup-compare-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "githooks-delegation-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "githooks-delegation-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "proof-vector-generators-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "proof-vector-generators-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "win32-path-derivation-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "win32-path-derivation-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "network-analysis-dense-graph-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "network-analysis-dense-graph-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "network-analysis-refusal-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-offline-lastsynced-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-live-anchor-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-live-anchor-fallback-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "network-analysis-edge-refusal-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "lineage-build-segments-refresh-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "network-analysis-edge-refusal-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "balance-backfill-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "audit"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "audit-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-version-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "vite-fs-deny-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "browser-check-unlock-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "restore-safety-isolation-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "vault-health-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "records-index-usage-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "records-index-usage-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "table-index-usage-guard"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "table-index-usage-guard-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "bulk-import-batched-save-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "filter-chips-clear-all-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "amount-units-unit-toggle-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-auto-backfill-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-entity-list-core-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-entity-list-diff-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-entity-list-actions-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-entity-list-scale-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "entity-list-import-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-history-trim-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "settings-restore-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-electron-binaries-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "global-command-search-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-coin-passport-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-coin-origins-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-ownership-review-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backup-schedule-concurrency-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backup-schedule-save-lock-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "provider-test-probe-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "report-triggered-sync-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "packaged-backup-schedule-save-lock-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "empty-vault-navigation-browser-check"
+
+[[workflows.workflow]]
+name = "electrum-spend-discovery-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/record-queries.outpointSpendDiscovery.test.ts client/src/lib/electrum-spend-surfaces.outpointSpendDiscovery.test.ts client/src/pages/Nudgie.outpointSpendDiscovery.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "saved-template-derive-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-saved-template-derive-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "sparrow-mvdb-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-sparrow-mvdb-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "descriptor-import-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-descriptor-import-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev"
+waitForPort = 5000
+
+[[workflows.workflow]]
+name = "crud-guards"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-crud-guards.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "crud-guards-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-crud-guards.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "network-policy-write-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-network-policy-writes.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "network-policy-write-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-network-policy-writes.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "lockfile-urls"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-lockfile-urls.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "no-external-resources"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-no-external-resources.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "version-literal"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-version-literal.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "entity-list"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/privacy-entity-list.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bulk-editor-text-join-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/bulk-editor-types.textJoin.test.ts client/src/pages/bulk-editor-types.undoStaleness.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "typecheck"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run check"
+
+[[workflows.workflow]]
+name = "note-rendering"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-note-rendering.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "test-providers"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-test-providers.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "no-buffer-global"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-no-buffer-global.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "proof-verify-browser-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-proof-verify-browser.mjs"
+
+[[workflows.workflow]]
+name = "proof-verify-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/proofVerificationBrowserCheck.test.ts client/src/lib/signatureVerify.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pdf-glyph-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/pdfGlyphBrowserCheck.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pdf-glyph-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pdf-glyph-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pdf-text-sanitized"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pdf-text-sanitized.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "sample-pdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-sample-pdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-empty-exclusion-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-empty-exclusion-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-empty-exclusion-live-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-empty-exclusion-live-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "adversary-view-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-adversary-view-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dust-badge-audit-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dust-badge-audit-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "privacy-audit-flows-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-privacy-audit-flows-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-page-node-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/ProofOfFundsDeclaration.documentIntegrity.test.tsx client/src/pages/ProofOfFundsDeclaration.freshnessAnchorValidation.test.tsx client/src/pages/ProofOfFundsDeclaration.nodeUnreachable.test.tsx client/src/pages/proof-of-funds/pof-pdf-data.canonicalPayload.test.ts"
+
+[[workflows.workflow]]
+name = "demo-vault-loader-node-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/DemoVaultLoader.test.tsx"
+
+[[workflows.workflow]]
+name = "privacy-audit-interrupted-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/PrivacyAudit.interruptedNotice.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "deep-dive-worker-error-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/privacy-audit/transaction-deep-dive.workerError.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-empty-exclusion-vault-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-empty-exclusion-vault-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "block-hash-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run electron/block-hash.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "electrum-transport-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run electron/electrum-client.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "external-open-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run electron/security-utils.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "batch-history-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run electron/batch-history.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "block-validation"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-block-validation.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-empty-exclusion-vault-live-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-empty-exclusion-vault-live-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "recently-added-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-recently-added-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "heuristic-resync-progress-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-heuristic-resync-progress-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "db-noise-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-db-noise-guard.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "browser-check-lock-guard"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-browser-check-lock.test.mjs"
+
+[[workflows.workflow]]
+name = "descriptor-import-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/descriptor-import-utils.test.ts client/src/pages/DescriptorImport.copyButtons.test.tsx client/src/pages/BulkImport.chainCoverage.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "descriptor-bsms-import-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-descriptor-bsms-import-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[agent]
+integrations = ["javascript_object_storage:1.0.0"]
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000
+
+[[workflows.workflow]]
+name = "bulk-editor-notes-append-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bulk-editor-notes-append-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bulk-editor-counterparty-set-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bulk-editor-counterparty-set-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "add-metadata-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-add-metadata-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "quick-tagger-duplicate-tag-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-quick-tagger-duplicate-tag-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "mobile-import-kept-metadata-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-mobile-import-kept-metadata-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "demo-vault-build"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/demo-vault/build-demo-vault.mjs 2>&1 | tee scripts/demo-vault/build.log"
+
+
+[[workflows.workflow]]
+name = "rebuild-toast-details-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/settings/maintenance-tools-section.viewDetailsAction.test.tsx client/src/pages/settings/maintenance-tools-section.noProgress.test.tsx client/src/pages/settings/maintenance-tools-section.rebuildDetails.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "utxo-balance-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-utxo-balance-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "utxo-resync-affected-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/UTXOs.resyncAffected.test.tsx client/src/pages/UTXOs.engineOutpointCoverage.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "descriptor-import-scroll-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-descriptor-import-scroll.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "calendar-dropdown-caption-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/ui/calendar.dropdownCaption.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "descriptor-singlesig-handoff-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-descriptor-singlesig-handoff-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "demo-custody-chain-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-demo-custody-chain-browser.mjs"
+
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bip329-export-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/bip329.test.ts client/src/lib/bip329-export.test.ts client/src/pages/ExportPage.bip329Filter.test.tsx client/src/lib/csv-export.test.ts client/src/lib/csv-export.scale.test.ts client/src/pages/ExportPage.csvFilter.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bip329-export-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bip329-export-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-5k-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-5k-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dependency-audit"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-audit.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dependency-audit-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-audit.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "install-hooks-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-install-hooks.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-bundle-freshness-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/packaged-bundle-freshness.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "trusted-types-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-trusted-types-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "trusted-types-allowlist"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-trusted-types-allowlist.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "trusted-types-csp-sync"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-trusted-types-csp-sync.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "psbt-builder-node-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/psbt.test.ts client/src/lib/psbt-metadata.test.ts client/src/lib/data/saved-psbts-crud.test.ts client/src/components/BuildPsbtDialog.test.tsx client/src/lib/backup/saved-psbts-roundtrip.runtime.test.ts client/src/lib/evidence-notarization.test.ts"
+
+[[workflows.workflow]]
+name = "psbt-builder-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-psbt-builder-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "transactions-entity-filter-node-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/engine/__tests__/engine-core.test.ts client/src/lib/engine/__tests__/transactions-entity-filter-equivalence.test.ts client/src/lib/engine/__tests__/engine-core.entityFilterScale.test.ts client/src/pages/UTXOs.entityFilters.test.tsx client/src/pages/Transactions.sortControl.test.tsx"
+
+[[workflows.workflow]]
+name = "transactions-entity-filter-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-transactions-entity-filter-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "transactions-utxos-filter-controls-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-transactions-utxos-filter-controls-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "legacy-upgrade-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/legacy-migration.test.ts client/src/lib/__tests__/legacy-decrypt.test.ts client/src/components/LegacyMigrationOverlay.test.tsx client/src/lib/backup/format.compatibility.test.ts client/src/lib/backup/kdf-params.runtime.test.ts client/src/lib/backup/restore.edge.runtime.test.ts client/src/lib/backup/legacy-restore-pipeline.runtime.test.ts client/src/lib/backup/legacy-restore.runtime.test.ts client/src/lib/backup/legacy-restore-misc.runtime.test.ts client/src/lib/backup/legacy-node-settings-restore.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "legacy-upgrade-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-legacy-upgrade-scale-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "restore-mode-guard-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/settings/restore-backup-flow.v3MergeEnabled.test.tsx client/src/lib/backup/v3-merge-restore.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "edit-attachments-toast-node-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/contexts/RecordPreviewContext.editAttachmentsToast.test.tsx"
+
+[[workflows.workflow]]
+name = "v3-merge-restore-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-v3-merge-restore-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-recompute-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-recompute-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-recompute-ui-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-recompute-ui-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-recompute-selected-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-recompute-selected-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-select-all-loaded-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-select-all-loaded-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-stale-single-row-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-stale-single-row-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "conflict-resolution-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/RecordDetailPanel.conflictSlot.test.tsx client/src/lib/conflict-detection.test.ts client/src/lib/data/record-origins-crud.captureMergeOrigin.test.ts client/src/lib/wallet-import/import-manager.mergeOrigins.test.ts client/src/pages/ConflictResolution.mergedImports.test.tsx client/src/pages/QuickTagger.mergeOrigins.test.tsx client/src/pages/Nudgie.mergeOrigins.test.tsx client/src/pages/Dashboard.mergeOrigins.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "filtered-scan-gate-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/address-stats.filteredScanGate.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "balance-backfill-overlimit-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/address-stats.overLimitFallback.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "compact-backup-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/backup/compact.classification.test.ts client/src/lib/backup/compact-roundtrip.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "quantum-scanner-node-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/QuantumRiskScanner.test.tsx client/src/pages/QuantumRiskScanner.scale.test.tsx"
+
+[[workflows.workflow]]
+name = "quantum-scan-scale-browser-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-quantum-scan-scale-browser.mjs"
+
+[[workflows.workflow]]
+name = "records-search-visibility-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/records-query.test.ts client/src/lib/data/record-crud.tierInsertHardening.test.ts client/src/lib/data/record-crud.searchVisibilityRepair.test.ts client/src/lib/engine/__tests__/records-search-tier-parity.test.ts client/src/pages/Records.hiddenMatches.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "search-visibility-repair-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-search-visibility-repair-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "record-search-index-recovery-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-record-search-index-recovery-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "server-response-hygiene-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run server/response-hygiene.test.ts server/attachments.security.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "launch-token-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run server/launch-token.test.ts server/attachments.security.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "tor-proxy-hardening-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run server/tor-proxy.test.ts server/tor-proxy.transport.test.ts electron/tor-proxy.test.ts electron/security-utils.test.ts client/src/lib/tor-proxy-settings-sync.staleToken.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dashboard-hidden-matches-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/pages/Dashboard.hiddenMatches.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "launch-token-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-launch-token-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+
+[[workflows.workflow]]
+name = "vite-fs-deny-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-vite-fs-deny-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+[[workflows.workflow]]
+name = "wallet-overview-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=2 --teardownTimeout=30000 client/src/lib/engine/__tests__/wallet-usage-parity.test.ts client/src/lib/engine/__tests__/engine-core.test.ts client/src/lib/wallet-import/merge-utils.reattribution.test.ts client/src/lib/wallet-import/import-manager.mergeOrigins.test.ts client/src/pages/BulkImport.reattribution.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "attachment-hardening-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-attachment-hardening-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "legacy-restore-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/backup/legacy-restore.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "vault-kdf-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/crypto.kdf.test.ts client/src/lib/vault.kdf.test.ts client/src/lib/backup/kdf-params.runtime.test.ts client/src/contexts/AuthContext.kdfUpgradeRetry.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "argon2-kdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-argon2-kdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dusted-mark-all-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/DustedPage.markAll.test.tsx client/src/pages/DustedPage.unmarkAll.test.tsx client/src/pages/DustedPage.per-output.test.tsx client/src/pages/DustedPage.dustScopeDedup.test.ts client/src/pages/DustedPage.spendDamage.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "wallet-overview-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-wallet-overview-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-deep-scroll-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-deep-scroll-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "kdf-upgrade-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-kdf-upgrade-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-deriver-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/address-deriver.test.ts client/src/pages/AddressDeriver.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "wallet-import-reattribution-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-wallet-import-reattribution-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "merge-analysis-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/backup/merge-analysis.runtime.test.ts client/src/lib/backup/v3-merge-restore.runtime.test.ts client/src/lib/backup/merge-classify.blankInputPairing.runtime.test.ts client/src/pages/settings/restore-backup-flow.v3MergeEnabled.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-deriver-paste-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-deriver-paste-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "merge-analysis-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-merge-analysis-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "electrum-sent-nudge-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-electrum-sent-nudge-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "records-search-visibility-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-records-search-visibility-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "ipc-error-sanitization"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-ipc-error-sanitization.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "tor-proxy-settings-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-tor-proxy-settings-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "forgotten-network-source-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-forgotten-network-source-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-forgotten-network-source-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-forgotten-network-source-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-ownership-review-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-ownership-review-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "prod-response-hygiene-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-prod-response-hygiene.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "electrum-cert-trust-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-electrum-cert-trust-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "metadata-sources-dedup-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-metadata-sources-dedup-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "node-settings-cert-revoke-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/NodeSettings.certRevokeReprompt.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "restore-oversized-attachment-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/backup/restore-oversized-attachment.runtime.test.ts client/src/lib/backup/restore-attachment-writer.realEndpoint.test.ts client/src/lib/backup/restore-attachment-writer.electronEndpoint.test.ts client/src/pages/settings/restore-backup-flow.oversizedSkipSummary.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "wallet-drilldown-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-wallet-drilldown-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "private-key-file-reject-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-private-key-file-reject-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "merge-preview-rows-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-merge-preview-rows-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "private-key-scan-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/wallet-import/import-manager.scanForPrivateKeys.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "failed-unlock-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/LoginScreen.failedUnlock.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "ipc-sanitization-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-ipc-error-sanitization.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "trusted-types-csp-sync-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-trusted-types-csp-sync.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "launch-token-cross-origin-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-launch-token-cross-origin-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "launch-token-cross-origin-prod-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-launch-token-cross-origin-prod-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "launch-token-prod-static-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-launch-token-prod-static-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-poisoning-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/address-poisoning.test.ts client/src/lib/address-poisoning.scale.test.ts client/src/lib/data/poisoning-tagging.scale.test.ts client/src/pages/AddressPoisoning.test.tsx client/src/pages/AddressPoisoning.tagProgress.test.tsx client/src/components/AddressLink.poisoningGuard.test.tsx client/src/hooks/use-guarded-address-copy.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dashboard-hidden-matches-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dashboard-hidden-matches-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-poisoning-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-poisoning-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "poisoning-copy-guard-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-poisoning-copy-guard-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-reuse-copy-guard-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-reuse-copy-guard-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "canonical-identifiers-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/bitcoin.canonicalize.test.ts client/src/lib/data/record-crud.canonicalization.test.ts client/src/lib/transaction-sync.canonicalMatch.test.ts client/src/components/RecordFormDialog.identifierWarning.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-poisoning-scale-browser-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-poisoning-scale-browser.mjs"
+
+[[workflows.workflow]]
+name = "dashboard-hidden-matches-engine-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dashboard-hidden-matches-engine-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "transactions-entity-filter-engine-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-transactions-entity-filter-engine-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "input-string-canonicalization"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-input-string-canonicalization.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "duplicate-identifiers-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/DatabaseDoctor.duplicateIdentifiers.test.tsx client/src/pages/DatabaseDoctor.typeFieldConfirm.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-duplicates-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-duplicates-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-resolve-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-resolve-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-invault-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-invault-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "canonical-identifiers-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-canonical-identifiers-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-invault-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/AddressChecker.inVault.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "behavior-hidden-matches-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-behavior-hidden-matches-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "heuristic-list-virtualized-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-heuristic-list-virtualized-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "group-address-rows-virtualized-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-group-address-rows-virtualized-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-node-unreachable-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-node-unreachable-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "engine-bridge-shared-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-engine-bridge-shared.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "engine-bridge-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-engine-bridge-shared.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "aml-participant-cap-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/proof-of-funds/aml-screening.participantCap.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "vocab-ensure-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/vocabulary-crud.ensure.test.ts"
+
+[[workflows.workflow]]
+name = "vocab-combobox-add-new-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/VocabularyCombobox.addNew.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-addons-pdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-addons-pdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "op-return-fallback-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/transaction-crud.opReturnBooleanScan.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-cancel-history-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-cancel-history-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-electrum-cancel-history-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-electrum-cancel-history-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-cancel-history-all-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-cancel-history-all-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-reset-history-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-reset-history-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "address-checker-electrum-reset-history-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-address-checker-electrum-reset-history-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "declaration-prefs-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-declaration-prefs-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "backup-compare-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/backup/compare.test.ts client/src/lib/backup/compare.runtime.test.ts client/src/components/BackupCompareDialog.diffLinks.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "backup-compare-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-backup-compare-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "backup-compare-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-backup-compare-scale-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "sparse-record-fixtures-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/RecordDetailPanel.sparseRecord.test.tsx client/src/components/RecordTable.test.tsx client/src/pages/Dashboard.sparseRecords.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "adversary-scenario-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/adversary-scenario.test.ts client/src/lib/adversary-scenario.extend.test.ts client/src/lib/data/adversary-scenarios-crud.test.ts client/src/lib/backup/adversary-scenarios-roundtrip.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "adversary-scenario-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-adversary-scenario-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "boolean-where-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-boolean-where.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "lineage-owned-origin-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/lineageEngine.ownedOriginScan.test.ts client/src/lib/lineageEngine.custodySplit.test.ts client/src/lib/data/transaction-crud.opReturnBooleanScan.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "notarization-restore-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-notarization-restore-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "notarization-handoff-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-notarization-handoff-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "evidence-package-streaming-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-evidence-package-streaming-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "evidence-package-streaming-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-evidence-package-streaming-browser.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "notarization-merge-restore-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-notarization-merge-restore-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "database-doctor-type-fields-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-database-doctor-type-fields-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "githooks-delegation-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-githooks-delegation.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "githooks-delegation-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-githooks-delegation.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-freshness-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-freshness-guard.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-freshness-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-packaged-freshness-guard.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "custody-segment-build-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-custody-segment-build-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "proof-vector-generators-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-proof-vector-generators.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "proof-vector-generators-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-proof-vector-generators.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "win32-path-derivation-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-win32-path-derivation.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "win32-path-derivation-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-win32-path-derivation.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "continuity-proof-all-segments-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/ContinuityProof.allSegments.test.tsx client/src/components/ContinuityProof.originDate.test.tsx client/src/lib/unix-seconds.test.ts client/src/lib/data/lineage-crud.filteredSegments.test.ts client/src/pages/proof-of-funds/use-balance-check.offlineLastSynced.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dormant-coins-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/dormant-coins.test.ts client/src/pages/DormantCoins.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "utxo-provenance-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/UtxoProvenance.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dormant-coins-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dormant-coins-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dormant-coins-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dormant-coins-scale-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dormant-live-check-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dormant-live-check-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dormant-resync-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dormant-resync-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dormant-live-check-electrum-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/dormant-live-check.electrum.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "network-analysis-dense-graph-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/network-analysis.denseGraph.test.ts client/src/pages/NetworkAnalysis.cancelLayout.test.tsx client/src/pages/NetworkAnalysis.nodeInteraction.test.tsx client/src/pages/NetworkAnalysis.graphContrast.test.tsx client/src/pages/NetworkAnalysis.copyButton.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "network-analysis-dense-graph-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-network-analysis-dense-graph-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "continuity-proof-all-segments-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-continuity-proof-all-segments-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "network-analysis-refusal-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-network-analysis-refusal-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "lineage-build-segments-refresh-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-lineage-build-segments-refresh-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-offline-lastsynced-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-offline-lastsynced-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-live-anchor-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-live-anchor-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-live-anchor-fallback-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-live-anchor-fallback-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "network-analysis-edge-refusal-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-network-analysis-edge-refusal-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "waitforfunction-options-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-waitforfunction-options.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "waitforfunction-options-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-waitforfunction-options.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dusted-spend-damage-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dusted-spend-damage-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "continuity-proof-export-pdf-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/components/ContinuityProof.exportPdf.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "custody-segment-export-pdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-custody-segment-export-pdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "continuity-proof-export-all-pdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-continuity-proof-export-all-pdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bulk-editor-undo-skip-preview-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bulk-editor-undo-skip-preview-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+    name = "utxos-notarization-banner-node-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "npx vitest run client/src/pages/UTXOs.notarizationBanner.test.tsx"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+
+    [[workflows.workflow]]
+    name = "address-checker-cancel-batch-browser-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "node scripts/check-address-checker-cancel-batch-browser.mjs"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+
+    [[workflows.workflow]]
+    name = "packaged-electrum-cancel-browser-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "node scripts/check-packaged-electrum-cancel-browser.mjs"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+
+    [[workflows.workflow]]
+    name = "vocab-combobox-duplicate-select-browser-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "node scripts/check-vocab-combobox-duplicate-select-browser.mjs"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+
+    [[workflows.workflow]]
+    name = "wallet-import-value-updater-add-new-browser-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "node scripts/check-wallet-import-value-updater-add-new-browser.mjs"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+
+    [[workflows.workflow]]
+    name = "balance-backfill-scale-browser-check"
+    author = "agent"
+
+    [[workflows.workflow.tasks]]
+    task = "shell.exec"
+    args = "node scripts/check-balance-backfill-scale-browser.mjs"
+
+    [workflows.workflow.metadata]
+    isValidation = true
+
+[[workflows.workflow]]
+name = "about-electron-version-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-about-electron-version-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "audit"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-audit.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "audit-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-audit.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "release-fixture-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-release-fixtures.test.mjs scripts/release-workflow.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-version-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-version-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "browser-check-unlock-guard"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-browser-check-unlock-guard.js && node --test scripts/unlock-flow-utils.test.mjs"
+
+[[workflows.workflow]]
+name = "vault-health-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-vault-health-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "records-index-usage-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-records-index-usage.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "records-index-usage-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-records-index-usage.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "bulk-import-batched-save-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-bulk-import-batched-save-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "table-index-usage-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-table-index-usage.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "table-index-usage-guard-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/check-table-index-usage.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "filter-chips-clear-all-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-filter-chips-clear-all-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "amount-units-unit-toggle-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/amount-units.test.ts client/src/pages/DustedPage.unitToggleThreshold.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-auto-backfill-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.autoBackfill.test.tsx client/src/pages/SettingsPage.resolveInputsProgress.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-entity-list-core-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.entityList.test.tsx client/src/pages/SettingsPage.entityListMerge.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-entity-list-diff-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.entityDiffCategoryOptions.test.tsx client/src/pages/SettingsPage.entityDiffFilter.test.tsx client/src/pages/SettingsPage.entityListCategoryDiff.test.tsx client/src/pages/SettingsPage.entityListChangedDetail.test.tsx client/src/pages/SettingsPage.entityMergeDetailRows.test.tsx client/src/pages/SettingsPage.entityOverridesOnlyChanged.test.tsx client/src/pages/SettingsPage.entityReplaceDetailRows.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-entity-list-actions-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.entityErrorDownload.test.tsx client/src/pages/SettingsPage.entityListConfirm.test.tsx client/src/pages/SettingsPage.entityListConfirmFailure.test.tsx client/src/pages/SettingsPage.entityListReplaceSummary.test.tsx client/src/pages/SettingsPage.entityListSummary.test.tsx client/src/pages/SettingsPage.entityRevertFailure.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-entity-list-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-settings-entity-list-scale-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "entity-list-import-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-entity-list-import-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-history-trim-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.historyTrim.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "settings-restore-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 client/src/pages/SettingsPage.restoreAttachmentWriteFailed.test.tsx client/src/pages/SettingsPage.restoreAttachmentWriteRaw.test.tsx client/src/pages/SettingsPage.restoreInterrupted.test.tsx client/src/pages/SettingsPage.restorePreview.test.tsx client/src/pages/SettingsPage.restorePreviewV3.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-electron-binaries-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/packaged-electron-binaries.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "global-command-search-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-global-command-search-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "coin-passport-export-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-coin-passport-export-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "transaction-inbox-saved-view-snooze-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-transaction-inbox-saved-view-snooze-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "encrypted-backup-restore-safety-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-encrypted-backup-restore-safety-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "restore-safety-isolation-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-stable-backup-fixture-privacy.mjs && node scripts/check-restore-safety-isolation.js && node --test scripts/check-restore-safety-isolation.test.mjs scripts/stable-backup-fixture.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "protected-vault-migration-gate-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/protected-vault-migration-gate.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-vault-migration-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-vault-migration-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-coin-passport-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-coin-passport-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-coin-origins-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-coin-origins-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "coin-origins-export-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-coin-origins-export-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "record-search-index-concurrency-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/data/record-crud.globalSearch.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "backup-schedule-concurrency-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run --maxWorkers=1 --teardownTimeout=30000 client/src/lib/backup/scheduled-settings.runtime.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "backup-schedule-save-lock-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-backup-schedule-save-lock-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "network-privacy-activity"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run check && npx vitest run client/src/lib/network-privacy.test.ts client/src/lib/data/network-privacy-activity-crud.test.ts client/src/lib/legacy-migration.test.ts && node scripts/check-network-privacy-activity-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-network-privacy-activity-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-network-privacy-activity-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "provider-test-probe-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --test scripts/provider-test-probe.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "report-triggered-sync-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-report-triggered-sync-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "workflow-schedules-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-workflow-schedules.mjs && node --test scripts/check-workflow-schedules.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-backup-schedule-save-lock-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-backup-schedule-save-lock-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-encrypted-backup-restore-safety-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "KYUTXO_PACKAGED_RESTORE_SAFETY=1 node scripts/check-encrypted-backup-restore-safety-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "owner-book-million-row-release-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "KYUTXO_OWNER_BOOK_SCALE_ROWS=1000000 npm run test:owner-book-million"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "protected-owner-book-million-row-release-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "KYUTXO_OWNER_BOOK_PROTECTED_MILLION=1 npm run test:protected-owner-book-million"
+
+[workflows.workflow.metadata]
+isValidation = false
+
+[[workflows.workflow]]
+name = "focused-validation-tests-guard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-focused-validation-tests.mjs && node --test scripts/check-focused-validation-tests.test.mjs scripts/check-packaged-storage-boundary.test.mjs scripts/check-protected-vault-claims.test.mjs scripts/check-release-runner-readiness.test.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "packaged-engine-rebuild-scale-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-packaged-engine-rebuild-scale-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "empty-vault-navigation-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-empty-vault-navigation-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
