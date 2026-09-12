@@ -45,8 +45,8 @@ describe("shared attachment listing contract", () => {
     expect(result).toMatchObject({ success: true, total: 3, totalBytes: 10, cursor: null });
     expect(result.files).toEqual(expect.arrayContaining([
       "root.bin",
-      path.join("nested", "child.bin"),
-      path.join("nested", "deeper", "deepest", "deep.bin"),
+      path.posix.join("nested", "child.bin"),
+      path.posix.join("nested", "deeper", "deepest", "deep.bin"),
     ]));
     expect(result.files).toHaveLength(3);
     expect(result.files?.some((name) => name.includes("linked"))).toBe(false);

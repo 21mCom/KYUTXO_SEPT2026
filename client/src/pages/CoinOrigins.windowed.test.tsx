@@ -112,7 +112,7 @@ describe("Coin Origins native windows", () => {
     fireEvent.click(screen.getByTestId("button-coin-origins-retry"));
 
     await waitFor(() => expect(screen.queryByTestId("coin-origins-load-error")).toBeNull());
-    expect(screen.getAllByText("recovered-window:0").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("recovered-window:0")).length).toBeGreaterThan(0);
     expect(screen.getByTestId("coin-origins-page").getAttribute("data-navigation-ready")).toBe("true");
     expect(mocks.engineGetCoinOriginsPage).toHaveBeenCalledTimes(2);
   });

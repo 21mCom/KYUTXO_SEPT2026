@@ -412,7 +412,7 @@ router.post('/upload', singleFileUpload, async (req: Request, res) => {
     }
 
     // Return relative path for storage in database
-    const relativePath = path.join('attachments', sanitizedId, filename);
+    const relativePath = path.posix.join('attachments', sanitizedId, filename);
 
     res.json({
       objectStoragePath: relativePath,

@@ -84,7 +84,7 @@ describe("containedRealPath", () => {
     const f = path.join(base, "dir", "file.bin");
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, "x");
-    expect(await containedRealPath(base, f)).toBe(fs.realpathSync(f));
+    expect(await containedRealPath(base, f)).toBe(await fs.promises.realpath(f));
   });
 
   it("returns the would-be path for a missing write target under real dirs", async () => {
@@ -92,7 +92,7 @@ describe("containedRealPath", () => {
     fs.mkdirSync(dir, { recursive: true });
     const target = path.join(dir, "new.bin");
     expect(await containedRealPath(base, target)).toBe(
-      path.join(fs.realpathSync(dir), "new.bin"),
+      path.join(await fs.promises.realpath(dir), "new.bin"),
     );
   });
 
@@ -101,7 +101,7 @@ describe("containedRealPath", () => {
     // base/a/b/c.bin, not a reversal like base/c.bin/a/b.
     const target = path.join(base, "a", "b", "c.bin");
     expect(await containedRealPath(base, target)).toBe(
-      path.join(fs.realpathSync(base), "a", "b", "c.bin"),
+      path.join(await fs.promises.realpath(base), "a", "b", "c.bin"),
     );
   });
 

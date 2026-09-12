@@ -351,7 +351,7 @@ describe("legitimate round-trip still works", () => {
 
     const list = await fetch(`${baseUrl}/api/attachments/list-all`);
     const listBody = await list.json();
-    expect(listBody.files).toContain(rel.split(path.sep).join("/"));
+    expect(listBody.files).toContain(rel);
 
     const down = await fetch(`${baseUrl}/api/attachments/download/${objectStoragePath}`);
     expect(down.status).toBe(200);
@@ -377,7 +377,7 @@ describe("legitimate round-trip still works", () => {
     });
   });
 
-  it("an aborted download closes the file descriptor (no fd leak)", async () => {
+  it.skipIf(!fs.existsSync("/proc/self/fd"))("an aborted download closes the file descriptor (no fd leak)", async () => {
     // A file large enough that the stream cannot fit in socket buffers, so
     // aborting the client genuinely interrupts the transfer mid-stream.
     const bigDir = path.join(attachmentsDir, "bigdl");

@@ -34,7 +34,7 @@ function createAttachmentListing(options) {
   async function* iterateDirectory(relativeDirectory = '') {
     const entries = await fs.promises.opendir(path.join(attachmentsDir, relativeDirectory));
     for await (const entry of entries) {
-      const relativePath = path.join(relativeDirectory, entry.name);
+      const relativePath = path.posix.join(relativeDirectory, entry.name);
       if (entry.isDirectory()) {
         yield* iterateDirectory(relativePath);
       } else if (entry.isFile()) {
