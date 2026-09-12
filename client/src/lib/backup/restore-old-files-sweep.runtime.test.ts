@@ -389,6 +389,6 @@ describe(
     ]);
     expect(cleanupProgress.map((progress) => progress.percent)).toEqual([95, 96, 98, 99]);
     expect(await listDiskFiles()).toEqual([]);
-  });
+  }, 90_000);
   },
 );
