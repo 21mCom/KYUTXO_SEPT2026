@@ -88,7 +88,9 @@ test('fresh repo: hook is created with exactly one tagged line per check', () =>
       `unexpected extra lines in fresh hook:\n${lines.join('\n')}`
     );
     // Executable bit set.
-    assert.ok(fs.statSync(hookPath(repo)).mode & 0o111, 'hook is not executable');
+    if (process.platform !== 'win32') {
+      assert.ok(fs.statSync(hookPath(repo)).mode & 0o111, 'hook is not executable');
+    }
   });
 });
 

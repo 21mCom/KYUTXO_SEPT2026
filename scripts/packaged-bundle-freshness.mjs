@@ -26,7 +26,12 @@ import { verifyPackagedBuildProvenance } from './packaged-build-provenance.mjs';
  * Exported so the node --test suite can pin the win32-style input behaviour.
  */
 export function repoRootFromModuleUrl(moduleUrl) {
-  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), '..');
+  const url = new URL(moduleUrl);
+  const modulePath =
+    process.platform === 'win32' && !/^\/[A-Za-z]:\//.test(url.pathname)
+      ? decodeURIComponent(url.pathname)
+      : fileURLToPath(url);
+  return path.resolve(path.dirname(modulePath), '..');
 }
 
 // Exported for the landmark regression test (a platform-naive derivation must

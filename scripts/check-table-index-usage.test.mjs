@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const SCANNER = path.resolve(path.dirname(__filename), 'check-table-index-usage.js');
-const scannerSrc = fs.readFileSync(SCANNER, 'utf8');
+const scannerSrc = fs.readFileSync(SCANNER, 'utf8').replace(/\r\n?/g, '\n');
 
 // ---------------------------------------------------------------------------
 // Helpers

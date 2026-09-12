@@ -22,7 +22,10 @@ function makeRepo() {
 }
 
 function run(root, source) {
-  return spawnSync(process.execPath, [SCRIPT, '--', process.execPath, '-e', source], {
+  const commandFilename = '.release-fixture-command.cjs';
+  const commandPath = path.join(root, commandFilename);
+  fs.writeFileSync(commandPath, source);
+  return spawnSync(process.execPath, [SCRIPT, '--', process.execPath, commandFilename], {
     cwd: root,
     env: { ...process.env, CHECK_RELEASE_FIXTURES_ROOT: root },
     encoding: 'utf8',
@@ -43,7 +46,9 @@ test('passes when a test command leaves tracked documents unchanged', (t) => {
 test('labels deleted and rewritten documents together without reverting remaining damage', (t) => {
   const root = makeRepo();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const unusualFilename = 'damaged\nsample.pdf';
+  const unusualFilename = process.platform === 'win32'
+    ? 'damaged sample.pdf'
+    : 'damaged\nsample.pdf';
   fs.writeFileSync(path.join(root, unusualFilename), 'unusual original');
   spawnSync('git', ['add', unusualFilename], { cwd: root, timeout: 30_000 });
   fs.writeFileSync(path.join(root, 'sample.pdf'), 'pre-existing user edit');
@@ -58,7 +63,11 @@ test('labels deleted and rewritten documents together without reverting remainin
   );
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /deleted: "damaged\\nsample\.pdf"/);
+  if (process.platform === 'win32') {
+    assert.match(result.stderr, /deleted: damaged sample\.pdf/);
+  } else {
+    assert.match(result.stderr, /deleted: "damaged\\nsample\.pdf"/);
+  }
   assert.match(result.stderr, /rewritten: nested\.docx/);
   assert.doesNotMatch(result.stderr, /rewritten: "nested\.docx"/);
   assert.match(result.stderr, /left untouched/);

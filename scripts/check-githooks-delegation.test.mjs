@@ -89,13 +89,17 @@ test('missing pre-push fails', () => {
   });
 });
 
-test('non-executable hooks fail', () => {
-  withFixture({ mode: 0o644 }, (dir) => {
-    const result = runGuard(dir);
-    assertFails(result, /pre-commit is not executable/);
-    assert.match(result.stderr, /pre-push is not executable/);
-  });
-});
+test(
+  'non-executable hooks fail',
+  { skip: process.platform === 'win32' ? 'Windows does not expose POSIX execute bits' : false },
+  () => {
+    withFixture({ mode: 0o644 }, (dir) => {
+      const result = runGuard(dir);
+      assertFails(result, /pre-commit is not executable/);
+      assert.match(result.stderr, /pre-push is not executable/);
+    });
+  },
+);
 
 test('missing shebang fails', () => {
   const noShebang = GOOD_PRE_COMMIT.replace('#!/bin/sh\n', '# not a shebang\n');

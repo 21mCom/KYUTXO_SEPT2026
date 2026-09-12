@@ -38,8 +38,9 @@ function checkHook(name) {
     failures.push(`.githooks/${name} exists but is not a regular file.`);
     return null;
   }
-  // Any exec bit (owner/group/other) — git requires the hook to be executable.
-  if ((stat.mode & 0o111) === 0) {
+  // Any exec bit (owner/group/other) — POSIX git requires the hook to be
+  // executable. Windows does not expose POSIX mode bits for this check.
+  if (process.platform !== 'win32' && (stat.mode & 0o111) === 0) {
     failures.push(
       `.githooks/${name} is not executable — git skips non-executable hooks WITHOUT any error. Fix with: chmod +x .githooks/${name}`,
     );
