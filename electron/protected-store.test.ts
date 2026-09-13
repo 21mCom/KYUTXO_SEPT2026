@@ -52,6 +52,14 @@ describe("protected store", () => {
     expect(worker).not.toContain("message.sql");
   });
 
+  it("reuses one prepared upsert throughout each protected repository batch", () => {
+    const worker = fs.readFileSync(path.join(__dirname, "protected-store-worker.cjs"), "utf8");
+    expect(worker).toContain("let saveStatement;");
+    expect(worker).toContain("saveStatement ??= db.prepare(`");
+    expect(worker).toContain("saveStatement.run(");
+    expect(worker).not.toContain("`).run(idKey(saved.id)");
+  });
+
   it("returns fixed mirror fingerprints without exposing renderer-defined queries", async () => {
     const { client } = makeClient();
     const call = (collection: string, operation: string, payload: object = {}) =>
@@ -434,6 +442,13 @@ describe("protected store", () => {
           address: "busy-address", amount: index,
         })),
       });
+      await expect(client.call(MESSAGE_TYPES.REPOSITORY, {
+        repository: "transactions", collection: "transactionParticipants", operation: "saveBatch",
+        rows: Array.from({ length: 5001 }, (_, index) => ({
+          id: index + 2000, txid: `oversized-${index}`, role: "output",
+          address: "busy-address", amount: index,
+        })),
+      })).rejects.toThrow("Protected store operation failed");
       await client.call(MESSAGE_TYPES.REPOSITORY, {
         repository: "transactions", collection: "transactionParticipants", operation: "save",
         row: { id: 1001, txid: "tx-1000", role: "output", address: "busy-address", amount: 1000 },

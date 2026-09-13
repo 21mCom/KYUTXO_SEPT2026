@@ -1001,13 +1001,14 @@ function repositoryImpl(message) {
     if (!Number.isSafeInteger(id)) fail();
     return id;
   };
+  let saveStatement;
   const save = (row) => {
     if (!row || typeof row !== 'object' || Array.isArray(row)) fail();
     const saved = row.id === undefined ? { ...row, id: allocateId() } : row;
     if (!validId(saved.id)) fail();
     const value = entityValue(saved);
     const fields = extracted(saved);
-    db.prepare(`
+    saveStatement ??= db.prepare(`
        INSERT INTO ${table}(id_key,id_sort,value_json,record_type,input_string_lower,label_lower,transaction_id,address,record_id_key,status,created_at,updated_at,
          block_time,curation_state,txid,role,prev_txid,prev_vout,date_value,currency,asset,last_synced_at,sync_run_timestamp,dismissed,
          spent_txid,spent_vout,created_txid,created_vout,spent_address,created_address,segment_id,snapshot_id,origin_txid,origin_vout,origin_address,current_address,evidence_id)
@@ -1022,7 +1023,8 @@ function repositoryImpl(message) {
           created_vout=excluded.created_vout,spent_address=excluded.spent_address,created_address=excluded.created_address,
           segment_id=excluded.segment_id,snapshot_id=excluded.snapshot_id,origin_txid=excluded.origin_txid,origin_vout=excluded.origin_vout,
           origin_address=excluded.origin_address,current_address=excluded.current_address,evidence_id=excluded.evidence_id
-    `).run(idKey(saved.id), idSort(saved.id), value, fields.recordType, fields.inputStringLower, fields.labelLower,
+    `);
+    saveStatement.run(idKey(saved.id), idSort(saved.id), value, fields.recordType, fields.inputStringLower, fields.labelLower,
       fields.transactionId, fields.address, fields.recordIdKey, fields.status,
       Number.isSafeInteger(saved.createdAt) ? saved.createdAt : null,
        Number.isSafeInteger(saved.updatedAt) ? saved.updatedAt : null,
@@ -1211,7 +1213,7 @@ function repositoryImpl(message) {
     return { items, next: items.length === limit ? items[items.length - 1].id : null, collection };
   }
   if (operation === 'saveBatch') {
-    if (!Array.isArray(message.rows) || message.rows.length > 1000) fail();
+    if (!Array.isArray(message.rows) || message.rows.length > 5000) fail();
     const transaction = db.transaction((rows) => rows.map(save));
     return { ids: transaction(message.rows) };
   }
